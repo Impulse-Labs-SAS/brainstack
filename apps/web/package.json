@@ -1,0 +1,13 @@
+{
+  "name": "@brainstack/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "build": "echo \"[web] build stub — Fase 4\"",
+    "dev": "echo \"[web] dev stub — Fase 4\""
+  }
+}

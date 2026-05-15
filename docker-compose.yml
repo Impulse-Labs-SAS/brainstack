@@ -1,0 +1,31 @@
+# =============================================================================
+# BrainStack — docker-compose
+# Single service in Fase 0 (the Node server stub). Caddy + TLS wiring lands in
+# Fase 5. Volumes are pre-declared so notes and the sqlite cache survive
+# container restarts.
+# =============================================================================
+
+services:
+  brainstack:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: brainstack:dev
+    container_name: brainstack
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      NOTES_DIR: /data/brain
+      DATABASE_URL: /data/brainstack.db
+    ports:
+      - "3000:3000"
+    volumes:
+      - brain-notes:/data/brain
+      - brain-db:/data
+
+volumes:
+  brain-notes:
+  brain-db:
