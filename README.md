@@ -21,7 +21,7 @@ packages/
   skill/      Canonical AI instructions + adapters for every major client
 ```
 
-Storage: plain `.md` files in `NOTES_DIR` (source of truth) + a regenerable sqlite cache with FTS5 search. Auth: magic link via Resend + Bearer API keys for MCP clients. Backups: a cron pushes the notes directory to a private git repo.
+Storage: plain `.md` files in `NOTES_DIR` (source of truth) + a regenerable sqlite cache with FTS5 search. Auth: email + password (argon2id) and Google OAuth, plus Bearer API keys for MCP clients. Backups: a cron snapshots the sqlite and pushes the notes directory + snapshot to a private git repo.
 
 ## Quick start (self-host)
 
@@ -35,7 +35,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Then visit `https://<your-domain>`, request a magic link, and follow it to sign in. Generate API keys from **Settings → API keys** to connect Claude, Cursor, and friends.
+Then visit `https://<your-domain>`, sign up with email + password (or "Continue with Google"), verify your email, and generate API keys from **Settings → API keys** to connect Claude, Cursor, and friends.
 
 ## Local development
 

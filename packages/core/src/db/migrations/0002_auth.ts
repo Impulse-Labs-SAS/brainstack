@@ -1,5 +1,5 @@
 // Auth schema for BrainStack.
-// All token-like values (magic link tokens, API keys) are stored as sha256
+// All token-like values (session tokens, API keys) are stored as sha256
 // hashes — never plaintext.
 
 export const name = '0002_auth';

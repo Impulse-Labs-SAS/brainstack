@@ -2,8 +2,6 @@ import { openDatabase, type BrainStackDatabase } from '@brainstack/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 
-import { AppError } from '../lib/errors.js';
-
 import { ApiKeyService } from './ApiKeyService.js';
 import { AuthService } from './AuthService.js';
 import { CapturingEmailSender } from './EmailSender.js';
@@ -35,43 +33,17 @@ afterEach(() => {
   bs.close();
 });
 
-describe('AuthService magic-link flow', () => {
-  it('emails a magic link and creates a session on callback', async () => {
-    const { token } = await auth.requestMagicLink('user@brain.test');
-    expect(mailer.sent).toHaveLength(1);
-    expect(mailer.sent[0]?.text).toContain('https://brain.test/auth/magic-link/callback');
+describe('AuthService sessions', () => {
+  it('creates, validates and revokes a session', () => {
+    const user = auth.ensureUser('user@brain.test');
+    const session = auth.createSession(user.id);
+    expect(session.token).toMatch(/^[a-f0-9]{64}$/);
 
-    const result = await auth.consumeMagicLink(token);
-    expect(result.user.email).toBe('user@brain.test');
-    expect(result.session.token).toMatch(/^[a-f0-9]{64}$/);
+    const validated = auth.validateSession(session.token);
+    expect(validated?.id).toBe(user.id);
 
-    const session = auth.validateSession(result.session.token);
-    expect(session?.id).toBe(result.user.id);
-  });
-
-  it('rejects unauthorized emails', async () => {
-    await expect(auth.requestMagicLink('intruder@brain.test')).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-    });
-  });
-
-  it('rejects expired tokens', async () => {
-    const { token } = await auth.requestMagicLink('user@brain.test');
-    now += 16 * 60 * 1000;
-    await expect(auth.consumeMagicLink(token)).rejects.toBeInstanceOf(AppError);
-  });
-
-  it('rejects reused tokens', async () => {
-    const { token } = await auth.requestMagicLink('user@brain.test');
-    await auth.consumeMagicLink(token);
-    await expect(auth.consumeMagicLink(token)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
-  });
-
-  it('revokes sessions and invalidates them', async () => {
-    const { token } = await auth.requestMagicLink('user@brain.test');
-    const result = await auth.consumeMagicLink(token);
-    auth.revokeSession(result.session.token);
-    expect(auth.validateSession(result.session.token)).toBeNull();
+    auth.revokeSession(session.token);
+    expect(auth.validateSession(session.token)).toBeNull();
   });
 });
 

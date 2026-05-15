@@ -1,7 +1,7 @@
 // Drizzle schema for the BrainStack sqlite cache.
 // The filesystem is the source of truth; this schema is regenerable.
-// Auth tables (users, sessions, magic_link_tokens, api_keys) live in the same
-// database for V1 simplicity.
+// Auth tables (users, sessions, api_keys) live in the same database for V1
+// simplicity.
 
 import { sqliteTable, text, integer, primaryKey, index } from 'drizzle-orm/sqlite-core';
 
@@ -73,15 +73,6 @@ export const sessions = sqliteTable(
   },
   (t) => ({ userIdx: index('idx_sessions_user').on(t.userId) }),
 );
-
-export const magicLinkTokens = sqliteTable('magic_link_tokens', {
-  id: text('id').primaryKey(),
-  email: text('email').notNull(),
-  tokenHash: text('token_hash').notNull().unique(),
-  createdAt: integer('created_at').notNull(),
-  expiresAt: integer('expires_at').notNull(),
-  consumedAt: integer('consumed_at'),
-});
 
 export const apiKeys = sqliteTable(
   'api_keys',

@@ -1,6 +1,6 @@
 // Pluggable email sender so tests can capture outgoing mail without hitting
 // Resend. Two implementations: ResendSender for production, ConsoleSender for
-// dev/test (logs the magic link to stdout/pino).
+// dev/test (logs the message to stdout/pino).
 
 import { Resend } from 'resend';
 import type { Logger } from 'pino';

@@ -60,19 +60,7 @@ const FrontmatterInput = z.record(z.string(), z.unknown()).optional();
 export const appRouter = t.router({
   auth: t.router({
     me: t.procedure.query(({ ctx }) => ({ user: ctx.user })),
-    requestMagicLink: t.procedure
-      .input(z.object({ email: z.string().email() }))
-      .mutation(async ({ ctx, input }) => {
-        await wrap(() => ctx.auth.requestMagicLink(input.email));
-        return { ok: true };
-      }),
-    logout: protectedProcedure.mutation(({ ctx }) => {
-      if (ctx.principal?.kind === 'user') {
-        // The HTTP handler clears the cookie. We just drop the session row
-        // here when a session token is plumbed through (web layer fills it).
-      }
-      return { ok: true };
-    }),
+    logout: protectedProcedure.mutation(() => ({ ok: true })),
   }),
   notes: t.router({
     get: protectedProcedure

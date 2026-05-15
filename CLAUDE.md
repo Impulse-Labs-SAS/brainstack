@@ -8,7 +8,7 @@ This repo is BrainStack: shared second brain for humans + AI assistants. Design 
 - Backend: Hono + `@modelcontextprotocol/sdk` + tRPC + Drizzle + better-sqlite3.
 - Frontend: Next.js 14+ App Router + Tailwind + **Justd** (NOT shadcn) + CodeMirror 6.
 - Storage: filesystem `.md` (source of truth) + sqlite FTS5 (regenerable cache).
-- Logger pino, validation zod, magic-link auth via Resend.
+- Logger pino, validation zod, email+password (`@node-rs/argon2`) + Google OAuth (`arctic`) + optional TOTP (`@oslojs/otp`), transactional email via Resend.
 
 ## Workspaces
 
