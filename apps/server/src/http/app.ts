@@ -10,6 +10,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
 import type { ApiKey } from '../services/ApiKeyService.js';
+import type { GoogleOAuthService } from '../services/GoogleOAuthService.js';
 
 import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
 
@@ -17,6 +18,7 @@ import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
 import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
+import { createOAuthGoogleRouter } from './routes/oauthGoogle.js';
 import { createTrpcRouter } from './routes/trpc.js';
 import { healthRouter } from './routes/health.js';
 import type { NoteService } from '../services/NoteService.js';
@@ -40,6 +42,8 @@ export interface BuildAppOptions {
   exposeDevTokens: boolean;
   /** Inject a custom limiter (tests). Defaults to an in-memory one. */
   loginLimiter?: LoginRateLimiter;
+  /** Google OAuth service. When omitted, /auth/google* routes are disabled. */
+  google?: GoogleOAuthService;
 }
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
@@ -89,6 +93,19 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       exposeDevTokens: opts.exposeDevTokens,
     }),
   );
+
+  if (opts.google) {
+    app.route(
+      '/auth',
+      createOAuthGoogleRouter({
+        google: opts.google,
+        auth: opts.auth,
+        logger: opts.logger,
+        secureCookies: opts.secureCookies,
+        appHome: opts.appHome,
+      }),
+    );
+  }
 
   const requireAuth = buildAuthMiddleware(middlewareOpts);
   const rateLimit = buildRateLimitMiddleware({ perMinute: opts.rateLimitPerMinute });

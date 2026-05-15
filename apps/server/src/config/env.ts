@@ -27,8 +27,13 @@ const Env = z.object({
   AUTHORIZED_EMAILS: z.string().optional(),
   BACKUP_REPO: z.string().optional(),
   BACKUP_CRON: z.string().default('0 3 * * *'),
+  /** Absolute path of the local git clone used as the backup target. */
+  BACKUP_DIR: z.string().optional(),
   /** Comma-separated origins allowed by CORS. Default: localhost dev web. */
   CORS_ORIGINS: z.string().default('http://localhost:3001'),
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof Env>;

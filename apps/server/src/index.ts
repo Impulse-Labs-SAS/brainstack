@@ -14,6 +14,7 @@ import { ApiKeyService } from './services/ApiKeyService.js';
 import { AuthService } from './services/AuthService.js';
 import { BackupService } from './services/BackupService.js';
 import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js';
+import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { IndexService } from './services/IndexService.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
@@ -49,6 +50,19 @@ async function main(): Promise<void> {
     authorizedEmails: cfg.authorizedEmails,
   });
   const apiKeys = new ApiKeyService({ db: bs });
+
+  const google =
+    cfg.GOOGLE_OAUTH_CLIENT_ID && cfg.GOOGLE_OAUTH_CLIENT_SECRET && cfg.GOOGLE_OAUTH_REDIRECT_URI
+      ? new GoogleOAuthService({
+          clientId: cfg.GOOGLE_OAUTH_CLIENT_ID,
+          clientSecret: cfg.GOOGLE_OAUTH_CLIENT_SECRET,
+          redirectUri: cfg.GOOGLE_OAUTH_REDIRECT_URI,
+          db: bs,
+        })
+      : undefined;
+  if (!google) {
+    logger.info('Google OAuth disabled (set GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI to enable)');
+  }
 
   const backup = new BackupService({
     notesDir: cfg.notesDirAbs,
@@ -92,6 +106,7 @@ async function main(): Promise<void> {
     corsOrigins: cfg.corsOrigins,
     appHome: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
     exposeDevTokens: cfg.NODE_ENV === 'development',
+    google,
   });
   const httpServer = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info({ port: info.port }, 'HTTP listening');
