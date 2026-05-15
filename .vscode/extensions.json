@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "bradlc.vscode-tailwindcss",
+    "ms-azuretools.vscode-docker",
+    "vitest.explorer",
+    "yoavbls.pretty-ts-errors"
+  ]
+}

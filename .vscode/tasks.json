@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "back",
+      "detail": "Hono + MCP HTTP + tRPC on :3000",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["--filter", "@brainstack/server", "dev"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "group": "brainstack", "reveal": "always" }
+    },
+    {
+      "label": "front",
+      "detail": "Next.js web app on :3001",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["--filter", "@brainstack/web", "dev"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "group": "brainstack", "reveal": "always" }
+    },
+    {
+      "label": "mcp",
+      "detail": "Server in MCP stdio mode (for Claude Code / Cursor local)",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["--filter", "@brainstack/server", "dev"],
+      "options": { "env": { "MCP_STDIO": "true" } },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "group": "brainstack", "reveal": "always" }
+    },
+    {
+      "label": "dev: all (back + front)",
+      "dependsOn": ["back", "front"],
+      "dependsOrder": "parallel",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "group": "brainstack" }
+    }
+  ]
+}

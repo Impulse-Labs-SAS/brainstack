@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: server",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@brainstack/server", "dev"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: server (MCP stdio)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@brainstack/server", "dev"],
+      "env": { "MCP_STDIO": "true" },
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: vitest current file (core)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@brainstack/core", "exec", "vitest", "run", "${relativeFile}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug: server + web",
+      "configurations": ["Debug: server"],
+      "preLaunchTask": "dev: web (Next.js :3001)"
+    }
+  ]
+}

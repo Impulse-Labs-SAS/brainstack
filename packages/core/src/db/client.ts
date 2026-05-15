@@ -5,6 +5,8 @@
 import Database from 'better-sqlite3';
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { migrations, type Migration } from './migrations/index.js';
 import * as schema from './schema.js';
@@ -77,6 +79,9 @@ export function openDatabase(
   filePath: string,
   options: OpenDatabaseOptions = {},
 ): BrainStackDatabase {
+  if (filePath !== ':memory:' && !options.readonly) {
+    mkdirSync(dirname(filePath), { recursive: true });
+  }
   const sqlite = new Database(filePath, { readonly: options.readonly ?? false });
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');

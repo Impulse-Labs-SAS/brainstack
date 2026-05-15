@@ -105,6 +105,7 @@ async function main(): Promise<void> {
     },
     rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
     secureCookies: cfg.NODE_ENV === 'production',
+    corsOrigins: cfg.corsOrigins,
   });
   const httpServer = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info({ port: info.port }, 'HTTP listening');

@@ -27,6 +27,8 @@ const Env = z.object({
   AUTHORIZED_EMAILS: z.string().optional(),
   BACKUP_REPO: z.string().optional(),
   BACKUP_CRON: z.string().default('0 3 * * *'),
+  /** Comma-separated origins allowed by CORS. Default: localhost dev web. */
+  CORS_ORIGINS: z.string().default('http://localhost:3001'),
 });
 
 export type AppEnv = z.infer<typeof Env>;
@@ -38,6 +40,7 @@ export interface AppConfig extends AppEnv {
   databasePathAbs: string;
   /** Parsed authorized emails as a normalised set, empty if none configured. */
   authorizedEmails: Set<string>;
+  corsOrigins: string[];
 }
 
 let cached: AppConfig | null = null;
@@ -57,7 +60,8 @@ export function loadConfig(): AppConfig {
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
   );
-  cached = { ...parsed, notesDirAbs, databasePathAbs, authorizedEmails };
+  const corsOrigins = parsed.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  cached = { ...parsed, notesDirAbs, databasePathAbs, authorizedEmails, corsOrigins };
   return cached;
 }
 

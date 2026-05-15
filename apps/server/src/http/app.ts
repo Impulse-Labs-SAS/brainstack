@@ -2,6 +2,7 @@
 // `index.ts` only worries about boot order and shutdown.
 
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import type { Logger } from 'pino';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -29,10 +30,25 @@ export interface BuildAppOptions {
   resolveUserForApiKey(apiKey: ApiKey): User;
   rateLimitPerMinute: number;
   secureCookies: boolean;
+  /** Allowed origins for CORS (web app, etc.). Empty array disables CORS. */
+  corsOrigins: string[];
 }
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const app = new Hono<AuthBindings>();
+
+  if (opts.corsOrigins.length > 0) {
+    app.use(
+      '*',
+      cors({
+        origin: (origin) =>
+          opts.corsOrigins.includes(origin) ? origin : opts.corsOrigins[0] ?? null,
+        credentials: true,
+        allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowHeaders: ['Content-Type', 'Authorization', 'x-session-token'],
+      }),
+    );
+  }
 
   app.use('*', async (c, next) => {
     const start = Date.now();
