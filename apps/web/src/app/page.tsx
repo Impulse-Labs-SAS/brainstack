@@ -25,13 +25,17 @@ export default function HomePage() {
     },
   });
 
+  // Middleware (apps/web/src/middleware.ts) guarantees a session cookie is
+  // present before this route renders, but the cookie can still be expired
+  // or invalid server-side — in that case force a hard redirect so the
+  // browser drops the stale cookie and goes through /login again.
   useEffect(() => {
-    if (me.data && me.data.user == null) {
-      router.replace('/login');
+    if (me.isError || (me.data && me.data.user == null)) {
+      window.location.href = '/login';
     }
-  }, [me.data, router]);
+  }, [me.isError, me.data]);
 
-  if (!me.data) {
+  if (!me.data || !me.data.user) {
     return (
       <AppShell>
         <div className="flex h-full items-center justify-center text-fg-muted">Loading…</div>
