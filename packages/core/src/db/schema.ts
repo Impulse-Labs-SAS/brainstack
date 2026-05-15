@@ -56,8 +56,52 @@ export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
   displayName: text('display_name'),
+  /** 0/1 boolean. Email verification gate for password logins and Google linking. */
+  emailVerified: integer('email_verified').notNull().default(0),
+  /** Argon2id hash. Null when the user only has Google OAuth. */
+  passwordHash: text('password_hash'),
+  /** Google `sub`. Unique when set. Null until the user links Google. */
+  googleId: text('google_id'),
+  /** Base32 TOTP secret. Null until 2FA is enrolled. */
+  totpSecret: text('totp_secret'),
   createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull().default(0),
   lastLoginAt: integer('last_login_at'),
+});
+
+export const passwordResetTokens = sqliteTable('password_reset_tokens', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  usedAt: integer('used_at'),
+});
+
+export const emailVerificationTokens = sqliteTable('email_verification_tokens', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  email: text('email').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  usedAt: integer('used_at'),
+});
+
+export const totpBackupCodes = sqliteTable('totp_backup_codes', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  codeHash: text('code_hash').notNull().unique(),
+  usedAt: integer('used_at'),
+  createdAt: integer('created_at').notNull(),
+});
+
+export const oauthStates = sqliteTable('oauth_states', {
+  state: text('state').primaryKey(),
+  codeVerifier: text('code_verifier').notNull(),
+  redirectTo: text('redirect_to'),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
 });
 
 export const sessions = sqliteTable(
