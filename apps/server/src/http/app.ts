@@ -14,13 +14,18 @@ import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
 import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
+import { createTrpcRouter } from './routes/trpc.js';
 import { healthRouter } from './routes/health.js';
+import type { NoteService } from '../services/NoteService.js';
+import type { SearchService } from '../services/SearchService.js';
 
 export interface BuildAppOptions {
   buildMcpServer(): McpServer;
   logger: Logger;
   auth: AuthService;
   apiKeys: ApiKeyService;
+  notes: NoteService;
+  search: SearchService;
   resolveUserForApiKey(apiKey: ApiKey): User;
   rateLimitPerMinute: number;
   secureCookies: boolean;
@@ -65,6 +70,17 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   app.use('/mcp', requireAuth);
   app.use('/mcp', rateLimit);
   app.route('/mcp', mcpRouter);
+
+  app.route(
+    '/trpc',
+    createTrpcRouter({
+      notes: opts.notes,
+      search: opts.search,
+      auth: opts.auth,
+      apiKeys: opts.apiKeys,
+      resolveUserForApiKey: opts.resolveUserForApiKey,
+    }),
+  );
 
   app.notFound((c) => c.json({ error: 'not found' }, 404));
 

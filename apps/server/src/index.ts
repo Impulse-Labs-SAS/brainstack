@@ -68,6 +68,8 @@ async function main(): Promise<void> {
     logger,
     auth,
     apiKeys,
+    notes,
+    search,
     resolveUserForApiKey: (apiKey) => {
       const user = bs.sqlite
         .prepare<[string], {

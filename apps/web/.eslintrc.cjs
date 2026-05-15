@@ -1,0 +1,7 @@
+module.exports = {
+  root: false,
+  extends: ['next/core-web-vitals', 'next/typescript'],
+  rules: {
+    '@typescript-eslint/consistent-type-imports': 'warn',
+  },
+};

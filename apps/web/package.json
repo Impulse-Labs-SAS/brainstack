@@ -4,10 +4,44 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint \"src/**/*.ts\"",
+    "lint": "next lint --dir src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "build": "echo \"[web] build stub — Fase 4\"",
-    "dev": "echo \"[web] dev stub — Fase 4\""
+    "build": "next build",
+    "dev": "next dev -p 3001",
+    "start": "next start -p 3001"
+  },
+  "dependencies": {
+    "@brainstack/server": "workspace:*",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.3.6",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.39.0",
+    "@tanstack/react-query": "^5.77.0",
+    "@trpc/client": "^11.17.0",
+    "@trpc/react-query": "^11.17.0",
+    "@trpc/server": "^11.17.0",
+    "clsx": "^2.1.1",
+    "codemirror": "^6.0.2",
+    "geist": "^1.5.1",
+    "lucide-react": "^0.475.0",
+    "next": "^15.5.7",
+    "react": "^19.2.0",
+    "react-aria-components": "^1.13.0",
+    "react-dom": "^19.2.0",
+    "superjson": "^2.2.6",
+    "tailwind-merge": "^3.4.0",
+    "tailwind-variants": "^3.2.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "autoprefixer": "^10.4.20",
+    "eslint-config-next": "^15.5.7",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.18",
+    "tailwindcss-react-aria-components": "^1.2.0"
   }
 }

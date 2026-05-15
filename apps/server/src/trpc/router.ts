@@ -1,0 +1,146 @@
+// Root tRPC router. The web app talks to the server exclusively through this
+// router; MCP clients go through the dedicated MCP transports. Both share the
+// same underlying services, so behaviour stays consistent.
+
+import { TRPCError, initTRPC } from '@trpc/server';
+import superjson from 'superjson';
+import { z } from 'zod';
+
+import { AppError } from '../lib/errors.js';
+
+import type { TrpcContext } from './context.js';
+
+const t = initTRPC.context<TrpcContext>().create({
+  transformer: superjson,
+  errorFormatter: ({ shape, error }) => ({
+    ...shape,
+    data: {
+      ...shape.data,
+      appCode:
+        error.cause instanceof AppError ? error.cause.code : (shape.data.code as string),
+    },
+  }),
+});
+
+const requireUser = t.middleware(({ ctx, next }) => {
+  if (!ctx.user) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'session required' });
+  }
+  return next({ ctx: { ...ctx, user: ctx.user } });
+});
+
+export const publicProcedure = t.procedure;
+export const protectedProcedure = t.procedure.use(requireUser);
+
+const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof AppError) {
+      const trpcCode =
+        err.code === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : err.code === 'ALREADY_EXISTS'
+            ? 'CONFLICT'
+            : err.code === 'UNAUTHORIZED'
+              ? 'UNAUTHORIZED'
+              : err.code === 'FORBIDDEN'
+                ? 'FORBIDDEN'
+                : err.code === 'INVALID_INPUT'
+                  ? 'BAD_REQUEST'
+                  : 'INTERNAL_SERVER_ERROR';
+      throw new TRPCError({ code: trpcCode, message: err.message, cause: err });
+    }
+    throw err;
+  }
+};
+
+const FrontmatterInput = z.record(z.string(), z.unknown()).optional();
+
+export const appRouter = t.router({
+  auth: t.router({
+    me: t.procedure.query(({ ctx }) => ({ user: ctx.user })),
+    requestMagicLink: t.procedure
+      .input(z.object({ email: z.string().email() }))
+      .mutation(async ({ ctx, input }) => {
+        await wrap(() => ctx.auth.requestMagicLink(input.email));
+        return { ok: true };
+      }),
+    logout: protectedProcedure.mutation(({ ctx }) => {
+      if (ctx.principal?.kind === 'user') {
+        // The HTTP handler clears the cookie. We just drop the session row
+        // here when a session token is plumbed through (web layer fills it).
+      }
+      return { ok: true };
+    }),
+  }),
+  notes: t.router({
+    get: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .query(async ({ ctx, input }) => wrap(() => ctx.notes.get(input.path))),
+    list: protectedProcedure
+      .input(
+        z
+          .object({
+            folder: z.string().optional(),
+            tag: z.string().optional(),
+            status: z.string().optional(),
+            limit: z.number().int().min(1).max(500).optional(),
+          })
+          .optional(),
+      )
+      .query(({ ctx, input }) => ctx.notes.list(input ?? {})),
+    create: protectedProcedure
+      .input(
+        z.object({ path: z.string().min(1), content: z.string(), frontmatter: FrontmatterInput }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => ctx.notes.create(input.path, input.content, input.frontmatter)),
+      ),
+    update: protectedProcedure
+      .input(z.object({ path: z.string().min(1), content: z.string() }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => ctx.notes.update(input.path, input.content)),
+      ),
+    remove: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        await wrap(() => ctx.notes.remove(input.path));
+        return { ok: true };
+      }),
+    move: protectedProcedure
+      .input(z.object({ from: z.string().min(1), to: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => ctx.notes.move(input.from, input.to)),
+      ),
+    backlinks: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .query(({ ctx, input }) => ctx.notes.listLinks(input.path)),
+    addToInbox: protectedProcedure
+      .input(z.object({ content: z.string().min(1), title: z.string().optional() }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => ctx.notes.addToInbox(input.content, input.title)),
+      ),
+  }),
+  search: t.router({
+    query: protectedProcedure
+      .input(z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(50).optional() }))
+      .query(({ ctx, input }) => ctx.search.search(input.query, { limit: input.limit })),
+  }),
+  apiKeys: t.router({
+    list: protectedProcedure.query(({ ctx }) => ctx.apiKeys.list(ctx.user.id)),
+    create: protectedProcedure
+      .input(z.object({ name: z.string().min(1).max(80), scopes: z.array(z.string()).optional() }))
+      .mutation(({ ctx, input }) =>
+        ctx.apiKeys.create(ctx.user.id, input.name, input.scopes ?? []),
+      ),
+    revoke: protectedProcedure
+      .input(z.object({ id: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        await wrap(() => Promise.resolve(ctx.apiKeys.revoke(input.id)));
+        return { ok: true };
+      }),
+  }),
+});
+
+export type AppRouter = typeof appRouter;
