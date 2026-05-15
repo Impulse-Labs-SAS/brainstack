@@ -12,6 +12,7 @@ import { getLogger } from './lib/logger.js';
 import { buildMcpServer } from './mcp/server.js';
 import { ApiKeyService } from './services/ApiKeyService.js';
 import { AuthService } from './services/AuthService.js';
+import { BackupService } from './services/BackupService.js';
 import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js';
 import { IndexService } from './services/IndexService.js';
 import { NoteService } from './services/NoteService.js';
@@ -49,8 +50,16 @@ async function main(): Promise<void> {
   });
   const apiKeys = new ApiKeyService({ db: bs });
 
+  const backup = new BackupService({
+    notesDir: cfg.notesDirAbs,
+    cronExpression: cfg.BACKUP_CRON,
+    remote: cfg.BACKUP_REPO,
+    logger,
+  });
+
   await index.bootstrap();
   index.startWatching();
+  backup.start();
 
   const factory = () => buildMcpServer({ notes, search, logger });
 
@@ -104,6 +113,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'shutting down');
     httpServer.close?.();
+    backup.stop();
     await index.stopWatching();
     bs.close();
     if (stdioConnected) process.exit(0);

@@ -1,8 +1,9 @@
 # =============================================================================
 # BrainStack — docker-compose
-# Single service in Fase 0 (the Node server stub). Caddy + TLS wiring lands in
-# Fase 5. Volumes are pre-declared so notes and the sqlite cache survive
-# container restarts.
+# Two services in V1:
+#   - brainstack   Node app (Hono + MCP + tRPC) running on port 3000
+#   - caddy        Reverse proxy with automatic TLS via Let's Encrypt
+# Notes live on a named volume so they persist across container restarts.
 # =============================================================================
 
 services:
@@ -20,12 +21,32 @@ services:
       NODE_ENV: production
       NOTES_DIR: /data/brain
       DATABASE_URL: /data/brainstack.db
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     volumes:
       - brain-notes:/data/brain
       - brain-db:/data
 
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: brainstack-caddy
+    restart: unless-stopped
+    depends_on:
+      - brainstack
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Override DOMAIN in your .env to enable Let's Encrypt for that hostname.
+      # Leave it empty (or set to ":80") for local HTTP-only.
+      DOMAIN: ${DOMAIN:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   brain-notes:
   brain-db:
+  caddy-data:
+  caddy-config:

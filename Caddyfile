@@ -1,0 +1,20 @@
+# Caddyfile — sits in front of the brainstack container.
+# Set DOMAIN in .env to your public hostname for automatic TLS via Let's
+# Encrypt; leave it as ":80" for local HTTP-only.
+
+{$DOMAIN} {
+    encode zstd gzip
+    @websocket {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+
+    reverse_proxy brainstack:3000 {
+        flush_interval -1
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

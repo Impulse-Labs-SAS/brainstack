@@ -33,6 +33,7 @@ attachments/
 
 # Skill generated outputs
 packages/skill/dist/
+packages/skill/build/
 
 # Logs
 *.log
