@@ -6,7 +6,7 @@ import { Suspense, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { AuthApiError, authFetch, googleSignInHref } from '@/lib/authApi';
+import { AuthApiError, authFetch } from '@/lib/authApi';
 
 interface LoginResult {
   user: { id: string };
@@ -98,18 +98,6 @@ function LoginInner() {
             {pending ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>
-
-        <div className="my-4 flex items-center gap-3 text-[11px] text-fg-muted">
-          <span className="h-px flex-1 bg-border" />
-          OR
-          <span className="h-px flex-1 bg-border" />
-        </div>
-        <a
-          href={googleSignInHref()}
-          className="block w-full rounded-md border border-border bg-bg-elevated px-3 py-2 text-center text-sm text-fg-primary hover:bg-bg-base"
-        >
-          Continue with Google
-        </a>
 
         <div className="mt-6 flex items-center justify-between text-xs text-fg-muted">
           <Link href="/signup" className="hover:text-fg-primary">

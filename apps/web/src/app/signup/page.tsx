@@ -5,7 +5,7 @@ import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { authFetch, googleSignInHref } from '@/lib/authApi';
+import { authFetch } from '@/lib/authApi';
 
 interface SignupResult {
   user: { id: string; email: string };
@@ -115,18 +115,6 @@ export default function SignupPage() {
             {pending ? 'Creating…' : 'Create account'}
           </Button>
         </form>
-
-        <div className="my-4 flex items-center gap-3 text-[11px] text-fg-muted">
-          <span className="h-px flex-1 bg-border" />
-          OR
-          <span className="h-px flex-1 bg-border" />
-        </div>
-        <a
-          href={googleSignInHref()}
-          className="block w-full rounded-md border border-border bg-bg-elevated px-3 py-2 text-center text-sm text-fg-primary hover:bg-bg-base"
-        >
-          Continue with Google
-        </a>
 
         <div className="mt-6 text-xs text-fg-muted">
           Already have an account?{' '}
