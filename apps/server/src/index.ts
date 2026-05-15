@@ -69,8 +69,10 @@ async function main(): Promise<void> {
 
   const backup = new BackupService({
     notesDir: cfg.notesDirAbs,
-    cronExpression: cfg.BACKUP_CRON,
+    databasePath: cfg.databasePathAbs,
+    backupDir: cfg.BACKUP_DIR,
     remote: cfg.BACKUP_REPO,
+    cronExpression: cfg.BACKUP_CRON,
     logger,
   });
 
