@@ -11,6 +11,8 @@ import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
 import type { ApiKey } from '../services/ApiKeyService.js';
 
+import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
+
 import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
 import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
 import { createAuthRouter } from './routes/auth.js';
@@ -32,6 +34,12 @@ export interface BuildAppOptions {
   secureCookies: boolean;
   /** Allowed origins for CORS (web app, etc.). Empty array disables CORS. */
   corsOrigins: string[];
+  /** First CORS origin or PUBLIC_ORIGIN — where verify/reset redirect lands. */
+  appHome: string;
+  /** When true (dev), responses include verification/reset URLs. */
+  exposeDevTokens: boolean;
+  /** Inject a custom limiter (tests). Defaults to an in-memory one. */
+  loginLimiter?: LoginRateLimiter;
 }
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
@@ -65,6 +73,8 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
     resolveUser: opts.resolveUserForApiKey,
   };
 
+  const loginLimiter = opts.loginLimiter ?? createLoginRateLimiter();
+
   app.route('/health', healthRouter);
   app.route(
     '/auth',
@@ -74,6 +84,9 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       apiKeys: opts.apiKeys,
       logger: opts.logger,
       secureCookies: opts.secureCookies,
+      loginLimiter,
+      appHome: opts.appHome,
+      exposeDevTokens: opts.exposeDevTokens,
     }),
   );
 

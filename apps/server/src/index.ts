@@ -80,32 +80,18 @@ async function main(): Promise<void> {
     notes,
     search,
     resolveUserForApiKey: (apiKey) => {
-      const user = bs.sqlite
-        .prepare<[string], {
-          id: string;
-          email: string;
-          display_name: string | null;
-          created_at: number;
-          last_login_at: number | null;
-        }>(
-          `SELECT id, email, display_name, created_at, last_login_at FROM users WHERE id = ?`,
-        )
-        .get(apiKey.userId);
+      const user = auth.getUser(apiKey.userId);
       if (!user) {
         // Shouldn't happen because FK cascades on delete, but stay defensive.
         throw new Error(`user not found for api key ${apiKey.id}`);
       }
-      return {
-        id: user.id,
-        email: user.email,
-        displayName: user.display_name,
-        createdAt: user.created_at,
-        lastLoginAt: user.last_login_at,
-      };
+      return user;
     },
     rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
     secureCookies: cfg.NODE_ENV === 'production',
     corsOrigins: cfg.corsOrigins,
+    appHome: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
+    exposeDevTokens: cfg.NODE_ENV === 'development',
   });
   const httpServer = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info({ port: info.port }, 'HTTP listening');
