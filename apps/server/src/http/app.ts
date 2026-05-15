@@ -6,28 +6,65 @@ import type { Logger } from 'pino';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
+import type { ApiKeyService } from '../services/ApiKeyService.js';
+import type { AuthService, User } from '../services/AuthService.js';
+import type { ApiKey } from '../services/ApiKeyService.js';
+
+import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
+import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
+import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
 import { healthRouter } from './routes/health.js';
 
 export interface BuildAppOptions {
   buildMcpServer(): McpServer;
   logger: Logger;
+  auth: AuthService;
+  apiKeys: ApiKeyService;
+  resolveUserForApiKey(apiKey: ApiKey): User;
+  rateLimitPerMinute: number;
+  secureCookies: boolean;
 }
 
-export function buildApp({ buildMcpServer, logger }: BuildAppOptions): Hono {
-  const app = new Hono();
+export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
+  const app = new Hono<AuthBindings>();
 
   app.use('*', async (c, next) => {
     const start = Date.now();
     await next();
-    logger.debug(
+    opts.logger.debug(
       { method: c.req.method, path: c.req.path, status: c.res.status, ms: Date.now() - start },
       'http',
     );
   });
 
+  const middlewareOpts = {
+    auth: opts.auth,
+    apiKeys: opts.apiKeys,
+    resolveUser: opts.resolveUserForApiKey,
+  };
+
   app.route('/health', healthRouter);
-  app.route('/mcp', createMcpHttpRouter({ buildServer: buildMcpServer, logger }));
+  app.route(
+    '/auth',
+    createAuthRouter({
+      ...middlewareOpts,
+      auth: opts.auth,
+      apiKeys: opts.apiKeys,
+      logger: opts.logger,
+      secureCookies: opts.secureCookies,
+    }),
+  );
+
+  const requireAuth = buildAuthMiddleware(middlewareOpts);
+  const rateLimit = buildRateLimitMiddleware({ perMinute: opts.rateLimitPerMinute });
+  const mcpRouter = createMcpHttpRouter({ buildServer: opts.buildMcpServer, logger: opts.logger });
+
+  app.use('/mcp/*', requireAuth);
+  app.use('/mcp/*', rateLimit);
+  app.use('/mcp', requireAuth);
+  app.use('/mcp', rateLimit);
+  app.route('/mcp', mcpRouter);
 
   app.notFound((c) => c.json({ error: 'not found' }, 404));
 

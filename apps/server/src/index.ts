@@ -10,6 +10,9 @@ import { loadConfig } from './config/env.js';
 import { buildApp } from './http/app.js';
 import { getLogger } from './lib/logger.js';
 import { buildMcpServer } from './mcp/server.js';
+import { ApiKeyService } from './services/ApiKeyService.js';
+import { AuthService } from './services/AuthService.js';
+import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js';
 import { IndexService } from './services/IndexService.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
@@ -33,6 +36,19 @@ async function main(): Promise<void> {
   const notes = new NoteService({ root: cfg.notesDirAbs, db: bs, index });
   const search = new SearchService(bs);
 
+  const emailSender =
+    cfg.RESEND_API_KEY && cfg.AUTH_EMAIL_FROM
+      ? new ResendEmailSender(cfg.RESEND_API_KEY, cfg.AUTH_EMAIL_FROM)
+      : new ConsoleEmailSender(logger);
+  const auth = new AuthService({
+    db: bs,
+    email: emailSender,
+    logger,
+    publicOrigin: cfg.PUBLIC_ORIGIN,
+    authorizedEmails: cfg.authorizedEmails,
+  });
+  const apiKeys = new ApiKeyService({ db: bs });
+
   await index.bootstrap();
   index.startWatching();
 
@@ -47,7 +63,38 @@ async function main(): Promise<void> {
     logger.info('MCP stdio transport connected');
   }
 
-  const app = buildApp({ buildMcpServer: factory, logger });
+  const app = buildApp({
+    buildMcpServer: factory,
+    logger,
+    auth,
+    apiKeys,
+    resolveUserForApiKey: (apiKey) => {
+      const user = bs.sqlite
+        .prepare<[string], {
+          id: string;
+          email: string;
+          display_name: string | null;
+          created_at: number;
+          last_login_at: number | null;
+        }>(
+          `SELECT id, email, display_name, created_at, last_login_at FROM users WHERE id = ?`,
+        )
+        .get(apiKey.userId);
+      if (!user) {
+        // Shouldn't happen because FK cascades on delete, but stay defensive.
+        throw new Error(`user not found for api key ${apiKey.id}`);
+      }
+      return {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        createdAt: user.created_at,
+        lastLoginAt: user.last_login_at,
+      };
+    },
+    rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
+    secureCookies: cfg.NODE_ENV === 'production',
+  });
   const httpServer = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info({ port: info.port }, 'HTTP listening');
   });
