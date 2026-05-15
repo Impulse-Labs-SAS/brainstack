@@ -14,5 +14,20 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "chokidar": "^5.0.0",
+    "drizzle-orm": "^0.45.2",
+    "gray-matter": "^4.0.3",
+    "remark": "^15.0.1",
+    "remark-parse": "^11.0.0",
+    "unist-util-visit": "^5.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/mdast": "^4.0.4",
+    "drizzle-kit": "^0.31.10"
   }
 }

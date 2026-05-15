@@ -17,6 +17,11 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml}\""
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
