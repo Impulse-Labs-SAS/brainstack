@@ -18,6 +18,10 @@ export default function SettingsPage() {
           <div className="font-mono text-xs text-fg-muted">{me.data?.user?.email ?? 'Not signed in'}</div>
         </div>
         <div className="max-w-xl space-y-3">
+          <Link href="/settings/account" className="block rounded border border-border bg-bg-surface p-3 hover:bg-bg-elevated">
+            <div className="text-fg-primary">Account</div>
+            <div className="text-xs text-fg-muted">Password, Google sign-in, 2FA, sessions.</div>
+          </Link>
           <Link href="/settings/api-keys" className="block rounded border border-border bg-bg-surface p-3 hover:bg-bg-elevated">
             <div className="text-fg-primary">API keys</div>
             <div className="text-xs text-fg-muted">Manage tokens for MCP clients (Claude, Cursor, …).</div>
