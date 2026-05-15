@@ -53,3 +53,8 @@ Thumbs.db
 # Test coverage
 coverage/
 .nyc_output/
+
+# Throwaway screenshots dropped at repo root during chat sessions
+/image.png
+/image-*.png
+/screenshot*.png
