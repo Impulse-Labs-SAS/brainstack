@@ -11,6 +11,7 @@ import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
 import type { ApiKey } from '../services/ApiKeyService.js';
 import type { GoogleOAuthService } from '../services/GoogleOAuthService.js';
+import type { TotpService } from '../services/TotpService.js';
 
 import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
 
@@ -19,6 +20,7 @@ import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
 import { createOAuthGoogleRouter } from './routes/oauthGoogle.js';
+import { createTotpRouter } from './routes/totp.js';
 import { createTrpcRouter } from './routes/trpc.js';
 import { healthRouter } from './routes/health.js';
 import type { NoteService } from '../services/NoteService.js';
@@ -44,6 +46,8 @@ export interface BuildAppOptions {
   loginLimiter?: LoginRateLimiter;
   /** Google OAuth service. When omitted, /auth/google* routes are disabled. */
   google?: GoogleOAuthService;
+  /** TOTP service. When omitted, /auth/totp/* routes are disabled. */
+  totp?: TotpService;
 }
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
@@ -104,6 +108,13 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
         secureCookies: opts.secureCookies,
         appHome: opts.appHome,
       }),
+    );
+  }
+
+  if (opts.totp) {
+    app.route(
+      '/auth/totp',
+      createTotpRouter({ ...middlewareOpts, auth: opts.auth, totp: opts.totp }),
     );
   }
 

@@ -18,6 +18,7 @@ import { AppError } from '../lib/errors.js';
 import { generateToken, sha256 } from '../lib/tokens.js';
 
 import type { EmailSender } from './EmailSender.js';
+import type { TotpService } from './TotpService.js';
 
 export interface AuthServiceOptions {
   db: BrainStackDatabase;
@@ -27,6 +28,9 @@ export interface AuthServiceOptions {
   publicOrigin: string;
   /** Lowercased emails allowed to sign in. Empty set = open (dev only). */
   authorizedEmails: Set<string>;
+  /** Optional TOTP gate. When set and a user has totp_secret, login()
+   * requires a `code` and verifies it before creating a session. */
+  totp?: TotpService;
   /** Override timestamp source for tests. */
   now?: () => number;
 }
@@ -186,7 +190,7 @@ export class AuthService {
   async login(
     rawEmail: string,
     password: string,
-    context: { userAgent?: string; ipAddress?: string } = {},
+    context: { userAgent?: string; ipAddress?: string; totpCode?: string } = {},
   ): Promise<{ user: User; session: Session }> {
     const email = this.normaliseEmail(rawEmail);
     // Always look up — we still hash a dummy password if the user is missing
@@ -210,6 +214,15 @@ export class AuthService {
     }
     if (row.email_verified !== 1) {
       throw new AppError('email not verified', 'FORBIDDEN', 403);
+    }
+
+    if (row.totp_secret && this.opts.totp) {
+      if (!context.totpCode) {
+        throw new AppError('totp code required', 'UNAUTHORIZED', 401);
+      }
+      if (!this.opts.totp.verifyForUser(row.id, context.totpCode)) {
+        throw new AppError('invalid totp code', 'UNAUTHORIZED', 401);
+      }
     }
 
     const now = this.now();

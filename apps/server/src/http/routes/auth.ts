@@ -95,6 +95,7 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       .object({
         email: z.string().email().max(320),
         password: z.string().min(1).max(256),
+        totpCode: z.string().min(1).max(20).optional(),
         redirectTo: z.string().max(512).optional(),
       })
       .safeParse(await c.req.json().catch(() => ({})));
@@ -119,6 +120,7 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       const result = await options.auth.login(parsed.data.email, parsed.data.password, {
         userAgent: c.req.header('user-agent') ?? undefined,
         ipAddress: ip,
+        totpCode: parsed.data.totpCode,
       });
       options.loginLimiter.reset(limiterKey);
       setSessionCookie(c, result.session.token, options.secureCookies);

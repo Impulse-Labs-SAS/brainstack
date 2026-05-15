@@ -18,6 +18,7 @@ import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { IndexService } from './services/IndexService.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
+import { TotpService } from './services/TotpService.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -42,12 +43,14 @@ async function main(): Promise<void> {
     cfg.RESEND_API_KEY && cfg.AUTH_EMAIL_FROM
       ? new ResendEmailSender(cfg.RESEND_API_KEY, cfg.AUTH_EMAIL_FROM)
       : new ConsoleEmailSender(logger);
+  const totp = new TotpService({ db: bs, issuer: 'BrainStack' });
   const auth = new AuthService({
     db: bs,
     email: emailSender,
     logger,
     publicOrigin: cfg.PUBLIC_ORIGIN,
     authorizedEmails: cfg.authorizedEmails,
+    totp,
   });
   const apiKeys = new ApiKeyService({ db: bs });
 
@@ -107,6 +110,7 @@ async function main(): Promise<void> {
     appHome: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
     exposeDevTokens: cfg.NODE_ENV === 'development',
     google,
+    totp,
   });
   const httpServer = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info({ port: info.port }, 'HTTP listening');
