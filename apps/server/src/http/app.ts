@@ -26,6 +26,7 @@ import { healthRouter } from './routes/health.js';
 import { createConfigRouter, type PublicConfig } from './routes/config.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
+import type { SharingService } from '../services/SharingService.js';
 
 export interface BuildAppOptions {
   buildMcpServer(): McpServer;
@@ -34,6 +35,7 @@ export interface BuildAppOptions {
   apiKeys: ApiKeyService;
   notes: NoteService;
   search: SearchService;
+  sharing: SharingService;
   resolveUserForApiKey(apiKey: ApiKey): User;
   rateLimitPerMinute: number;
   secureCookies: boolean;
@@ -139,6 +141,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       search: opts.search,
       auth: opts.auth,
       apiKeys: opts.apiKeys,
+      sharing: opts.sharing,
       resolveUserForApiKey: opts.resolveUserForApiKey,
     }),
   );

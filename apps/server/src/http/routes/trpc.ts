@@ -10,6 +10,7 @@ import type { ApiKey, ApiKeyService } from '../../services/ApiKeyService.js';
 import type { AuthService, User } from '../../services/AuthService.js';
 import type { NoteService } from '../../services/NoteService.js';
 import type { SearchService } from '../../services/SearchService.js';
+import type { SharingService } from '../../services/SharingService.js';
 import { SESSION_COOKIE, type AuthBindings, type Principal } from '../middleware/auth.js';
 import { buildContext } from '../../trpc/context.js';
 import { appRouter } from '../../trpc/router.js';
@@ -19,6 +20,7 @@ export interface TrpcRouterOptions {
   search: SearchService;
   auth: AuthService;
   apiKeys: ApiKeyService;
+  sharing: SharingService;
   resolveUserForApiKey(apiKey: ApiKey): User;
 }
 
@@ -39,6 +41,7 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
             apiKeys: options.apiKeys,
             notes: options.notes,
             search: options.search,
+            sharing: options.sharing,
           },
           principal,
         ),

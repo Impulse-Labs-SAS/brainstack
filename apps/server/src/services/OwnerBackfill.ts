@@ -62,7 +62,7 @@ export function backfillOwnerId(
     };
   }
 
-  const ownerId = userRows[0].id;
+  const ownerId = userRows[0]!.id;
   const tx = bs.sqlite.transaction(() => {
     const r1 = bs.sqlite
       .prepare('UPDATE notes SET owner_id = ? WHERE owner_id IS NULL')

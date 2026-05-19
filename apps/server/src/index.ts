@@ -19,6 +19,7 @@ import { IndexService } from './services/IndexService.js';
 import { NoteService } from './services/NoteService.js';
 import { backfillOwnerId } from './services/OwnerBackfill.js';
 import { SearchService } from './services/SearchService.js';
+import { SharingService } from './services/SharingService.js';
 import { TotpService } from './services/TotpService.js';
 
 async function main(): Promise<void> {
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
     totp,
   });
   const apiKeys = new ApiKeyService({ db: bs });
+  const sharing = new SharingService({ db: bs, deployment: cfg.BRAINSTACK_DEPLOYMENT });
 
   const google =
     cfg.GOOGLE_OAUTH_CLIENT_ID && cfg.GOOGLE_OAUTH_CLIENT_SECRET && cfg.GOOGLE_OAUTH_REDIRECT_URI
@@ -100,6 +102,7 @@ async function main(): Promise<void> {
     apiKeys,
     notes,
     search,
+    sharing,
     resolveUserForApiKey: (apiKey) => {
       const user = auth.getUser(apiKey.userId);
       if (!user) {

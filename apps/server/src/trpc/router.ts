@@ -163,6 +163,60 @@ export const appRouter = t.router({
       .input(z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(50).optional() }))
       .query(({ ctx, input }) => ctx.search.search(input.query, { limit: input.limit })),
   }),
+  sharing: t.router({
+    listSharedWithMe: protectedProcedure.query(({ ctx }) =>
+      ctx.sharing.enabled ? ctx.sharing.listSharedRoots(ctx.user.id) : [],
+    ),
+    listMyShares: protectedProcedure.query(({ ctx }) =>
+      ctx.sharing.enabled ? ctx.sharing.listMyShares(ctx.user.id) : [],
+    ),
+    shareWithUser: protectedProcedure
+      .input(
+        z.object({
+          folderPath: z.string().min(1),
+          email: z.string().email(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => {
+          if (!ctx.sharing.enabled) {
+            throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
+          }
+          const target = ctx.auth.getUserByEmail(input.email);
+          if (!target) {
+            // El flow con invitación por email/link entra en el paso 9.
+            throw new AppError('user no encontrado; usar invitación', 'NOT_FOUND', 404);
+          }
+          const id = ctx.sharing.grant({
+            ownerId: ctx.user.id,
+            sharedWithUserId: target.id,
+            folderPath: input.folderPath,
+            grantedBy: ctx.user.id,
+          });
+          return { id, sharedWithUserId: target.id };
+        }),
+      ),
+    revoke: protectedProcedure
+      .input(
+        z.object({
+          folderPath: z.string().min(1),
+          sharedWithUserId: z.string().min(1),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => {
+          if (!ctx.sharing.enabled) {
+            throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
+          }
+          ctx.sharing.revoke({
+            ownerId: ctx.user.id,
+            sharedWithUserId: input.sharedWithUserId,
+            folderPath: input.folderPath,
+          });
+          return { ok: true };
+        }),
+      ),
+  }),
   apiKeys: t.router({
     list: protectedProcedure.query(({ ctx }) => ctx.apiKeys.list(ctx.user.id)),
     create: protectedProcedure

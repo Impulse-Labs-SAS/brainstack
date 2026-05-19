@@ -154,6 +154,11 @@ export class AuthService {
     return row ? rowToUser(row) : null;
   }
 
+  getUserByEmail(email: string): User | null {
+    const row = this.findUserByEmail(email);
+    return row ? rowToUser(row) : null;
+  }
+
   async signup(
     rawEmail: string,
     password: string,
