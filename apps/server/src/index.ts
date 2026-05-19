@@ -17,6 +17,7 @@ import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { IndexService } from './services/IndexService.js';
 import { NoteService } from './services/NoteService.js';
+import { backfillOwnerId } from './services/OwnerBackfill.js';
 import { SearchService } from './services/SearchService.js';
 import { TotpService } from './services/TotpService.js';
 
@@ -77,6 +78,7 @@ async function main(): Promise<void> {
   });
 
   await index.bootstrap();
+  backfillOwnerId(bs, { deployment: cfg.BRAINSTACK_DEPLOYMENT, logger });
   index.startWatching();
   backup.start();
 

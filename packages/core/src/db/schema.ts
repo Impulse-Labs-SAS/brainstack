@@ -5,25 +5,40 @@
 
 import { sqliteTable, text, integer, primaryKey, index } from 'drizzle-orm/sqlite-core';
 
-export const notes = sqliteTable('notes', {
-  path: text('path').primaryKey(),
-  title: text('title').notNull(),
-  frontmatter: text('frontmatter', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
-  body: text('body').notNull(),
-  mtime: integer('mtime').notNull(),
-  checksum: text('checksum').notNull(),
-});
+export const notes = sqliteTable(
+  'notes',
+  {
+    path: text('path').primaryKey(),
+    title: text('title').notNull(),
+    frontmatter: text('frontmatter', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
+    body: text('body').notNull(),
+    mtime: integer('mtime').notNull(),
+    checksum: text('checksum').notNull(),
+    /**
+     * Dueño de la nota. NULL en self-host hasta que el backfill corre o
+     * cuando aún no hay user creado. En hosted se asigna al indexar según
+     * el subdir del path físico. Ver docs/Sharing-design.md.
+     */
+    ownerId: text('owner_id'),
+  },
+  (t) => ({ ownerIdx: index('idx_notes_owner').on(t.ownerId) }),
+);
 
-export const attachments = sqliteTable('attachments', {
-  path: text('path').primaryKey(),
-  filename: text('filename').notNull(),
-  mimeType: text('mime_type').notNull(),
-  sizeBytes: integer('size_bytes').notNull(),
-  width: integer('width'),
-  height: integer('height'),
-  durationS: integer('duration_s'),
-  createdAt: integer('created_at').notNull(),
-});
+export const attachments = sqliteTable(
+  'attachments',
+  {
+    path: text('path').primaryKey(),
+    filename: text('filename').notNull(),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    durationS: integer('duration_s'),
+    createdAt: integer('created_at').notNull(),
+    ownerId: text('owner_id'),
+  },
+  (t) => ({ ownerIdx: index('idx_attachments_owner').on(t.ownerId) }),
+);
 
 export const links = sqliteTable(
   'links',
