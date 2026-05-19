@@ -236,6 +236,37 @@ export async function movePath(
   return relativeToRoot(root, toAbs);
 }
 
+/**
+ * Walk the vault and yield every folder as a posix-style relative path
+ * (excluding the root itself, hidden dirs, and `Attachments`). Used to
+ * surface empty folders in the tree view — the index only knows about
+ * folders that contain notes/attachments.
+ */
+export async function listFolders(root: string): Promise<string[]> {
+  const out: string[] = [];
+
+  async function walk(dirAbs: string, dirRel: string): Promise<void> {
+    let entries: Dirent[];
+    try {
+      entries = await fsp.readdir(dirAbs, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.')) continue;
+      if (dirRel === '' && entry.name === 'Attachments') continue;
+      const childAbs = join(dirAbs, entry.name);
+      const childRel = dirRel === '' ? entry.name : `${dirRel}${sep}${entry.name}`;
+      out.push(toPosixPath(childRel));
+      await walk(childAbs, childRel);
+    }
+  }
+
+  await walk(safeResolve(root, '.'), '');
+  return out.sort();
+}
+
 /** Walk NOTES_DIR and yield every `.md` file as a posix-style relative path. */
 export async function listNoteFiles(root: string): Promise<string[]> {
   const out: string[] = [];

@@ -40,6 +40,7 @@ export {
   createFolder,
   deleteNote,
   deletePath,
+  listFolders,
   listNoteFiles,
   moveNote,
   movePath,
