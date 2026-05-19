@@ -84,7 +84,8 @@ async function main(): Promise<void> {
   index.startWatching();
   backup.start();
 
-  const factory = () => buildMcpServer({ notes, search, logger });
+  const factory = (principal: { userId: string } | null = null) =>
+    buildMcpServer({ notes, search, sharing, logger, principal });
 
   let stdioConnected = false;
   if (cfg.MCP_STDIO) {

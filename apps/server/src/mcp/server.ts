@@ -13,11 +13,24 @@ import { AppError } from '../lib/errors.js';
 
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
+import type { SharingService } from '../services/SharingService.js';
+
+export interface McpPrincipal {
+  /** ID del user autenticado que invoca el MCP. */
+  userId: string;
+}
 
 export interface BuildMcpServerOptions {
   notes: NoteService;
   search: SearchService;
+  sharing: SharingService;
   logger: Logger;
+  /**
+   * Principal del request actual. Requerido en hosted; opcional en
+   * self-host (sharing.enabled=false hace que assertCanRead/Write
+   * pasen sin chequear).
+   */
+  principal?: McpPrincipal | null;
 }
 
 const TEXT = (text: string) => ({ content: [{ type: 'text' as const, text }] });
@@ -41,12 +54,28 @@ function toMcpError(err: unknown): { content: { type: 'text'; text: string }[]; 
 export function buildMcpServer({
   notes,
   search,
+  sharing,
   logger,
+  principal,
 }: BuildMcpServerOptions): McpServer {
   const server = new McpServer(
     { name: 'brainstack', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
+
+  // En hosted exigimos principal. En self-host puede faltar; sharing
+  // hace short-circuit y los asserts son no-op.
+  const requireUserId = (): string => {
+    if (principal?.userId) return principal.userId;
+    if (sharing.enabled) {
+      throw new AppError('mcp request sin principal', 'UNAUTHORIZED', 401);
+    }
+    return '';
+  };
+  const assertRead = (path: string): void =>
+    sharing.assertCanRead(requireUserId(), requireUserId(), path);
+  const assertWrite = (path: string): void =>
+    sharing.assertCanWrite(requireUserId(), requireUserId(), path);
 
   server.registerTool(
     'search_brain',
@@ -76,6 +105,7 @@ export function buildMcpServer({
     },
     async ({ path }) => {
       try {
+        assertRead(path);
         const note = await notes.get(path);
         return JSON_TEXT(note);
       } catch (err) {
@@ -121,6 +151,7 @@ export function buildMcpServer({
     },
     async ({ path, content, frontmatter }) => {
       try {
+        assertWrite(path);
         const result = await notes.create(path, content, frontmatter);
         return JSON_TEXT(result);
       } catch (err) {
@@ -138,6 +169,7 @@ export function buildMcpServer({
     },
     async ({ path, content }) => {
       try {
+        assertWrite(path);
         const final = await notes.update(path, content);
         return TEXT(`Updated ${final}`);
       } catch (err) {
@@ -200,6 +232,7 @@ export function buildMcpServer({
     },
     async ({ path }) => {
       try {
+        assertWrite(path);
         const final = await notes.createFolder(path);
         return TEXT(`Created folder ${final}`);
       } catch (err) {
@@ -218,6 +251,8 @@ export function buildMcpServer({
     },
     async ({ from, to }) => {
       try {
+        assertWrite(from);
+        assertWrite(to);
         const result = await notes.move(from, to);
         return JSON_TEXT(result);
       } catch (err) {
@@ -239,6 +274,7 @@ export function buildMcpServer({
     },
     async ({ path, recursive }) => {
       try {
+        assertWrite(path);
         const result = await notes.remove(path, { recursive });
         return JSON_TEXT(result);
       } catch (err) {
@@ -261,6 +297,7 @@ export function buildMcpServer({
     },
     async ({ path, data_base64, mime }) => {
       try {
+        assertWrite(path);
         const final = await notes.uploadAttachment({
           path,
           dataBase64: data_base64,
@@ -283,6 +320,7 @@ export function buildMcpServer({
     },
     async ({ path }) => {
       try {
+        assertRead(path);
         const result = await notes.getAttachment(path);
         return JSON_TEXT(result);
       } catch (err) {
@@ -300,6 +338,7 @@ export function buildMcpServer({
     },
     async ({ path }) => {
       try {
+        assertRead(path);
         const rows = notes.listLinks(path);
         return JSON_TEXT(rows);
       } catch (err) {
@@ -307,6 +346,26 @@ export function buildMcpServer({
       }
     },
   );
+
+  if (sharing.enabled) {
+    server.registerTool(
+      'list_shared_with_me',
+      {
+        title: 'List shared folders',
+        description:
+          'List folders that other users have shared with me. Returns folder path, owner id, owner display name, owner email, and granted_at.',
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          const userId = requireUserId();
+          return JSON_TEXT(sharing.listSharedRoots(userId));
+        } catch (err) {
+          return toMcpError(err);
+        }
+      },
+    );
+  }
 
   server.registerTool(
     'get_brainstack_guide',

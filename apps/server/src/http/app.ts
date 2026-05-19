@@ -28,8 +28,10 @@ import type { NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import type { SharingService } from '../services/SharingService.js';
 
+import type { McpPrincipal } from '../mcp/server.js';
+
 export interface BuildAppOptions {
-  buildMcpServer(): McpServer;
+  buildMcpServer(principal: McpPrincipal | null): McpServer;
   logger: Logger;
   auth: AuthService;
   apiKeys: ApiKeyService;

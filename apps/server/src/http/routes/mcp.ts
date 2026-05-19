@@ -9,13 +9,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger } from 'pino';
 
+import type { McpPrincipal } from '../../mcp/server.js';
+import type { AuthBindings } from '../middleware/auth.js';
+
 export interface McpHttpRouterOptions {
-  buildServer(): McpServer;
+  buildServer(principal: McpPrincipal | null): McpServer;
   logger: Logger;
 }
 
-export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOptions): Hono {
-  const router = new Hono();
+export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOptions): Hono<AuthBindings> {
+  const router = new Hono<AuthBindings>();
 
   router.all('/', async (c) => {
     // @hono/node-server exposes the raw Node objects on `c.env`.
@@ -36,8 +39,12 @@ export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOption
       }
     }
 
+    const principal = c.get('principal');
+    const mcpPrincipal: McpPrincipal | null = principal
+      ? { userId: principal.user.id }
+      : null;
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    const server = buildServer();
+    const server = buildServer(mcpPrincipal);
     try {
       await server.connect(transport);
       await transport.handleRequest(incoming, outgoing, body);
