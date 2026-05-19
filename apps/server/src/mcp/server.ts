@@ -11,7 +11,7 @@ import type { Logger } from 'pino';
 
 import { AppError } from '../lib/errors.js';
 
-import type { NoteService } from '../services/NoteService.js';
+import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 
 export interface BuildMcpServerOptions {
@@ -108,27 +108,11 @@ export function buildMcpServer({
   );
 
   server.registerTool(
-    'add_to_inbox',
-    {
-      title: 'Add a note to the inbox',
-      description: 'Create a new note in the Inbox/ folder. Use this for quick capture without classifying.',
-      inputSchema: { content: z.string().min(1), title: z.string().optional() },
-    },
-    async ({ content, title }) => {
-      try {
-        const path = await notes.addToInbox(content, title);
-        return TEXT(`Saved to ${path}`);
-      } catch (err) {
-        return toMcpError(err);
-      }
-    },
-  );
-
-  server.registerTool(
     'create_note',
     {
       title: 'Create a note',
-      description: 'Create a new note at the given path. Fails if a note already exists.',
+      description:
+        'Create a new note at the given path. Fails if a note already exists. Returns the final path plus `affectedMocs`: the existing `_<Folder>.md` index note for the parent folder, if any, which you should consider updating to link the new note.',
       inputSchema: {
         path: z.string().min(1),
         content: z.string(),
@@ -137,8 +121,8 @@ export function buildMcpServer({
     },
     async ({ path, content, frontmatter }) => {
       try {
-        const final = await notes.create(path, content, frontmatter);
-        return TEXT(`Created ${final}`);
+        const result = await notes.create(path, content, frontmatter);
+        return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
       }
@@ -156,6 +140,151 @@ export function buildMcpServer({
       try {
         const final = await notes.update(path, content);
         return TEXT(`Updated ${final}`);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_tree',
+    {
+      title: 'List the vault tree',
+      description:
+        'Return a hierarchical view of the vault. Scope to a subfolder with `path`. ' +
+        'Cap depth with `depth` (default 4). Folders are listed before files; both alphabetical.',
+      inputSchema: {
+        path: z.string().optional(),
+        depth: z.number().int().min(1).max(MAX_TREE_DEPTH).optional(),
+      },
+    },
+    async ({ path, depth }) => {
+      try {
+        const tree = await notes.listTree(path, depth);
+        return JSON_TEXT(tree);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_decisions',
+    {
+      title: 'List decisions',
+      description:
+        'List every note flagged as a decision (tag `decisión`/`decision` or frontmatter `status: decidido`). ' +
+        'Optional folder scope.',
+      inputSchema: {
+        folder: z.string().optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    async (args) => {
+      try {
+        const rows = notes.listDecisions(args);
+        return JSON_TEXT(rows);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'create_folder',
+    {
+      title: 'Create a folder',
+      description:
+        'Create a folder (and any missing parents) under the vault root. Idempotent: a no-op if the folder already exists.',
+      inputSchema: { path: z.string().min(1) },
+    },
+    async ({ path }) => {
+      try {
+        const final = await notes.createFolder(path);
+        return TEXT(`Created folder ${final}`);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'move',
+    {
+      title: 'Move or rename a note, attachment, or folder',
+      description:
+        'Move/rename a path. Wikilinks pointing at the moved path(s) — including aliases, sections, and attachment embeds — are rewritten across the vault. Folders are moved with all their contents. Returns the final path plus `affectedMocs`: existing `_<Folder>.md` index notes in the source and destination parent folders that you should consider updating.',
+      inputSchema: { from: z.string().min(1), to: z.string().min(1) },
+    },
+    async ({ from, to }) => {
+      try {
+        const result = await notes.move(from, to);
+        return JSON_TEXT(result);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'delete',
+    {
+      title: 'Delete a note, attachment, or folder',
+      description:
+        'Delete a path. Folders require `recursive: true` unless empty. Does NOT rewrite wikilinks — links pointing here become unresolved.',
+      inputSchema: {
+        path: z.string().min(1),
+        recursive: z.boolean().optional(),
+      },
+    },
+    async ({ path, recursive }) => {
+      try {
+        const result = await notes.remove(path, { recursive });
+        return JSON_TEXT(result);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'upload_attachment',
+    {
+      title: 'Upload an attachment',
+      description:
+        'Write a binary attachment under Attachments/. `data_base64` is the file content base64-encoded. Returns the final path so it can be embedded as ![[…]].',
+      inputSchema: {
+        path: z.string().min(1),
+        data_base64: z.string().min(1),
+        mime: z.string().optional(),
+      },
+    },
+    async ({ path, data_base64, mime }) => {
+      try {
+        const final = await notes.uploadAttachment({
+          path,
+          dataBase64: data_base64,
+          mime,
+        });
+        return TEXT(final);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_attachment',
+    {
+      title: 'Read an attachment',
+      description:
+        'Return the bytes of an attachment under Attachments/, base64-encoded, along with size and mtime.',
+      inputSchema: { path: z.string().min(1) },
+    },
+    async ({ path }) => {
+      try {
+        const result = await notes.getAttachment(path);
+        return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
       }

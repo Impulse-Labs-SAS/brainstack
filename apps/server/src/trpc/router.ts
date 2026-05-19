@@ -7,6 +7,7 @@ import superjson from 'superjson';
 import { z } from 'zod';
 
 import { AppError } from '../lib/errors.js';
+import { MAX_TREE_DEPTH } from '../services/NoteService.js';
 
 import type { TrpcContext } from './context.js';
 
@@ -91,24 +92,70 @@ export const appRouter = t.router({
         wrap(() => ctx.notes.update(input.path, input.content)),
       ),
     remove: protectedProcedure
-      .input(z.object({ path: z.string().min(1) }))
-      .mutation(async ({ ctx, input }) => {
-        await wrap(() => ctx.notes.remove(input.path));
-        return { ok: true };
-      }),
+      .input(
+        z.object({
+          path: z.string().min(1),
+          recursive: z.boolean().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => ctx.notes.remove(input.path, { recursive: input.recursive })),
+      ),
     move: protectedProcedure
       .input(z.object({ from: z.string().min(1), to: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
         wrap(() => ctx.notes.move(input.from, input.to)),
       ),
+    createFolder: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => ctx.notes.createFolder(input.path)),
+      ),
+    tree: protectedProcedure
+      .input(
+        z
+          .object({
+            path: z.string().optional(),
+            depth: z.number().int().min(1).max(MAX_TREE_DEPTH).optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) =>
+        wrap(() => ctx.notes.listTree(input?.path, input?.depth)),
+      ),
+    decisions: protectedProcedure
+      .input(
+        z
+          .object({
+            folder: z.string().optional(),
+            limit: z.number().int().min(1).max(500).optional(),
+          })
+          .optional(),
+      )
+      .query(({ ctx, input }) => ctx.notes.listDecisions(input ?? {})),
+    uploadAttachment: protectedProcedure
+      .input(
+        z.object({
+          path: z.string().min(1),
+          dataBase64: z.string().min(1),
+          mime: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(() =>
+          ctx.notes.uploadAttachment({
+            path: input.path,
+            dataBase64: input.dataBase64,
+            mime: input.mime,
+          }),
+        ),
+      ),
+    getAttachment: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .query(async ({ ctx, input }) => wrap(() => ctx.notes.getAttachment(input.path))),
     backlinks: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .query(({ ctx, input }) => ctx.notes.listLinks(input.path)),
-    addToInbox: protectedProcedure
-      .input(z.object({ content: z.string().min(1), title: z.string().optional() }))
-      .mutation(async ({ ctx, input }) =>
-        wrap(() => ctx.notes.addToInbox(input.content, input.title)),
-      ),
   }),
   search: t.router({
     query: protectedProcedure
