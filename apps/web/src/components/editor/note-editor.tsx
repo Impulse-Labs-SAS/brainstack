@@ -2,10 +2,34 @@
 
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorState } from '@codemirror/state';
-import { oneDark } from '@codemirror/theme-one-dark';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { useEffect, useRef } from 'react';
+
+/** Sober markdown highlight aligned with the app palette (no saturated greens/reds). */
+const brainHighlight = HighlightStyle.define([
+  { tag: t.heading1, color: 'var(--fg-primary)', fontWeight: '600' },
+  { tag: t.heading2, color: 'var(--fg-primary)', fontWeight: '600' },
+  { tag: [t.heading3, t.heading4, t.heading5, t.heading6], color: 'var(--fg-primary)', fontWeight: '600' },
+  { tag: t.strong, color: 'var(--fg-primary)', fontWeight: '600' },
+  { tag: t.emphasis, color: 'var(--fg-primary)', fontStyle: 'italic' },
+  { tag: t.link, color: 'var(--accent)' },
+  { tag: t.url, color: 'var(--accent)' },
+  { tag: t.monospace, color: 'var(--fg-secondary)' },
+  { tag: t.quote, color: 'var(--fg-secondary)', fontStyle: 'italic' },
+  { tag: t.list, color: 'var(--fg-secondary)' },
+  { tag: t.meta, color: 'var(--fg-muted)' },
+  { tag: t.comment, color: 'var(--fg-muted)', fontStyle: 'italic' },
+  { tag: t.processingInstruction, color: 'var(--fg-muted)' },
+  { tag: t.contentSeparator, color: 'var(--fg-muted)' },
+  { tag: [t.atom, t.bool, t.number], color: 'var(--fg-secondary)' },
+  { tag: [t.keyword, t.modifier, t.operatorKeyword], color: 'var(--fg-secondary)' },
+  { tag: [t.string, t.regexp], color: 'var(--fg-secondary)' },
+  { tag: t.escape, color: 'var(--accent)' },
+  { tag: t.invalid, color: 'var(--danger)' },
+]);
 
 export interface NoteEditorProps {
   value: string;
@@ -28,7 +52,7 @@ export function NoteEditor({ value, onChange }: NoteEditorProps) {
         lineNumbers(),
         history(),
         markdown(),
-        oneDark,
+        syntaxHighlighting(brainHighlight),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
@@ -36,11 +60,29 @@ export function NoteEditor({ value, onChange }: NoteEditorProps) {
             onChangeRef.current(update.state.doc.toString());
           }
         }),
-        EditorView.theme({
-          '&': { height: '100%', backgroundColor: 'transparent' },
-          '.cm-content': { padding: '16px', fontFamily: 'var(--font-mono)' },
-          '.cm-gutters': { backgroundColor: 'transparent', borderRight: '1px solid var(--border-subtle)' },
-        }),
+        EditorView.theme(
+          {
+            '&': {
+              height: '100%',
+              backgroundColor: 'transparent',
+              color: 'var(--fg-primary)',
+            },
+            '.cm-scroller': { fontFamily: 'var(--font-mono)' },
+            '.cm-content': { padding: '16px', caretColor: 'var(--accent)' },
+            '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
+            '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection':
+              { backgroundColor: 'rgba(124, 92, 255, 0.25)' },
+            '.cm-gutters': {
+              backgroundColor: 'transparent',
+              borderRight: '1px solid var(--border-subtle)',
+              color: 'var(--fg-muted)',
+            },
+            '.cm-activeLine': { backgroundColor: 'rgba(255, 255, 255, 0.02)' },
+            '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--fg-secondary)' },
+            '.cm-lineNumbers .cm-gutterElement': { color: 'var(--fg-disabled)' },
+          },
+          { dark: true },
+        ),
       ],
     });
     const view = new EditorView({ state, parent: hostRef.current });
