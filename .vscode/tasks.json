@@ -8,6 +8,7 @@
       "command": "pnpm",
       "args": ["--filter", "@brainstack/server", "dev"],
       "isBackground": true,
+      "group": "build",
       "problemMatcher": [],
       "presentation": { "panel": "dedicated", "group": "brainstack", "reveal": "always" }
     },
@@ -18,17 +19,7 @@
       "command": "pnpm",
       "args": ["--filter", "@brainstack/web", "dev"],
       "isBackground": true,
-      "problemMatcher": [],
-      "presentation": { "panel": "dedicated", "group": "brainstack", "reveal": "always" }
-    },
-    {
-      "label": "mcp",
-      "detail": "Server in MCP stdio mode (for Claude Code / Cursor local)",
-      "type": "shell",
-      "command": "pnpm",
-      "args": ["--filter", "@brainstack/server", "dev"],
-      "options": { "env": { "MCP_STDIO": "true" } },
-      "isBackground": true,
+      "group": "build",
       "problemMatcher": [],
       "presentation": { "panel": "dedicated", "group": "brainstack", "reveal": "always" }
     },
@@ -36,7 +27,7 @@
       "label": "dev: all (back + front)",
       "dependsOn": ["back", "front"],
       "dependsOrder": "parallel",
-      "group": { "kind": "build", "isDefault": true },
+      "group": "build",
       "problemMatcher": [],
       "presentation": { "group": "brainstack" }
     }

@@ -17,6 +17,7 @@ out/
 .env.local
 .env.*.local
 !.env.example
+.claude/settings.local.json
 
 # SQLite (BrainStack cache)
 *.db
