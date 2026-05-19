@@ -33,6 +33,13 @@ export class NoteAlreadyExistsError extends Error {
   }
 }
 
+export class FolderNotEmptyError extends Error {
+  override readonly name = 'FolderNotEmptyError';
+  constructor(public readonly path: string) {
+    super(`folder not empty: ${path}`);
+  }
+}
+
 export interface ReadNoteResult {
   /** Posix path relative to root. */
   path: string;
@@ -154,6 +161,72 @@ export async function moveNote(
   if (!fromStats || !fromStats.isFile()) {
     throw new NoteNotFoundError(fromNorm);
   }
+  if (!options.overwrite && (await exists(toAbs))) {
+    throw new NoteAlreadyExistsError(toNorm);
+  }
+
+  await fsp.mkdir(dirname(toAbs), { recursive: true });
+  await fsp.rename(fromAbs, toAbs);
+  return relativeToRoot(root, toAbs);
+}
+
+/**
+ * Create a folder (and any missing parents) under root. Idempotent: succeeds
+ * if the folder already exists. Returns the canonical posix path.
+ */
+export async function createFolder(root: string, path: string): Promise<string> {
+  const norm = toPosixPath(path);
+  const abs = safeResolve(root, norm);
+  await fsp.mkdir(abs, { recursive: true });
+  return relativeToRoot(root, abs);
+}
+
+/**
+ * Delete a file or folder. For folders, refuses to delete a non-empty folder
+ * unless `recursive` is set. Throws `NoteNotFoundError` if the path is missing.
+ */
+export async function deletePath(
+  root: string,
+  path: string,
+  options: { recursive?: boolean } = {},
+): Promise<void> {
+  const norm = toPosixPath(path);
+  const abs = safeResolve(root, norm);
+  const stats = await statSafe(abs);
+  if (!stats) throw new NoteNotFoundError(norm);
+
+  if (stats.isDirectory()) {
+    if (!options.recursive) {
+      const entries = await fsp.readdir(abs);
+      if (entries.length > 0) throw new FolderNotEmptyError(norm);
+      await fsp.rmdir(abs);
+      return;
+    }
+    await fsp.rm(abs, { recursive: true, force: true });
+    return;
+  }
+
+  await fsp.unlink(abs);
+}
+
+/**
+ * Move/rename either a file or a folder. Unlike `moveNote`, this does not
+ * coerce a `.md` suffix; the caller passes exact posix paths. Refuses to
+ * overwrite an existing destination unless `overwrite` is true.
+ */
+export async function movePath(
+  root: string,
+  fromPath: string,
+  toPath: string,
+  options: { overwrite?: boolean } = {},
+): Promise<string> {
+  const fromNorm = toPosixPath(fromPath);
+  const toNorm = toPosixPath(toPath);
+  const fromAbs = safeResolve(root, fromNorm);
+  const toAbs = safeResolve(root, toNorm);
+
+  const fromStats = await statSafe(fromAbs);
+  if (!fromStats) throw new NoteNotFoundError(fromNorm);
   if (!options.overwrite && (await exists(toAbs))) {
     throw new NoteAlreadyExistsError(toNorm);
   }

@@ -34,11 +34,15 @@ export {
   toPosixPath,
 } from './fs/paths.js';
 export {
+  FolderNotEmptyError,
   NoteAlreadyExistsError,
   NoteNotFoundError,
+  createFolder,
   deleteNote,
+  deletePath,
   listNoteFiles,
   moveNote,
+  movePath,
   readNote,
   writeNote,
   type ReadNoteResult,
@@ -47,8 +51,15 @@ export {
 export {
   ATTACHMENTS_DIR,
   listAttachments,
+  readAttachment,
+  writeAttachment,
   type AttachmentInfo,
 } from './fs/attachments.js';
+export {
+  rewriteLinkTargets,
+  type LinkRewriteMapping,
+  type RewriteResult,
+} from './fs/rewrite-links.js';
 
 // --- Parser ------------------------------------------------------------------
 export {
