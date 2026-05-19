@@ -66,7 +66,12 @@ export const appRouter = t.router({
   notes: t.router({
     get: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
-      .query(async ({ ctx, input }) => wrap(() => ctx.notes.get(input.path))),
+      .query(async ({ ctx, input }) =>
+        wrap(() => {
+          ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
+          return ctx.notes.get(input.path);
+        }),
+      ),
     list: protectedProcedure
       .input(
         z
@@ -84,12 +89,18 @@ export const appRouter = t.router({
         z.object({ path: z.string().min(1), content: z.string(), frontmatter: FrontmatterInput }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => ctx.notes.create(input.path, input.content, input.frontmatter)),
+        wrap(() => {
+          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+          return ctx.notes.create(input.path, input.content, input.frontmatter);
+        }),
       ),
     update: protectedProcedure
       .input(z.object({ path: z.string().min(1), content: z.string() }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => ctx.notes.update(input.path, input.content)),
+        wrap(() => {
+          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+          return ctx.notes.update(input.path, input.content);
+        }),
       ),
     remove: protectedProcedure
       .input(
@@ -99,17 +110,27 @@ export const appRouter = t.router({
         }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => ctx.notes.remove(input.path, { recursive: input.recursive })),
+        wrap(() => {
+          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+          return ctx.notes.remove(input.path, { recursive: input.recursive });
+        }),
       ),
     move: protectedProcedure
       .input(z.object({ from: z.string().min(1), to: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => ctx.notes.move(input.from, input.to)),
+        wrap(() => {
+          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.from);
+          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.to);
+          return ctx.notes.move(input.from, input.to);
+        }),
       ),
     createFolder: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => ctx.notes.createFolder(input.path)),
+        wrap(() => {
+          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+          return ctx.notes.createFolder(input.path);
+        }),
       ),
     tree: protectedProcedure
       .input(
@@ -142,20 +163,29 @@ export const appRouter = t.router({
         }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() =>
-          ctx.notes.uploadAttachment({
+        wrap(() => {
+          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+          return ctx.notes.uploadAttachment({
             path: input.path,
             dataBase64: input.dataBase64,
             mime: input.mime,
-          }),
-        ),
+          });
+        }),
       ),
     getAttachment: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
-      .query(async ({ ctx, input }) => wrap(() => ctx.notes.getAttachment(input.path))),
+      .query(async ({ ctx, input }) =>
+        wrap(() => {
+          ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
+          return ctx.notes.getAttachment(input.path);
+        }),
+      ),
     backlinks: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
-      .query(({ ctx, input }) => ctx.notes.listLinks(input.path)),
+      .query(({ ctx, input }) => {
+        ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
+        return ctx.notes.listLinks(input.path);
+      }),
     graph: protectedProcedure.query(({ ctx }) => ctx.notes.graph()),
   }),
   search: t.router({
