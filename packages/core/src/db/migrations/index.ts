@@ -6,10 +6,11 @@ import * as m0002 from './0002_auth.js';
 import * as m0003 from './0003_drop_magic_link.js';
 import * as m0004 from './0004_password_oauth_totp.js';
 import * as m0005 from './0005_owner_id.js';
+import * as m0006 from './0006_sharing.js';
 
 export interface Migration {
   name: string;
   sql: string;
 }
 
-export const migrations: readonly Migration[] = [m0001, m0002, m0003, m0004, m0005];
+export const migrations: readonly Migration[] = [m0001, m0002, m0003, m0004, m0005, m0006];

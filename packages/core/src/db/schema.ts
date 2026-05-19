@@ -148,3 +148,49 @@ export const apiKeys = sqliteTable(
   },
   (t) => ({ userIdx: index('idx_api_keys_user').on(t.userId) }),
 );
+
+// --- Sharing -----------------------------------------------------------------
+// Solo se consulta en hosted; las tablas existen en ambos modos para evitar
+// drift de schema. Ver docs/Sharing-design.md §4.2.
+
+export const folderShares = sqliteTable(
+  'folder_shares',
+  {
+    id: text('id').primaryKey(),
+    /** Path relativo al vault del dueño, sin slash inicial. */
+    folderPath: text('folder_path').notNull(),
+    ownerId: text('owner_id').notNull(),
+    sharedWithUserId: text('shared_with_user_id').notNull(),
+    grantedAt: integer('granted_at').notNull(),
+    /** Quién creó la fila; normalmente == ownerId, queda explícito para auditoría. */
+    grantedBy: text('granted_by').notNull(),
+  },
+  (t) => ({
+    byTarget: index('idx_folder_shares_target').on(t.sharedWithUserId, t.folderPath),
+    byOwner: index('idx_folder_shares_owner').on(t.ownerId, t.folderPath),
+  }),
+);
+
+export const folderShareInvites = sqliteTable(
+  'folder_share_invites',
+  {
+    id: text('id').primaryKey(),
+    folderPath: text('folder_path').notNull(),
+    ownerId: text('owner_id').notNull(),
+    /** 'email' (targeted) o 'link' (multi-use hasta revocar). */
+    mode: text('mode', { enum: ['email', 'link'] }).notNull(),
+    /** Solo para mode='email'. NULL para 'link'. */
+    inviteeEmail: text('invitee_email'),
+    /** SHA-256 hex del token plano. Nunca guardamos el token. */
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: integer('expires_at').notNull(),
+    acceptedAt: integer('accepted_at'),
+    acceptedByUserId: text('accepted_by_user_id'),
+    revokedAt: integer('revoked_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    byOwner: index('idx_folder_share_invites_owner').on(t.ownerId, t.folderPath),
+    byEmail: index('idx_folder_share_invites_email').on(t.inviteeEmail),
+  }),
+);
