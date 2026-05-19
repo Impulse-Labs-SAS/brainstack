@@ -9,6 +9,7 @@ import { getCookie } from 'hono/cookie';
 import type { ApiKey, ApiKeyService } from '../../services/ApiKeyService.js';
 import type { AuthService, User } from '../../services/AuthService.js';
 import type { NoteService } from '../../services/NoteService.js';
+import type { InviteService } from '../../services/InviteService.js';
 import type { SearchService } from '../../services/SearchService.js';
 import type { SharingService } from '../../services/SharingService.js';
 import { SESSION_COOKIE, type AuthBindings, type Principal } from '../middleware/auth.js';
@@ -21,6 +22,7 @@ export interface TrpcRouterOptions {
   auth: AuthService;
   apiKeys: ApiKeyService;
   sharing: SharingService;
+  invites: InviteService;
   resolveUserForApiKey(apiKey: ApiKey): User;
 }
 
@@ -42,6 +44,7 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
             notes: options.notes,
             search: options.search,
             sharing: options.sharing,
+            invites: options.invites,
           },
           principal,
         ),

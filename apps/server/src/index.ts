@@ -16,6 +16,7 @@ import { BackupService } from './services/BackupService.js';
 import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js';
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { IndexService } from './services/IndexService.js';
+import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
 import { backfillOwnerId } from './services/OwnerBackfill.js';
 import { SearchService } from './services/SearchService.js';
@@ -56,6 +57,12 @@ async function main(): Promise<void> {
   });
   const apiKeys = new ApiKeyService({ db: bs });
   const sharing = new SharingService({ db: bs, deployment: cfg.BRAINSTACK_DEPLOYMENT });
+  const invites = new InviteService({
+    db: bs,
+    email: emailSender,
+    sharing,
+    publicOrigin: cfg.PUBLIC_ORIGIN,
+  });
 
   const google =
     cfg.GOOGLE_OAUTH_CLIENT_ID && cfg.GOOGLE_OAUTH_CLIENT_SECRET && cfg.GOOGLE_OAUTH_REDIRECT_URI
@@ -104,6 +111,7 @@ async function main(): Promise<void> {
     notes,
     search,
     sharing,
+    invites,
     resolveUserForApiKey: (apiKey) => {
       const user = auth.getUser(apiKey.userId);
       if (!user) {

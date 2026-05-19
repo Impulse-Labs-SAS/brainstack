@@ -24,6 +24,9 @@ import { createTotpRouter } from './routes/totp.js';
 import { createTrpcRouter } from './routes/trpc.js';
 import { healthRouter } from './routes/health.js';
 import { createConfigRouter, type PublicConfig } from './routes/config.js';
+import { createInviteRouter } from './routes/invite.js';
+import { buildOptionalAuthMiddleware } from './middleware/auth.js';
+import type { InviteService } from '../services/InviteService.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import type { SharingService } from '../services/SharingService.js';
@@ -38,6 +41,7 @@ export interface BuildAppOptions {
   notes: NoteService;
   search: SearchService;
   sharing: SharingService;
+  invites: InviteService;
   resolveUserForApiKey(apiKey: ApiKey): User;
   rateLimitPerMinute: number;
   secureCookies: boolean;
@@ -92,6 +96,15 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
 
   app.route('/health', healthRouter);
   app.route('/api/config', createConfigRouter(opts.publicConfig));
+
+  // /invite/accept/:token corre con optional-auth: el handler maneja
+  // los casos logueado/no-logueado y redirige al frontend acorde.
+  const optionalAuth = buildOptionalAuthMiddleware(middlewareOpts);
+  app.use('/invite/*', optionalAuth);
+  app.route(
+    '/invite',
+    createInviteRouter({ invites: opts.invites, appHome: opts.appHome }),
+  );
   app.route(
     '/auth',
     createAuthRouter({
@@ -144,6 +157,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       auth: opts.auth,
       apiKeys: opts.apiKeys,
       sharing: opts.sharing,
+      invites: opts.invites,
       resolveUserForApiKey: opts.resolveUserForApiKey,
     }),
   );

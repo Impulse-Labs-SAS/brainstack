@@ -4,6 +4,7 @@
 import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
 import type { NoteService } from '../services/NoteService.js';
+import type { InviteService } from '../services/InviteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import type { SharingService } from '../services/SharingService.js';
 
@@ -15,6 +16,7 @@ export interface ServerServices {
   notes: NoteService;
   search: SearchService;
   sharing: SharingService;
+  invites: InviteService;
 }
 
 export interface TrpcContext extends ServerServices {

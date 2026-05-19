@@ -246,6 +246,55 @@ export const appRouter = t.router({
           return { ok: true };
         }),
       ),
+    createInvite: protectedProcedure
+      .input(
+        z.object({
+          folderPath: z.string().min(1),
+          mode: z.enum(['email', 'link']),
+          inviteeEmail: z.string().email().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          const inv = await ctx.invites.create({
+            ownerId: ctx.user.id,
+            folderPath: input.folderPath,
+            mode: input.mode,
+            inviteeEmail: input.inviteeEmail,
+          });
+          // En email mode no devolvemos el token (ya fue enviado por mail).
+          return input.mode === 'link'
+            ? inv
+            : {
+                inviteId: inv.inviteId,
+                mode: inv.mode,
+                acceptUrl: null as string | null,
+                expiresAt: inv.expiresAt,
+                token: null as string | null,
+              };
+        }),
+      ),
+    listPendingInvites: protectedProcedure.query(({ ctx }) =>
+      ctx.invites.listPending(ctx.user.id),
+    ),
+    revokeInvite: protectedProcedure
+      .input(z.object({ inviteId: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() => {
+          ctx.invites.revoke(ctx.user.id, input.inviteId);
+          return { ok: true };
+        }),
+      ),
+    acceptInvite: protectedProcedure
+      .input(z.object({ token: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() =>
+          ctx.invites.accept({
+            token: input.token,
+            user: { id: ctx.user.id, email: ctx.user.email },
+          }),
+        ),
+      ),
   }),
   apiKeys: t.router({
     list: protectedProcedure.query(({ ctx }) => ctx.apiKeys.list(ctx.user.id)),
