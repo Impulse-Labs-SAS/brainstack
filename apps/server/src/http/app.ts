@@ -23,6 +23,7 @@ import { createOAuthGoogleRouter } from './routes/oauthGoogle.js';
 import { createTotpRouter } from './routes/totp.js';
 import { createTrpcRouter } from './routes/trpc.js';
 import { healthRouter } from './routes/health.js';
+import { createConfigRouter, type PublicConfig } from './routes/config.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 
@@ -48,6 +49,8 @@ export interface BuildAppOptions {
   google?: GoogleOAuthService;
   /** TOTP service. When omitted, /auth/totp/* routes are disabled. */
   totp?: TotpService;
+  /** Public deployment config exposed at GET /api/config. */
+  publicConfig: PublicConfig;
 }
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
@@ -84,6 +87,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const loginLimiter = opts.loginLimiter ?? createLoginRateLimiter();
 
   app.route('/health', healthRouter);
+  app.route('/api/config', createConfigRouter(opts.publicConfig));
   app.route(
     '/auth',
     createAuthRouter({

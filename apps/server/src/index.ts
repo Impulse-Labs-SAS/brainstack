@@ -113,6 +113,10 @@ async function main(): Promise<void> {
     exposeDevTokens: cfg.NODE_ENV === 'development',
     google,
     totp,
+    publicConfig: {
+      deployment: cfg.BRAINSTACK_DEPLOYMENT,
+      features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },
+    },
   });
   const httpServer = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info({ port: info.port }, 'HTTP listening');

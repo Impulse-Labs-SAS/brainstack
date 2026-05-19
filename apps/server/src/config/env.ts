@@ -34,6 +34,12 @@ const Env = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().optional(),
+  /**
+   * Modo de deployment. `self-host` (default) mantiene el comportamiento
+   * single-user histórico. `hosted` activa multi-tenant + sharing. Ver
+   * docs/Sharing-design.md.
+   */
+  BRAINSTACK_DEPLOYMENT: z.enum(['self-host', 'hosted']).default('self-host'),
 });
 
 export type AppEnv = z.infer<typeof Env>;
