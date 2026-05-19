@@ -13,6 +13,7 @@ import {
   PathTraversalError,
   createFolder,
   deletePath,
+  listFolders,
   movePath,
   readAttachment,
   readNote,
@@ -430,6 +431,42 @@ export class NoteService {
   }
 
   /**
+   * Whole-vault graph for the Obsidian-style visualisation. Nodes are notes
+   * (path + title); edges are resolved note-to-note wikilinks/embeds. Unresolved
+   * links and attachment links are dropped — they have no node to anchor to.
+   * Duplicate edges (multiple links between the same pair) are collapsed and
+   * counted via `weight` so the renderer can thicken heavy connections.
+   */
+  graph(): {
+    nodes: Array<{ path: string; title: string }>;
+    edges: Array<{ source: string; target: string; weight: number }>;
+  } {
+    const nodes = this.opts.db.sqlite
+      .prepare<unknown[], { path: string; title: string }>('SELECT path, title FROM notes')
+      .all();
+    const nodeSet = new Set(nodes.map((n) => n.path));
+
+    const raw = this.opts.db.sqlite
+      .prepare<unknown[], { source_path: string; target_path: string }>(
+        `SELECT source_path, target_path FROM links
+         WHERE target_type = 'note' AND source_path <> target_path`,
+      )
+      .all();
+
+    const counts = new Map<string, number>();
+    for (const link of raw) {
+      if (!nodeSet.has(link.source_path) || !nodeSet.has(link.target_path)) continue;
+      const key = `${link.source_path} ${link.target_path}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const edges = Array.from(counts.entries()).map(([key, weight]) => {
+      const [source, target] = key.split(' ');
+      return { source: source ?? '', target: target ?? '', weight };
+    });
+    return { nodes, edges };
+  }
+
+  /**
    * Hierarchical view of the vault. Builds a tree from the indexed notes +
    * attachments. `path` scopes the root of the tree (omit for the whole
    * vault). `depth` caps how many levels deep we descend (1 = immediate
@@ -466,6 +503,37 @@ export class NoteService {
 
     const folderIndex = new Map<string, TreeNode>();
     folderIndex.set(scope, rootNode);
+
+    // Seed the index with real filesystem folders so empty ones still show up.
+    // The notes/attachments loop below only materialises folders that contain
+    // indexed files, so without this pass `createFolder` would be invisible.
+    const allFolders = await listFolders(this.opts.root);
+    for (const folderPath of allFolders) {
+      const inFolderScope = scope
+        ? folderPath === scope || folderPath.startsWith(`${scope}/`)
+        : true;
+      if (!inFolderScope) continue;
+      const relative = scope ? folderPath.slice(scope.length + 1) : folderPath;
+      if (relative === '') continue;
+      const segments = relative.split('/');
+      if (segments.length > maxDepth) continue;
+      let parentPath = scope;
+      for (let i = 0; i < segments.length; i++) {
+        const segment = segments[i] ?? '';
+        const fp = parentPath === '' ? segment : `${parentPath}/${segment}`;
+        if (!folderIndex.has(fp)) {
+          const node: TreeNode = {
+            path: fp,
+            name: segment,
+            type: 'folder',
+            children: [],
+          };
+          folderIndex.set(fp, node);
+          folderIndex.get(parentPath)?.children?.push(node);
+        }
+        parentPath = fp;
+      }
+    }
 
     for (const entry of inScope) {
       const relative = scope ? entry.path.slice(scope.length + 1) : entry.path;

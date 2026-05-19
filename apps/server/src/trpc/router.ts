@@ -156,6 +156,7 @@ export const appRouter = t.router({
     backlinks: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .query(({ ctx, input }) => ctx.notes.listLinks(input.path)),
+    graph: protectedProcedure.query(({ ctx }) => ctx.notes.graph()),
   }),
   search: t.router({
     query: protectedProcedure
