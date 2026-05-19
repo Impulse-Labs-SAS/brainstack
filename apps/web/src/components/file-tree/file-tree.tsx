@@ -17,10 +17,13 @@ import {
 import {
   ChevronDown,
   ChevronRight,
+  FilePlus,
   FileText,
   Folder,
+  FolderPlus,
   Image as ImageIcon,
   Loader2,
+  Trash2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import {
@@ -34,6 +37,17 @@ import {
 
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
+import { SearchInput } from '@/components/search/search-input';
+import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
+
+type PromptKind = 'createNote' | 'createFolder' | 'rename';
+type PromptState = {
+  kind: PromptKind;
+  targetPath: string;
+  title: string;
+  label?: string;
+  defaultValue?: string;
+};
 
 const MAX_TREE_DEPTH = 20;
 
@@ -47,6 +61,29 @@ type TreeNode = {
 type Toast = { id: number; kind: 'info' | 'error'; text: string };
 
 const ROOT_DROP_ID = '__root__';
+const EXPANDED_KEY = 'brainstack:tree-expanded';
+
+function loadExpanded(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.localStorage.getItem(EXPANDED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return new Set(arr.filter((x): x is string => typeof x === 'string'));
+  } catch {
+    // ignore
+  }
+  return new Set();
+}
+
+function saveExpanded(set: Set<string>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(EXPANDED_KEY, JSON.stringify([...set]));
+  } catch {
+    // ignore
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,9 +102,6 @@ function attachmentDestForFile(file: File): string {
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
-  // Strip path components (the browser shouldn't send any, but be defensive)
-  // and replace control chars; keep accents/spaces — the server only blocks
-  // traversal, not Unicode.
   const safeName = file.name.replace(/[/\\]+/g, '_');
   return `Attachments/${yyyy}/${mm}/${safeName}`;
 }
@@ -82,7 +116,6 @@ function readAsBase64(file: File): Promise<string> {
         reject(new Error('unexpected reader result type'));
         return;
       }
-      // strip the `data:<mime>;base64,` prefix
       const comma = result.indexOf(',');
       resolve(comma === -1 ? result : result.slice(comma + 1));
     };
@@ -101,17 +134,29 @@ interface NodeRowProps {
   toggle(path: string): void;
   menuFor: string | null;
   openMenu(path: string, x: number, y: number): void;
+  onDeleteClick(path: string): void;
+  onPrefetch(path: string): void;
   busy: Set<string>;
 }
 
-function NodeRow({ node, depth, expanded, toggle, menuFor, openMenu, busy }: NodeRowProps) {
+function NodeRow({
+  node,
+  depth,
+  expanded,
+  toggle,
+  menuFor,
+  openMenu,
+  onDeleteClick,
+  onPrefetch,
+  busy,
+}: NodeRowProps) {
   const router = useRouter();
   const isFolder = node.type === 'folder';
   const isExpanded = isFolder ? expanded.has(node.path) || node.path === '' : false;
 
   const draggable = useDraggable({
     id: node.path === '' ? ROOT_DROP_ID : node.path,
-    disabled: node.path === '', // root isn't draggable
+    disabled: node.path === '',
   });
   const droppable = useDroppable({
     id: node.path === '' ? ROOT_DROP_ID : node.path,
@@ -120,10 +165,10 @@ function NodeRow({ node, depth, expanded, toggle, menuFor, openMenu, busy }: Nod
 
   const Icon = isFolder ? Folder : node.type === 'note' ? FileText : ImageIcon;
 
-  const onContext = (e: ReactDragEvent | React.MouseEvent) => {
+  const onContext = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    openMenu(node.path, (e as React.MouseEvent).clientX, (e as React.MouseEvent).clientY);
+    openMenu(node.path, e.clientX, e.clientY);
   };
 
   const onClick = () => {
@@ -146,10 +191,13 @@ function NodeRow({ node, depth, expanded, toggle, menuFor, openMenu, busy }: Nod
           {...draggable.attributes}
           {...draggable.listeners}
           onClick={onClick}
+          onMouseEnter={() => {
+            if (node.type === 'note') onPrefetch(node.path);
+          }}
           onContextMenu={onContext}
           style={{ paddingLeft: 8 + depth * 14 }}
           className={cn(
-            'group flex h-7 cursor-default select-none items-center gap-1.5 rounded pr-2 text-sm transition-colors',
+            'group flex h-7 cursor-default select-none items-center gap-1.5 rounded pr-1 text-sm transition-colors',
             'hover:bg-bg-elevated',
             droppable.isOver && isFolder ? 'bg-accent/10 ring-1 ring-accent' : '',
             menuFor === node.path ? 'bg-bg-elevated' : '',
@@ -171,9 +219,23 @@ function NodeRow({ node, depth, expanded, toggle, menuFor, openMenu, busy }: Nod
             <span className="w-5" />
           )}
           <Icon size={13} className="text-fg-muted" strokeWidth={1.75} />
-          <span className="truncate font-mono text-[12px] text-fg-secondary">{node.name}</span>
-          {busy.has(node.path) && (
-            <Loader2 size={11} className="ml-auto animate-spin text-fg-muted" />
+          <span className="flex-1 truncate font-mono text-[12px] text-fg-secondary">
+            {node.name}
+          </span>
+          {busy.has(node.path) ? (
+            <Loader2 size={11} className="animate-spin text-fg-muted" />
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteClick(node.path);
+              }}
+              title="Delete"
+              className="flex h-5 w-5 items-center justify-center rounded text-fg-muted opacity-0 transition-opacity hover:bg-bg-surface hover:text-red-400 group-hover:opacity-100"
+            >
+              <Trash2 size={11} strokeWidth={1.75} />
+            </button>
           )}
         </div>
       )}
@@ -188,6 +250,8 @@ function NodeRow({ node, depth, expanded, toggle, menuFor, openMenu, busy }: Nod
               toggle={toggle}
               menuFor={menuFor}
               openMenu={openMenu}
+              onDeleteClick={onDeleteClick}
+              onPrefetch={onPrefetch}
               busy={busy}
             />
           ))}
@@ -219,10 +283,17 @@ export function FileTree() {
   const removeM = trpc.notes.remove.useMutation();
   const uploadM = trpc.notes.uploadAttachment.useMutation();
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => loadExpanded());
+
+  useEffect(() => {
+    saveExpanded(expanded);
+  }, [expanded]);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [searchActive, setSearchActive] = useState(false);
+  const [prompt, setPrompt] = useState<PromptState | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const toastIdRef = useRef(0);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -238,6 +309,17 @@ export function FileTree() {
   const refresh = useCallback(async () => {
     await Promise.all([utils.notes.tree.invalidate(), utils.notes.list.invalidate()]);
   }, [utils]);
+
+  // Warm the cache so clicking a note shows content immediately.
+  const prefetchedRef = useRef<Set<string>>(new Set());
+  const prefetchNote = useCallback(
+    (path: string) => {
+      if (prefetchedRef.current.has(path)) return;
+      prefetchedRef.current.add(path);
+      void utils.notes.get.prefetch({ path });
+    },
+    [utils],
+  );
 
   const markBusy = useCallback((path: string, on: boolean) => {
     setBusy((prev) => {
@@ -263,14 +345,21 @@ export function FileTree() {
 
   useEffect(() => {
     if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener('click', close);
-    window.addEventListener('contextmenu', close);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('contextmenu', close);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(null);
     };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [menu]);
+
+  const onRootContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMenu('', e.clientX, e.clientY);
+    },
+    [openMenu],
+  );
 
   // ---------------------------------------------------------------------------
   // DnD: move on drop
@@ -283,7 +372,6 @@ export function FileTree() {
       if (!overId) return;
       const destFolder = overId === ROOT_DROP_ID ? '' : overId;
 
-      // Can't drop on self or on a child of self (would create a cycle).
       if (from === destFolder) return;
       if (destFolder !== '' && isDescendantOf(destFolder, from)) {
         pushToast('error', "can't move a folder inside itself");
@@ -348,92 +436,128 @@ export function FileTree() {
   };
 
   // ---------------------------------------------------------------------------
-  // Context menu actions
+  // Actions (reusable from menu, header buttons, hover row actions)
   // ---------------------------------------------------------------------------
 
-  const folderForPath = useCallback(
-    (path: string, tree: TreeNode | undefined): string => {
-      if (!tree) return '';
-      const node = findNode(tree, path);
-      if (!node) return '';
-      if (node.type === 'folder') return node.path;
-      const lastSlash = node.path.lastIndexOf('/');
-      return lastSlash === -1 ? '' : node.path.slice(0, lastSlash);
+  const folderForPath = useCallback((path: string, tree: TreeNode | undefined): string => {
+    if (!tree || path === '') return '';
+    const node = findNode(tree, path);
+    if (!node) return '';
+    if (node.type === 'folder') return node.path;
+    const lastSlash = node.path.lastIndexOf('/');
+    return lastSlash === -1 ? '' : node.path.slice(0, lastSlash);
+  }, []);
+
+  const createNote = useCallback(
+    (targetPath: string) => {
+      setPrompt({
+        kind: 'createNote',
+        targetPath,
+        title: 'New note',
+        label: 'Name (without .md)',
+      });
     },
     [],
   );
 
-  const doCreateNote = useCallback(async () => {
-    if (!menu) return;
-    const folder = folderForPath(menu.path, treeQ.data);
-    const name = window.prompt('New note name (without .md):');
-    setMenu(null);
-    if (!name?.trim()) return;
-    const path = folder === '' ? `${name.trim()}.md` : `${folder}/${name.trim()}.md`;
-    try {
-      const result = await createM.mutateAsync({
-        path,
-        content: `# ${name.trim()}\n`,
-        frontmatter: { created: new Date().toISOString().slice(0, 10), tags: [] },
+  const createFolder = useCallback(
+    (targetPath: string) => {
+      setPrompt({
+        kind: 'createFolder',
+        targetPath,
+        title: 'New folder',
+        label: 'Folder name',
       });
-      await refresh();
-      const mocs = result.affectedMocs.length
-        ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
-        : '';
-      pushToast('info', `created ${result.path}${mocs}`);
-    } catch (err) {
-      pushToast('error', (err as Error).message);
-    }
-  }, [menu, folderForPath, treeQ.data, createM, refresh, pushToast]);
+    },
+    [],
+  );
 
-  const doCreateFolder = useCallback(async () => {
-    if (!menu) return;
-    const folder = folderForPath(menu.path, treeQ.data);
-    const name = window.prompt('New folder name:');
-    setMenu(null);
-    if (!name?.trim()) return;
-    const path = folder === '' ? name.trim() : `${folder}/${name.trim()}`;
-    try {
-      await createFolderM.mutateAsync({ path });
-      setExpanded((prev) => new Set(prev).add(path));
-      await refresh();
-      pushToast('info', `created folder ${path}`);
-    } catch (err) {
-      pushToast('error', (err as Error).message);
-    }
-  }, [menu, folderForPath, treeQ.data, createFolderM, refresh, pushToast]);
-
-  const doRename = useCallback(async () => {
-    if (!menu) return;
-    const from = menu.path;
-    setMenu(null);
+  const renamePath = useCallback((from: string) => {
+    if (from === '') return;
     const basename = from.split('/').pop() ?? from;
-    const next = window.prompt('Rename to:', basename);
-    if (!next || next === basename) return;
-    const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
-    const to = parent === '' ? next : `${parent}/${next}`;
-    try {
-      const result = await moveM.mutateAsync({ from, to });
-      await refresh();
-      pushToast('info', `renamed to ${result.path}`);
-    } catch (err) {
-      pushToast('error', (err as Error).message);
-    }
-  }, [menu, moveM, refresh, pushToast]);
+    setPrompt({
+      kind: 'rename',
+      targetPath: from,
+      title: `Rename ${basename}`,
+      label: 'New name',
+      defaultValue: basename,
+    });
+  }, []);
 
-  const doDelete = useCallback(async () => {
-    if (!menu) return;
-    const target = menu.path;
-    setMenu(null);
-    if (!window.confirm(`Delete ${target}? Contents are removed permanently.`)) return;
+  const deletePath = useCallback((target: string) => {
+    if (target === '') return;
+    setConfirmDelete(target);
+  }, []);
+
+  const runPrompt = useCallback(
+    async (value: string) => {
+      if (!prompt) return;
+      const { kind, targetPath } = prompt;
+      setPrompt(null);
+      const name = value.trim();
+      if (!name) return;
+
+      if (kind === 'createNote') {
+        const folder = folderForPath(targetPath, treeQ.data);
+        const path = folder === '' ? `${name}.md` : `${folder}/${name}.md`;
+        try {
+          const result = await createM.mutateAsync({
+            path,
+            content: `# ${name}\n`,
+            frontmatter: { created: new Date().toISOString().slice(0, 10), tags: [] },
+          });
+          await refresh();
+          const mocs = result.affectedMocs.length
+            ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
+            : '';
+          pushToast('info', `created ${result.path}${mocs}`);
+        } catch (err) {
+          pushToast('error', (err as Error).message);
+        }
+      } else if (kind === 'createFolder') {
+        const folder = folderForPath(targetPath, treeQ.data);
+        const path = folder === '' ? name : `${folder}/${name}`;
+        try {
+          await createFolderM.mutateAsync({ path });
+          setExpanded((prev) => new Set(prev).add(path));
+          await refresh();
+          pushToast('info', `created folder ${path}`);
+        } catch (err) {
+          pushToast('error', (err as Error).message);
+        }
+      } else if (kind === 'rename') {
+        const from = targetPath;
+        const basename = from.split('/').pop() ?? from;
+        if (name === basename) return;
+        const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
+        const to = parent === '' ? name : `${parent}/${name}`;
+        try {
+          const result = await moveM.mutateAsync({ from, to });
+          await refresh();
+          pushToast('info', `renamed to ${result.path}`);
+        } catch (err) {
+          pushToast('error', (err as Error).message);
+        }
+      }
+    },
+    [prompt, folderForPath, treeQ.data, createM, createFolderM, moveM, refresh, pushToast],
+  );
+
+  const runDelete = useCallback(async () => {
+    const target = confirmDelete;
+    setConfirmDelete(null);
+    if (!target) return;
+    markBusy(target, true);
     try {
       const result = await removeM.mutateAsync({ path: target, recursive: true });
       await refresh();
       pushToast('info', `deleted ${result.deleted.length} item(s)`);
     } catch (err) {
       pushToast('error', (err as Error).message);
+    } finally {
+      markBusy(target, false);
     }
-  }, [menu, removeM, refresh, pushToast]);
+  }, [confirmDelete, removeM, refresh, pushToast, markBusy]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -455,53 +579,142 @@ export function FileTree() {
       className="relative flex h-full flex-col"
       onDragOver={onNativeDragOver}
       onDrop={onNativeDrop}
-      onContextMenu={(e) => {
-        // Right-click on the empty area of the tree → menu for root folder.
-        if (e.target === e.currentTarget) {
-          e.preventDefault();
-          openMenu('', e.clientX, e.clientY);
-        }
-      }}
+      onContextMenu={onRootContextMenu}
     >
-      <div className="flex h-9 items-center justify-between border-b border-border-subtle px-3 font-mono text-[11px] text-fg-muted">
-        <span>vault</span>
-        {treeQ.isFetching && <Loader2 size={11} className="animate-spin" />}
-      </div>
-      <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-        <div className="flex-1 overflow-y-auto py-1">
-          <NodeRow
-            node={root}
-            depth={-1}
-            expanded={expanded}
-            toggle={toggle}
-            menuFor={menu?.path ?? null}
-            openMenu={openMenu}
-            busy={busy}
-          />
-          {root.children && root.children.length === 0 && (
-            <div className="px-4 py-6 text-center font-mono text-[11px] text-fg-muted">
-              empty vault — right-click to add a note or folder
+      <SearchInput onActiveChange={setSearchActive} placeholder="Search notes…" />
+
+      {!searchActive && (
+        <>
+          <div
+            onContextMenu={onRootContextMenu}
+            className="flex h-8 items-center justify-between border-y border-border-subtle px-3 font-mono text-[11px] text-fg-muted"
+          >
+            <span className="flex items-center gap-1.5">
+              vault
+              {treeQ.isFetching && <Loader2 size={10} className="animate-spin" />}
+            </span>
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => createNote('')}
+                title="New note in root"
+                className="flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
+              >
+                <FilePlus size={12} strokeWidth={1.75} />
+              </button>
+              <button
+                type="button"
+                onClick={() => createFolder('')}
+                title="New folder in root"
+                className="flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
+              >
+                <FolderPlus size={12} strokeWidth={1.75} />
+              </button>
             </div>
-          )}
-        </div>
-      </DndContext>
+          </div>
+          <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+            <div className="flex-1 overflow-y-auto py-1" onContextMenu={onRootContextMenu}>
+              <NodeRow
+                node={root}
+                depth={-1}
+                expanded={expanded}
+                toggle={toggle}
+                menuFor={menu?.path ?? null}
+                openMenu={openMenu}
+                onDeleteClick={deletePath}
+                onPrefetch={prefetchNote}
+                busy={busy}
+              />
+              {root.children && root.children.length === 0 && (
+                <div className="px-4 py-6 text-center font-mono text-[11px] text-fg-muted">
+                  empty vault — use + above or right-click to add a note or folder
+                </div>
+              )}
+            </div>
+          </DndContext>
+        </>
+      )}
 
       {menu && (
-        <div
-          className="fixed z-50 min-w-[150px] overflow-hidden rounded-md border border-border bg-bg-surface text-sm shadow-lg"
-          style={{ left: menu.x, top: menu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MenuItem onClick={doCreateNote}>New note</MenuItem>
-          <MenuItem onClick={doCreateFolder}>New folder</MenuItem>
-          {menu.path !== '' && <MenuItem onClick={doRename}>Rename</MenuItem>}
+        <>
+          <div
+            className="fixed inset-0 z-[60]"
+            onClick={() => setMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu(null);
+            }}
+          />
+          <div
+            className="fixed z-[61] min-w-[150px] overflow-hidden rounded-md border border-border-default bg-bg-surface text-sm shadow-lg"
+            style={{ left: menu.x, top: menu.y }}
+            onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.stopPropagation()}
+          >
+          <MenuItem
+            onClick={() => {
+              const p = menu.path;
+              setMenu(null);
+              createNote(p);
+            }}
+          >
+            New note
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              const p = menu.path;
+              setMenu(null);
+              createFolder(p);
+            }}
+          >
+            New folder
+          </MenuItem>
           {menu.path !== '' && (
-            <MenuItem onClick={doDelete} danger>
+            <MenuItem
+              onClick={() => {
+                const p = menu.path;
+                setMenu(null);
+                renamePath(p);
+              }}
+            >
+              Rename
+            </MenuItem>
+          )}
+          {menu.path !== '' && (
+            <MenuItem
+              danger
+              onClick={() => {
+                const p = menu.path;
+                setMenu(null);
+                deletePath(p);
+              }}
+            >
               Delete
             </MenuItem>
           )}
-        </div>
+          </div>
+        </>
       )}
+
+      <PromptModal
+        open={prompt !== null}
+        title={prompt?.title ?? ''}
+        label={prompt?.label}
+        defaultValue={prompt?.defaultValue}
+        okLabel={prompt?.kind === 'rename' ? 'Rename' : 'Create'}
+        onCancel={() => setPrompt(null)}
+        onConfirm={runPrompt}
+      />
+
+      <ConfirmModal
+        open={confirmDelete !== null}
+        title="Delete?"
+        message={confirmDelete ? `${confirmDelete} will be removed permanently.` : undefined}
+        okLabel="Delete"
+        danger
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={runDelete}
+      />
 
       <div className="pointer-events-none absolute bottom-3 right-3 flex flex-col items-end gap-1">
         {toasts.map((t) => (
