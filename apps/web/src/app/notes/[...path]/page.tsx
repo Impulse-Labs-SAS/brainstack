@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import { useParams } from 'next/navigation';
+import { keepPreviousData } from '@tanstack/react-query';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
 import { NoteEditor } from '@/components/editor/note-editor';
 import { Kbd } from '@/components/ui/kbd';
+import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 
@@ -14,31 +16,42 @@ export default function NotePage() {
   const params = useParams<{ path: string[] }>();
   const path = decodeURIComponent((params.path ?? []).join('/'));
 
-  const note = trpc.notes.get.useQuery({ path }, { enabled: !!path });
-  const backlinks = trpc.notes.backlinks.useQuery({ path }, { enabled: !!path });
+  const note = trpc.notes.get.useQuery(
+    { path },
+    { enabled: !!path, placeholderData: keepPreviousData },
+  );
+  const backlinks = trpc.notes.backlinks.useQuery(
+    { path },
+    { enabled: !!path, placeholderData: keepPreviousData },
+  );
   const update = trpc.notes.update.useMutation();
   const upload = trpc.notes.uploadAttachment.useMutation();
 
+  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 320);
+  const [backlinksWidth, setBacklinksWidth] = usePersistedWidth(
+    'brainstack:notes-backlinks-width',
+    280,
+  );
+
   const [draft, setDraft] = useState<string | null>(null);
+  const [draftPath, setDraftPath] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  // Most recent draft kept in a ref so the file-drop callback always sees the
-  // current text without having to be re-created on every keystroke.
   const draftRef = useRef<string | null>(null);
   draftRef.current = draft;
 
+  // Init the draft once the query has *fresh* data for the current path.
+  // With keepPreviousData, note.data is the previous note while loading, so
+  // we gate on (!isPlaceholderData && draftPath !== path) to avoid loading
+  // the wrong content into the editor.
   useEffect(() => {
-    if (note.data && draft === null) {
-      setDraft(reconstructBody(note.data));
-    }
-  }, [note.data, draft]);
-
-  // Reset the draft when the user switches notes via a path change.
-  useEffect(() => {
-    setDraft(null);
+    if (!note.data || note.isPlaceholderData) return;
+    if (draftPath === path) return;
+    setDraft(reconstructBody(note.data));
+    setDraftPath(path);
     setSavedAt(null);
-  }, [path]);
+  }, [note.data, note.isPlaceholderData, path, draftPath]);
 
   useEffect(() => {
     if (draft === null) return;
@@ -72,7 +85,6 @@ export default function NotePage() {
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
-      // Upload one by one so a single failure doesn't take down the rest.
       const inserted: string[] = [];
       for (const file of files) {
         try {
@@ -98,14 +110,25 @@ export default function NotePage() {
     [upload],
   );
 
+  const tree = (
+    <ResizablePanel
+      side="left"
+      width={treeWidth}
+      onWidthChange={setTreeWidth}
+      min={200}
+      max={560}
+      className="border-r border-border-subtle"
+    >
+      <FileTree />
+    </ResizablePanel>
+  );
+
   if (!note.data && note.isLoading) {
     return (
       <AppShell>
-        <div className="grid h-full grid-cols-[320px_1fr]">
-          <div className="border-r border-border-subtle">
-            <FileTree />
-          </div>
-          <div className="flex h-full items-center justify-center text-fg-muted">Loading…</div>
+        <div className="flex h-full overflow-hidden">
+          {tree}
+          <div className="flex flex-1 items-center justify-center text-fg-muted">Loading…</div>
         </div>
       </AppShell>
     );
@@ -114,11 +137,9 @@ export default function NotePage() {
   if (!note.data) {
     return (
       <AppShell>
-        <div className="grid h-full grid-cols-[320px_1fr]">
-          <div className="border-r border-border-subtle">
-            <FileTree />
-          </div>
-          <div className="flex h-full items-center justify-center font-mono text-[12px] text-fg-muted">
+        <div className="flex h-full overflow-hidden">
+          {tree}
+          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
             note not found: {path}
           </div>
         </div>
@@ -128,12 +149,10 @@ export default function NotePage() {
 
   return (
     <AppShell>
-      <div className="grid h-full grid-cols-[320px_1fr_280px] overflow-hidden">
-        <div className="border-r border-border-subtle">
-          <FileTree />
-        </div>
+      <div className="flex h-full overflow-hidden">
+        {tree}
 
-        <div className="flex flex-col overflow-hidden">
+        <div className="flex flex-1 flex-col overflow-hidden">
           <div className="flex h-12 items-center justify-between border-b border-border-subtle px-4">
             <div>
               <div className="text-sm font-medium text-fg-primary">{note.data.title}</div>
@@ -181,27 +200,36 @@ export default function NotePage() {
           )}
         </div>
 
-        <aside className="overflow-y-auto border-l border-border-subtle p-4">
-          <div className="mb-2 flex items-center gap-2 font-mono text-[11px] text-fg-muted">
-            <Kbd>backlinks</Kbd>
-          </div>
-          <ul className="space-y-1">
-            {(backlinks.data ?? []).map((link) => (
-              <li key={`${link.sourcePath}-${link.linkKind}`}>
-                <a
-                  href={`/notes/${link.sourcePath.replace(/\.md$/i, '')}`}
-                  className="block rounded px-2 py-1 text-xs text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary"
-                >
-                  <span className="font-mono">{link.sourcePath}</span>
-                  <span className="ml-2 text-fg-muted">{link.linkKind}</span>
-                </a>
-              </li>
-            ))}
-            {backlinks.data && backlinks.data.length === 0 && (
-              <li className="text-xs text-fg-muted">No backlinks yet.</li>
-            )}
-          </ul>
-        </aside>
+        <ResizablePanel
+          side="right"
+          width={backlinksWidth}
+          onWidthChange={setBacklinksWidth}
+          min={200}
+          max={480}
+          className="border-l border-border-subtle"
+        >
+          <aside className="h-full overflow-y-auto p-4">
+            <div className="mb-2 flex items-center gap-2 font-mono text-[11px] text-fg-muted">
+              <Kbd>backlinks</Kbd>
+            </div>
+            <ul className="space-y-1">
+              {(backlinks.data ?? []).map((link) => (
+                <li key={`${link.sourcePath}-${link.linkKind}`}>
+                  <a
+                    href={`/notes/${link.sourcePath.replace(/\.md$/i, '')}`}
+                    className="block rounded px-2 py-1 text-xs text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary"
+                  >
+                    <span className="font-mono">{link.sourcePath}</span>
+                    <span className="ml-2 text-fg-muted">{link.linkKind}</span>
+                  </a>
+                </li>
+              ))}
+              {backlinks.data && backlinks.data.length === 0 && (
+                <li className="text-xs text-fg-muted">No backlinks yet.</li>
+              )}
+            </ul>
+          </aside>
+        </ResizablePanel>
       </div>
     </AppShell>
   );
