@@ -33,7 +33,7 @@ export function middleware(req: NextRequest): NextResponse {
     // user doesn't see an auth form they don't need.
     if (hasSession && (pathname === '/login' || pathname === '/signup')) {
       const url = req.nextUrl.clone();
-      url.pathname = '/';
+      url.pathname = '/notes';
       return NextResponse.redirect(url);
     }
     return NextResponse.next();

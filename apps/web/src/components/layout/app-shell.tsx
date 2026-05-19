@@ -1,14 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Search, Inbox, Settings, FileText, KeyRound } from 'lucide-react';
+import { Search, Settings, FileText, KeyRound } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 
 const links = [
-  { href: '/', label: 'Inbox', icon: Inbox },
   { href: '/notes', label: 'Notes', icon: FileText },
   { href: '/search', label: 'Search', icon: Search },
   { href: '/settings/api-keys', label: 'API keys', icon: KeyRound },
@@ -25,10 +24,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <nav className="flex-1 overflow-y-auto p-2">
           {links.map((link) => {
-            const active =
-              link.href === '/'
-                ? pathname === '/'
-                : pathname.startsWith(link.href);
+            const active = pathname.startsWith(link.href);
             const Icon = link.icon;
             return (
               <Link
