@@ -36,6 +36,8 @@ import {
   type DragEvent as ReactDragEvent,
 } from 'react';
 
+import { BLOCKED_UPLOAD_MESSAGE, isBlockedUpload } from '@/lib/uploads';
+
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
@@ -110,11 +112,26 @@ function attachmentDestForFile(file: File): string {
   return `Attachments/${yyyy}/${mm}/${safeName}`;
 }
 
-function baseNameFromFile(file: File): string {
-  const dot = file.name.lastIndexOf('.');
-  const stem = dot > 0 ? file.name.slice(0, dot) : file.name;
-  const cleaned = stem.replace(/[/\\]+/g, '_').trim();
-  return cleaned || 'Untitled';
+function splitFilename(name: string): { stem: string; ext: string } {
+  const safe = name.replace(/[/\\]+/g, '_');
+  const dot = safe.lastIndexOf('.');
+  if (dot <= 0) return { stem: safe, ext: '' };
+  return { stem: safe.slice(0, dot), ext: safe.slice(dot) };
+}
+
+/**
+ * Devuelve el primer path libre bajo `folder` para `filename`. Si ya
+ * existe, agrega sufijo incremental (` 2`, ` 3`…). Hasta 99 intentos;
+ * más allá devuelve null y el caller toastea error.
+ */
+function pickFreeDest(folder: string, filename: string, existing: ReadonlySet<string>): string | null {
+  const { stem, ext } = splitFilename(filename);
+  for (let i = 1; i <= 99; i++) {
+    const candidate = i === 1 ? `${stem}${ext}` : `${stem} ${i}${ext}`;
+    const path = folder === '' ? candidate : `${folder}/${candidate}`;
+    if (!existing.has(path)) return path;
+  }
+  return null;
 }
 
 function readAsBase64(file: File): Promise<string> {
@@ -435,6 +452,10 @@ export function FileTree() {
     async (files: readonly File[]): Promise<void> => {
       if (files.length === 0) return;
       for (const file of files) {
+        if (isBlockedUpload({ mime: file.type, filename: file.name })) {
+          pushToast('error', `${file.name}: ${BLOCKED_UPLOAD_MESSAGE}`);
+          continue;
+        }
         const dest = attachmentDestForFile(file);
         markBusy(dest, true);
         try {
@@ -476,38 +497,25 @@ export function FileTree() {
   );
 
   /**
-   * Upload de archivos dirigidos a una carpeta. El archivo físico sigue
-   * yendo a Attachments/YYYY/MM/... — lo que cambia es que además se crea
-   * una nota nueva dentro del folder elegido con el embed ![[...]] del
-   * adjunto. Si el nombre choca con una nota existente, se aplica sufijo
-   * incremental (' 2', ' 3'…). 99 intentos máx antes de tirar error.
+   * Upload de archivos dirigidos a una carpeta. El binario se persiste
+   * directamente en `<folder>/<safeName>` — sin wrapper `.md` ni ruta
+   * Attachments/. Si el nombre choca con un path existente en el tree
+   * cacheado, se aplica sufijo incremental (`foo.pdf` → `foo 2.pdf`),
+   * 99 intentos máx antes de tirar error.
    */
   const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
   const folderUploadTargetRef = useRef<string | null>(null);
 
-  const createNoteWithEmbed = useCallback(
-    async (folderPath: string, baseName: string, attachmentPath: string): Promise<string> => {
-      for (let i = 1; i <= 99; i++) {
-        const candidateName = i === 1 ? baseName : `${baseName} ${i}`;
-        const notePath =
-          folderPath === '' ? `${candidateName}.md` : `${folderPath}/${candidateName}.md`;
-        try {
-          const result = await createM.mutateAsync({
-            path: notePath,
-            content: `![[${attachmentPath}]]\n`,
-          });
-          return result.path;
-        } catch (err) {
-          const code = (err as { data?: { code?: string } })?.data?.code;
-          const msg = (err as Error).message ?? '';
-          if (code === 'CONFLICT' || /already exists/i.test(msg)) continue;
-          throw err;
-        }
-      }
-      throw new Error(`no se pudo asignar un nombre único para ${baseName}`);
-    },
-    [createM],
-  );
+  const collectExistingPaths = useCallback((tree: TreeNode | undefined): Set<string> => {
+    const out = new Set<string>();
+    if (!tree) return out;
+    const walk = (node: TreeNode): void => {
+      if (node.path) out.add(node.path);
+      node.children?.forEach(walk);
+    };
+    walk(tree);
+    return out;
+  }, []);
 
   const onFolderUploadClick = useCallback((folder: string): void => {
     folderUploadTargetRef.current = folder;
@@ -521,19 +529,27 @@ export function FileTree() {
       const files = Array.from(e.target.files ?? []);
       e.target.value = '';
       if (files.length === 0) return;
+      const existing = collectExistingPaths(treeQ.data);
       for (const file of files) {
-        const dest = attachmentDestForFile(file);
+        if (isBlockedUpload({ mime: file.type, filename: file.name })) {
+          pushToast('error', `${file.name}: ${BLOCKED_UPLOAD_MESSAGE}`);
+          continue;
+        }
+        const dest = pickFreeDest(folder, file.name, existing);
+        if (!dest) {
+          pushToast('error', `${file.name}: no se pudo asignar un nombre único`);
+          continue;
+        }
         markBusy(dest, true);
         try {
           const dataBase64 = await readAsBase64(file);
-          const attachmentPath = await uploadM.mutateAsync({
+          const finalPath = await uploadM.mutateAsync({
             path: dest,
             dataBase64,
             mime: file.type || undefined,
           });
-          const baseName = baseNameFromFile(file);
-          const notePath = await createNoteWithEmbed(folder, baseName, attachmentPath);
-          pushToast('info', `uploaded ${attachmentPath} + ${notePath}`);
+          existing.add(finalPath);
+          pushToast('info', `uploaded ${finalPath}`);
         } catch (err) {
           pushToast('error', `${file.name}: ${(err as Error).message}`);
         } finally {
@@ -542,7 +558,7 @@ export function FileTree() {
       }
       await refresh();
     },
-    [createNoteWithEmbed, markBusy, pushToast, refresh, uploadM],
+    [collectExistingPaths, markBusy, pushToast, refresh, treeQ.data, uploadM],
   );
 
   // ---------------------------------------------------------------------------
