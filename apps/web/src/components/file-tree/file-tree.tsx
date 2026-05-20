@@ -39,6 +39,7 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
+import { SharedWithMeSection } from './shared-with-me';
 
 type PromptKind = 'createNote' | 'createFolder' | 'rename';
 type PromptState = {
@@ -632,6 +633,7 @@ export function FileTree() {
               )}
             </div>
           </DndContext>
+          <SharedWithMeSection />
         </>
       )}
 
