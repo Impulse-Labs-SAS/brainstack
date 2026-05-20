@@ -39,7 +39,12 @@ async function main(): Promise<void> {
   );
 
   const bs = openDatabase(cfg.databasePathAbs);
-  const index = new IndexService({ root: cfg.notesDirAbs, db: bs, logger });
+  const index = new IndexService({
+    root: cfg.notesDirAbs,
+    db: bs,
+    logger,
+    vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT, notesDirAbs: cfg.notesDirAbs },
+  });
   const notes = new NoteService({ root: cfg.notesDirAbs, db: bs, index });
   const search = new SearchService(bs);
 
