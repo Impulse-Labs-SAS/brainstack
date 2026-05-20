@@ -28,7 +28,9 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { usePersistedViewMode, type ViewMode } from '@/lib/use-view-mode';
 import {
+  attachmentPathToRoute,
   buildIndex,
+  resolveAttachmentTarget,
   resolveEmbed as resolveEmbedClient,
   resolveNoteTarget,
   encodePath,
@@ -69,6 +71,16 @@ export default function NotePage() {
 
   const resolveLink = useCallback(
     (target: string): { href: string; resolved: boolean } => {
+      // Extensión no-.md → tratamos el wikilink como referencia a attachment
+      // y ruteamos a /files/<path>. Si no se encuentra, devolvemos /files/
+      // con el target tal cual como link roto.
+      const dot = target.lastIndexOf('.');
+      const ext = dot > 0 ? target.slice(dot + 1).toLowerCase() : '';
+      if (ext && ext !== 'md') {
+        const attPath = resolveAttachmentTarget(target, treeIndex);
+        if (attPath) return { href: attachmentPathToRoute(attPath), resolved: true };
+        return { href: `/files/${encodePath(target)}`, resolved: false };
+      }
       const notePath = resolveNoteTarget(target, sourcePath, treeIndex);
       if (notePath) {
         return { href: `/notes/${encodePath(notePath.replace(/\.md$/i, ''))}`, resolved: true };
