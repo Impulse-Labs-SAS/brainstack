@@ -188,6 +188,8 @@ function NodeRow({
       toggle(node.path);
     } else if (node.type === 'note') {
       router.push(notePathToRoute(node.path));
+    } else if (node.type === 'attachment') {
+      router.push(`/files/${node.path.split('/').map(encodeURIComponent).join('/')}`);
     }
   };
 
