@@ -110,6 +110,13 @@ function attachmentDestForFile(file: File): string {
   return `Attachments/${yyyy}/${mm}/${safeName}`;
 }
 
+function baseNameFromFile(file: File): string {
+  const dot = file.name.lastIndexOf('.');
+  const stem = dot > 0 ? file.name.slice(0, dot) : file.name;
+  const cleaned = stem.replace(/[/\\]+/g, '_').trim();
+  return cleaned || 'Untitled';
+}
+
 function readAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -466,6 +473,76 @@ export function FileTree() {
     [uploadFiles],
   );
 
+  /**
+   * Upload de archivos dirigidos a una carpeta. El archivo físico sigue
+   * yendo a Attachments/YYYY/MM/... — lo que cambia es que además se crea
+   * una nota nueva dentro del folder elegido con el embed ![[...]] del
+   * adjunto. Si el nombre choca con una nota existente, se aplica sufijo
+   * incremental (' 2', ' 3'…). 99 intentos máx antes de tirar error.
+   */
+  const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const folderUploadTargetRef = useRef<string | null>(null);
+
+  const createNoteWithEmbed = useCallback(
+    async (folderPath: string, baseName: string, attachmentPath: string): Promise<string> => {
+      for (let i = 1; i <= 99; i++) {
+        const candidateName = i === 1 ? baseName : `${baseName} ${i}`;
+        const notePath =
+          folderPath === '' ? `${candidateName}.md` : `${folderPath}/${candidateName}.md`;
+        try {
+          const result = await createM.mutateAsync({
+            path: notePath,
+            content: `![[${attachmentPath}]]\n`,
+          });
+          return result.path;
+        } catch (err) {
+          const code = (err as { data?: { code?: string } })?.data?.code;
+          const msg = (err as Error).message ?? '';
+          if (code === 'CONFLICT' || /already exists/i.test(msg)) continue;
+          throw err;
+        }
+      }
+      throw new Error(`no se pudo asignar un nombre único para ${baseName}`);
+    },
+    [createM],
+  );
+
+  const onFolderUploadClick = useCallback((folder: string): void => {
+    folderUploadTargetRef.current = folder;
+    folderUploadInputRef.current?.click();
+  }, []);
+
+  const onFolderUploadChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const folder = folderUploadTargetRef.current ?? '';
+      folderUploadTargetRef.current = null;
+      const files = Array.from(e.target.files ?? []);
+      e.target.value = '';
+      if (files.length === 0) return;
+      for (const file of files) {
+        const dest = attachmentDestForFile(file);
+        markBusy(dest, true);
+        try {
+          const dataBase64 = await readAsBase64(file);
+          const attachmentPath = await uploadM.mutateAsync({
+            path: dest,
+            dataBase64,
+            mime: file.type || undefined,
+          });
+          const baseName = baseNameFromFile(file);
+          const notePath = await createNoteWithEmbed(folder, baseName, attachmentPath);
+          pushToast('info', `uploaded ${attachmentPath} + ${notePath}`);
+        } catch (err) {
+          pushToast('error', `${file.name}: ${(err as Error).message}`);
+        } finally {
+          markBusy(dest, false);
+        }
+      }
+      await refresh();
+    },
+    [createNoteWithEmbed, markBusy, pushToast, refresh, uploadM],
+  );
+
   // ---------------------------------------------------------------------------
   // Actions (reusable from menu, header buttons, hover row actions)
   // ---------------------------------------------------------------------------
@@ -656,6 +733,13 @@ export function FileTree() {
                 hidden
                 onChange={onHeaderUploadChange}
               />
+              <input
+                ref={folderUploadInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={onFolderUploadChange}
+              />
             </div>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -716,6 +800,17 @@ export function FileTree() {
           >
             New folder
           </MenuItem>
+          {!/\.[a-z0-9]+$/i.test(menu.path) && (
+            <MenuItem
+              onClick={() => {
+                const p = folderForPath(menu.path, treeQ.data);
+                setMenu(null);
+                onFolderUploadClick(p);
+              }}
+            >
+              Upload…
+            </MenuItem>
+          )}
           {menu.path !== '' && (
             <MenuItem
               onClick={() => {
