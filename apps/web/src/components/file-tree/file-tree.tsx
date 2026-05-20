@@ -23,6 +23,7 @@ import {
   FolderPlus,
   Image as ImageIcon,
   Loader2,
+  Paperclip,
   Trash2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -415,30 +416,55 @@ export function FileTree() {
     }
   };
 
+  /**
+   * Upload de archivos arbitrarios a Attachments/YYYY/MM/. No inserta
+   * wikilinks en ninguna nota — solo persiste el archivo y refresca el
+   * árbol. Compartido entre el drop nativo en el sidebar y el botón
+   * Paperclip del header.
+   */
+  const uploadFiles = useCallback(
+    async (files: readonly File[]): Promise<void> => {
+      if (files.length === 0) return;
+      for (const file of files) {
+        const dest = attachmentDestForFile(file);
+        markBusy(dest, true);
+        try {
+          const dataBase64 = await readAsBase64(file);
+          const finalPath = await uploadM.mutateAsync({
+            path: dest,
+            dataBase64,
+            mime: file.type || undefined,
+          });
+          pushToast('info', `uploaded ${finalPath}`);
+        } catch (err) {
+          pushToast('error', `${file.name}: ${(err as Error).message}`);
+        } finally {
+          markBusy(dest, false);
+        }
+      }
+      await refresh();
+    },
+    [markBusy, pushToast, refresh, uploadM],
+  );
+
   const onNativeDrop = async (e: ReactDragEvent<HTMLDivElement>) => {
     if (!e.dataTransfer.types.includes('Files')) return;
     e.preventDefault();
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length === 0) return;
-    for (const file of files) {
-      const dest = attachmentDestForFile(file);
-      markBusy(dest, true);
-      try {
-        const dataBase64 = await readAsBase64(file);
-        const finalPath = await uploadM.mutateAsync({
-          path: dest,
-          dataBase64,
-          mime: file.type || undefined,
-        });
-        pushToast('info', `uploaded ${finalPath}`);
-      } catch (err) {
-        pushToast('error', `${file.name}: ${(err as Error).message}`);
-      } finally {
-        markBusy(dest, false);
-      }
-    }
-    await refresh();
+    await uploadFiles(Array.from(e.dataTransfer.files));
   };
+
+  const headerUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const onHeaderUploadClick = useCallback((): void => {
+    headerUploadInputRef.current?.click();
+  }, []);
+  const onHeaderUploadChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const files = Array.from(e.target.files ?? []);
+      e.target.value = '';
+      await uploadFiles(files);
+    },
+    [uploadFiles],
+  );
 
   // ---------------------------------------------------------------------------
   // Actions (reusable from menu, header buttons, hover row actions)
@@ -615,6 +641,21 @@ export function FileTree() {
               >
                 <FolderPlus size={12} strokeWidth={1.75} />
               </button>
+              <button
+                type="button"
+                onClick={onHeaderUploadClick}
+                title="Upload attachment(s) to Attachments/"
+                className="flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
+              >
+                <Paperclip size={12} strokeWidth={1.75} />
+              </button>
+              <input
+                ref={headerUploadInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={onHeaderUploadChange}
+              />
             </div>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
