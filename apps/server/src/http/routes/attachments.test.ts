@@ -134,9 +134,16 @@ describe('GET /api/attachments/* — self-host', () => {
     expect(res.status).toBe(404);
   });
 
-  it('400 si el path no cae bajo Attachments/', async () => {
-    await writeFile(h.root, 'Notes/x.md', 'x');
-    const res = await h.fetch('/api/attachments/Notes/x.md', undefined, 'alice');
+  it('200 para binarios fuera de Attachments/ (upload-a-carpeta)', async () => {
+    await writeFile(h.root, 'Proyectos/reporte.pdf', Buffer.from('%PDF-1.4'));
+    const res = await h.fetch('/api/attachments/Proyectos/reporte.pdf', undefined, 'alice');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+  });
+
+  it('400 si el path apunta a un .md', async () => {
+    await writeFile(h.root, 'Proyectos/nota.md', '# hola');
+    const res = await h.fetch('/api/attachments/Proyectos/nota.md', undefined, 'alice');
     expect(res.status).toBe(400);
   });
 
@@ -168,14 +175,23 @@ describe('GET /api/attachments/* — hosted (cross-owner)', () => {
     await fsp.rm(h.root, { recursive: true, force: true });
   });
 
-  it('bob no ve attachments de alice (404, vault scope)', async () => {
+  it('bob no ve binarios de alice (404, vault scope)', async () => {
     await writeFile(h.root, 'alice/Attachments/secret.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(h.root, 'alice/Proyectos/reporte.pdf', Buffer.from('%PDF-1.4'));
     // alice OK
-    const ok = await h.fetch('/api/attachments/Attachments/secret.png', undefined, 'alice');
-    expect(ok.status).toBe(200);
+    expect(
+      (await h.fetch('/api/attachments/Attachments/secret.png', undefined, 'alice')).status,
+    ).toBe(200);
+    expect(
+      (await h.fetch('/api/attachments/Proyectos/reporte.pdf', undefined, 'alice')).status,
+    ).toBe(200);
     // bob: queda fuera de su vault, debería ser 404
-    const blocked = await h.fetch('/api/attachments/Attachments/secret.png', undefined, 'bob');
-    expect(blocked.status).toBe(404);
+    expect(
+      (await h.fetch('/api/attachments/Attachments/secret.png', undefined, 'bob')).status,
+    ).toBe(404);
+    expect(
+      (await h.fetch('/api/attachments/Proyectos/reporte.pdf', undefined, 'bob')).status,
+    ).toBe(404);
   });
 });
 

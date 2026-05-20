@@ -19,8 +19,6 @@ import {
   toPosixPath,
 } from '@brainstack/core';
 
-import { ATTACHMENTS_DIR } from '@brainstack/core';
-
 import type { AuthBindings } from '../middleware/auth.js';
 import type { SharingService } from '../../services/SharingService.js';
 import { toPhysical, type VaultRootResolverConfig } from '../../lib/vault.js';
@@ -111,8 +109,11 @@ export function createAttachmentsRouter(opts: AttachmentsRouterOptions): Hono<Au
     if (!rawPath) return c.json({ error: 'missing path' }, 400);
 
     const logical = toPosixPath(rawPath);
-    if (!logical.startsWith(`${ATTACHMENTS_DIR}/`) && logical !== ATTACHMENTS_DIR) {
-      return c.json({ error: 'not an attachment path' }, 400);
+    // El endpoint sirve cualquier binario; las notas .md se sirven vía
+    // tRPC y no por acá (evita confusión y un hipotético render de la
+    // fuente con cookie de auth).
+    if (logical.toLowerCase().endsWith('.md')) {
+      return c.json({ error: 'cannot serve .md via this endpoint' }, 400);
     }
 
     // Owner-aware: only the caller's vault is reachable. Cross-owner shared

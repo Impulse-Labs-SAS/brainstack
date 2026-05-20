@@ -13,21 +13,23 @@ import { promises as fsp, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 
 import {
+  BLOCKED_UPLOAD_MESSAGE,
   FolderNotEmptyError,
   NoteAlreadyExistsError,
   NoteNotFoundError,
   PathTraversalError,
   createFolder,
   deletePath,
+  isBlockedUpload,
   listFolders,
   movePath,
-  readAttachment,
+  readBinaryFile,
   readNote,
   relativeToRoot,
   rewriteLinkTargets,
   safeResolve,
   toPosixPath,
-  writeAttachment,
+  writeBinaryFile,
   writeNote,
   type BrainStackDatabase,
   type Frontmatter,
@@ -162,9 +164,29 @@ export class NoteService {
       .get(physicalPath, ...params);
     if (!row) {
       try {
-        const file = await readNote(this.opts.cfg.notesDirAbs, physicalPath);
-        await this.opts.index.reindex(file.path);
-        return this.get(userId, path);
+        const root = this.rootFor(userId);
+        const file = await readNote(root, path);
+        // file.path es el path lógico resuelto por readNote, ya con `.md`
+        // ensured. Lo traducimos a físico para reindexar y reconsultar por
+        // path exacto, evitando loop si el caller omitió el sufijo.
+        const resolvedPhysical = this.toPhysical(userId, file.path);
+        await this.opts.index.reindex(resolvedPhysical);
+        const retried = this.opts.db.sqlite
+          .prepare<unknown[], { path: string; title: string; frontmatter: string; body: string; mtime: number; checksum: string }>(
+            `SELECT path, title, frontmatter, body, mtime, checksum FROM notes WHERE path = ?${sql}`,
+          )
+          .get(resolvedPhysical, ...params);
+        if (!retried) {
+          throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
+        }
+        return {
+          path: this.toLogical(userId, retried.path),
+          title: retried.title,
+          frontmatter: JSON.parse(retried.frontmatter) as Frontmatter,
+          body: retried.body,
+          mtime: retried.mtime,
+          checksum: retried.checksum,
+        };
       } catch (err) {
         if (err instanceof NoteNotFoundError) {
           throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
@@ -367,6 +389,9 @@ export class NoteService {
   // ---------------------------------------------------------------------------
 
   async uploadAttachment(userId: string, input: UploadAttachmentInput): Promise<string> {
+    if (isBlockedUpload({ mime: input.mime, filename: input.path })) {
+      throw new AppError(BLOCKED_UPLOAD_MESSAGE, 'INVALID_INPUT', 400);
+    }
     const norm = this.normalize(userId, input.path);
     let bytes: Buffer;
     try {
@@ -378,7 +403,7 @@ export class NoteService {
       throw new AppError('empty attachment payload', 'INVALID_INPUT', 400);
     }
     try {
-      const finalPhysical = await writeAttachment(this.opts.cfg.notesDirAbs, norm, bytes);
+      const finalPhysical = await writeBinaryFile(this.opts.cfg.notesDirAbs, norm, bytes);
       return this.toLogical(userId, finalPhysical);
     } catch (err) {
       throw mapPathError(err);
@@ -388,7 +413,7 @@ export class NoteService {
   async getAttachment(userId: string, path: string): Promise<AttachmentPayload> {
     const norm = this.normalize(userId, path);
     try {
-      const result = await readAttachment(this.opts.cfg.notesDirAbs, norm);
+      const result = await readBinaryFile(this.opts.cfg.notesDirAbs, norm);
       return {
         path: this.toLogical(userId, result.path),
         sizeBytes: result.sizeBytes,
@@ -397,7 +422,7 @@ export class NoteService {
       };
     } catch (err) {
       if (err instanceof PathTraversalError) throw mapPathError(err);
-      if (err instanceof Error && err.message.startsWith('attachment not found')) {
+      if (err instanceof Error && err.message.startsWith('file not found')) {
         throw new AppError(`attachment not found: ${path}`, 'NOT_FOUND', 404);
       }
       throw err;

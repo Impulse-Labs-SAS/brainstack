@@ -89,6 +89,48 @@ export async function readAttachment(
 }
 
 /**
+ * Read any binary file under `root`. Same path-traversal guard as
+ * `readAttachment` but without the `Attachments/` requirement — used by
+ * the HTTP route that serves binaries living next to notes (uploads via
+ * the file-tree's per-folder action).
+ */
+export async function readBinaryFile(
+  root: string,
+  path: string,
+): Promise<{ path: string; bytes: Buffer; sizeBytes: number; mtime: number }> {
+  const norm = toPosixPath(path);
+  const abs = safeResolve(root, norm);
+  const canonical = relativeToRoot(root, abs);
+  const stats = await fsp.stat(abs).catch(() => null);
+  if (!stats || !stats.isFile()) {
+    throw new Error(`file not found: ${canonical}`);
+  }
+  const bytes = await fsp.readFile(abs);
+  return { path: canonical, bytes, sizeBytes: stats.size, mtime: stats.mtimeMs };
+}
+
+/**
+ * Atomically write a binary file at the given path under `root`. Refuses
+ * to overwrite `.md` files (those are notes, not attachments) and goes
+ * through `safeResolve` for traversal protection. Returns the canonical
+ * posix path relative to root.
+ */
+export async function writeBinaryFile(
+  root: string,
+  path: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  const norm = toPosixPath(path);
+  if (norm.toLowerCase().endsWith('.md')) {
+    throw new Error(`refusing to write a .md file as binary: ${norm}`);
+  }
+  const abs = safeResolve(root, norm);
+  await fsp.mkdir(dirname(abs), { recursive: true });
+  await writeBytesAtomic(abs, bytes);
+  return relativeToRoot(root, abs);
+}
+
+/**
  * Atomically write an attachment under `Attachments/`. Refuses paths outside
  * that subtree (the resolver also blocks traversal, but this is the explicit
  * contract). Returns the canonical posix path relative to root.
@@ -100,7 +142,11 @@ export async function writeAttachment(
 ): Promise<string> {
   const { abs } = resolveAttachmentPath(root, path);
   await fsp.mkdir(dirname(abs), { recursive: true });
+  await writeBytesAtomic(abs, bytes);
+  return relativeToRoot(root, abs);
+}
 
+async function writeBytesAtomic(abs: string, bytes: Uint8Array): Promise<void> {
   const tmp = `${abs}.tmp-${randomBytes(6).toString('hex')}`;
   let handle: FileHandle | null = null;
   try {
@@ -124,6 +170,4 @@ export async function writeAttachment(
     await fsp.unlink(tmp).catch(() => undefined);
     throw err;
   }
-
-  return relativeToRoot(root, abs);
 }

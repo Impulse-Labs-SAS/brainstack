@@ -53,7 +53,9 @@ export {
   ATTACHMENTS_DIR,
   listAttachments,
   readAttachment,
+  readBinaryFile,
   writeAttachment,
+  writeBinaryFile,
   type AttachmentInfo,
 } from './fs/attachments.js';
 export {
@@ -95,5 +97,14 @@ export {
   type WatcherHandle,
   type WatcherOptions,
 } from './indexer/watcher.js';
+
+// --- Uploads -----------------------------------------------------------------
+export {
+  BLOCKED_UPLOAD_EXTS,
+  BLOCKED_UPLOAD_MIMES,
+  BLOCKED_UPLOAD_MESSAGE,
+  isBlockedUpload,
+  type BlockedCheck,
+} from './uploads/blocked.js';
 
 export const CORE_PACKAGE_VERSION = '0.1.0';
