@@ -4,7 +4,12 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ownerIdFromPhysicalPath, resolveVaultRoot } from './vault.js';
+import {
+  ownerIdFromPhysicalPath,
+  resolveVaultRoot,
+  toLogical,
+  toPhysical,
+} from './vault.js';
 
 let root: string;
 
@@ -66,5 +71,34 @@ describe('ownerIdFromPhysicalPath', () => {
     expect(
       ownerIdFromPhysicalPath(root, { deployment: 'hosted', notesDirAbs: root }),
     ).toBeNull();
+  });
+});
+
+describe('toPhysical / toLogical', () => {
+  const selfCfg = { deployment: 'self-host' as const, notesDirAbs: '/x' };
+  const hostedCfg = { deployment: 'hosted' as const, notesDirAbs: '/x' };
+
+  it('self-host: identity en ambos sentidos', () => {
+    expect(toPhysical('alice', 'proyectos/foo.md', selfCfg)).toBe('proyectos/foo.md');
+    expect(toLogical('alice', 'proyectos/foo.md', selfCfg)).toBe('proyectos/foo.md');
+  });
+
+  it('hosted: prefixea y strippea <userId>/', () => {
+    expect(toPhysical('alice', 'proyectos/foo.md', hostedCfg)).toBe('alice/proyectos/foo.md');
+    expect(toLogical('alice', 'alice/proyectos/foo.md', hostedCfg)).toBe('proyectos/foo.md');
+  });
+
+  it('hosted toPhysical es idempotente si ya viene prefixed', () => {
+    expect(toPhysical('alice', 'alice/proyectos/foo.md', hostedCfg)).toBe(
+      'alice/proyectos/foo.md',
+    );
+  });
+
+  it('hosted toLogical sobre path que no pertenece tira error', () => {
+    expect(() => toLogical('alice', 'bob/x.md', hostedCfg)).toThrow();
+  });
+
+  it('hosted toLogical sobre root del user → ""', () => {
+    expect(toLogical('alice', 'alice', hostedCfg)).toBe('');
   });
 });

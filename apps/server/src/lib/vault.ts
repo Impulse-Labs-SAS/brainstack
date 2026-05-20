@@ -47,3 +47,42 @@ export function ownerIdFromPhysicalPath(
   if (segs.length === 0 || !segs[0]) return null;
   return segs[0];
 }
+
+/**
+ * Convierte un path lógico (el que conoce el frontend o el agente MCP,
+ * sin prefix de owner) al path físico que vive en DB/FS. En self-host es
+ * identity; en hosted prefixea `<userId>/`. Idempotente: si el input ya
+ * arranca con `<userId>/`, no duplica.
+ */
+export function toPhysical(
+  userId: string,
+  logicalPath: string,
+  cfg: VaultRootResolverConfig,
+): string {
+  if (cfg.deployment === 'self-host') return logicalPath;
+  if (!userId) throw new Error('toPhysical: userId requerido en hosted');
+  const norm = logicalPath.replace(/^[\\/]+/, '');
+  if (norm === userId || norm.startsWith(userId + '/')) return norm;
+  return `${userId}/${norm}`;
+}
+
+/**
+ * Inverso de `toPhysical`. En self-host es identity. En hosted strippea
+ * el prefix `<userId>/`. Si el path no empieza con el prefix esperado,
+ * throw — señal de que un row de otro user se filtró sin querer.
+ */
+export function toLogical(
+  userId: string,
+  physicalPath: string,
+  cfg: VaultRootResolverConfig,
+): string {
+  if (cfg.deployment === 'self-host') return physicalPath;
+  if (!userId) throw new Error('toLogical: userId requerido en hosted');
+  const norm = physicalPath.replace(/^[\\/]+/, '');
+  const prefix = userId + '/';
+  if (norm === userId) return '';
+  if (!norm.startsWith(prefix)) {
+    throw new Error(`toLogical: path "${physicalPath}" no pertenece a user "${userId}"`);
+  }
+  return norm.slice(prefix.length);
+}
