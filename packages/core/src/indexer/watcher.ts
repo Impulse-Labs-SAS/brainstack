@@ -26,6 +26,12 @@ export interface WatcherOptions {
   onChange?: (event: WatcherEvent) => void;
   /** Called on errors so the host can log via pino instead of swallowing. */
   onError?: (err: unknown) => void;
+  /**
+   * Devuelve el owner_id para un path físico absoluto. Si no se pasa,
+   * los inserts dejan owner_id NULL (self-host). En hosted se cablea a
+   * `ownerIdFromPhysicalPath(abs, cfg)` para derivar dueño del subdir.
+   */
+  deriveOwnerId?: (absolutePath: string) => string | null;
 }
 
 export type WatcherEvent =
@@ -77,11 +83,14 @@ export function startWatcher(
     const tx = bs.sqlite.transaction(() => {
       bs.sqlite.exec('DELETE FROM attachments');
       const insert = bs.sqlite.prepare(`
-        INSERT INTO attachments (path, filename, mime_type, size_bytes, width, height, duration_s, created_at)
-        VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)
+        INSERT INTO attachments (path, filename, mime_type, size_bytes, width, height, duration_s, created_at, owner_id)
+        VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
       `);
       for (const a of attachments) {
-        insert.run(a.path, a.filename, guessMimeType(a.filename), a.sizeBytes, a.mtime);
+        const ownerId = options.deriveOwnerId
+          ? options.deriveOwnerId(safeResolve(root, a.path))
+          : null;
+        insert.run(a.path, a.filename, guessMimeType(a.filename), a.sizeBytes, a.mtime, ownerId);
       }
     });
     tx();
@@ -95,7 +104,7 @@ export function startWatcher(
   watcher
     .on('add', (path: string) => {
       if (isMarkdown(path)) {
-        reindexFile(root, bs, relPosix(path))
+        reindexFile(root, bs, relPosix(path), { deriveOwnerId: options.deriveOwnerId })
           .then(() => options.onChange?.({ kind: 'note-upserted', path: relPosix(path) }))
           .catch(handleError);
       } else if (isAttachment(path)) {
@@ -104,7 +113,7 @@ export function startWatcher(
     })
     .on('change', (path: string) => {
       if (isMarkdown(path)) {
-        reindexFile(root, bs, relPosix(path))
+        reindexFile(root, bs, relPosix(path), { deriveOwnerId: options.deriveOwnerId })
           .then((res) => {
             if (!res.skipped) {
               options.onChange?.({ kind: 'note-upserted', path: relPosix(path) });
