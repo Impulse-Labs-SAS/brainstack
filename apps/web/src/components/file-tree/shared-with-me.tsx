@@ -43,7 +43,7 @@ export function SharedWithMeSection() {
           {items.map((s) => (
             <li key={`${s.ownerId}:${s.folderPath}`}>
               <Link
-                href={`/notes/${encodeURIComponent(s.ownerId)}/${s.folderPath}`}
+                href={`/notes/shared/${encodeURIComponent(s.ownerId)}/${s.folderPath}`}
                 className={cn(
                   'flex items-center gap-2 px-3 py-1 font-mono text-[12px]',
                   'text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary',

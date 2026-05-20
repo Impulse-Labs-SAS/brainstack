@@ -33,12 +33,13 @@ const brainHighlight = HighlightStyle.define([
 
 export interface NoteEditorProps {
   value: string;
-  onChange(value: string): void;
+  onChange?(value: string): void;
+  readOnly?: boolean;
 }
 
 /** Minimal CodeMirror 6 markdown editor. Wikilink/autocomplete extensions
  * land in Fase 4.1. */
-export function NoteEditor({ value, onChange }: NoteEditorProps) {
+export function NoteEditor({ value, onChange, readOnly = false }: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -55,9 +56,10 @@ export function NoteEditor({ value, onChange }: NoteEditorProps) {
         syntaxHighlighting(brainHighlight),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
+        ...(readOnly ? [EditorView.editable.of(false), EditorState.readOnly.of(true)] : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            onChangeRef.current(update.state.doc.toString());
+            onChangeRef.current?.(update.state.doc.toString());
           }
         }),
         EditorView.theme(
