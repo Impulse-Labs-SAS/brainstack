@@ -144,6 +144,7 @@ export function MarkdownPreview({
             </Link>
           );
         }
+        if (!raw) return null;
         return (
           // eslint-disable-next-line @next/next/no-img-element
           <img
