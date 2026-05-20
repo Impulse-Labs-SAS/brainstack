@@ -34,8 +34,9 @@ interface Harness {
 async function buildHarness(deployment: Deployment): Promise<Harness> {
   const root = await fsp.mkdtemp(join(tmpdir(), 'bs-dual-'));
   const bs = openDatabase(':memory:');
-  const index = new IndexService({ root, db: bs, logger });
-  const notes = new NoteService({ root, db: bs, index });
+  const vaultCfg = { deployment, notesDirAbs: root };
+  const index = new IndexService({ root, db: bs, logger, vaultCfg });
+  const notes = new NoteService({ cfg: vaultCfg, db: bs, index });
   const search = new SearchService(bs);
   const email = new CapturingEmailSender();
   const totp = new TotpService({ db: bs, issuer: 'BrainStack' });

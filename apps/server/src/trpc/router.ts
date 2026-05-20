@@ -69,7 +69,7 @@ export const appRouter = t.router({
       .query(async ({ ctx, input }) =>
         wrap(() => {
           ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.get(input.path);
+          return ctx.notes.get(ctx.user.id, input.path);
         }),
       ),
     list: protectedProcedure
@@ -83,7 +83,7 @@ export const appRouter = t.router({
           })
           .optional(),
       )
-      .query(({ ctx, input }) => ctx.notes.list(input ?? {})),
+      .query(({ ctx, input }) => ctx.notes.list(ctx.user.id, input ?? {})),
     create: protectedProcedure
       .input(
         z.object({ path: z.string().min(1), content: z.string(), frontmatter: FrontmatterInput }),
@@ -91,7 +91,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(() => {
           ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.create(input.path, input.content, input.frontmatter);
+          return ctx.notes.create(ctx.user.id, input.path, input.content, input.frontmatter);
         }),
       ),
     update: protectedProcedure
@@ -99,7 +99,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(() => {
           ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.update(input.path, input.content);
+          return ctx.notes.update(ctx.user.id, input.path, input.content);
         }),
       ),
     remove: protectedProcedure
@@ -112,7 +112,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(() => {
           ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.remove(input.path, { recursive: input.recursive });
+          return ctx.notes.remove(ctx.user.id, input.path, { recursive: input.recursive });
         }),
       ),
     move: protectedProcedure
@@ -121,7 +121,7 @@ export const appRouter = t.router({
         wrap(() => {
           ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.from);
           ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.to);
-          return ctx.notes.move(input.from, input.to);
+          return ctx.notes.move(ctx.user.id, input.from, input.to);
         }),
       ),
     createFolder: protectedProcedure
@@ -129,7 +129,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(() => {
           ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.createFolder(input.path);
+          return ctx.notes.createFolder(ctx.user.id, input.path);
         }),
       ),
     tree: protectedProcedure
@@ -142,7 +142,7 @@ export const appRouter = t.router({
           .optional(),
       )
       .query(async ({ ctx, input }) =>
-        wrap(() => ctx.notes.listTree(input?.path, input?.depth)),
+        wrap(() => ctx.notes.listTree(ctx.user.id, input?.path, input?.depth)),
       ),
     decisions: protectedProcedure
       .input(
@@ -153,7 +153,7 @@ export const appRouter = t.router({
           })
           .optional(),
       )
-      .query(({ ctx, input }) => ctx.notes.listDecisions(input ?? {})),
+      .query(({ ctx, input }) => ctx.notes.listDecisions(ctx.user.id, input ?? {})),
     uploadAttachment: protectedProcedure
       .input(
         z.object({
@@ -165,7 +165,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(() => {
           ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.uploadAttachment({
+          return ctx.notes.uploadAttachment(ctx.user.id, {
             path: input.path,
             dataBase64: input.dataBase64,
             mime: input.mime,
@@ -177,16 +177,16 @@ export const appRouter = t.router({
       .query(async ({ ctx, input }) =>
         wrap(() => {
           ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.getAttachment(input.path);
+          return ctx.notes.getAttachment(ctx.user.id, input.path);
         }),
       ),
     backlinks: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .query(({ ctx, input }) => {
         ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
-        return ctx.notes.listLinks(input.path);
+        return ctx.notes.listLinks(ctx.user.id, input.path);
       }),
-    graph: protectedProcedure.query(({ ctx }) => ctx.notes.graph()),
+    graph: protectedProcedure.query(({ ctx }) => ctx.notes.graph(ctx.user.id)),
     getForOwner: protectedProcedure
       .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
       .query(async ({ ctx, input }) =>

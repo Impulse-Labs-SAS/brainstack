@@ -45,7 +45,11 @@ async function main(): Promise<void> {
     logger,
     vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT, notesDirAbs: cfg.notesDirAbs },
   });
-  const notes = new NoteService({ root: cfg.notesDirAbs, db: bs, index });
+  const notes = new NoteService({
+    cfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT, notesDirAbs: cfg.notesDirAbs },
+    db: bs,
+    index,
+  });
   const search = new SearchService(bs);
 
   const emailSender =

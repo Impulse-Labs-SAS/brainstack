@@ -106,7 +106,7 @@ export function buildMcpServer({
     async ({ path }) => {
       try {
         assertRead(path);
-        const note = await notes.get(path);
+        const note = await notes.get(requireUserId(), path);
         return JSON_TEXT(note);
       } catch (err) {
         return toMcpError(err);
@@ -129,7 +129,7 @@ export function buildMcpServer({
     },
     async (args) => {
       try {
-        const rows = notes.list(args);
+        const rows = notes.list(requireUserId(), args);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -152,7 +152,7 @@ export function buildMcpServer({
     async ({ path, content, frontmatter }) => {
       try {
         assertWrite(path);
-        const result = await notes.create(path, content, frontmatter);
+        const result = await notes.create(requireUserId(), path, content, frontmatter);
         return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
@@ -170,7 +170,7 @@ export function buildMcpServer({
     async ({ path, content }) => {
       try {
         assertWrite(path);
-        const final = await notes.update(path, content);
+        const final = await notes.update(requireUserId(), path, content);
         return TEXT(`Updated ${final}`);
       } catch (err) {
         return toMcpError(err);
@@ -192,7 +192,7 @@ export function buildMcpServer({
     },
     async ({ path, depth }) => {
       try {
-        const tree = await notes.listTree(path, depth);
+        const tree = await notes.listTree(requireUserId(), path, depth);
         return JSON_TEXT(tree);
       } catch (err) {
         return toMcpError(err);
@@ -214,7 +214,7 @@ export function buildMcpServer({
     },
     async (args) => {
       try {
-        const rows = notes.listDecisions(args);
+        const rows = notes.listDecisions(requireUserId(), args);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -233,7 +233,7 @@ export function buildMcpServer({
     async ({ path }) => {
       try {
         assertWrite(path);
-        const final = await notes.createFolder(path);
+        const final = await notes.createFolder(requireUserId(), path);
         return TEXT(`Created folder ${final}`);
       } catch (err) {
         return toMcpError(err);
@@ -253,7 +253,7 @@ export function buildMcpServer({
       try {
         assertWrite(from);
         assertWrite(to);
-        const result = await notes.move(from, to);
+        const result = await notes.move(requireUserId(), from, to);
         return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
@@ -275,7 +275,7 @@ export function buildMcpServer({
     async ({ path, recursive }) => {
       try {
         assertWrite(path);
-        const result = await notes.remove(path, { recursive });
+        const result = await notes.remove(requireUserId(), path, { recursive });
         return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
@@ -298,7 +298,7 @@ export function buildMcpServer({
     async ({ path, data_base64, mime }) => {
       try {
         assertWrite(path);
-        const final = await notes.uploadAttachment({
+        const final = await notes.uploadAttachment(requireUserId(), {
           path,
           dataBase64: data_base64,
           mime,
@@ -321,7 +321,7 @@ export function buildMcpServer({
     async ({ path }) => {
       try {
         assertRead(path);
-        const result = await notes.getAttachment(path);
+        const result = await notes.getAttachment(requireUserId(), path);
         return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
@@ -339,7 +339,7 @@ export function buildMcpServer({
     async ({ path }) => {
       try {
         assertRead(path);
-        const rows = notes.listLinks(path);
+        const rows = notes.listLinks(requireUserId(), path);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);

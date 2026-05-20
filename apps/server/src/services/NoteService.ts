@@ -2,6 +2,12 @@
 // @brainstack/core (atomic filesystem) and then triggers an immediate reindex
 // so the sqlite cache stays in sync without waiting for the chokidar event
 // (the watcher will dedupe the event by checksum).
+//
+// Owner-aware: en hosted, cada método recibe el userId del caller. Internamente
+// traduce paths lógicos (lo que ve el frontend / MCP, sin prefix) a paths
+// físicos (lo que vive en DB/FS: `<userId>/...`) via toPhysical/toLogical.
+// En self-host esos helpers son identity, los filtros owner_id quedan
+// desactivados y el comportamiento es el de single-tenant previo.
 
 import { promises as fsp, type Dirent } from 'node:fs';
 import { join } from 'node:path';
@@ -30,6 +36,12 @@ import {
 import matter from 'gray-matter';
 
 import { AppError } from '../lib/errors.js';
+import {
+  resolveVaultRoot,
+  toLogical,
+  toPhysical,
+  type VaultRootResolverConfig,
+} from '../lib/vault.js';
 
 import type { IndexService } from './IndexService.js';
 
@@ -90,7 +102,7 @@ export interface AttachmentPayload {
 }
 
 export interface NoteServiceOptions {
-  root: string;
+  cfg: VaultRootResolverConfig;
   db: BrainStackDatabase;
   index: IndexService;
 }
@@ -108,20 +120,51 @@ export class NoteService {
   constructor(private readonly opts: NoteServiceOptions) {}
 
   // ---------------------------------------------------------------------------
+  // Helpers de owner-awareness
+  // ---------------------------------------------------------------------------
+
+  /** Path físico (lo que vive en DB/FS). En self-host es identity. */
+  private toPhysical(userId: string, logical: string): string {
+    return toPhysical(userId, logical, this.opts.cfg);
+  }
+
+  /** Path lógico que devolvemos al caller. En self-host es identity. */
+  private toLogical(userId: string, physical: string): string {
+    return toLogical(userId, physical, this.opts.cfg);
+  }
+
+  /** Root absoluto para FS scans del user (hosted: per-user subdir). */
+  private rootFor(userId: string): string {
+    return resolveVaultRoot(userId, this.opts.cfg);
+  }
+
+  /** Filtro WHERE owner_id; en self-host no filtra. */
+  private ownerWhere(userId: string): { sql: string; params: unknown[] } {
+    if (this.opts.cfg.deployment === 'self-host') return { sql: '', params: [] };
+    return { sql: ' AND owner_id = ?', params: [userId] };
+  }
+
+  private get hosted(): boolean {
+    return this.opts.cfg.deployment === 'hosted';
+  }
+
+  // ---------------------------------------------------------------------------
   // Notes — CRUD
   // ---------------------------------------------------------------------------
 
-  async get(path: string): Promise<NoteRowDto> {
+  async get(userId: string, path: string): Promise<NoteRowDto> {
+    const physicalPath = this.toPhysical(userId, path);
+    const { sql, params } = this.ownerWhere(userId);
     const row = this.opts.db.sqlite
-      .prepare<[string], { path: string; title: string; frontmatter: string; body: string; mtime: number; checksum: string }>(
-        'SELECT path, title, frontmatter, body, mtime, checksum FROM notes WHERE path = ?',
+      .prepare<unknown[], { path: string; title: string; frontmatter: string; body: string; mtime: number; checksum: string }>(
+        `SELECT path, title, frontmatter, body, mtime, checksum FROM notes WHERE path = ?${sql}`,
       )
-      .get(path);
+      .get(physicalPath, ...params);
     if (!row) {
       try {
-        const file = await readNote(this.opts.root, path);
+        const file = await readNote(this.opts.cfg.notesDirAbs, physicalPath);
         await this.opts.index.reindex(file.path);
-        return this.get(file.path);
+        return this.get(userId, path);
       } catch (err) {
         if (err instanceof NoteNotFoundError) {
           throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
@@ -130,7 +173,7 @@ export class NoteService {
       }
     }
     return {
-      path: row.path,
+      path: this.toLogical(userId, row.path),
       title: row.title,
       frontmatter: JSON.parse(row.frontmatter) as Frontmatter,
       body: row.body,
@@ -140,16 +183,26 @@ export class NoteService {
   }
 
   async create(
+    userId: string,
     path: string,
     content: string,
     frontmatter?: Frontmatter,
   ): Promise<MutationResult> {
+    const physicalPath = this.toPhysical(userId, path);
     const merged = frontmatter ? buildContent(content, frontmatter) : content;
     try {
-      const finalPath = await writeNote(this.opts.root, path, merged, { failIfExists: true });
-      await this.opts.index.reindex(finalPath);
-      const affectedMocs = await this.candidateMocs([parentOf(finalPath)]);
-      return { path: finalPath, affectedMocs };
+      const finalPhysical = await writeNote(
+        this.opts.cfg.notesDirAbs,
+        physicalPath,
+        merged,
+        { failIfExists: true },
+      );
+      await this.opts.index.reindex(finalPhysical);
+      const affectedMocs = await this.candidateMocs(userId, [parentOf(finalPhysical)]);
+      return {
+        path: this.toLogical(userId, finalPhysical),
+        affectedMocs: affectedMocs.map((p) => this.toLogical(userId, p)),
+      };
     } catch (err) {
       if (err instanceof NoteAlreadyExistsError) {
         throw new AppError(`note already exists: ${path}`, 'ALREADY_EXISTS', 409);
@@ -158,18 +211,19 @@ export class NoteService {
     }
   }
 
-  async update(path: string, content: string): Promise<string> {
+  async update(userId: string, path: string, content: string): Promise<string> {
+    const physicalPath = this.toPhysical(userId, path);
     try {
-      await readNote(this.opts.root, path);
+      await readNote(this.opts.cfg.notesDirAbs, physicalPath);
     } catch (err) {
       if (err instanceof NoteNotFoundError) {
         throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
       }
       throw mapPathError(err);
     }
-    const finalPath = await writeNote(this.opts.root, path, content);
-    await this.opts.index.reindex(finalPath);
-    return finalPath;
+    const finalPhysical = await writeNote(this.opts.cfg.notesDirAbs, physicalPath, content);
+    await this.opts.index.reindex(finalPhysical);
+    return this.toLogical(userId, finalPhysical);
   }
 
   // ---------------------------------------------------------------------------
@@ -178,39 +232,31 @@ export class NoteService {
 
   /**
    * Delete a note, attachment, or folder. Folders require `recursive: true`
-   * unless they are empty. If the path turns out to be a single file, the
-   * `recursive` flag is harmless — it permits descending, not requires it.
-   *
-   * Returns the explicit list of paths that were deleted. Callers (CLI/UX,
-   * MCP) get the blast radius for free without having to diff the tree
-   * before/after, and the agent sees exactly what its delete touched.
+   * unless they are empty.
    */
   async remove(
+    userId: string,
     path: string,
     options: { recursive?: boolean } = {},
   ): Promise<{ deleted: string[] }> {
-    const norm = this.normalize(path);
+    const norm = this.normalize(userId, path);
 
-    // Enumerate before the FS mutation so the response is accurate even if a
-    // descendant disappears mid-operation. For files this is trivially the
-    // path itself; for folders we walk disk (same authoritative source as
-    // `move`).
     const kind = await this.classify(norm);
     if (kind === 'missing') {
-      throw new AppError(`path not found: ${norm}`, 'NOT_FOUND', 404);
+      throw new AppError(`path not found: ${path}`, 'NOT_FOUND', 404);
     }
     const targets: string[] =
       kind === 'folder' ? (await this.walkFolder(norm)).map((c) => c.path) : [norm];
 
     try {
-      await deletePath(this.opts.root, norm, { recursive: options.recursive });
+      await deletePath(this.opts.cfg.notesDirAbs, norm, { recursive: options.recursive });
     } catch (err) {
       if (err instanceof NoteNotFoundError) {
-        throw new AppError(`path not found: ${norm}`, 'NOT_FOUND', 404);
+        throw new AppError(`path not found: ${path}`, 'NOT_FOUND', 404);
       }
       if (err instanceof FolderNotEmptyError) {
         throw new AppError(
-          `folder not empty: ${norm} (pass recursive=true to delete contents)`,
+          `folder not empty: ${path} (pass recursive=true to delete contents)`,
           'INVALID_INPUT',
           400,
         );
@@ -223,67 +269,49 @@ export class NoteService {
         this.opts.index.remove(target);
       }
     }
-    // Attachment removals are handled by the watcher's periodic rescan; the
-    // explicit `deleted` list still reports them so the caller has the full
-    // picture.
 
-    return { deleted: targets.sort() };
+    return { deleted: targets.map((p) => this.toLogical(userId, p)).sort() };
   }
 
   /**
-   * Move/rename a note, attachment, or folder. Wikilinks targeting the moved
-   * path(s) get rewritten across the vault.
-   *
-   * Order matters: filesystem rename first, then rewrite wikilinks. If the
-   * process dies between these two steps, the worst-case is dangling
-   * wikilinks the indexer will flag as unresolved — not links pointing at a
-   * vanished intermediate path.
+   * Move/rename. Wikilinks targeting the moved path(s) get rewritten across the
+   * user's own vault. Cross-owner moves no están soportados (V1 read-only).
    */
-  async move(fromPath: string, toPath: string): Promise<MutationResult> {
-    const fromNorm = this.normalize(fromPath);
-    const toNorm = this.normalize(toPath);
+  async move(userId: string, fromPath: string, toPath: string): Promise<MutationResult> {
+    const fromNorm = this.normalize(userId, fromPath);
+    const toNorm = this.normalize(userId, toPath);
 
-    // Enumerate everything that's about to move from disk — not from the DB.
-    // The index can be a step behind (e.g. a freshly written attachment whose
-    // bulk-rescan hasn't fired yet); if its mapping isn't in the rewrite list,
-    // wikilinks pointing at it stay broken forever, since rewriteLinkTargets
-    // runs exactly once per move. Disk is the only authoritative source.
     const movedTopLevelKind = await this.classify(fromNorm);
     const movingChildren: ChildEntry[] =
       movedTopLevelKind === 'folder' ? await this.walkFolder(fromNorm) : [];
 
-    let finalPath: string;
+    let finalPhysical: string;
     try {
-      finalPath = await movePath(this.opts.root, fromNorm, toNorm);
+      finalPhysical = await movePath(this.opts.cfg.notesDirAbs, fromNorm, toNorm);
     } catch (err) {
       if (err instanceof NoteNotFoundError) {
-        throw new AppError(`path not found: ${fromNorm}`, 'NOT_FOUND', 404);
+        throw new AppError(`path not found: ${fromPath}`, 'NOT_FOUND', 404);
       }
       if (err instanceof NoteAlreadyExistsError) {
-        throw new AppError(`destination already exists: ${toNorm}`, 'ALREADY_EXISTS', 409);
+        throw new AppError(`destination already exists: ${toPath}`, 'ALREADY_EXISTS', 409);
       }
       throw mapPathError(err);
     }
 
-    // Build the rewrite mappings. For a single file we map the file itself.
-    // For a folder, we map every classified child the disk walk found —
-    // notes go through note-matching rules, binaries through exact-path
-    // matching. The classification follows the same rule the resolver uses:
-    // `.md` (case-insensitive) → note; anything else → attachment.
     const mappings: LinkRewriteMapping[] = [];
-    const movedNotePaths: string[] = []; // old paths, for index.remove
-    const newNotePaths: string[] = []; // new paths, for index.reindex
+    const movedNotePaths: string[] = [];
+    const newNotePaths: string[] = [];
 
     if (movedTopLevelKind === 'file') {
-      mappings.push({ from: fromNorm, to: finalPath });
+      mappings.push({ from: fromNorm, to: finalPhysical });
       if (fromNorm.toLowerCase().endsWith('.md')) {
         movedNotePaths.push(fromNorm);
-        newNotePaths.push(finalPath);
+        newNotePaths.push(finalPhysical);
       }
     } else if (movedTopLevelKind === 'folder') {
       for (const child of movingChildren) {
         const rel = child.path.slice(fromNorm.length + 1);
-        const newPath = `${finalPath}/${rel}`;
+        const newPath = `${finalPhysical}/${rel}`;
         mappings.push({ from: child.path, to: newPath });
         if (child.type === 'note') {
           movedNotePaths.push(child.path);
@@ -292,27 +320,43 @@ export class NoteService {
       }
     }
 
-    const { filesChanged } = await rewriteLinkTargets(this.opts.root, mappings);
+    // El rewriter walks el FS — en hosted, restringimos al vault del user
+    // pasando su root específico. Self-host usa el global.
+    const rewriteRoot = this.hosted ? this.rootFor(userId) : this.opts.cfg.notesDirAbs;
+    // Las mappings están en physical paths; convertir a logical para el rewriter
+    // si estamos en hosted (sus paths son relativos al root que recibe).
+    const rewriteMappings = this.hosted
+      ? mappings.map((m) => ({
+          from: this.toLogical(userId, m.from),
+          to: this.toLogical(userId, m.to),
+        }))
+      : mappings;
+    const { filesChanged } = await rewriteLinkTargets(rewriteRoot, rewriteMappings);
 
-    // Bring the index in sync with disk: drop the old note paths, reindex
-    // the new ones, then reindex every file whose body the rewriter touched.
     for (const oldPath of movedNotePaths) this.opts.index.remove(oldPath);
     for (const newPath of newNotePaths) await this.opts.index.reindex(newPath);
+    // filesChanged está en paths relativos al rewriteRoot; reindex necesita
+    // physical (con prefix). En self-host coinciden; en hosted re-prefijar.
     for (const changed of filesChanged) {
-      await this.opts.index.reindex(changed);
+      const physical = this.hosted ? this.toPhysical(userId, changed) : changed;
+      await this.opts.index.reindex(physical);
     }
 
-    const affectedMocs = await this.candidateMocs([
+    const affectedMocs = await this.candidateMocs(userId, [
       parentOf(fromNorm),
-      parentOf(finalPath),
+      parentOf(finalPhysical),
     ]);
-    return { path: finalPath, affectedMocs };
+    return {
+      path: this.toLogical(userId, finalPhysical),
+      affectedMocs: affectedMocs.map((p) => this.toLogical(userId, p)),
+    };
   }
 
-  async createFolder(path: string): Promise<string> {
-    const norm = this.normalize(path);
+  async createFolder(userId: string, path: string): Promise<string> {
+    const norm = this.normalize(userId, path);
     try {
-      return await createFolder(this.opts.root, norm);
+      const finalPhysical = await createFolder(this.opts.cfg.notesDirAbs, norm);
+      return this.toLogical(userId, finalPhysical);
     } catch (err) {
       throw mapPathError(err);
     }
@@ -322,8 +366,8 @@ export class NoteService {
   // Attachments
   // ---------------------------------------------------------------------------
 
-  async uploadAttachment(input: UploadAttachmentInput): Promise<string> {
-    const norm = this.normalize(input.path);
+  async uploadAttachment(userId: string, input: UploadAttachmentInput): Promise<string> {
+    const norm = this.normalize(userId, input.path);
     let bytes: Buffer;
     try {
       bytes = Buffer.from(input.dataBase64, 'base64');
@@ -334,21 +378,19 @@ export class NoteService {
       throw new AppError('empty attachment payload', 'INVALID_INPUT', 400);
     }
     try {
-      const finalPath = await writeAttachment(this.opts.root, norm, bytes);
-      // Attachment indexing is handled by the watcher rescan; the table is
-      // rebuilt in bulk rather than per-row.
-      return finalPath;
+      const finalPhysical = await writeAttachment(this.opts.cfg.notesDirAbs, norm, bytes);
+      return this.toLogical(userId, finalPhysical);
     } catch (err) {
       throw mapPathError(err);
     }
   }
 
-  async getAttachment(path: string): Promise<AttachmentPayload> {
-    const norm = this.normalize(path);
+  async getAttachment(userId: string, path: string): Promise<AttachmentPayload> {
+    const norm = this.normalize(userId, path);
     try {
-      const result = await readAttachment(this.opts.root, norm);
+      const result = await readAttachment(this.opts.cfg.notesDirAbs, norm);
       return {
-        path: result.path,
+        path: this.toLogical(userId, result.path),
         sizeBytes: result.sizeBytes,
         mtime: result.mtime,
         dataBase64: result.bytes.toString('base64'),
@@ -356,7 +398,7 @@ export class NoteService {
     } catch (err) {
       if (err instanceof PathTraversalError) throw mapPathError(err);
       if (err instanceof Error && err.message.startsWith('attachment not found')) {
-        throw new AppError(`attachment not found: ${norm}`, 'NOT_FOUND', 404);
+        throw new AppError(`attachment not found: ${path}`, 'NOT_FOUND', 404);
       }
       throw err;
     }
@@ -366,7 +408,10 @@ export class NoteService {
   // Queries
   // ---------------------------------------------------------------------------
 
-  list(filter: ListFilter = {}): Array<{ path: string; title: string; mtime: number }> {
+  list(
+    userId: string,
+    filter: ListFilter = {},
+  ): Array<{ path: string; title: string; mtime: number }> {
     const limit = filter.limit ?? 200;
     const parts: string[] = ['SELECT n.path, n.title, n.mtime FROM notes n'];
     const params: unknown[] = [];
@@ -379,23 +424,36 @@ export class NoteService {
     }
     if (filter.folder) {
       where.push('n.path LIKE ?');
-      params.push(`${filter.folder.replace(/\/+$/, '')}/%`);
+      const folderPhysical = this.toPhysical(userId, filter.folder.replace(/\/+$/, ''));
+      params.push(`${folderPhysical}/%`);
     }
     if (filter.status) {
       where.push("json_extract(n.frontmatter, '$.status') = ?");
       params.push(filter.status);
+    }
+    if (this.hosted) {
+      where.push('n.owner_id = ?');
+      params.push(userId);
     }
 
     if (where.length > 0) parts.push('WHERE ' + where.join(' AND '));
     parts.push('ORDER BY n.mtime DESC LIMIT ?');
     params.push(limit);
 
-    return this.opts.db.sqlite
+    const rows = this.opts.db.sqlite
       .prepare<unknown[], { path: string; title: string; mtime: number }>(parts.join(' '))
       .all(...params);
+    return rows.map((r) => ({
+      path: this.toLogical(userId, r.path),
+      title: r.title,
+      mtime: r.mtime,
+    }));
   }
 
-  listLinks(path: string): Array<{
+  listLinks(
+    userId: string,
+    path: string,
+  ): Array<{
     sourcePath: string;
     targetPath: string;
     targetType: string;
@@ -403,9 +461,17 @@ export class NoteService {
     alias: string | null;
     section: string | null;
   }> {
+    const physicalPath = this.toPhysical(userId, path);
+    // En hosted: solo backlinks desde notas del propio user (links cross-owner
+    // se exponen por separado vía notes.linksForOwner).
+    const ownerJoin = this.hosted
+      ? 'JOIN notes n ON n.path = l.source_path WHERE l.target_path = ? AND n.owner_id = ?'
+      : 'WHERE l.target_path = ?';
+    const params: unknown[] = this.hosted ? [physicalPath, userId] : [physicalPath];
+
     return this.opts.db.sqlite
       .prepare<
-        [string],
+        unknown[],
         {
           source_path: string;
           target_path: string;
@@ -415,14 +481,15 @@ export class NoteService {
           section: string | null;
         }
       >(
-        `SELECT source_path, target_path, target_type, link_kind, alias, section
-         FROM links WHERE target_path = ?
-         ORDER BY source_path, position`,
+        `SELECT l.source_path, l.target_path, l.target_type, l.link_kind, l.alias, l.section
+         FROM links l
+         ${ownerJoin}
+         ORDER BY l.source_path, l.position`,
       )
-      .all(path)
+      .all(...params)
       .map((row) => ({
-        sourcePath: row.source_path,
-        targetPath: row.target_path,
+        sourcePath: this.toLogical(userId, row.source_path),
+        targetPath: this.toLogical(userId, row.target_path),
         targetType: row.target_type,
         linkKind: row.link_kind,
         alias: row.alias,
@@ -431,19 +498,19 @@ export class NoteService {
   }
 
   /**
-   * Whole-vault graph for the Obsidian-style visualisation. Nodes are notes
-   * (path + title); edges are resolved note-to-note wikilinks/embeds. Unresolved
-   * links and attachment links are dropped — they have no node to anchor to.
-   * Duplicate edges (multiple links between the same pair) are collapsed and
-   * counted via `weight` so the renderer can thicken heavy connections.
+   * Graph del vault propio del user. Edges cross-owner se manejan aparte.
    */
-  graph(): {
+  graph(userId: string): {
     nodes: Array<{ path: string; title: string }>;
     edges: Array<{ source: string; target: string; weight: number }>;
   } {
+    const ownerFilter = this.hosted ? 'WHERE owner_id = ?' : '';
+    const noteParams: unknown[] = this.hosted ? [userId] : [];
     const nodes = this.opts.db.sqlite
-      .prepare<unknown[], { path: string; title: string }>('SELECT path, title FROM notes')
-      .all();
+      .prepare<unknown[], { path: string; title: string }>(
+        `SELECT path, title FROM notes ${ownerFilter}`,
+      )
+      .all(...noteParams);
     const nodeSet = new Set(nodes.map((n) => n.path));
 
     const raw = this.opts.db.sqlite
@@ -456,68 +523,76 @@ export class NoteService {
     const counts = new Map<string, number>();
     for (const link of raw) {
       if (!nodeSet.has(link.source_path) || !nodeSet.has(link.target_path)) continue;
-      const key = `${link.source_path} ${link.target_path}`;
+      const key = `${link.source_path} ${link.target_path}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     const edges = Array.from(counts.entries()).map(([key, weight]) => {
-      const [source, target] = key.split(' ');
-      return { source: source ?? '', target: target ?? '', weight };
+      const [source, target] = key.split(' ');
+      return {
+        source: this.toLogical(userId, source ?? ''),
+        target: this.toLogical(userId, target ?? ''),
+        weight,
+      };
     });
-    return { nodes, edges };
+    return {
+      nodes: nodes.map((n) => ({ path: this.toLogical(userId, n.path), title: n.title })),
+      edges,
+    };
   }
 
   /**
-   * Hierarchical view of the vault. Builds a tree from the indexed notes +
-   * attachments. `path` scopes the root of the tree (omit for the whole
-   * vault). `depth` caps how many levels deep we descend (1 = immediate
-   * children only).
+   * Tree del vault del user. Scope `path` opcional (lógico).
    */
-  async listTree(path?: string, depth?: number): Promise<TreeNode> {
-    const scope = path ? this.normalize(path) : '';
+  async listTree(userId: string, path?: string, depth?: number): Promise<TreeNode> {
+    const scopeLogical = path ? this.normalizeLogical(path) : '';
     const maxDepth = depth ?? DEFAULT_TREE_DEPTH;
 
-    const notePaths = this.opts.db.sqlite
-      .prepare<unknown[], { path: string }>('SELECT path FROM notes')
-      .all()
-      .map((r) => r.path);
-    const attachmentPaths = this.opts.db.sqlite
-      .prepare<unknown[], { path: string }>('SELECT path FROM attachments')
-      .all()
-      .map((r) => r.path);
+    const root = this.rootFor(userId);
+
+    // Las tablas tienen physical paths; traducimos a lógico para construir el árbol.
+    const ownerWhere = this.hosted ? 'WHERE owner_id = ?' : '';
+    const ownerParams: unknown[] = this.hosted ? [userId] : [];
+    const notePhysicals = this.opts.db.sqlite
+      .prepare<unknown[], { path: string }>(`SELECT path FROM notes ${ownerWhere}`)
+      .all(...ownerParams)
+      .map((r) => this.toLogical(userId, r.path));
+    const attachmentPhysicals = this.opts.db.sqlite
+      .prepare<unknown[], { path: string }>(`SELECT path FROM attachments ${ownerWhere}`)
+      .all(...ownerParams)
+      .map((r) => this.toLogical(userId, r.path));
 
     const all: Array<{ path: string; type: 'note' | 'attachment' }> = [
-      ...notePaths.map((p) => ({ path: p, type: 'note' as const })),
-      ...attachmentPaths.map((p) => ({ path: p, type: 'attachment' as const })),
+      ...notePhysicals.map((p) => ({ path: p, type: 'note' as const })),
+      ...attachmentPhysicals.map((p) => ({ path: p, type: 'attachment' as const })),
     ];
 
-    const inScope = scope
-      ? all.filter((e) => e.path === scope || e.path.startsWith(`${scope}/`))
+    const inScope = scopeLogical
+      ? all.filter(
+          (e) => e.path === scopeLogical || e.path.startsWith(`${scopeLogical}/`),
+        )
       : all;
 
     const rootNode: TreeNode = {
-      path: scope,
-      name: scope === '' ? '' : (scope.split('/').pop() ?? scope),
+      path: scopeLogical,
+      name: scopeLogical === '' ? '' : (scopeLogical.split('/').pop() ?? scopeLogical),
       type: 'folder',
       children: [],
     };
 
     const folderIndex = new Map<string, TreeNode>();
-    folderIndex.set(scope, rootNode);
+    folderIndex.set(scopeLogical, rootNode);
 
-    // Seed the index with real filesystem folders so empty ones still show up.
-    // The notes/attachments loop below only materialises folders that contain
-    // indexed files, so without this pass `createFolder` would be invisible.
-    const allFolders = await listFolders(this.opts.root);
+    const allFolders = await listFolders(root);
     for (const folderPath of allFolders) {
-      const inFolderScope = scope
-        ? folderPath === scope || folderPath.startsWith(`${scope}/`)
+      const inFolderScope = scopeLogical
+        ? folderPath === scopeLogical || folderPath.startsWith(`${scopeLogical}/`)
         : true;
       if (!inFolderScope) continue;
-      const relative = scope ? folderPath.slice(scope.length + 1) : folderPath;
+      const relative = scopeLogical ? folderPath.slice(scopeLogical.length + 1) : folderPath;
       if (relative === '') continue;
       const segments = relative.split('/');
       if (segments.length > maxDepth) continue;
-      let parentPath = scope;
+      let parentPath = scopeLogical;
       for (let i = 0; i < segments.length; i++) {
         const segment = segments[i] ?? '';
         const fp = parentPath === '' ? segment : `${parentPath}/${segment}`;
@@ -536,12 +611,12 @@ export class NoteService {
     }
 
     for (const entry of inScope) {
-      const relative = scope ? entry.path.slice(scope.length + 1) : entry.path;
+      const relative = scopeLogical ? entry.path.slice(scopeLogical.length + 1) : entry.path;
       if (relative === '') continue;
       const segments = relative.split('/');
       if (segments.length > maxDepth) continue;
 
-      let parentPath = scope;
+      let parentPath = scopeLogical;
       for (let i = 0; i < segments.length - 1; i++) {
         const segment = segments[i] ?? '';
         const folderPath = parentPath === '' ? segment : `${parentPath}/${segment}`;
@@ -571,20 +646,20 @@ export class NoteService {
     return rootNode;
   }
 
-  /**
-   * Notes the user has marked as decisions. V1 heuristic: tagged `decisión`
-   * (or `decision`) OR `frontmatter.status === 'decidido'`. Lives in a single
-   * SQL pass with a UNION to dedupe.
-   */
-  listDecisions(filter: { folder?: string; limit?: number } = {}): Array<{
+  listDecisions(
+    userId: string,
+    filter: { folder?: string; limit?: number } = {},
+  ): Array<{
     path: string;
     title: string;
     mtime: number;
   }> {
     const limit = filter.limit ?? 100;
     const folderPattern = filter.folder
-      ? `${filter.folder.replace(/\/+$/, '')}/%`
+      ? `${this.toPhysical(userId, filter.folder.replace(/\/+$/, ''))}/%`
       : null;
+
+    const ownerClause = this.hosted ? 'AND n.owner_id = ?' : '';
 
     const sql = `
       SELECT DISTINCT n.path, n.title, n.mtime
@@ -595,78 +670,87 @@ export class NoteService {
         OR json_extract(n.frontmatter, '$.status') = 'decidido'
       )
       ${folderPattern ? 'AND n.path LIKE ?' : ''}
+      ${ownerClause}
       ORDER BY n.mtime DESC
       LIMIT ?
     `;
 
     const params: unknown[] = [];
     if (folderPattern) params.push(folderPattern);
+    if (this.hosted) params.push(userId);
     params.push(limit);
 
     return this.opts.db.sqlite
       .prepare<unknown[], { path: string; title: string; mtime: number }>(sql)
-      .all(...params);
+      .all(...params)
+      .map((r) => ({
+        path: this.toLogical(userId, r.path),
+        title: r.title,
+        mtime: r.mtime,
+      }));
   }
 
   // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
 
-  /** Apply path normalisation + traversal guard once at the service boundary. */
-  private normalize(path: string): string {
+  /** Valida y devuelve el path lógico sin '/' al inicio/fin. */
+  private normalizeLogical(path: string): string {
     if (typeof path !== 'string' || path.trim() === '') {
       throw new AppError('path is required', 'INVALID_INPUT', 400);
     }
-    const norm = toPosixPath(path);
+    return toPosixPath(path).replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
+  }
+
+  /**
+   * Normaliza un path del caller a su forma **física**. Aplica path traversal
+   * guard y prefix de owner. Único punto que aplica safeResolve para que
+   * cualquier intento de `../` muera acá.
+   */
+  private normalize(userId: string, path: string): string {
+    if (typeof path !== 'string' || path.trim() === '') {
+      throw new AppError('path is required', 'INVALID_INPUT', 400);
+    }
+    const logical = toPosixPath(path);
+    const physical = this.toPhysical(userId, logical);
     try {
-      const abs = safeResolve(this.opts.root, norm);
-      return relativeToRoot(this.opts.root, abs);
+      const abs = safeResolve(this.opts.cfg.notesDirAbs, physical);
+      return relativeToRoot(this.opts.cfg.notesDirAbs, abs);
     } catch (err) {
       throw mapPathError(err);
     }
   }
 
-  private async classify(path: string): Promise<'file' | 'folder' | 'missing'> {
-    const abs = safeResolve(this.opts.root, path);
+  private async classify(physicalPath: string): Promise<'file' | 'folder' | 'missing'> {
+    const abs = safeResolve(this.opts.cfg.notesDirAbs, physicalPath);
     const stat = await fsp.stat(abs).catch(() => null);
     if (!stat) return 'missing';
     return stat.isDirectory() ? 'folder' : 'file';
   }
 
-  /**
-   * Resolve `_<Folder>.md` MOC candidates for the given folder paths and keep
-   * only the ones that already exist. Used by `create` and `move` to give the
-   * caller a follow-up list without forcing them to recompute or stat paths.
-   * Deduplicates, drops the vault root (no obvious MOC name), and ignores
-   * folders that have no MOC yet — convention isn't enforced server-side.
-   */
-  private async candidateMocs(folderPaths: readonly string[]): Promise<string[]> {
+  private async candidateMocs(
+    userId: string,
+    folderPhysicals: readonly string[],
+  ): Promise<string[]> {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const folder of folderPaths) {
-      if (folder === '') continue;
+    for (const folder of folderPhysicals) {
+      if (folder === '' || folder === userId) continue;
       const moc = mocPathFor(folder);
       if (seen.has(moc)) continue;
       seen.add(moc);
       try {
-        await readNote(this.opts.root, moc);
+        await readNote(this.opts.cfg.notesDirAbs, moc);
         out.push(moc);
       } catch {
-        // MOC doesn't exist — skip silently. The agent will see the empty
-        // slot and either create one or move on.
+        // MOC doesn't exist — skip silently.
       }
     }
     return out;
   }
 
-  /**
-   * Recursively enumerate every file under `folderPath` from disk, classified
-   * by extension. Used by `move` to build a complete mapping list independent
-   * of the index — see the comment in `move` for why disk is authoritative
-   * here. Supports mixed folders (notes + binaries) regardless of location.
-   */
-  private async walkFolder(folderPath: string): Promise<ChildEntry[]> {
-    const baseAbs = safeResolve(this.opts.root, folderPath);
+  private async walkFolder(physicalPath: string): Promise<ChildEntry[]> {
+    const baseAbs = safeResolve(this.opts.cfg.notesDirAbs, physicalPath);
     const out: ChildEntry[] = [];
 
     const walk = async (dirAbs: string): Promise<void> => {
@@ -682,7 +766,7 @@ export class NoteService {
         if (entry.isDirectory()) {
           await walk(childAbs);
         } else if (entry.isFile()) {
-          const relative = relativeToRoot(this.opts.root, childAbs);
+          const relative = relativeToRoot(this.opts.cfg.notesDirAbs, childAbs);
           out.push({
             path: relative,
             type: relative.toLowerCase().endsWith('.md') ? 'note' : 'attachment',
@@ -694,7 +778,6 @@ export class NoteService {
     await walk(baseAbs);
     return out;
   }
-
 }
 
 interface ChildEntry {
@@ -732,4 +815,3 @@ function sortTree(node: TreeNode): void {
   });
   for (const child of node.children) sortTree(child);
 }
-
