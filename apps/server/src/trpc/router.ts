@@ -214,7 +214,9 @@ export const appRouter = t.router({
   search: t.router({
     query: protectedProcedure
       .input(z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(50).optional() }))
-      .query(({ ctx, input }) => ctx.search.search(input.query, { limit: input.limit })),
+      .query(({ ctx, input }) =>
+        ctx.search.search(ctx.user.id, input.query, { limit: input.limit }),
+      ),
   }),
   sharing: t.router({
     listSharedWithMe: protectedProcedure.query(({ ctx }) =>

@@ -50,7 +50,10 @@ async function main(): Promise<void> {
     db: bs,
     index,
   });
-  const search = new SearchService(bs);
+  const search = new SearchService({
+    db: bs,
+    cfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT, notesDirAbs: cfg.notesDirAbs },
+  });
 
   const emailSender =
     cfg.RESEND_API_KEY && cfg.AUTH_EMAIL_FROM

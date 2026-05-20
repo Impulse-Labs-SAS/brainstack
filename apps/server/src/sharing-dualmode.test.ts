@@ -37,7 +37,7 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
   const vaultCfg = { deployment, notesDirAbs: root };
   const index = new IndexService({ root, db: bs, logger, vaultCfg });
   const notes = new NoteService({ cfg: vaultCfg, db: bs, index });
-  const search = new SearchService(bs);
+  const search = new SearchService({ db: bs, cfg: vaultCfg });
   const email = new CapturingEmailSender();
   const totp = new TotpService({ db: bs, issuer: 'BrainStack' });
   const auth = new AuthService({

@@ -30,7 +30,10 @@ beforeEach(async () => {
     db: bs,
     index,
   });
-  search = new SearchService(bs);
+  search = new SearchService({
+    db: bs,
+    cfg: { deployment: 'self-host', notesDirAbs: root },
+  });
   await index.bootstrap();
 });
 
@@ -348,12 +351,12 @@ describe('SearchService', () => {
   it('returns ranked hits with snippets', async () => {
     await notes.create(USER, 'Zuno/pricing.md', '# Pricing\nWe will use tiered pricing for Zuno.');
     await notes.create(USER, 'BRUTUS/specs.md', 'BRUTUS does not deal with pricing.');
-    const hits = search.search('pricing');
+    const hits = search.search(USER,'pricing');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]?.snippet).toContain('<mark>');
   });
 
   it('returns empty array for empty query', () => {
-    expect(search.search('')).toEqual([]);
+    expect(search.search(USER,'')).toEqual([]);
   });
 });

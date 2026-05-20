@@ -86,7 +86,7 @@ export function buildMcpServer({
     },
     async ({ query, limit }) => {
       try {
-        const hits = search.search(query, { limit });
+        const hits = search.search(requireUserId(), query, { limit });
         logger.debug({ query, hits: hits.length }, 'search_brain');
         return JSON_TEXT(hits);
       } catch (err) {
