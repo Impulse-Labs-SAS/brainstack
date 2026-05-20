@@ -85,6 +85,7 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
       deployment,
       features: { sharing: deployment === 'hosted' },
     },
+    vaultCfg: { deployment, notesDirAbs: root },
   });
 
   return {

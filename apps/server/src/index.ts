@@ -150,6 +150,7 @@ async function main(): Promise<void> {
       deployment: cfg.BRAINSTACK_DEPLOYMENT,
       features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },
     },
+    vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT, notesDirAbs: cfg.notesDirAbs },
   });
   const httpServer = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info({ port: info.port }, 'HTTP listening');
