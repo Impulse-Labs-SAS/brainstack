@@ -10,7 +10,7 @@
 import 'highlight.js/styles/github-dark.css';
 
 import Link from 'next/link';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
@@ -247,6 +247,7 @@ export function MarkdownPreview({
             remarkPlugins={[remarkGfm, remarkWikilinks]}
             rehypePlugins={[rehypeRaw, rehypeHighlight]}
             components={components}
+            urlTransform={urlTransform}
           >
             {body}
           </ReactMarkdown>
@@ -254,6 +255,18 @@ export function MarkdownPreview({
       )}
     </div>
   );
+}
+
+// El sanitizador default de react-markdown strippea cualquier protocolo
+// que no esté en su whitelist (http/https/mailto/etc.), y eso incluye
+// nuestros esquemas internos `wikilink://` y `embed://` — sin esto los
+// component overrides reciben href/src vacío y los wikilinks/embeds no
+// se renderizan. Como esos URLs los construye nuestro propio plugin
+// remark y no contenido de usuario, dejarlos pasar es seguro; el resto
+// sigue por el sanitizador estándar para bloquear javascript:/data:.
+function urlTransform(url: string): string {
+  if (url.startsWith('wikilink://') || url.startsWith('embed://')) return url;
+  return defaultUrlTransform(url);
 }
 
 function formatValue(v: unknown): string {
