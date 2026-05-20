@@ -16,6 +16,8 @@ const SPLIT_MIN_WIDTH = 900;
 
 import { Columns, Eye, Pencil } from 'lucide-react';
 
+import { BLOCKED_UPLOAD_MESSAGE, isBlockedUpload } from '@/lib/uploads';
+
 import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
 import { NoteEditor } from '@/components/editor/note-editor';
@@ -144,6 +146,10 @@ export default function NotePage() {
 
       const inserted: string[] = [];
       for (const file of files) {
+        if (isBlockedUpload({ mime: file.type, filename: file.name })) {
+          setUploadError(`${file.name}: ${BLOCKED_UPLOAD_MESSAGE}`);
+          continue;
+        }
         try {
           const dataBase64 = await readAsBase64(file);
           const dest = attachmentDestForFile(file);

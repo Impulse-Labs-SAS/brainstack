@@ -254,13 +254,74 @@ describe('NoteService attachments', () => {
     expect(got.sizeBytes).toBe(4);
   });
 
-  it('rejects upload outside Attachments/', async () => {
+  it('permite upload directo a una carpeta (upload-a-carpeta)', async () => {
+    const path = await notes.uploadAttachment(USER, {
+      path: 'Zuno/reporte.pdf',
+      dataBase64: Buffer.from('%PDF-1.4').toString('base64'),
+      mime: 'application/pdf',
+    });
+    expect(path).toBe('Zuno/reporte.pdf');
+    const got = await notes.getAttachment(USER, path);
+    expect(got.path).toBe('Zuno/reporte.pdf');
+  });
+
+  it('rejects upload de .md (es nota, no attachment)', async () => {
     await expect(
       notes.uploadAttachment(USER, {
-        path: 'Zuno/img.png',
+        path: 'Zuno/intento.md',
+        dataBase64: PNG_B64,
+      }),
+    ).rejects.toBeDefined();
+  });
+
+  it('rejects upload por mime audio/video', async () => {
+    await expect(
+      notes.uploadAttachment(USER, {
+        path: 'Zuno/clip.bin',
+        dataBase64: PNG_B64,
+        mime: 'audio/mpeg',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(
+      notes.uploadAttachment(USER, {
+        path: 'Zuno/clip.bin',
+        dataBase64: PNG_B64,
+        mime: 'video/mp4',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('rejects upload por extensión audio/video (sin mime)', async () => {
+    await expect(
+      notes.uploadAttachment(USER, {
+        path: 'Zuno/clip.mp4',
         dataBase64: PNG_B64,
       }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(
+      notes.uploadAttachment(USER, {
+        path: 'Zuno/track.mp3',
+        dataBase64: PNG_B64,
+        mime: '',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('permite uploads no bloqueados (PDF/imagen)', async () => {
+    await expect(
+      notes.uploadAttachment(USER, {
+        path: 'Zuno/foto.png',
+        dataBase64: PNG_B64,
+        mime: 'image/png',
+      }),
+    ).resolves.toBe('Zuno/foto.png');
+    await expect(
+      notes.uploadAttachment(USER, {
+        path: 'Zuno/doc.pdf',
+        dataBase64: Buffer.from('%PDF-1.4').toString('base64'),
+        mime: 'application/pdf',
+      }),
+    ).resolves.toBe('Zuno/doc.pdf');
   });
 
   it('returns 404 when the attachment is missing', async () => {
