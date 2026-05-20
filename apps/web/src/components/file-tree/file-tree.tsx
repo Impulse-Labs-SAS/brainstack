@@ -40,6 +40,8 @@ import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
 import { SharedWithMeSection } from './shared-with-me';
+import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
+import { useSharingEnabled } from '@/lib/use-deployment';
 
 type PromptKind = 'createNote' | 'createFolder' | 'rename';
 type PromptState = {
@@ -295,6 +297,8 @@ export function FileTree() {
   const [searchActive, setSearchActive] = useState(false);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [shareFolderPath, setShareFolderPath] = useState<string | null>(null);
+  const sharingEnabled = useSharingEnabled();
   const toastIdRef = useRef(0);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -682,6 +686,17 @@ export function FileTree() {
               Rename
             </MenuItem>
           )}
+          {sharingEnabled && menu.path !== '' && !/\.[a-z0-9]+$/i.test(menu.path) && (
+            <MenuItem
+              onClick={() => {
+                const p = menu.path;
+                setMenu(null);
+                setShareFolderPath(p);
+              }}
+            >
+              Share…
+            </MenuItem>
+          )}
           {menu.path !== '' && (
             <MenuItem
               danger
@@ -706,6 +721,12 @@ export function FileTree() {
         okLabel={prompt?.kind === 'rename' ? 'Rename' : 'Create'}
         onCancel={() => setPrompt(null)}
         onConfirm={runPrompt}
+      />
+
+      <ShareFolderModal
+        folderPath={shareFolderPath ?? ''}
+        open={shareFolderPath !== null}
+        onClose={() => setShareFolderPath(null)}
       />
 
       <ConfirmModal
