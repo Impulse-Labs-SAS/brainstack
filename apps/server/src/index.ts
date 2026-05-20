@@ -79,6 +79,7 @@ async function main(): Promise<void> {
   const crossOwner = new CrossOwnerReader({
     sharing,
     vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT, notesDirAbs: cfg.notesDirAbs },
+    db: bs,
   });
 
   const google =

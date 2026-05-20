@@ -225,6 +225,11 @@ export const appRouter = t.router({
       .query(async ({ ctx, input }) =>
         wrap(() => ctx.crossOwner.getAttachment(ctx.user.id, input.ownerId, input.path)),
       ),
+    linksForOwner: protectedProcedure
+      .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
+      .query(({ ctx, input }) =>
+        wrap(() => ctx.crossOwner.linksForOwner(ctx.user.id, input.ownerId, input.path)),
+      ),
   }),
   search: t.router({
     query: protectedProcedure

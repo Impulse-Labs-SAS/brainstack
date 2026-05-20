@@ -13,18 +13,34 @@ import {
   parseNote,
   readAttachment,
   readNote,
+  type BrainStackDatabase,
   type Frontmatter,
 } from '@brainstack/core';
 
 import { AppError } from '../lib/errors.js';
-import { resolveVaultRoot, type VaultRootResolverConfig } from '../lib/vault.js';
+import {
+  resolveVaultRoot,
+  toLogical,
+  toPhysical,
+  type VaultRootResolverConfig,
+} from '../lib/vault.js';
 
 import type { SharingService } from './SharingService.js';
 import type { AttachmentPayload, NoteRowDto, TreeNode } from './NoteService.js';
 
+export interface CrossOwnerLink {
+  sourcePath: string;
+  targetPath: string;
+  targetType: 'note' | 'attachment' | 'unresolved';
+  linkKind: string;
+  alias: string | null;
+  section: string | null;
+}
+
 export interface CrossOwnerReaderOptions {
   sharing: SharingService;
   vaultCfg: VaultRootResolverConfig;
+  db: BrainStackDatabase;
 }
 
 const DEFAULT_TREE_DEPTH = 4;
@@ -181,11 +197,82 @@ export class CrossOwnerReader {
     return rootNode;
   }
 
+  /**
+   * Lista outgoing links de una nota ajena. El viewer debe poder leer la
+   * nota. Cada link, si su target apunta a una nota/attachment fuera del
+   * scope que el viewer puede leer, se downgradea a `unresolved` — esto
+   * enmascara cross-border desde la perspectiva del viewer.
+   */
+  linksForOwner(viewerId: string, ownerId: string, path: string): CrossOwnerLink[] {
+    this.requireEnabled();
+    this.opts.sharing.assertCanRead(viewerId, ownerId, path);
+    const sourcePhysical = toPhysical(ownerId, path, this.opts.vaultCfg);
+
+    const rows = this.opts.db.sqlite
+      .prepare<
+        [string],
+        {
+          source_path: string;
+          target_path: string;
+          target_type: string;
+          link_kind: string;
+          alias: string | null;
+          section: string | null;
+        }
+      >(
+        `SELECT source_path, target_path, target_type, link_kind, alias, section
+         FROM links WHERE source_path = ?
+         ORDER BY position`,
+      )
+      .all(sourcePhysical);
+
+    return rows.map((r) => {
+      const targetOwner = ownerOfPhysical(r.target_path);
+      const isUnresolved = r.target_type === 'unresolved';
+      const viewerCanReadTarget =
+        !isUnresolved &&
+        targetOwner !== null &&
+        this.opts.sharing.canRead(
+          viewerId,
+          targetOwner,
+          stripOwnerPrefix(r.target_path, targetOwner),
+        );
+      const targetType = (
+        isUnresolved || !viewerCanReadTarget ? 'unresolved' : (r.target_type as 'note' | 'attachment')
+      );
+      // Para el frontend devolvemos paths LÓGICOS desde la perspectiva del
+      // owner de la source: el editor de la página shared muestra paths sin
+      // prefix del owner.
+      return {
+        sourcePath: toLogical(ownerId, r.source_path, this.opts.vaultCfg),
+        targetPath:
+          targetOwner === ownerId && !isUnresolved
+            ? toLogical(ownerId, r.target_path, this.opts.vaultCfg)
+            : r.target_path,
+        targetType,
+        linkKind: r.link_kind,
+        alias: r.alias,
+        section: r.section,
+      };
+    });
+  }
+
   private requireEnabled(): void {
     if (!this.enabled) {
       throw new AppError('cross-owner reads no disponibles en self-host', 'NOT_FOUND', 404);
     }
   }
+}
+
+function ownerOfPhysical(physicalPath: string): string | null {
+  const i = physicalPath.indexOf('/');
+  if (i <= 0) return null;
+  return physicalPath.slice(0, i);
+}
+
+function stripOwnerPrefix(physicalPath: string, owner: string): string {
+  const prefix = owner + '/';
+  return physicalPath.startsWith(prefix) ? physicalPath.slice(prefix.length) : physicalPath;
 }
 
 function sortTree(node: TreeNode): void {

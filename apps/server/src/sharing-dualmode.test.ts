@@ -59,6 +59,7 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
   const crossOwner = new CrossOwnerReader({
     sharing,
     vaultCfg: { deployment, notesDirAbs: root },
+    db: bs,
   });
 
   await index.bootstrap();

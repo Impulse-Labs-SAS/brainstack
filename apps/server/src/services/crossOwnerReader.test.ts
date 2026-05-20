@@ -42,6 +42,7 @@ describe('CrossOwnerReader — self-host', () => {
     const reader = new CrossOwnerReader({
       sharing,
       vaultCfg: { deployment: 'self-host', notesDirAbs: notesDir },
+      db: bs,
     });
     expect(reader.enabled).toBe(false);
     await expect(reader.getNote('viewer', 'owner', 'x.md')).rejects.toBeInstanceOf(AppError);
@@ -55,6 +56,7 @@ describe('CrossOwnerReader — hosted', () => {
     const reader = new CrossOwnerReader({
       sharing,
       vaultCfg: { deployment: 'hosted', notesDirAbs: notesDir },
+      db: bs,
     });
     await writeFile('owner/proyectos/foo.md', '# foo\n');
     await expect(reader.getNote('viewer', 'owner', 'proyectos/foo.md')).rejects.toMatchObject({
@@ -73,6 +75,7 @@ describe('CrossOwnerReader — hosted', () => {
     const reader = new CrossOwnerReader({
       sharing,
       vaultCfg: { deployment: 'hosted', notesDirAbs: notesDir },
+      db: bs,
     });
     await writeFile('owner/proyectos/foo.md', '---\ntitle: Foo\n---\nhola');
     const note = await reader.getNote('viewer', 'owner', 'proyectos/foo.md');
@@ -92,6 +95,7 @@ describe('CrossOwnerReader — hosted', () => {
     const reader = new CrossOwnerReader({
       sharing,
       vaultCfg: { deployment: 'hosted', notesDirAbs: notesDir },
+      db: bs,
     });
     await fsp.mkdir(join(notesDir, 'owner'), { recursive: true });
     await expect(reader.getNote('viewer', 'owner', 'proyectos/nope.md')).rejects.toMatchObject({
@@ -104,6 +108,7 @@ describe('CrossOwnerReader — hosted', () => {
     const reader = new CrossOwnerReader({
       sharing,
       vaultCfg: { deployment: 'hosted', notesDirAbs: notesDir },
+      db: bs,
     });
     await expect(reader.listTree('viewer', 'owner', '', 4)).rejects.toMatchObject({
       code: 'INVALID_INPUT',
@@ -124,6 +129,7 @@ describe('CrossOwnerReader — hosted', () => {
     const reader = new CrossOwnerReader({
       sharing,
       vaultCfg: { deployment: 'hosted', notesDirAbs: notesDir },
+      db: bs,
     });
     await writeFile('owner/proyectos/a.md', 'a');
     await writeFile('owner/proyectos/sub/b.md', 'b');
