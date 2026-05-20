@@ -1,16 +1,36 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+} from 'react';
 import { useParams } from 'next/navigation';
 import { keepPreviousData } from '@tanstack/react-query';
+
+const MAX_TREE_DEPTH = 20;
+const SPLIT_MIN_WIDTH = 900;
+
+import { Columns, Eye, Pencil } from 'lucide-react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
 import { NoteEditor } from '@/components/editor/note-editor';
+import { MarkdownPreview } from '@/components/editor/markdown-preview';
 import { Kbd } from '@/components/ui/kbd';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
+import { usePersistedViewMode, type ViewMode } from '@/lib/use-view-mode';
+import {
+  buildIndex,
+  resolveEmbed as resolveEmbedClient,
+  resolveNoteTarget,
+  encodePath,
+} from '@/lib/wikilinks-client';
 
 export default function NotePage() {
   const params = useParams<{ path: string[] }>();
@@ -26,6 +46,43 @@ export default function NotePage() {
   );
   const update = trpc.notes.update.useMutation();
   const upload = trpc.notes.uploadAttachment.useMutation();
+  const tree = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
+
+  const treeIndex = useMemo(() => buildIndex(tree.data ?? null), [tree.data]);
+
+  const [viewMode, setViewMode] = usePersistedViewMode('edit');
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia(`(max-width: ${SPLIT_MIN_WIDTH - 1}px)`);
+    const apply = (): void => setNarrow(mql.matches);
+    apply();
+    mql.addEventListener('change', apply);
+    return () => mql.removeEventListener('change', apply);
+  }, []);
+  const effectiveMode: ViewMode = narrow && viewMode === 'split' ? 'edit' : viewMode;
+
+  // Note path WITH .md extension for the resolver — the URL strips it.
+  const sourcePath = useMemo(() => (path.toLowerCase().endsWith('.md') ? path : `${path}.md`), [path]);
+
+  const resolveLink = useCallback(
+    (target: string): { href: string; resolved: boolean } => {
+      const notePath = resolveNoteTarget(target, sourcePath, treeIndex);
+      if (notePath) {
+        return { href: `/notes/${encodePath(notePath.replace(/\.md$/i, ''))}`, resolved: true };
+      }
+      return {
+        href: `/notes/${encodePath(target.replace(/\.md$/i, ''))}`,
+        resolved: false,
+      };
+    },
+    [sourcePath, treeIndex],
+  );
+
+  const resolveEmbed = useCallback(
+    (target: string) => resolveEmbedClient(target, sourcePath, treeIndex),
+    [sourcePath, treeIndex],
+  );
 
   const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 320);
   const [backlinksWidth, setBacklinksWidth] = usePersistedWidth(
@@ -110,7 +167,7 @@ export default function NotePage() {
     [upload],
   );
 
-  const tree = (
+  const treePanel = (
     <ResizablePanel
       side="left"
       width={treeWidth}
@@ -127,7 +184,7 @@ export default function NotePage() {
     return (
       <AppShell>
         <div className="flex h-full overflow-hidden">
-          {tree}
+          {treePanel}
           <div className="flex flex-1 items-center justify-center text-fg-muted">Loading…</div>
         </div>
       </AppShell>
@@ -138,7 +195,7 @@ export default function NotePage() {
     return (
       <AppShell>
         <div className="flex h-full overflow-hidden">
-          {tree}
+          {treePanel}
           <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
             note not found: {path}
           </div>
@@ -150,7 +207,7 @@ export default function NotePage() {
   return (
     <AppShell>
       <div className="flex h-full overflow-hidden">
-        {tree}
+        {treePanel}
 
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="flex h-12 items-center justify-between border-b border-border-subtle px-4">
@@ -158,14 +215,21 @@ export default function NotePage() {
               <div className="text-sm font-medium text-fg-primary">{note.data.title}</div>
               <div className="font-mono text-[11px] text-fg-muted">{path}</div>
             </div>
-            <div className="font-mono text-[11px] text-fg-muted">
-              {upload.isPending
-                ? 'uploading…'
-                : update.isPending
-                  ? 'saving…'
-                  : savedAt
-                    ? `saved ${new Date(savedAt).toISOString().slice(11, 19)}`
-                    : 'idle'}
+            <div className="flex items-center gap-3">
+              <ViewModeToggle
+                value={effectiveMode}
+                onChange={setViewMode}
+                splitDisabled={narrow}
+              />
+              <div className="font-mono text-[11px] text-fg-muted">
+                {upload.isPending
+                  ? 'uploading…'
+                  : update.isPending
+                    ? 'saving…'
+                    : savedAt
+                      ? `saved ${new Date(savedAt).toISOString().slice(11, 19)}`
+                      : 'idle'}
+              </div>
             </div>
           </div>
 
@@ -178,7 +242,32 @@ export default function NotePage() {
             onDragLeave={onDragLeave}
             onDrop={onDrop}
           >
-            {draft !== null && <NoteEditor value={draft} onChange={setDraft} />}
+            {draft !== null && effectiveMode === 'edit' && (
+              <NoteEditor value={draft} onChange={setDraft} />
+            )}
+            {draft !== null && effectiveMode === 'preview' && (
+              <MarkdownPreview
+                body={stripFrontmatter(draft)}
+                frontmatter={note.data.frontmatter}
+                resolveLink={resolveLink}
+                resolveEmbed={resolveEmbed}
+              />
+            )}
+            {draft !== null && effectiveMode === 'split' && (
+              <div className="grid h-full grid-cols-2 divide-x divide-border-subtle">
+                <div className="h-full overflow-hidden">
+                  <NoteEditor value={draft} onChange={setDraft} />
+                </div>
+                <div className="h-full overflow-hidden">
+                  <MarkdownPreview
+                    body={stripFrontmatter(draft)}
+                    frontmatter={note.data.frontmatter}
+                    resolveLink={resolveLink}
+                    resolveEmbed={resolveEmbed}
+                  />
+                </div>
+              </div>
+            )}
             {dropActive && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[12px] text-accent">
                 drop to upload as attachment
@@ -233,6 +322,52 @@ export default function NotePage() {
       </div>
     </AppShell>
   );
+}
+
+function ViewModeToggle({
+  value,
+  onChange,
+  splitDisabled,
+}: {
+  value: ViewMode;
+  onChange(m: ViewMode): void;
+  splitDisabled: boolean;
+}) {
+  const btn = (m: ViewMode, label: string, icon: React.ReactNode, disabled = false) => (
+    <button
+      key={m}
+      type="button"
+      disabled={disabled}
+      onClick={() => onChange(m)}
+      title={label}
+      className={cn(
+        'flex h-7 w-7 items-center justify-center transition-colors',
+        value === m
+          ? 'bg-bg-elevated text-fg-primary'
+          : 'text-fg-muted hover:bg-bg-elevated hover:text-fg-secondary',
+        disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-fg-muted',
+      )}
+      aria-pressed={value === m}
+      aria-label={label}
+    >
+      {icon}
+    </button>
+  );
+  return (
+    <div className="flex items-center divide-x divide-border-subtle overflow-hidden rounded border border-border-subtle">
+      {btn('edit', 'Edit', <Pencil size={12} strokeWidth={1.75} />)}
+      {btn('preview', 'Preview', <Eye size={12} strokeWidth={1.75} />)}
+      {btn('split', 'Split', <Columns size={12} strokeWidth={1.75} />, splitDisabled)}
+    </div>
+  );
+}
+
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith('---')) return content;
+  const end = content.indexOf('\n---', 3);
+  if (end === -1) return content;
+  const after = content.slice(end + 4);
+  return after.startsWith('\n') ? after.slice(1) : after;
 }
 
 interface NoteData {
