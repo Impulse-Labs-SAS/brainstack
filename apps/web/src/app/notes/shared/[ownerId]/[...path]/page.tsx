@@ -39,6 +39,10 @@ export default function SharedNotePage() {
     { ownerId, path },
     { enabled: isNote && !!ownerId, placeholderData: keepPreviousData },
   );
+  const linksQ = trpc.notes.linksForOwner.useQuery(
+    { ownerId, path },
+    { enabled: isNote && !!ownerId },
+  );
 
   const [treeWidth, setTreeWidth] = usePersistedWidth(
     'brainstack:shared-tree-width',
@@ -148,9 +152,45 @@ export default function SharedNotePage() {
           <div className="relative flex-1 overflow-hidden">
             <NoteEditor value={reconstructBody(note.data)} readOnly />
           </div>
+          <OutgoingLinks links={linksQ.data ?? []} />
         </div>
       </div>
     </AppShell>
+  );
+}
+
+function OutgoingLinks({
+  links,
+}: {
+  links: Array<{
+    targetPath: string;
+    targetType: 'note' | 'attachment' | 'unresolved';
+    alias: string | null;
+  }>;
+}) {
+  if (links.length === 0) return null;
+  const resolved = links.filter((l) => l.targetType !== 'unresolved');
+  const broken = links.filter((l) => l.targetType === 'unresolved');
+  return (
+    <div className="border-t border-border-subtle px-4 py-2 font-mono text-[11px]">
+      <div className="mb-1 text-fg-muted">outgoing links · {links.length}</div>
+      <ul className="space-y-0.5">
+        {resolved.map((l, i) => (
+          <li key={`r-${i}`} className="text-fg-secondary">
+            <span className="mr-1.5 text-green-400/80">✓</span>
+            <span className="truncate">{l.alias ?? l.targetPath}</span>
+          </li>
+        ))}
+        {broken.map((l, i) => (
+          <li key={`b-${i}`} className="text-fg-muted line-through">
+            <span className="mr-1.5 text-red-400/60 no-underline">✕</span>
+            <span title="enmascarado: sin acceso al target">
+              {l.alias ?? l.targetPath}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
