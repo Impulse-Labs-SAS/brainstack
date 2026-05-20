@@ -81,13 +81,27 @@ export function buildMcpServer({
     'search_brain',
     {
       title: 'Search the brain',
-      description: 'Full-text search over every note in BrainStack. Returns ranked hits with snippets.',
-      inputSchema: { query: z.string().min(1), limit: z.number().int().min(1).max(50).optional() },
+      description:
+        'Full-text search over notes in BrainStack. `scope` controla qué notas se incluyen: `mine` (default) solo las propias, `shared` solo las compartidas conmigo, `all` ambas. Retorna hits rankeados con snippets.',
+      inputSchema: {
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(50).optional(),
+        scope: z.enum(['mine', 'shared', 'all']).optional(),
+      },
     },
-    async ({ query, limit }) => {
+    async ({ query, limit, scope }) => {
       try {
-        const hits = search.search(requireUserId(), query, { limit });
-        logger.debug({ query, hits: hits.length }, 'search_brain');
+        const userId = requireUserId();
+        const effectiveScope = scope ?? 'mine';
+        const includeMine = effectiveScope !== 'shared';
+        const sharedScopes =
+          effectiveScope !== 'mine' && sharing.enabled
+            ? sharing
+                .listSharedRoots(userId)
+                .map((r) => ({ ownerId: r.ownerId, folderPath: r.folderPath }))
+            : [];
+        const hits = search.search(userId, query, { limit, includeMine, sharedScopes });
+        logger.debug({ query, hits: hits.length, scope: effectiveScope }, 'search_brain');
         return JSON_TEXT(hits);
       } catch (err) {
         logger.error({ err }, 'search_brain failed');

@@ -498,20 +498,36 @@ export class NoteService {
   }
 
   /**
-   * Graph del vault propio del user. Edges cross-owner se manejan aparte.
+   * Graph del vault. Por defecto solo el propio del user. Pasando
+   * `sharedScopes` se incluyen nodos+edges de carpetas compartidas al user.
    */
-  graph(userId: string): {
-    nodes: Array<{ path: string; title: string }>;
+  graph(
+    userId: string,
+    opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }> } = {},
+  ): {
+    nodes: Array<{ path: string; title: string; ownerId: string | null }>;
     edges: Array<{ source: string; target: string; weight: number }>;
   } {
-    const ownerFilter = this.hosted ? 'WHERE owner_id = ?' : '';
-    const noteParams: unknown[] = this.hosted ? [userId] : [];
-    const nodes = this.opts.db.sqlite
-      .prepare<unknown[], { path: string; title: string }>(
-        `SELECT path, title FROM notes ${ownerFilter}`,
+    const sharedScopes = opts.sharedScopes ?? [];
+
+    const blocks: string[] = [];
+    const params: unknown[] = [];
+    if (this.hosted) {
+      blocks.push('owner_id = ?');
+      params.push(userId);
+      for (const s of sharedScopes) {
+        blocks.push('(owner_id = ? AND path LIKE ?)');
+        params.push(s.ownerId, `${s.ownerId}/${s.folderPath}/%`);
+      }
+    }
+    const where = this.hosted ? `WHERE ${blocks.join(' OR ')}` : '';
+    const nodesRaw = this.opts.db.sqlite
+      .prepare<unknown[], { path: string; title: string; owner_id: string | null }>(
+        `SELECT path, title, owner_id FROM notes ${where}`,
       )
-      .all(...noteParams);
-    const nodeSet = new Set(nodes.map((n) => n.path));
+      .all(...params);
+    const nodeSet = new Set(nodesRaw.map((n) => n.path));
+    const ownerByPath = new Map(nodesRaw.map((n) => [n.path, n.owner_id]));
 
     const raw = this.opts.db.sqlite
       .prepare<unknown[], { source_path: string; target_path: string }>(
@@ -526,16 +542,26 @@ export class NoteService {
       const key = `${link.source_path} ${link.target_path}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
+    const edgeKey = (physical: string): string => {
+      const owner = ownerByPath.get(physical) ?? userId;
+      return this.hosted ? toLogical(owner, physical, this.opts.cfg) : physical;
+    };
     const edges = Array.from(counts.entries()).map(([key, weight]) => {
       const [source, target] = key.split(' ');
       return {
-        source: this.toLogical(userId, source ?? ''),
-        target: this.toLogical(userId, target ?? ''),
+        source: edgeKey(source ?? ''),
+        target: edgeKey(target ?? ''),
         weight,
       };
     });
     return {
-      nodes: nodes.map((n) => ({ path: this.toLogical(userId, n.path), title: n.title })),
+      nodes: nodesRaw.map((n) => ({
+        path: this.hosted
+          ? toLogical(n.owner_id ?? userId, n.path, this.opts.cfg)
+          : n.path,
+        title: n.title,
+        ownerId: n.owner_id,
+      })),
       edges,
     };
   }

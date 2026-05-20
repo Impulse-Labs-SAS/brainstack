@@ -186,7 +186,22 @@ export const appRouter = t.router({
         ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
         return ctx.notes.listLinks(ctx.user.id, input.path);
       }),
-    graph: protectedProcedure.query(({ ctx }) => ctx.notes.graph(ctx.user.id)),
+    graph: protectedProcedure
+      .input(
+        z
+          .object({ scope: z.enum(['mine', 'shared', 'all']).optional() })
+          .optional(),
+      )
+      .query(({ ctx, input }) => {
+        const scope = input?.scope ?? 'mine';
+        const sharedScopes =
+          scope !== 'mine'
+            ? ctx
+                .sharedRoots()
+                .map((r) => ({ ownerId: r.ownerId, folderPath: r.folderPath }))
+            : [];
+        return ctx.notes.graph(ctx.user.id, { sharedScopes });
+      }),
     getForOwner: protectedProcedure
       .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
       .query(async ({ ctx, input }) =>
@@ -213,10 +228,28 @@ export const appRouter = t.router({
   }),
   search: t.router({
     query: protectedProcedure
-      .input(z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(50).optional() }))
-      .query(({ ctx, input }) =>
-        ctx.search.search(ctx.user.id, input.query, { limit: input.limit }),
-      ),
+      .input(
+        z.object({
+          query: z.string().min(1),
+          limit: z.number().int().min(1).max(50).optional(),
+          scope: z.enum(['mine', 'shared', 'all']).optional(),
+        }),
+      )
+      .query(({ ctx, input }) => {
+        const scope = input.scope ?? 'mine';
+        const includeMine = scope !== 'shared';
+        const sharedScopes =
+          scope !== 'mine'
+            ? ctx
+                .sharedRoots()
+                .map((r) => ({ ownerId: r.ownerId, folderPath: r.folderPath }))
+            : [];
+        return ctx.search.search(ctx.user.id, input.query, {
+          limit: input.limit,
+          includeMine,
+          sharedScopes,
+        });
+      }),
   }),
   sharing: t.router({
     listSharedWithMe: protectedProcedure.query(({ ctx }) =>
