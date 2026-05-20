@@ -19,10 +19,16 @@ export interface AttachmentInfo {
   mtime: number;
 }
 
-/** Enumerate every file under `Attachments/` as posix paths relative to root. */
+/**
+ * Enumerate every non-md file under `root` as posix paths relative to it.
+ * Cualquier binario en cualquier carpeta cuenta como "attachment" — el
+ * dir histórico `Attachments/` sigue siendo el destino default del drop
+ * nativo, pero el upload-a-carpeta los deposita en otras ubicaciones y
+ * deben aparecer igual.
+ */
 export async function listAttachments(root: string): Promise<AttachmentInfo[]> {
   const out: AttachmentInfo[] = [];
-  const attachmentsAbs = safeResolve(root, ATTACHMENTS_DIR);
+  const rootAbs = safeResolve(root, '.');
 
   async function walk(dirAbs: string, dirRel: string): Promise<void> {
     let entries: Dirent[];
@@ -38,10 +44,11 @@ export async function listAttachments(root: string): Promise<AttachmentInfo[]> {
       if (entry.isDirectory()) {
         await walk(childAbs, childRel);
       } else if (entry.isFile()) {
+        if (entry.name.toLowerCase().endsWith('.md')) continue;
         const stats = await fsp.stat(childAbs).catch(() => null);
         if (!stats) continue;
         out.push({
-          path: toPosixPath(`${ATTACHMENTS_DIR}/${childRel}`),
+          path: toPosixPath(childRel),
           filename: entry.name,
           sizeBytes: stats.size,
           mtime: stats.mtimeMs,
@@ -50,7 +57,7 @@ export async function listAttachments(root: string): Promise<AttachmentInfo[]> {
     }
   }
 
-  await walk(attachmentsAbs, '');
+  await walk(rootAbs, '');
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 

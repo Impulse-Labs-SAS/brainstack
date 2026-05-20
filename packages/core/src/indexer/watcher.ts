@@ -4,12 +4,12 @@
 // of which already dedupe by checksum, so the watcher itself is idempotent.
 
 import chokidar, { type FSWatcher } from 'chokidar';
-import { relative, sep } from 'node:path';
+import { relative } from 'node:path';
 
 import type { BrainStackDatabase } from '../db/client.js';
 
 import { reindexFile, removeFromIndex } from './bootstrap.js';
-import { listAttachments, ATTACHMENTS_DIR } from '../fs/attachments.js';
+import { listAttachments } from '../fs/attachments.js';
 import { safeResolve, toPosixPath } from '../fs/paths.js';
 
 export interface WatcherHandle {
@@ -71,7 +71,8 @@ export function startWatcher(
   function isAttachment(absPath: string): boolean {
     const rel = relative(rootAbs, absPath);
     if (rel.startsWith('..')) return false;
-    return rel.split(sep)[0] === ATTACHMENTS_DIR;
+    // Cualquier archivo no-.md en el vault cuenta como attachment.
+    return !absPath.toLowerCase().endsWith('.md');
   }
 
   function relPosix(absPath: string): string {

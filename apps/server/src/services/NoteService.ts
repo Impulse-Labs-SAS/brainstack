@@ -404,10 +404,40 @@ export class NoteService {
     }
     try {
       const finalPhysical = await writeBinaryFile(this.opts.cfg.notesDirAbs, norm, bytes);
+      this.upsertAttachmentRow(finalPhysical, bytes.length, userId, input.mime);
       return this.toLogical(userId, finalPhysical);
     } catch (err) {
       throw mapPathError(err);
     }
+  }
+
+  /**
+   * Inserta/actualiza la fila correspondiente al binario recién escrito.
+   * El watcher también la repintaría eventualmente, pero acá nos
+   * adelantamos para que el tree query del cliente vea el archivo en el
+   * próximo refetch (sin race condition).
+   */
+  private upsertAttachmentRow(
+    physicalPath: string,
+    sizeBytes: number,
+    userId: string,
+    mime: string | undefined,
+  ): void {
+    const filename = physicalPath.split('/').pop() ?? physicalPath;
+    const mimeType = mime && mime.length > 0 ? mime : 'application/octet-stream';
+    const ownerId = this.hosted ? userId : null;
+    this.opts.db.sqlite
+      .prepare(
+        `INSERT INTO attachments (path, filename, mime_type, size_bytes, width, height, duration_s, created_at, owner_id)
+         VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET
+           filename = excluded.filename,
+           mime_type = excluded.mime_type,
+           size_bytes = excluded.size_bytes,
+           created_at = excluded.created_at,
+           owner_id = excluded.owner_id`,
+      )
+      .run(physicalPath, filename, mimeType, sizeBytes, Date.now(), ownerId);
   }
 
   async getAttachment(userId: string, path: string): Promise<AttachmentPayload> {
