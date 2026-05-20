@@ -187,6 +187,29 @@ export const appRouter = t.router({
         return ctx.notes.listLinks(input.path);
       }),
     graph: protectedProcedure.query(({ ctx }) => ctx.notes.graph()),
+    getForOwner: protectedProcedure
+      .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
+      .query(async ({ ctx, input }) =>
+        wrap(() => ctx.crossOwner.getNote(ctx.user.id, input.ownerId, input.path)),
+      ),
+    treeForOwner: protectedProcedure
+      .input(
+        z.object({
+          ownerId: z.string().min(1),
+          path: z.string().min(1),
+          depth: z.number().int().min(1).max(MAX_TREE_DEPTH).optional(),
+        }),
+      )
+      .query(async ({ ctx, input }) =>
+        wrap(() =>
+          ctx.crossOwner.listTree(ctx.user.id, input.ownerId, input.path, input.depth),
+        ),
+      ),
+    getAttachmentForOwner: protectedProcedure
+      .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
+      .query(async ({ ctx, input }) =>
+        wrap(() => ctx.crossOwner.getAttachment(ctx.user.id, input.ownerId, input.path)),
+      ),
   }),
   search: t.router({
     query: protectedProcedure

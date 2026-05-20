@@ -14,6 +14,7 @@ import { ApiKeyService } from './services/ApiKeyService.js';
 import { AuthService } from './services/AuthService.js';
 import { BackupService } from './services/BackupService.js';
 import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js';
+import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { IndexService } from './services/IndexService.js';
 import { InviteService } from './services/InviteService.js';
@@ -62,6 +63,10 @@ async function main(): Promise<void> {
     email: emailSender,
     sharing,
     publicOrigin: cfg.PUBLIC_ORIGIN,
+  });
+  const crossOwner = new CrossOwnerReader({
+    sharing,
+    vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT, notesDirAbs: cfg.notesDirAbs },
   });
 
   const google =
@@ -112,6 +117,7 @@ async function main(): Promise<void> {
     search,
     sharing,
     invites,
+    crossOwner,
     resolveUserForApiKey: (apiKey) => {
       const user = auth.getUser(apiKey.userId);
       if (!user) {

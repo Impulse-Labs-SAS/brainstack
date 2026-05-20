@@ -8,6 +8,7 @@ import { getCookie } from 'hono/cookie';
 
 import type { ApiKey, ApiKeyService } from '../../services/ApiKeyService.js';
 import type { AuthService, User } from '../../services/AuthService.js';
+import type { CrossOwnerReader } from '../../services/CrossOwnerReader.js';
 import type { NoteService } from '../../services/NoteService.js';
 import type { InviteService } from '../../services/InviteService.js';
 import type { SearchService } from '../../services/SearchService.js';
@@ -23,6 +24,7 @@ export interface TrpcRouterOptions {
   apiKeys: ApiKeyService;
   sharing: SharingService;
   invites: InviteService;
+  crossOwner: CrossOwnerReader;
   resolveUserForApiKey(apiKey: ApiKey): User;
 }
 
@@ -45,6 +47,7 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
             search: options.search,
             sharing: options.sharing,
             invites: options.invites,
+            crossOwner: options.crossOwner,
           },
           principal,
         ),

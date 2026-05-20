@@ -13,6 +13,7 @@ import pino from 'pino';
 import { ApiKeyService } from './services/ApiKeyService.js';
 import { AuthService } from './services/AuthService.js';
 import { CapturingEmailSender } from './services/EmailSender.js';
+import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { IndexService } from './services/IndexService.js';
 import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
@@ -54,6 +55,10 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
     sharing,
     publicOrigin: 'http://test',
   });
+  const crossOwner = new CrossOwnerReader({
+    sharing,
+    vaultCfg: { deployment, notesDirAbs: root },
+  });
 
   await index.bootstrap();
 
@@ -67,6 +72,7 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
     search,
     sharing,
     invites,
+    crossOwner,
     resolveUserForApiKey: (k) => auth.getUser(k.userId)!,
     rateLimitPerMinute: 1000,
     secureCookies: false,
@@ -82,7 +88,7 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
   return {
     bs,
     root,
-    fetch: (p, init) => app.fetch(new Request(`http://test${p}`, init)),
+    fetch: (p, init) => Promise.resolve(app.fetch(new Request(`http://test${p}`, init))),
   };
 }
 

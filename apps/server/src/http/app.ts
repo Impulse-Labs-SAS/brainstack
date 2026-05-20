@@ -26,6 +26,7 @@ import { healthRouter } from './routes/health.js';
 import { createConfigRouter, type PublicConfig } from './routes/config.js';
 import { createInviteRouter } from './routes/invite.js';
 import { buildOptionalAuthMiddleware } from './middleware/auth.js';
+import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import type { InviteService } from '../services/InviteService.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
@@ -42,6 +43,7 @@ export interface BuildAppOptions {
   search: SearchService;
   sharing: SharingService;
   invites: InviteService;
+  crossOwner: CrossOwnerReader;
   resolveUserForApiKey(apiKey: ApiKey): User;
   rateLimitPerMinute: number;
   secureCookies: boolean;
@@ -158,6 +160,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       apiKeys: opts.apiKeys,
       sharing: opts.sharing,
       invites: opts.invites,
+      crossOwner: opts.crossOwner,
       resolveUserForApiKey: opts.resolveUserForApiKey,
     }),
   );

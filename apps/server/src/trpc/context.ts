@@ -3,6 +3,7 @@
 
 import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
+import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { InviteService } from '../services/InviteService.js';
 import type { SearchService } from '../services/SearchService.js';
@@ -17,6 +18,7 @@ export interface ServerServices {
   search: SearchService;
   sharing: SharingService;
   invites: InviteService;
+  crossOwner: CrossOwnerReader;
 }
 
 export interface TrpcContext extends ServerServices {
