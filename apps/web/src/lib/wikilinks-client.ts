@@ -3,6 +3,8 @@
 // it can run in the browser. Inputs come from the file tree fetched via
 // trpc.notes.tree.
 
+import { attachmentUrl } from './server-url';
+
 export type AttachmentKind = 'image' | 'video' | 'audio' | 'pdf' | 'other';
 
 export interface TreeIndex {
@@ -123,7 +125,7 @@ export function resolveEmbed(
     if (!attPath) return null;
     return {
       kind: kindForExtension(ext),
-      src: '/api/attachments/' + encodePath(attPath),
+      src: attachmentUrl(attPath),
       path: attPath,
     };
   }

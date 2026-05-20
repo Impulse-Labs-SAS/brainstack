@@ -8,7 +8,7 @@ import { FileTree } from '@/components/file-tree/file-tree';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { AttachmentViewer, humanSize } from '@/components/viewer/attachment-viewer';
 import { mimeFromExt } from '@/lib/mime';
-import { encodePath } from '@/lib/wikilinks-client';
+import { attachmentUrl } from '@/lib/server-url';
 import { trpc } from '@/lib/trpc';
 
 export default function FilePage() {
@@ -21,7 +21,7 @@ export default function FilePage() {
 
   const name = path.split('/').pop() ?? path;
   const mime = mimeFromExt(path);
-  const src = `/api/attachments/${encodePath(path)}`;
+  const src = attachmentUrl(path);
   const downloadHref = `${src}?download=1`;
 
   return (
