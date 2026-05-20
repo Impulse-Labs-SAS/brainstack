@@ -29,10 +29,20 @@ export interface ReindexResult {
   ambiguousLinks: number;
 }
 
+export interface IndexerOptions {
+  /**
+   * Devuelve el owner_id para un path físico absoluto. Si no se pasa,
+   * todos los inserts dejan owner_id NULL (self-host). En hosted se
+   * pasa `(abs) => ownerIdFromPhysicalPath(abs, cfg)`.
+   */
+  deriveOwnerId?: (absolutePath: string) => string | null;
+}
+
 /** Scan NOTES_DIR end-to-end and rebuild the sqlite cache. */
 export async function bootstrapIndex(
   root: string,
   bs: BrainStackDatabase,
+  opts: IndexerOptions = {},
 ): Promise<BootstrapResult> {
   const notePaths = await listNoteFiles(root);
   const attachments = await listAttachments(root);
@@ -44,11 +54,12 @@ export async function bootstrapIndex(
   const replaceAttachments = bs.sqlite.transaction(() => {
     bs.sqlite.exec('DELETE FROM attachments');
     const insert = bs.sqlite.prepare(`
-      INSERT INTO attachments (path, filename, mime_type, size_bytes, width, height, duration_s, created_at)
-      VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)
+      INSERT INTO attachments (path, filename, mime_type, size_bytes, width, height, duration_s, created_at, owner_id)
+      VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
     `);
     for (const a of attachments) {
-      insert.run(a.path, a.filename, guessMimeType(a.filename), a.sizeBytes, a.mtime);
+      const ownerId = opts.deriveOwnerId ? opts.deriveOwnerId(safeResolve(root, a.path)) : null;
+      insert.run(a.path, a.filename, guessMimeType(a.filename), a.sizeBytes, a.mtime, ownerId);
     }
   });
   replaceAttachments();
@@ -61,7 +72,13 @@ export async function bootstrapIndex(
     try {
       const { content, mtime } = await readNote(root, path);
       const parsed = parseNote(content, { path });
-      const stats = upsertParsedNote(bs, parsed, mtime, { noteIndex, attachmentIndex });
+      const ownerId = opts.deriveOwnerId
+        ? opts.deriveOwnerId(safeResolve(root, parsed.path))
+        : null;
+      const stats = upsertParsedNote(bs, parsed, mtime, ownerId, {
+        noteIndex,
+        attachmentIndex,
+      });
       unresolved += stats.unresolved;
       ambiguous += stats.ambiguous;
       indexed++;
@@ -87,6 +104,7 @@ export async function reindexFile(
   root: string,
   bs: BrainStackDatabase,
   path: string,
+  opts: IndexerOptions = {},
 ): Promise<ReindexResult> {
   const { content, mtime } = await readNote(root, path);
   const parsed = parseNote(content, { path });
@@ -110,7 +128,13 @@ export async function reindexFile(
     .all();
   const attachmentIndex = new Set(attRows.map((r) => r.path));
 
-  const stats = upsertParsedNote(bs, parsed, mtime, { noteIndex, attachmentIndex });
+  const ownerId = opts.deriveOwnerId
+    ? opts.deriveOwnerId(safeResolve(root, parsed.path))
+    : null;
+  const stats = upsertParsedNote(bs, parsed, mtime, ownerId, {
+    noteIndex,
+    attachmentIndex,
+  });
   return {
     skipped: false,
     unresolvedLinks: stats.unresolved,
@@ -137,6 +161,7 @@ function upsertParsedNote(
   bs: BrainStackDatabase,
   parsed: ParsedNote,
   mtime: number,
+  ownerId: string | null,
   ctx: Omit<ResolutionInputs, 'sourcePath'>,
 ): UpsertStats {
   const { resolved, ambiguous } = resolveLinks(parsed.links, {
@@ -147,14 +172,15 @@ function upsertParsedNote(
   const tx = bs.sqlite.transaction(() => {
     bs.sqlite
       .prepare(
-        `INSERT INTO notes (path, title, frontmatter, body, mtime, checksum)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO notes (path, title, frontmatter, body, mtime, checksum, owner_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (path) DO UPDATE SET
            title = excluded.title,
            frontmatter = excluded.frontmatter,
            body = excluded.body,
            mtime = excluded.mtime,
-           checksum = excluded.checksum`,
+           checksum = excluded.checksum,
+           owner_id = excluded.owner_id`,
       )
       .run(
         parsed.path,
@@ -163,6 +189,7 @@ function upsertParsedNote(
         parsed.body,
         mtime,
         parsed.checksum,
+        ownerId,
       );
 
     bs.sqlite.prepare('DELETE FROM links WHERE source_path = ?').run(parsed.path);
