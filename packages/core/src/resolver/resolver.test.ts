@@ -91,3 +91,61 @@ describe('resolveLink', () => {
     expect(result.ambiguous).toBe(false);
   });
 });
+
+describe('resolveLink — allowedOwners (cross-border masking)', () => {
+  // Convención hosted: paths empiezan con <userId>/.
+  const hostedNoteIndex = new Set([
+    'alice/proyectos/foo.md',
+    'alice/privado/secreto.md',
+    'bob/proyectos/foo.md',
+  ]);
+  const hostedAttachmentIndex = new Set<string>();
+  const hostedOwnerByPath = new Map<string, string | null>([
+    ['alice/proyectos/foo.md', 'alice'],
+    ['alice/privado/secreto.md', 'alice'],
+    ['bob/proyectos/foo.md', 'bob'],
+  ]);
+
+  it('cuando allowedOwners restringe a {alice}, los matches de bob se enmascaran', () => {
+    // Bare wikilink "foo" desde una nota de alice resolvería ambiguo
+    // (alice/proyectos/foo.md + bob/proyectos/foo.md). Con allowedOwners
+    // = {alice}, la única candidate válida queda alice/proyectos/foo.md
+    // y se promueve a resolved.
+    const result = resolveLink(link({ rawTarget: 'foo' }), {
+      sourcePath: 'alice/something.md',
+      noteIndex: hostedNoteIndex,
+      attachmentIndex: hostedAttachmentIndex,
+      ownerByPath: hostedOwnerByPath,
+      allowedOwners: new Set(['alice']),
+    });
+    expect(result.targetType).toBe('note');
+    expect(result.targetPath).toBe('alice/proyectos/foo.md');
+    expect(result.ambiguous).toBe(false);
+  });
+
+  it('un wikilink explícito a un path de bob desde alice queda unresolved', () => {
+    const result = resolveLink(link({ rawTarget: 'bob/proyectos/foo' }), {
+      sourcePath: 'alice/proyectos/x.md',
+      noteIndex: hostedNoteIndex,
+      attachmentIndex: hostedAttachmentIndex,
+      ownerByPath: hostedOwnerByPath,
+      allowedOwners: new Set(['alice']),
+    });
+    expect(result.targetType).toBe('unresolved');
+  });
+
+  it('sin allowedOwners el resolver opera global (sin enmascarado)', () => {
+    // Source path en el root, sin folder propio que filtre por descendiente,
+    // así la búsqueda global devuelve ambos foo.md.
+    const result = resolveLink(link({ rawTarget: 'foo' }), {
+      sourcePath: 'root.md',
+      noteIndex: hostedNoteIndex,
+      attachmentIndex: hostedAttachmentIndex,
+    });
+    expect(result.ambiguous).toBe(true);
+    expect(result.candidates.sort()).toEqual([
+      'alice/proyectos/foo.md',
+      'bob/proyectos/foo.md',
+    ]);
+  });
+});

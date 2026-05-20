@@ -68,6 +68,17 @@ export async function bootstrapIndex(
   let ambiguous = 0;
   let indexed = 0;
 
+  // Pre-computar ownerByPath una vez (hosted) para que el resolver pueda
+  // enmascarar wikilinks cross-border. En self-host queda undefined.
+  const ownerByPath: Map<string, string | null> | undefined = opts.deriveOwnerId
+    ? new Map()
+    : undefined;
+  if (ownerByPath && opts.deriveOwnerId) {
+    for (const p of notePaths) ownerByPath.set(p, opts.deriveOwnerId(safeResolve(root, p)));
+    for (const a of attachments)
+      ownerByPath.set(a.path, opts.deriveOwnerId(safeResolve(root, a.path)));
+  }
+
   for (const path of notePaths) {
     try {
       const { content, mtime } = await readNote(root, path);
@@ -75,9 +86,12 @@ export async function bootstrapIndex(
       const ownerId = opts.deriveOwnerId
         ? opts.deriveOwnerId(safeResolve(root, parsed.path))
         : null;
+      const allowedOwners = ownerId ? new Set([ownerId]) : undefined;
       const stats = upsertParsedNote(bs, parsed, mtime, ownerId, {
         noteIndex,
         attachmentIndex,
+        ownerByPath,
+        allowedOwners,
       });
       unresolved += stats.unresolved;
       ambiguous += stats.ambiguous;
@@ -117,23 +131,40 @@ export async function reindexFile(
   }
 
   const noteRows = bs.sqlite
-    .prepare<unknown[], { path: string }>('SELECT path FROM notes')
+    .prepare<unknown[], { path: string; owner_id: string | null }>(
+      'SELECT path, owner_id FROM notes',
+    )
     .all();
   const noteIndex = new Set(noteRows.map((r) => r.path));
   // Make sure the file we just parsed is part of the index for self-references.
   noteIndex.add(parsed.path);
 
   const attRows = bs.sqlite
-    .prepare<unknown[], { path: string }>('SELECT path FROM attachments')
+    .prepare<unknown[], { path: string; owner_id: string | null }>(
+      'SELECT path, owner_id FROM attachments',
+    )
     .all();
   const attachmentIndex = new Set(attRows.map((r) => r.path));
 
   const ownerId = opts.deriveOwnerId
     ? opts.deriveOwnerId(safeResolve(root, parsed.path))
     : null;
+
+  const ownerByPath: Map<string, string | null> | undefined = opts.deriveOwnerId
+    ? new Map()
+    : undefined;
+  if (ownerByPath) {
+    for (const r of noteRows) ownerByPath.set(r.path, r.owner_id);
+    for (const r of attRows) ownerByPath.set(r.path, r.owner_id);
+    ownerByPath.set(parsed.path, ownerId);
+  }
+  const allowedOwners = ownerId ? new Set([ownerId]) : undefined;
+
   const stats = upsertParsedNote(bs, parsed, mtime, ownerId, {
     noteIndex,
     attachmentIndex,
+    ownerByPath,
+    allowedOwners,
   });
   return {
     skipped: false,

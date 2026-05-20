@@ -17,6 +17,17 @@ export interface ResolutionInputs {
   noteIndex: ReadonlySet<string>;
   /** All known attachment paths in the brain (posix, relative). */
   attachmentIndex: ReadonlySet<string>;
+  /**
+   * Owner_id por cada path conocido (note o attachment). NULL en self-host
+   * para todos. Necesario sólo cuando `allowedOwners` está presente.
+   */
+  ownerByPath?: ReadonlyMap<string, string | null>;
+  /**
+   * Si está, sólo se aceptan resoluciones cuyo owner caiga acá. Targets
+   * fuera del set se degradan a `unresolved` — esto enmascara wikilinks
+   * cross-border en hosted. Si no se pasa, el resolver opera como siempre.
+   */
+  allowedOwners?: ReadonlySet<string>;
 }
 
 export interface ResolutionResult {
@@ -46,19 +57,58 @@ function withMdExtension(target: string): string {
 export function resolveLink(link: ParsedLink, ctx: ResolutionInputs): ResolutionResult {
   const raw = toPosixPath(link.rawTarget);
 
+  let result: ResolutionResult;
   // Markdown-style links are always treated as exact, relative-to-source paths.
   if (link.kind === 'markdown') {
-    return resolveExact(raw, ctx, link);
+    result = resolveExact(raw, ctx, link);
+  } else {
+    // Embeds with an explicit non-.md extension are attachment lookups.
+    const ext = extensionOf(raw);
+    if (link.isEmbed && ext && ext !== 'md') {
+      result = resolveAttachment(raw, ctx);
+    } else {
+      // Wikilinks and note-embeds: try the full ladder.
+      result = resolveNote(raw, ctx, link);
+    }
+  }
+  return maskByOwner(result, ctx);
+}
+
+/**
+ * Si `ctx.allowedOwners` está definido, degradar a `unresolved` cualquier
+ * resolución que apunte a un path cuyo owner no esté en el set. Para
+ * matches ambiguos, primero filtra candidates por owner; si queda 1 se
+ * promueve a resuelto, si quedan >1 sigue ambiguo, si 0 va a unresolved.
+ */
+function maskByOwner(result: ResolutionResult, ctx: ResolutionInputs): ResolutionResult {
+  if (!ctx.allowedOwners || !ctx.ownerByPath) return result;
+  const ownerOf = (p: string): string | null => ctx.ownerByPath?.get(p) ?? null;
+
+  if (result.ambiguous) {
+    const filtered = result.candidates.filter((p) => {
+      const o = ownerOf(p);
+      return o !== null && ctx.allowedOwners!.has(o);
+    });
+    if (filtered.length === 1) {
+      return {
+        targetPath: filtered[0]!,
+        targetType: result.targetType === 'unresolved' ? 'note' : result.targetType,
+        ambiguous: false,
+        candidates: [],
+      };
+    }
+    if (filtered.length === 0) {
+      return { ...result, targetType: 'unresolved', ambiguous: false, candidates: [] };
+    }
+    return { ...result, candidates: filtered };
   }
 
-  // Embeds with an explicit non-.md extension are attachment lookups.
-  const ext = extensionOf(raw);
-  if (link.isEmbed && ext && ext !== 'md') {
-    return resolveAttachment(raw, ctx);
+  if (result.targetType === 'unresolved') return result;
+  const owner = ownerOf(result.targetPath);
+  if (owner === null || !ctx.allowedOwners.has(owner)) {
+    return { ...result, targetType: 'unresolved' };
   }
-
-  // Wikilinks and note-embeds: try the full ladder.
-  return resolveNote(raw, ctx, link);
+  return result;
 }
 
 function extensionOf(target: string): string | null {
