@@ -7,6 +7,7 @@
 
 import {
   bigint,
+  boolean,
   index,
   integer,
   jsonb,
@@ -70,6 +71,65 @@ export const users = pgTable('users', {
   displayName: text('display_name'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull(),
   lastLoginAt: bigint('last_login_at', { mode: 'number' }),
+  /** Until this is true the account exists but cannot sign in. */
+  emailVerified: boolean('email_verified').notNull().default(false),
+  /** Null for an account that only ever signed in through Google. */
+  passwordHash: text('password_hash'),
+  googleId: text('google_id'),
+  /** Null unless the user turned 2FA on. */
+  totpSecret: text('totp_secret'),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(0),
+});
+
+/** Single-use, hashed, short-lived: the three properties every token here has. */
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    usedAt: bigint('used_at', { mode: 'number' }),
+  },
+  (t) => ({ userIdx: index('idx_password_reset_user').on(t.userId) }),
+);
+
+export const emailVerificationTokens = pgTable(
+  'email_verification_tokens',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    /** Stored alongside the user so changing an email re-verifies it. */
+    email: text('email').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    usedAt: bigint('used_at', { mode: 'number' }),
+  },
+  (t) => ({ userIdx: index('idx_email_verification_user').on(t.userId) }),
+);
+
+/** The codes that get a user back in when they lose the authenticator. */
+export const totpBackupCodes = pgTable(
+  'totp_backup_codes',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    codeHash: text('code_hash').notNull().unique(),
+    usedAt: bigint('used_at', { mode: 'number' }),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({ userIdx: index('idx_totp_backup_user').on(t.userId) }),
+);
+
+/** In-flight OAuth handshakes, holding the PKCE verifier until Google returns. */
+export const oauthStates = pgTable('oauth_states', {
+  state: text('state').primaryKey(),
+  codeVerifier: text('code_verifier').notNull(),
+  redirectTo: text('redirect_to'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
 });
 
 export const sessions = pgTable(

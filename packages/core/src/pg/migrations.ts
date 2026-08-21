@@ -175,4 +175,75 @@ const ownerAndSharing: PgMigration = {
   ],
 };
 
-export const pgMigrations: readonly PgMigration[] = [init, graphAndAuth, ownerAndSharing];
+/**
+ * Email + password, Google OAuth and optional TOTP, ported from the May line
+ * (migration 0004_password_oauth_totp).
+ *
+ * `email_verified` becomes a real BOOLEAN rather than the 0/1 integer sqlite
+ * forced, and every timestamp is BIGINT epoch millis like the rest of this
+ * schema.
+ *
+ * `magic_link_tokens` is deliberately left standing. The May line dropped it
+ * when it replaced magic links with passwords, but the rows in it belong to
+ * sessions handed out by the Netlify line, and dropping a table is not
+ * something a migration should do on the way past.
+ */
+const fullAuth: PgMigration = {
+  name: '0004_pg_auth_full',
+  statements: [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0`,
+    // Partial, so the many users without a Google account do not collide on null.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users (google_id)
+       WHERE google_id IS NOT NULL`,
+
+    `CREATE TABLE IF NOT EXISTS password_reset_tokens (
+       id         TEXT PRIMARY KEY,
+       user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       token_hash TEXT NOT NULL UNIQUE,
+       created_at BIGINT NOT NULL,
+       expires_at BIGINT NOT NULL,
+       used_at    BIGINT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens (user_id)`,
+
+    `CREATE TABLE IF NOT EXISTS email_verification_tokens (
+       id         TEXT PRIMARY KEY,
+       user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       email      TEXT NOT NULL,
+       token_hash TEXT NOT NULL UNIQUE,
+       created_at BIGINT NOT NULL,
+       expires_at BIGINT NOT NULL,
+       used_at    BIGINT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_email_verification_user
+       ON email_verification_tokens (user_id)`,
+
+    `CREATE TABLE IF NOT EXISTS totp_backup_codes (
+       id         TEXT PRIMARY KEY,
+       user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       code_hash  TEXT NOT NULL UNIQUE,
+       used_at    BIGINT,
+       created_at BIGINT NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_codes (user_id)`,
+
+    `CREATE TABLE IF NOT EXISTS oauth_states (
+       state         TEXT PRIMARY KEY,
+       code_verifier TEXT NOT NULL,
+       redirect_to   TEXT,
+       created_at    BIGINT NOT NULL,
+       expires_at    BIGINT NOT NULL
+     )`,
+  ],
+};
+
+export const pgMigrations: readonly PgMigration[] = [
+  init,
+  graphAndAuth,
+  ownerAndSharing,
+  fullAuth,
+];
