@@ -106,25 +106,23 @@ export class ApiKeyService {
   }
 
   /**
-   * `userId` is not optional in practice: without it this revokes by id alone,
+   * Delete a key outright.
+   *
+   * It used to be marked revoked and kept, which left a list of struck-through
+   * rows that say nothing anyone acts on. The key is gone the moment the row
+   * is: `validate` finds nothing to match against.
+   *
+   * `userId` is not optional in practice: without it this deletes by id alone,
    * and one user could retire another's key by guessing one.
    */
   async revoke(id: string, userId?: string): Promise<void> {
-    const now = this.now();
     const revoked = await this.opts.db
-      .update(apiKeys)
-      .set({ revokedAt: now })
-      .where(
-        and(
-          eq(apiKeys.id, id),
-          isNull(apiKeys.revokedAt),
-          ...(userId ? [eq(apiKeys.userId, userId)] : []),
-        ),
-      )
+      .delete(apiKeys)
+      .where(and(eq(apiKeys.id, id), ...(userId ? [eq(apiKeys.userId, userId)] : [])))
       .returning({ id: apiKeys.id });
 
     if (revoked.length === 0) {
-      throw new AppError('api key not found or already revoked', 'NOT_FOUND', 404);
+      throw new AppError('api key not found', 'NOT_FOUND', 404);
     }
   }
 

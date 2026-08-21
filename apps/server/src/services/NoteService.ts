@@ -25,7 +25,7 @@ import matter from 'gray-matter';
 import { AppError } from '../lib/errors.js';
 import { toLogical, toPhysical, type VaultConfig } from '../lib/vault.js';
 
-const { links, notes, tags } = pgSchema;
+const { folders, links, notes, tags } = pgSchema;
 
 export interface NoteRowDto {
   path: string;
@@ -106,6 +106,11 @@ export class NoteService {
     return this.hosted ? like(notes.path, `${userId}/%`) : sql`true`;
   }
 
+  /** The same, for the folders table. */
+  private foldersOwnedBy(userId: string) {
+    return this.hosted ? like(folders.path, `${userId}/%`) : sql`true`;
+  }
+
   // -- Reads -----------------------------------------------------------------
 
   async get(userId: string, path: string): Promise<NoteRowDto> {
@@ -156,6 +161,11 @@ export class NoteService {
     const raw = frontmatter ? matter.stringify(content, frontmatter) : content;
     const saved = await this.store.create(physical, raw, userId);
     const logical = this.toLogical(userId, saved.path);
+
+    // A note can be created straight into a folder nobody made, so the folders
+    // it lands in are registered here rather than left implied by its path.
+    const parent = logical.split('/').slice(0, -1).join('/');
+    if (parent) await this.ensureFolders(userId, parent);
     return { path: logical, affectedMocs: await this.mocsFor(userId, logical) };
   }
 
@@ -197,6 +207,17 @@ export class NoteService {
       await this.store.removeMany(under.map((r) => r.path));
     }
 
+    // The folder rows go with it: the folder itself and everything nested.
+    const removedFolders = await this.opts.db
+      .delete(folders)
+      .where(
+        and(
+          this.foldersOwnedBy(userId),
+          or(eq(folders.path, physical), like(folders.path, `${physical}/%`)),
+        ),
+      )
+      .returning({ path: folders.path });
+
     const [self] = await this.opts.db
       .select({ path: notes.path })
       .from(notes)
@@ -205,7 +226,7 @@ export class NoteService {
 
     if (self) {
       await this.store.remove(physical);
-    } else if (under.length === 0) {
+    } else if (under.length === 0 && removedFolders.length === 0) {
       // Neither a note nor a folder with anything in it.
       throw new AppError(`not found: ${path}`, 'NOT_FOUND', 404);
     }
@@ -224,18 +245,34 @@ export class NoteService {
   }
 
   /**
-   * Folders have no row of their own, so creating one means creating the note
-   * that makes it exist: an empty MOC, which is the convention this vault
-   * already uses for folder overviews.
+   * Create an empty folder.
+   *
+   * Every folder above it is created too, so a nested path leaves no gaps —
+   * what `mkdir -p` does, for the same reason.
    */
   async createFolder(userId: string, path: string): Promise<string> {
     const logical = this.normalizeLogical(path);
     if (!logical) throw new AppError('folder path is required', 'INVALID_INPUT', 400);
-
-    const name = logical.split('/').pop() ?? logical;
-    const mocPath = `${logical}/_${name}.md`;
-    await this.store.create(this.toPhysical(userId, mocPath), `# ${name}\n`, userId);
+    await this.ensureFolders(userId, logical);
     return logical;
+  }
+
+  /** Register a folder and its ancestors. Idempotent. */
+  private async ensureFolders(userId: string, logicalFolder: string): Promise<void> {
+    const segments = logicalFolder.split('/').filter(Boolean);
+    if (segments.length === 0) return;
+
+    const now = Date.now();
+    await this.opts.db
+      .insert(folders)
+      .values(
+        segments.map((_, i) => ({
+          path: this.toPhysical(userId, segments.slice(0, i + 1).join('/')),
+          ownerId: this.hosted ? userId : null,
+          createdAt: now,
+        })),
+      )
+      .onConflictDoNothing();
   }
 
   async addToInbox(userId: string, content: string, title?: string): Promise<string> {
@@ -253,16 +290,20 @@ export class NoteService {
     const scope = path ? this.normalizeLogical(path) : '';
     const maxDepth = Math.min(depth ?? DEFAULT_TREE_DEPTH, MAX_TREE_DEPTH);
 
-    const rows = await this.opts.db
-      .select({ path: notes.path })
-      .from(notes)
-      .where(this.ownedBy(userId));
+    const [noteRows, folderRows] = await Promise.all([
+      this.opts.db.select({ path: notes.path }).from(notes).where(this.ownedBy(userId)),
+      this.opts.db.select({ path: folders.path }).from(folders).where(this.foldersOwnedBy(userId)),
+    ]);
 
-    const logicalPaths = rows
-      .map((r) => this.toLogical(userId, r.path))
-      .filter((p) => (scope ? p === scope || p.startsWith(`${scope}/`) : true));
+    const inScope = (p: string): boolean =>
+      scope ? p === scope || p.startsWith(`${scope}/`) : true;
 
-    return buildTree(scope, logicalPaths, maxDepth);
+    const notePaths = noteRows.map((r) => this.toLogical(userId, r.path)).filter(inScope);
+    // Folders with notes under them are already implied by those paths; these
+    // are the empty ones, which nothing else would reveal.
+    const folderPaths = folderRows.map((r) => this.toLogical(userId, r.path)).filter(inScope);
+
+    return buildTree(scope, notePaths, maxDepth, folderPaths);
   }
 
   // -- Graph -----------------------------------------------------------------
@@ -405,8 +446,18 @@ export class NoteService {
   }
 }
 
-/** Build the folder tree implied by a flat list of note paths. */
-export function buildTree(scope: string, logicalPaths: readonly string[], maxDepth: number): TreeNode {
+/**
+ * Build the tree from the notes, plus any folder that holds nothing yet.
+ *
+ * Note paths imply every folder along them, so `emptyFolders` only has to carry
+ * the ones no note would reveal.
+ */
+export function buildTree(
+  scope: string,
+  logicalPaths: readonly string[],
+  maxDepth: number,
+  emptyFolders: readonly string[] = [],
+): TreeNode {
   const root: TreeNode = {
     path: scope,
     name: scope === '' ? '' : (scope.split('/').pop() ?? scope),
@@ -414,7 +465,30 @@ export function buildTree(scope: string, logicalPaths: readonly string[], maxDep
     children: [],
   };
 
-  const folders = new Map<string, TreeNode>([[scope, root]]);
+  const seen = new Map<string, TreeNode>([[scope, root]]);
+
+  /** Walk a folder path into existence, returning the deepest node. */
+  const ensureBranch = (relative: string): string => {
+    let parent = scope;
+    for (const segment of relative.split('/')) {
+      if (!segment) continue;
+      const folderPath = parent === '' ? segment : `${parent}/${segment}`;
+      if (!seen.has(folderPath)) {
+        const node: TreeNode = { path: folderPath, name: segment, type: 'folder', children: [] };
+        seen.set(folderPath, node);
+        seen.get(parent)?.children?.push(node);
+      }
+      parent = folderPath;
+    }
+    return parent;
+  };
+
+  for (const folder of emptyFolders) {
+    const relative = scope ? folder.slice(scope.length + 1) : folder;
+    if (!relative) continue;
+    if (relative.split('/').length > maxDepth) continue;
+    ensureBranch(relative);
+  }
 
   for (const full of logicalPaths) {
     const relative = scope ? full.slice(scope.length + 1) : full;
@@ -422,20 +496,10 @@ export function buildTree(scope: string, logicalPaths: readonly string[], maxDep
     const segments = relative.split('/');
     if (segments.length > maxDepth) continue;
 
-    let parent = scope;
     // Every segment but the last is a folder that has to exist first.
-    for (const segment of segments.slice(0, -1)) {
-      const folderPath = parent === '' ? segment : `${parent}/${segment}`;
-      if (!folders.has(folderPath)) {
-        const node: TreeNode = { path: folderPath, name: segment, type: 'folder', children: [] };
-        folders.set(folderPath, node);
-        folders.get(parent)?.children?.push(node);
-      }
-      parent = folderPath;
-    }
-
+    const parent = ensureBranch(segments.slice(0, -1).join('/'));
     const name = segments[segments.length - 1] ?? '';
-    folders.get(parent)?.children?.push({ path: full, name, type: 'note' });
+    seen.get(parent)?.children?.push({ path: full, name, type: 'note' });
   }
 
   sortTree(root);

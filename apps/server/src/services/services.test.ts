@@ -127,24 +127,58 @@ describe('NoteService.move', () => {
 });
 
 describe('NoteService.createFolder and remove', () => {
-  it('creates a folder by writing the MOC that makes it exist', async () => {
+  it('creates an empty folder, with nothing inside it', async () => {
     const folder = await notes.createFolder(USER, 'Proyectos/Nuevo');
     expect(folder).toBe('Proyectos/Nuevo');
 
-    const moc = await notes.get(USER, 'Proyectos/Nuevo/_Nuevo.md');
-    expect(moc.title).toBe('Nuevo');
+    // No note is invented to make the folder exist.
+    expect(await notes.list(USER, { folder: 'Proyectos' })).toEqual([]);
+
+    const tree = await notes.listTree(USER);
+    const proyectos = (tree.children ?? []).find((c) => c.name === 'Proyectos');
+    const nuevo = (proyectos?.children ?? []).find((c) => c.name === 'Nuevo');
+    expect(nuevo).toMatchObject({ type: 'folder' });
+    expect(nuevo?.children ?? []).toEqual([]);
   });
 
-  it('removes a folder and everything under it', async () => {
+  it('creates the folders above a nested one', async () => {
+    await notes.createFolder(USER, 'A/B/C');
+
+    const tree = await notes.listTree(USER);
+    const a = (tree.children ?? []).find((c) => c.name === 'A');
+    const b = (a?.children ?? []).find((c) => c.name === 'B');
+    expect((b?.children ?? []).map((c) => c.name)).toEqual(['C']);
+  });
+
+  it('registers the folders a note is created into', async () => {
+    await notes.create(USER, 'Sin/Crear/Antes/nota.md', '# N');
+
+    // Deleting the note leaves the folders, which now exist on their own.
+    await notes.remove(USER, 'Sin/Crear/Antes/nota.md');
+
+    const tree = await notes.listTree(USER);
+    const sin = (tree.children ?? []).find((c) => c.name === 'Sin');
+    expect(sin).toMatchObject({ type: 'folder' });
+  });
+
+  it('removes an empty folder', async () => {
+    await notes.createFolder(USER, 'Vacia');
+    await notes.remove(USER, 'Vacia', { recursive: true });
+
+    const tree = await notes.listTree(USER);
+    expect((tree.children ?? []).map((c) => c.name)).not.toContain('Vacia');
+  });
+
+  it('removes a folder, its notes and the folders nested in it', async () => {
     await notes.create(USER, 'Proyectos/a.md', '# A');
     await notes.create(USER, 'Proyectos/sub/b.md', '# B');
-    await notes.create(USER, 'Proyectos/_Proyectos.md', '# P');
+    await notes.createFolder(USER, 'Proyectos/vacia');
 
-    // Deleting the folder, which has no row of its own.
     await notes.remove(USER, 'Proyectos', { recursive: true });
 
-    // The MOC and everything beside it are gone.
     expect(await notes.list(USER, { folder: 'Proyectos' })).toEqual([]);
+    const tree = await notes.listTree(USER);
+    expect(JSON.stringify(tree)).not.toContain('Proyectos');
   });
 });
 

@@ -70,19 +70,8 @@ export default function ApiKeysPage() {
             </thead>
             <tbody>
               {(list.data ?? []).map((key) => (
-                <tr
-                  key={key.id}
-                  className="border-t border-border-subtle"
-                  // A revoked key is history, not a key. Dimming the whole row
-                  // is what tells them apart at a glance — before this, the only
-                  // difference was a missing button, which reads as broken.
-                  data-revoked={key.revokedAt ? 'true' : undefined}
-                >
-                  <td className="py-2 text-fg-primary">
-                    <span className={key.revokedAt ? 'text-fg-muted line-through' : undefined}>
-                      {key.name}
-                    </span>
-                  </td>
+                <tr key={key.id} className="border-t border-border-subtle">
+                  <td className="py-2 text-fg-primary">{key.name}</td>
                   <td className="py-2 font-mono text-fg-secondary">{key.prefix}…</td>
                   <td className="py-2 text-fg-secondary">
                     {new Date(key.createdAt).toISOString().slice(0, 10)}
@@ -93,20 +82,14 @@ export default function ApiKeysPage() {
                       : '—'}
                   </td>
                   <td className="py-2 text-right">
-                    {key.revokedAt ? (
-                      <span className="font-mono text-[11px] text-fg-muted">
-                        revoked {new Date(key.revokedAt).toISOString().slice(0, 10)}
-                      </span>
-                    ) : (
-                      <Button
-                        intent="danger"
-                        size="sm"
-                        isDisabled={revoke.isPending}
-                        onPress={() => revoke.mutate({ id: key.id })}
-                      >
-                        Revoke
-                      </Button>
-                    )}
+                    <Button
+                      intent="danger"
+                      size="sm"
+                      isDisabled={revoke.isPending}
+                      onPress={() => revoke.mutate({ id: key.id })}
+                    >
+                      Revoke
+                    </Button>
                   </td>
                 </tr>
               ))}

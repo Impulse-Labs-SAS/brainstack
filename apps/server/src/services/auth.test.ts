@@ -322,3 +322,28 @@ describe('AuthService link destinations', () => {
     expect(reset.url).toContain('https://app.brain.test/reset-password?token=');
   });
 });
+
+describe('ApiKeyService', () => {
+  it('deletes a key rather than keeping a revoked one around', async () => {
+    const user = await auth.ensureUser('user@brain.test');
+    const created = await apiKeys.create(user.id, 'Claude Code', ['notes:read']);
+
+    expect(await apiKeys.validate(created.token)).not.toBeNull();
+
+    await apiKeys.revoke(created.id, user.id);
+
+    // Gone from the listing, not struck through in it.
+    expect(await apiKeys.list(user.id)).toEqual([]);
+    expect(await apiKeys.validate(created.token)).toBeNull();
+  });
+
+  it('refuses to delete a key belonging to somebody else', async () => {
+    const mine = await auth.ensureUser('user@brain.test');
+    const theirs = await auth.ensureUser('otro@brain.test');
+    const key = await apiKeys.create(theirs.id, 'de otro', []);
+
+    await expect(apiKeys.revoke(key.id, mine.id)).rejects.toThrow();
+    // Still works for its owner.
+    expect(await apiKeys.validate(key.token)).not.toBeNull();
+  });
+});

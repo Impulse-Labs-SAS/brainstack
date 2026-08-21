@@ -182,6 +182,23 @@ export const apiKeys = pgTable(
 );
 
 /**
+ * A folder that exists without anything in it yet.
+ *
+ * Folders with notes under them are implied by those paths and are not listed
+ * here; the tree unions both sources.
+ */
+export const folders = pgTable(
+  'folders',
+  {
+    /** Stored path, owner prefix included. No trailing slash. */
+    path: text('path').primaryKey(),
+    ownerId: text('owner_id'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({ ownerIdx: index('idx_folders_owner').on(t.ownerId) }),
+);
+
+/**
  * An effective grant: this folder, of this owner, is readable by this user.
  *
  * Keyed by folder rather than by note so a share keeps covering notes created

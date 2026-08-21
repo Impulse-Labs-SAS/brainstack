@@ -241,9 +241,33 @@ const fullAuth: PgMigration = {
   ],
 };
 
+/**
+ * Folders that exist on their own.
+ *
+ * The tree is derived from note paths, which covers every folder that has
+ * something in it and none that do not. On a filesystem an empty directory
+ * exists by itself; here it needs a row, or "new folder" has nothing to create
+ * and has to invent a note to stand in for one.
+ *
+ * A folder may also be implied by a note beneath it and never appear here. The
+ * tree unions both, so this table holds only what would otherwise be invisible.
+ */
+const folders: PgMigration = {
+  name: '0005_pg_folders',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS folders (
+       path       TEXT PRIMARY KEY,
+       owner_id   TEXT REFERENCES users(id) ON DELETE CASCADE,
+       created_at BIGINT NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_folders_owner ON folders (owner_id)`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
   ownerAndSharing,
   fullAuth,
+  folders,
 ];
