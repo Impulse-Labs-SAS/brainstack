@@ -1,174 +1,161 @@
-// Suite de aislamiento hosted multi-user. Bootea dos users en el mismo
-// NOTES_DIR (alice/, bob/) y verifica que:
-//   - alice no ve notas de bob en list / tree / search / graph
-//   - con grant `bob → alice@proyectos`, search/all incluye matches de
-//     alice/proyectos/ pero no de alice/privado/
-//   - wikilink cross-border desde nota de alice a privado: resuelto para
-//     alice; visto vía linksForOwner por bob queda unresolved
+// Two users in one database, and what each of them can see.
 //
-// La idea es ejercitar el pipeline real (bootstrap → owner_id en DB →
-// services owner-aware) en hosted sin mockear nada.
+// This is the suite that matters most for sharing: isolation here is the only
+// thing between "Pablo's folder" and "everything Pablo wrote". It asserts the
+// negative cases — that a listing, a tree, a search and a graph all stop at the
+// owner's boundary — because those are the ones that fail quietly.
 
-import { promises as fsp } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-import { openDatabase, type BrainStackDatabase } from '@brainstack/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import pino from 'pino';
+import { pgSchema } from '@brainstack/core/pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
-import { IndexService } from './services/IndexService.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
 import { SharingService } from './services/SharingService.js';
+import { createTestDatabase, type TestDatabase } from './services/testDb.js';
 
-const logger = pino({ level: 'silent' });
+const { users } = pgSchema;
 
-interface Harness {
-  bs: BrainStackDatabase;
-  root: string;
-  notes: NoteService;
-  search: SearchService;
-  sharing: SharingService;
-  crossOwner: CrossOwnerReader;
-  index: IndexService;
-}
+const hosted = { deployment: 'hosted' as const };
 
-function seedUser(bs: BrainStackDatabase, id: string, email: string): void {
-  bs.sqlite
-    .prepare(`INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?)`)
-    .run(id, email, Date.now(), Date.now());
-}
+let database: TestDatabase;
+let notes: NoteService;
+let search: SearchService;
+let sharing: SharingService;
+let crossOwner: CrossOwnerReader;
 
-async function buildHostedHarness(): Promise<Harness> {
-  const root = await fsp.mkdtemp(join(tmpdir(), 'bs-hosted-'));
-  const bs = openDatabase(':memory:');
-  seedUser(bs, 'alice', 'alice@x.com');
-  seedUser(bs, 'bob', 'bob@x.com');
+beforeAll(async () => {
+  database = await createTestDatabase();
+});
 
-  const vaultCfg = { deployment: 'hosted' as const, notesDirAbs: root };
-  const index = new IndexService({ root, db: bs, logger, vaultCfg });
-  const notes = new NoteService({ cfg: vaultCfg, db: bs, index });
-  const search = new SearchService({ db: bs, cfg: vaultCfg });
-  const sharing = new SharingService({ db: bs, deployment: 'hosted' });
-  const crossOwner = new CrossOwnerReader({ sharing, vaultCfg, db: bs });
-  await index.bootstrap();
-
-  return { bs, root, notes, search, sharing, crossOwner, index };
-}
-
-async function writeFile(root: string, rel: string, content: string): Promise<void> {
-  const abs = join(root, rel);
-  await fsp.mkdir(join(abs, '..'), { recursive: true });
-  await fsp.writeFile(abs, content, 'utf8');
-}
-
-let h: Harness;
+afterAll(async () => {
+  await database.close();
+});
 
 beforeEach(async () => {
-  h = await buildHostedHarness();
+  await database.reset();
+
+  for (const [id, email] of [
+    ['alice', 'alice@brain.test'],
+    ['bob', 'bob@brain.test'],
+  ] as const) {
+    await database.db.insert(users).values({ id, email, createdAt: Date.now(), updatedAt: 0 });
+  }
+
+  notes = new NoteService({ db: database.db, cfg: hosted });
+  search = new SearchService({ db: database.db, cfg: hosted });
+  sharing = new SharingService({ db: database.db, deployment: 'hosted' });
+  crossOwner = new CrossOwnerReader({ db: database.db, sharing, vaultCfg: hosted });
 });
 
-afterEach(async () => {
-  h.bs.close();
-  await fsp.rm(h.root, { recursive: true, force: true });
-});
-
-describe('hosted multi-user — aislamiento básico', () => {
-  it('list/tree/search/graph de alice no incluyen notas de bob', async () => {
-    // Crear notas físicamente bajo cada subdir de user, después rebootstrap.
-    await writeFile(h.root, 'alice/proyectos/a.md', '# Alice A\nfoo content');
-    await writeFile(h.root, 'alice/privado/secreto.md', '# Privado\nfoo content');
-    await writeFile(h.root, 'bob/proyectos/b.md', '# Bob B\nfoo content');
-    await h.index.bootstrap();
-
-    const aliceList = h.notes.list('alice');
-    expect(aliceList.map((r) => r.path).sort()).toEqual([
-      'privado/secreto.md',
-      'proyectos/a.md',
-    ]);
-    const bobList = h.notes.list('bob');
-    expect(bobList.map((r) => r.path)).toEqual(['proyectos/b.md']);
-
-    const aliceTree = await h.notes.listTree('alice');
-    const aliceFolders = (aliceTree.children ?? []).map((c) => c.name).sort();
-    expect(aliceFolders).toContain('proyectos');
-    expect(aliceFolders).toContain('privado');
-    expect(aliceFolders).not.toContain('bob');
-
-    const aliceHits = h.search.search('alice', 'foo');
-    expect(aliceHits.every((hit) => hit.ownerId === 'alice')).toBe(true);
-    const bobHits = h.search.search('bob', 'foo');
-    expect(bobHits.every((hit) => hit.ownerId === 'bob')).toBe(true);
-    expect(bobHits.map((hit) => hit.path)).toEqual(['proyectos/b.md']);
-
-    const aliceGraph = h.notes.graph('alice');
-    expect(aliceGraph.nodes.every((n) => n.ownerId === 'alice')).toBe(true);
+describe('hosted multi-user isolation', () => {
+  beforeEach(async () => {
+    await notes.create('alice', 'Proyectos/zuno.md', '# Zuno\n\npresupuesto de alice');
+    await notes.create('alice', 'Privado/diario.md', '# Diario\n\nsecreto de alice');
+    await notes.create('bob', 'Proyectos/otro.md', '# Otro\n\npresupuesto de bob');
   });
 
-  it('owner_id se persiste correctamente en notes durante bootstrap', async () => {
-    await writeFile(h.root, 'alice/x.md', 'a');
-    await writeFile(h.root, 'bob/y.md', 'b');
-    await h.index.bootstrap();
-    const rows = h.bs.sqlite
-      .prepare<unknown[], { path: string; owner_id: string | null }>(
-        'SELECT path, owner_id FROM notes ORDER BY path',
-      )
-      .all();
-    expect(rows).toEqual([
-      { path: 'alice/x.md', owner_id: 'alice' },
-      { path: 'bob/y.md', owner_id: 'bob' },
-    ]);
+  it('list only returns the caller’s own notes', async () => {
+    const mine = await notes.list('alice');
+    const paths = mine.map((n) => n.path).sort();
+
+    expect(paths).toEqual(['Privado/diario.md', 'Proyectos/zuno.md']);
+    // Same logical path as alice's, different owner: it must not appear.
+    expect(paths).not.toContain('Proyectos/otro.md');
+  });
+
+  it('the same logical path can belong to both users at once', async () => {
+    await notes.create('bob', 'Privado/diario.md', '# Diario\n\nsecreto de bob');
+
+    expect((await notes.get('alice', 'Privado/diario.md')).body).toContain('alice');
+    expect((await notes.get('bob', 'Privado/diario.md')).body).toContain('bob');
+  });
+
+  it('the tree stops at the owner boundary', async () => {
+    const tree = await notes.listTree('alice');
+    const serialised = JSON.stringify(tree);
+
+    expect((tree.children ?? []).map((c) => c.name).sort()).toEqual(['Privado', 'Proyectos']);
+    expect(serialised).not.toContain('otro.md');
+    // No owner prefix leaks into what the caller sees.
+    expect(serialised).not.toContain('alice/');
+  });
+
+  it('search does not cross owners by default', async () => {
+    const hits = await search.search('alice', 'presupuesto');
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.path).toBe('Proyectos/zuno.md');
+    expect(hits[0]?.ownerId).toBe('alice');
+  });
+
+  it('the graph only contains the caller’s notes', async () => {
+    const { nodes } = await notes.graph('alice');
+    expect(nodes.every((n) => n.ownerId === 'alice')).toBe(true);
+    expect(nodes).toHaveLength(2);
+  });
+
+  it('every note is written with its owner recorded', async () => {
+    const mine = await notes.list('alice');
+    expect(mine).toHaveLength(2);
+
+    const { nodes } = await notes.graph('alice');
+    expect(nodes.map((n) => n.ownerId)).toEqual(['alice', 'alice']);
   });
 });
 
-describe('hosted multi-user — sharing scope', () => {
-  it('search con scope=all desde bob incluye match bajo carpeta compartida y excluye privadas', async () => {
-    await writeFile(h.root, 'alice/proyectos/a.md', '# A\nspecialword aquí');
-    await writeFile(h.root, 'alice/privado/secreto.md', '# Secreto\nspecialword tambien');
-    await writeFile(h.root, 'bob/notes/own.md', '# Bob\nspecialword propio');
-    await h.index.bootstrap();
-    h.sharing.grant({
+describe('hosted multi-user with a shared folder', () => {
+  beforeEach(async () => {
+    await notes.create('alice', 'Proyectos/zuno.md', '# Zuno\n\npresupuesto compartido');
+    await notes.create('alice', 'Privado/diario.md', '# Diario\n\npresupuesto privado');
+    await sharing.grant({
       ownerId: 'alice',
       sharedWithUserId: 'bob',
-      folderPath: 'proyectos',
+      folderPath: 'Proyectos',
       grantedBy: 'alice',
     });
-
-    const sharedScopes = h.sharing
-      .listSharedRoots('bob')
-      .map((r) => ({ ownerId: r.ownerId, folderPath: r.folderPath }));
-    const hits = h.search.search('bob', 'specialword', { sharedScopes });
-    const paths = hits.map((hit) => `${hit.ownerId}:${hit.path}`).sort();
-    expect(paths).toContain('alice:proyectos/a.md');
-    expect(paths).toContain('bob:notes/own.md');
-    expect(paths).not.toContain('alice:privado/secreto.md');
   });
 
-  it('linksForOwner desde bob enmascara link a privado', async () => {
-    // Nota de alice en proyectos linkea a privado/secreto
-    await writeFile(
-      h.root,
-      'alice/proyectos/a.md',
-      '# A\nver [[../privado/secreto]] como referencia',
-    );
-    await writeFile(h.root, 'alice/privado/secreto.md', '# Secreto\n');
-    await h.index.bootstrap();
-    h.sharing.grant({
-      ownerId: 'alice',
-      sharedWithUserId: 'bob',
-      folderPath: 'proyectos',
-      grantedBy: 'alice',
+  it('search with the shared scope reaches the folder and stops there', async () => {
+    const scopes = (await sharing.listSharedRoots('bob')).map((r) => ({
+      ownerId: r.ownerId,
+      folderPath: r.folderPath,
+    }));
+
+    const hits = await search.search('bob', 'presupuesto', {
+      includeMine: true,
+      sharedScopes: scopes,
     });
 
-    const linksFromBob = h.crossOwner.linksForOwner('bob', 'alice', 'proyectos/a.md');
-    // Si el resolver no encontró nada (porque '../privado/secreto' es path-style
-    // raro), igual estaría unresolved — el punto es que bob nunca debería ver
-    // targetType='note' apuntando a privado.
-    const visibleToPrivado = linksFromBob.filter(
-      (l) => l.targetType === 'note' && l.targetPath.includes('privado'),
-    );
-    expect(visibleToPrivado).toEqual([]);
+    expect(hits.map((h) => h.path)).toEqual(['Proyectos/zuno.md']);
+    expect(hits[0]?.ownerId).toBe('alice');
+    // The private note matches the query and must still not surface.
+    expect(JSON.stringify(hits)).not.toContain('diario');
+  });
+
+  it('search without the shared scope finds nothing of alice’s', async () => {
+    const hits = await search.search('bob', 'presupuesto');
+    expect(hits).toEqual([]);
+  });
+
+  it('bob can read a shared note and not a private one', async () => {
+    const note = await crossOwner.getNote('bob', 'alice', 'Proyectos/zuno.md');
+    expect(note.body).toContain('compartido');
+
+    await expect(
+      crossOwner.getNote('bob', 'alice', 'Privado/diario.md'),
+    ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
+  });
+
+  it('revoking the grant closes the door again', async () => {
+    await sharing.revoke({
+      ownerId: 'alice',
+      sharedWithUserId: 'bob',
+      folderPath: 'Proyectos',
+    });
+
+    await expect(
+      crossOwner.getNote('bob', 'alice', 'Proyectos/zuno.md'),
+    ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
   });
 });

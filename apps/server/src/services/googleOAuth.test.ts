@@ -1,47 +1,53 @@
-import { openDatabase, type BrainStackDatabase } from '@brainstack/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppError } from '../lib/errors.js';
 
-import { GoogleOAuthService } from './GoogleOAuthService.js';
+import { pgSchema } from '@brainstack/core/pg';
+import { eq } from 'drizzle-orm';
 
-let bs: BrainStackDatabase;
+import { GoogleOAuthService } from './GoogleOAuthService.js';
+import { createTestDatabase, type TestDatabase } from './testDb.js';
+
+let database: TestDatabase;
 let now = 1_700_000_000_000;
 let svc: GoogleOAuthService;
 
-beforeEach(() => {
-  bs = openDatabase(':memory:');
+beforeAll(async () => {
+  database = await createTestDatabase();
+});
+
+afterAll(async () => {
+  await database.close();
+});
+
+beforeEach(async () => {
+  await database.reset();
   now = 1_700_000_000_000;
   svc = new GoogleOAuthService({
     clientId: 'cid',
     clientSecret: 'csec',
     redirectUri: 'https://brain.test/auth/google/callback',
-    db: bs,
+    db: database.db,
     now: () => now,
   });
 });
 
-afterEach(() => {
-  bs.close();
-});
-
 describe('GoogleOAuthService state lifecycle', () => {
-  it('stores state + code_verifier and builds an authorization URL', () => {
-    const { url, state } = svc.startAuthorization('/dashboard');
+  it('stores state + code_verifier and builds an authorization URL', async () => {
+    const { url, state } = await svc.startAuthorization('/dashboard');
     expect(url).toMatch(/^https:\/\/accounts\.google\.com\//);
     expect(url).toContain('code_challenge=');
     expect(url).toContain(`state=${state}`);
 
-    const row = bs.sqlite
-      .prepare<[string], { state: string; redirect_to: string | null }>(
-        'SELECT state, redirect_to FROM oauth_states WHERE state = ?',
-      )
-      .get(state);
-    expect(row?.redirect_to).toBe('/dashboard');
+    const [row] = await database.db
+      .select()
+      .from(pgSchema.oauthStates)
+      .where(eq(pgSchema.oauthStates.state, state));
+    expect(row?.redirectTo).toBe('/dashboard');
   });
 
   it('rejects a callback whose state cookie does not match the query', async () => {
-    const { state } = svc.startAuthorization();
+    const { state } = await svc.startAuthorization();
     await expect(
       svc.completeAuthorization({ state, code: 'x', stateCookie: 'mismatch' }),
     ).rejects.toBeInstanceOf(AppError);
@@ -54,15 +60,16 @@ describe('GoogleOAuthService state lifecycle', () => {
   });
 
   it('rejects expired state', async () => {
-    const { state } = svc.startAuthorization();
+    const { state } = await svc.startAuthorization();
     now += 11 * 60 * 1000;
     await expect(
       svc.completeAuthorization({ state, code: 'x', stateCookie: state }),
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     // The expired row should be gone.
-    const row = bs.sqlite
-      .prepare('SELECT state FROM oauth_states WHERE state = ?')
-      .get(state);
+    const [row] = await database.db
+      .select()
+      .from(pgSchema.oauthStates)
+      .where(eq(pgSchema.oauthStates.state, state));
     expect(row).toBeUndefined();
   });
 });

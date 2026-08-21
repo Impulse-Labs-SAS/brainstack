@@ -1,20 +1,14 @@
-// Smoke test dual-mode: levanta el Hono app en ambos deployments y
-// verifica el gating de sharing.* y /api/config. No usa la red ni
-// disco real (better-sqlite3 in-memory + tmp dir).
+// Dual-mode smoke test: boots the Hono app in both deployments and checks the
+// gating of sharing and /api/config. No network and no disk — the database is
+// Postgres in-process.
 
-import { promises as fsp } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-import { openDatabase, type BrainStackDatabase } from '@brainstack/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pino from 'pino';
 
 import { ApiKeyService } from './services/ApiKeyService.js';
 import { AuthService } from './services/AuthService.js';
 import { CapturingEmailSender } from './services/EmailSender.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
-import { IndexService } from './services/IndexService.js';
 import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
@@ -22,21 +16,17 @@ import { SharingService, type Deployment } from './services/SharingService.js';
 import { TotpService } from './services/TotpService.js';
 import { buildApp } from './http/app.js';
 import { buildMcpServer } from './mcp/server.js';
+import { createTestDatabase, type TestDatabase } from './services/testDb.js';
 
 const logger = pino({ level: 'silent' });
 
 interface Harness {
-  bs: BrainStackDatabase;
-  root: string;
   fetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-async function buildHarness(deployment: Deployment): Promise<Harness> {
-  const root = await fsp.mkdtemp(join(tmpdir(), 'bs-dual-'));
-  const bs = openDatabase(':memory:');
-  const vaultCfg = { deployment, notesDirAbs: root };
-  const index = new IndexService({ root, db: bs, logger, vaultCfg });
-  const notes = new NoteService({ cfg: vaultCfg, db: bs, index });
+function buildHarness(deployment: Deployment, bs: TestDatabase['db']): Harness {
+  const vaultCfg = { deployment };
+  const notes = new NoteService({ cfg: vaultCfg, db: bs });
   const search = new SearchService({ db: bs, cfg: vaultCfg });
   const email = new CapturingEmailSender();
   const totp = new TotpService({ db: bs, issuer: 'BrainStack' });
@@ -56,13 +46,7 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
     sharing,
     publicOrigin: 'http://test',
   });
-  const crossOwner = new CrossOwnerReader({
-    sharing,
-    vaultCfg: { deployment, notesDirAbs: root },
-    db: bs,
-  });
-
-  await index.bootstrap();
+  const crossOwner = new CrossOwnerReader({ sharing, vaultCfg, db: bs });
 
   const app = buildApp({
     buildMcpServer: (principal) =>
@@ -75,7 +59,7 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
     sharing,
     invites,
     crossOwner,
-    resolveUserForApiKey: (k) => auth.getUser(k.userId)!,
+    resolveUserForApiKey: async (k) => (await auth.findUserById(k.userId ?? ''))!,
     rateLimitPerMinute: 1000,
     secureCookies: false,
     corsOrigins: [],
@@ -85,33 +69,27 @@ async function buildHarness(deployment: Deployment): Promise<Harness> {
       deployment,
       features: { sharing: deployment === 'hosted' },
     },
-    vaultCfg: { deployment, notesDirAbs: root },
+    vaultCfg,
   });
 
   return {
-    bs,
-    root,
     fetch: (p, init) => Promise.resolve(app.fetch(new Request(`http://test${p}`, init))),
   };
 }
 
-async function tearDown(h: Harness): Promise<void> {
-  h.bs.close();
-  await fsp.rm(h.root, { recursive: true, force: true });
-}
-
 describe('dual-mode: /api/config', () => {
+  let database: TestDatabase;
   let selfHost: Harness;
   let hosted: Harness;
 
-  beforeEach(async () => {
-    selfHost = await buildHarness('self-host');
-    hosted = await buildHarness('hosted');
+  beforeAll(async () => {
+    database = await createTestDatabase();
+    selfHost = buildHarness('self-host', database.db);
+    hosted = buildHarness('hosted', database.db);
   });
 
-  afterEach(async () => {
-    await tearDown(selfHost);
-    await tearDown(hosted);
+  afterAll(async () => {
+    await database.close();
   });
 
   it('reporta deployment y feature flag por modo', async () => {

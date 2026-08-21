@@ -1,28 +1,36 @@
-import { openDatabase, type BrainStackDatabase } from '@brainstack/core';
 import { decodeBase32 } from '@oslojs/encoding';
 import { generateTOTP } from '@oslojs/otp';
 import pino from 'pino';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppError } from '../lib/errors.js';
 
 import { AuthService } from './AuthService.js';
 import { CapturingEmailSender } from './EmailSender.js';
 import { TotpService } from './TotpService.js';
+import { createTestDatabase, type TestDatabase } from './testDb.js';
 
 const STRONG = 'Sup3rStrong!Passw0rd';
 
-let bs: BrainStackDatabase;
+let database: TestDatabase;
 let auth: AuthService;
 let totp: TotpService;
 let now = 1_700_000_000_000;
 
-beforeEach(() => {
-  bs = openDatabase(':memory:');
+beforeAll(async () => {
+  database = await createTestDatabase();
+});
+
+afterAll(async () => {
+  await database.close();
+});
+
+beforeEach(async () => {
+  await database.reset();
   now = 1_700_000_000_000;
-  totp = new TotpService({ db: bs, issuer: 'BrainStack', now: () => now });
+  totp = new TotpService({ db: database.db, issuer: 'BrainStack', now: () => now });
   auth = new AuthService({
-    db: bs,
+    db: database.db,
     email: new CapturingEmailSender(),
     logger: pino({ level: 'silent' }),
     publicOrigin: 'https://brain.test',
@@ -30,10 +38,6 @@ beforeEach(() => {
     totp,
     now: () => now,
   });
-});
-
-afterEach(() => {
-  bs.close();
 });
 
 function codeFor(secret: string): string {
@@ -47,66 +51,67 @@ function codeFor(secret: string): string {
 }
 
 describe('TotpService enrollment', () => {
-  it('returns a base32 secret + otpauth URI but does not persist anything', () => {
+  it('returns a base32 secret + otpauth URI but does not persist anything', async () => {
     const enrollment = totp.beginEnrollment('user@brain.test');
     expect(enrollment.secret).toMatch(/^[A-Z2-7]+$/);
     expect(enrollment.otpauthUri).toMatch(/^otpauth:\/\/totp\/BrainStack:user/);
-    const u = auth.ensureUser('user@brain.test');
-    expect(auth.getUser(u.id)?.hasTotp).toBe(false);
+    const u = await auth.ensureUser('user@brain.test');
+    expect((await auth.findUserById(u.id))?.hasTotp).toBe(false);
   });
 
-  it('persists the secret and returns 10 backup codes on confirmation', () => {
-    const u = auth.ensureUser('user@brain.test');
+  it('persists the secret and returns 10 backup codes on confirmation', async () => {
+    const u = await auth.ensureUser('user@brain.test');
     const { secret } = totp.beginEnrollment('user@brain.test');
-    const { backupCodes } = totp.confirmEnrollment(u.id, secret, codeFor(secret));
+    const { backupCodes } = await totp.confirmEnrollment(u.id, secret, codeFor(secret));
     expect(backupCodes).toHaveLength(10);
     expect(new Set(backupCodes).size).toBe(10);
-    expect(auth.getUser(u.id)?.hasTotp).toBe(true);
+    expect((await auth.findUserById(u.id))?.hasTotp).toBe(true);
   });
 
-  it('rejects the wrong confirmation code', () => {
-    const u = auth.ensureUser('user@brain.test');
+  it('rejects the wrong confirmation code', async () => {
+    const u = await auth.ensureUser('user@brain.test');
     const { secret } = totp.beginEnrollment('user@brain.test');
-    expect(() => totp.confirmEnrollment(u.id, secret, '000000')).toThrow(AppError);
-    expect(auth.getUser(u.id)?.hasTotp).toBe(false);
+    await expect(totp.confirmEnrollment(u.id, secret, '000000')).rejects.toThrow(AppError);
+    expect((await auth.findUserById(u.id))?.hasTotp).toBe(false);
   });
 });
 
 describe('TotpService verifyForUser', () => {
   it('accepts the current code', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    auth.consumeEmailVerification(verification.token);
+    await auth.consumeEmailVerification(verification.token);
     const { secret } = totp.beginEnrollment('user@brain.test');
-    const user = auth.getUser(auth.ensureUser('user@brain.test').id)!;
-    totp.confirmEnrollment(user.id, secret, codeFor(secret));
-    expect(totp.verifyForUser(user.id, codeFor(secret))).toBe(true);
+    const seeded = await auth.ensureUser('user@brain.test');
+    const user = (await auth.findUserById(seeded.id))!;
+    await totp.confirmEnrollment(user.id, secret, codeFor(secret));
+    expect(await totp.verifyForUser(user.id, codeFor(secret))).toBe(true);
   });
 
   it('accepts and consumes a backup code', async () => {
-    const u = auth.ensureUser('user@brain.test');
+    const u = await auth.ensureUser('user@brain.test');
     const { secret } = totp.beginEnrollment('user@brain.test');
-    const { backupCodes } = totp.confirmEnrollment(u.id, secret, codeFor(secret));
+    const { backupCodes } = await totp.confirmEnrollment(u.id, secret, codeFor(secret));
     const code = backupCodes[0]!;
-    expect(totp.verifyForUser(u.id, code)).toBe(true);
-    expect(totp.verifyForUser(u.id, code)).toBe(false); // already consumed
-    expect(totp.remainingBackupCodes(u.id)).toBe(9);
+    expect(await totp.verifyForUser(u.id, code)).toBe(true);
+    expect(await totp.verifyForUser(u.id, code)).toBe(false); // already consumed
+    expect(await totp.remainingBackupCodes(u.id)).toBe(9);
   });
 
-  it('returns false for an arbitrary string', () => {
-    const u = auth.ensureUser('user@brain.test');
+  it('returns false for an arbitrary string', async () => {
+    const u = await auth.ensureUser('user@brain.test');
     const { secret } = totp.beginEnrollment('user@brain.test');
-    totp.confirmEnrollment(u.id, secret, codeFor(secret));
-    expect(totp.verifyForUser(u.id, 'nope')).toBe(false);
+    await totp.confirmEnrollment(u.id, secret, codeFor(secret));
+    expect(await totp.verifyForUser(u.id, 'nope')).toBe(false);
   });
 });
 
 describe('AuthService.login with TOTP', () => {
   it('refuses login without a code when totp is enabled', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    auth.consumeEmailVerification(verification.token);
-    const me = auth.getUser(auth.ensureUser('user@brain.test').id)!;
+    await auth.consumeEmailVerification(verification.token);
+    const me = (await auth.findUserById((await auth.ensureUser('user@brain.test')).id))!;
     const { secret } = totp.beginEnrollment('user@brain.test');
-    totp.confirmEnrollment(me.id, secret, codeFor(secret));
+    await totp.confirmEnrollment(me.id, secret, codeFor(secret));
 
     await expect(auth.login('user@brain.test', STRONG)).rejects.toMatchObject({
       message: 'totp code required',
@@ -123,12 +128,12 @@ describe('AuthService.login with TOTP', () => {
 
 describe('TotpService.disable', () => {
   it('requires a valid code', async () => {
-    const u = auth.ensureUser('user@brain.test');
+    const u = await auth.ensureUser('user@brain.test');
     const { secret } = totp.beginEnrollment('user@brain.test');
-    totp.confirmEnrollment(u.id, secret, codeFor(secret));
-    expect(() => totp.disable(u.id, '000000')).toThrow(AppError);
-    totp.disable(u.id, codeFor(secret));
-    expect(auth.getUser(u.id)?.hasTotp).toBe(false);
-    expect(totp.remainingBackupCodes(u.id)).toBe(0);
+    await totp.confirmEnrollment(u.id, secret, codeFor(secret));
+    await expect(totp.disable(u.id, '000000')).rejects.toThrow(AppError);
+    await totp.disable(u.id, codeFor(secret));
+    expect((await auth.findUserById(u.id))?.hasTotp).toBe(false);
+    expect(await totp.remainingBackupCodes(u.id)).toBe(0);
   });
 });

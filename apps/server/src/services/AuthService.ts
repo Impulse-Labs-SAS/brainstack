@@ -52,6 +52,13 @@ export interface AuthServiceOptions {
   /** Lowercased emails allowed to sign in. Empty set = open (dev only). */
   authorizedEmails: Set<string>;
   /**
+   * Prefix the HTTP API is mounted under, for links that point at an endpoint
+   * rather than a page. Empty when the app serves its own routes at the root;
+   * `/api` behind the Next catch-all. Getting this wrong is what made every
+   * magic link 404 before, so it is passed in rather than assumed.
+   */
+  apiBasePath?: string;
+  /**
    * Optional TOTP gate. When set and the user has a secret, `login` requires a
    * code and verifies it before handing out a session.
    */
@@ -143,6 +150,11 @@ export class AuthService {
 
   private originBase(): string {
     return this.opts.publicOrigin.replace(/\/+$/, '');
+  }
+
+  /** Base for links that land on an endpoint. Pages do not get the prefix. */
+  private apiBase(): string {
+    return `${this.originBase()}${this.opts.apiBasePath ?? ''}`;
   }
 
   assertAuthorized(email: string): void {
@@ -337,7 +349,7 @@ export class AuthService {
       usedAt: null,
     });
 
-    const url = `${this.originBase()}/verify-email?token=${token}`;
+    const url = `${this.apiBase()}/auth/verify-email?token=${token}`;
     await this.opts.email.send({
       to: email,
       subject: 'Verify your BrainStack email',
@@ -489,15 +501,39 @@ export class AuthService {
 
   /**
    * Link a Google identity to an account, creating it if the email is new.
-   * Google has verified the address already, so the account arrives verified.
+   *
+   * Two refusals, both about account takeover:
+   *
+   * Google's own claim that the address is verified is required, because an
+   * unverified one proves only that somebody typed it.
+   *
+   * And an existing local account that has never verified its email cannot be
+   * linked to. Otherwise anyone could sign up with somebody else's address,
+   * wait for them to arrive through Google, and end up holding a password on
+   * their account.
    */
   async upsertGoogleUser(input: {
     googleId: string;
     email: string;
+    googleEmailVerified: boolean;
     displayName?: string | null;
   }): Promise<User> {
     const email = this.normaliseEmail(input.email);
     this.assertAuthorized(email);
+
+    if (!input.googleEmailVerified) {
+      throw new AppError('google email is unverified', 'FORBIDDEN', 403);
+    }
+
+    const existing = await this.rowByEmail(email);
+    if (existing && !existing.emailVerified && existing.passwordHash) {
+      throw new AppError(
+        'local account exists and is not verified; verify it before linking Google',
+        'FORBIDDEN',
+        403,
+      );
+    }
+
     const now = this.now();
 
     const [row] = await this.opts.db

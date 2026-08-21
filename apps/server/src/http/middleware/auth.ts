@@ -24,7 +24,7 @@ export interface AuthMiddlewareOptions {
   auth: AuthService;
   apiKeys: ApiKeyService;
   /** Resolve the user behind a valid API key (defaults to AuthService.ensureUser). */
-  resolveUser(apiKey: ApiKey): User;
+  resolveUser(apiKey: ApiKey): Promise<User>;
 }
 
 export function buildAuthMiddleware(

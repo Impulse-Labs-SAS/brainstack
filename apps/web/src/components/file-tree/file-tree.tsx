@@ -23,7 +23,6 @@ import {
   FolderPlus,
   Image as ImageIcon,
   Loader2,
-  Paperclip,
   Trash2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -33,10 +32,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
 } from 'react';
 
-import { BLOCKED_UPLOAD_MESSAGE, isBlockedUpload } from '@/lib/uploads';
 
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
@@ -102,53 +99,6 @@ function isDescendantOf(candidate: string, ancestor: string): boolean {
 
 function notePathToRoute(path: string): string {
   return `/notes/${path.replace(/\.md$/i, '')}`;
-}
-
-function attachmentDestForFile(file: File): string {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const safeName = file.name.replace(/[/\\]+/g, '_');
-  return `Attachments/${yyyy}/${mm}/${safeName}`;
-}
-
-function splitFilename(name: string): { stem: string; ext: string } {
-  const safe = name.replace(/[/\\]+/g, '_');
-  const dot = safe.lastIndexOf('.');
-  if (dot <= 0) return { stem: safe, ext: '' };
-  return { stem: safe.slice(0, dot), ext: safe.slice(dot) };
-}
-
-/**
- * Devuelve el primer path libre bajo `folder` para `filename`. Si ya
- * existe, agrega sufijo incremental (` 2`, ` 3`…). Hasta 99 intentos;
- * más allá devuelve null y el caller toastea error.
- */
-function pickFreeDest(folder: string, filename: string, existing: ReadonlySet<string>): string | null {
-  const { stem, ext } = splitFilename(filename);
-  for (let i = 1; i <= 99; i++) {
-    const candidate = i === 1 ? `${stem}${ext}` : `${stem} ${i}${ext}`;
-    const path = folder === '' ? candidate : `${folder}/${candidate}`;
-    if (!existing.has(path)) return path;
-  }
-  return null;
-}
-
-function readAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== 'string') {
-        reject(new Error('unexpected reader result type'));
-        return;
-      }
-      const comma = result.indexOf(',');
-      resolve(comma === -1 ? result : result.slice(comma + 1));
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +261,6 @@ export function FileTree() {
   const createM = trpc.notes.create.useMutation();
   const createFolderM = trpc.notes.createFolder.useMutation();
   const removeM = trpc.notes.remove.useMutation();
-  const uploadM = trpc.notes.uploadAttachment.useMutation();
 
   const [expanded, setExpanded] = useState<Set<string>>(() => loadExpanded());
 
@@ -431,140 +380,6 @@ export function FileTree() {
     [moveM, pushToast, refresh, markBusy],
   );
 
-  // ---------------------------------------------------------------------------
-  // OS file drop on the tree → uploadAttachment one by one
-  // ---------------------------------------------------------------------------
-
-  const onNativeDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (e.dataTransfer.types.includes('Files')) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-    }
-  };
-
-  /**
-   * Upload de archivos arbitrarios a Attachments/YYYY/MM/. No inserta
-   * wikilinks en ninguna nota — solo persiste el archivo y refresca el
-   * árbol. Compartido entre el drop nativo en el sidebar y el botón
-   * Paperclip del header.
-   */
-  const uploadFiles = useCallback(
-    async (files: readonly File[]): Promise<void> => {
-      if (files.length === 0) return;
-      for (const file of files) {
-        if (isBlockedUpload({ mime: file.type, filename: file.name })) {
-          pushToast('error', `${file.name}: ${BLOCKED_UPLOAD_MESSAGE}`);
-          continue;
-        }
-        const dest = attachmentDestForFile(file);
-        markBusy(dest, true);
-        try {
-          const dataBase64 = await readAsBase64(file);
-          const finalPath = await uploadM.mutateAsync({
-            path: dest,
-            dataBase64,
-            mime: file.type || undefined,
-          });
-          pushToast('info', `uploaded ${finalPath}`);
-        } catch (err) {
-          pushToast('error', `${file.name}: ${(err as Error).message}`);
-        } finally {
-          markBusy(dest, false);
-        }
-      }
-      await refresh();
-    },
-    [markBusy, pushToast, refresh, uploadM],
-  );
-
-  const onNativeDrop = async (e: ReactDragEvent<HTMLDivElement>) => {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    e.preventDefault();
-    await uploadFiles(Array.from(e.dataTransfer.files));
-  };
-
-  const headerUploadInputRef = useRef<HTMLInputElement | null>(null);
-  const onHeaderUploadClick = useCallback((): void => {
-    headerUploadInputRef.current?.click();
-  }, []);
-  const onHeaderUploadChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-      const files = Array.from(e.target.files ?? []);
-      e.target.value = '';
-      await uploadFiles(files);
-    },
-    [uploadFiles],
-  );
-
-  /**
-   * Upload de archivos dirigidos a una carpeta. El binario se persiste
-   * directamente en `<folder>/<safeName>` — sin wrapper `.md` ni ruta
-   * Attachments/. Si el nombre choca con un path existente en el tree
-   * cacheado, se aplica sufijo incremental (`foo.pdf` → `foo 2.pdf`),
-   * 99 intentos máx antes de tirar error.
-   */
-  const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
-  const folderUploadTargetRef = useRef<string | null>(null);
-
-  const collectExistingPaths = useCallback((tree: TreeNode | undefined): Set<string> => {
-    const out = new Set<string>();
-    if (!tree) return out;
-    const walk = (node: TreeNode): void => {
-      if (node.path) out.add(node.path);
-      node.children?.forEach(walk);
-    };
-    walk(tree);
-    return out;
-  }, []);
-
-  const onFolderUploadClick = useCallback((folder: string): void => {
-    folderUploadTargetRef.current = folder;
-    folderUploadInputRef.current?.click();
-  }, []);
-
-  const onFolderUploadChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-      const folder = folderUploadTargetRef.current ?? '';
-      folderUploadTargetRef.current = null;
-      const files = Array.from(e.target.files ?? []);
-      e.target.value = '';
-      if (files.length === 0) return;
-      const existing = collectExistingPaths(treeQ.data);
-      for (const file of files) {
-        if (isBlockedUpload({ mime: file.type, filename: file.name })) {
-          pushToast('error', `${file.name}: ${BLOCKED_UPLOAD_MESSAGE}`);
-          continue;
-        }
-        const dest = pickFreeDest(folder, file.name, existing);
-        if (!dest) {
-          pushToast('error', `${file.name}: no se pudo asignar un nombre único`);
-          continue;
-        }
-        markBusy(dest, true);
-        try {
-          const dataBase64 = await readAsBase64(file);
-          const finalPath = await uploadM.mutateAsync({
-            path: dest,
-            dataBase64,
-            mime: file.type || undefined,
-          });
-          existing.add(finalPath);
-          pushToast('info', `uploaded ${finalPath}`);
-        } catch (err) {
-          pushToast('error', `${file.name}: ${(err as Error).message}`);
-        } finally {
-          markBusy(dest, false);
-        }
-      }
-      await refresh();
-    },
-    [collectExistingPaths, markBusy, pushToast, refresh, treeQ.data, uploadM],
-  );
-
-  // ---------------------------------------------------------------------------
-  // Actions (reusable from menu, header buttons, hover row actions)
-  // ---------------------------------------------------------------------------
-
   const folderForPath = useCallback((path: string, tree: TreeNode | undefined): string => {
     if (!tree || path === '') return '';
     const node = findNode(tree, path);
@@ -675,9 +490,9 @@ export function FileTree() {
     if (!target) return;
     markBusy(target, true);
     try {
-      const result = await removeM.mutateAsync({ path: target, recursive: true });
+      await removeM.mutateAsync({ path: target, recursive: true });
       await refresh();
-      pushToast('info', `deleted ${result.deleted.length} item(s)`);
+      pushToast('info', `deleted ${target}`);
     } catch (err) {
       pushToast('error', (err as Error).message);
     } finally {
@@ -703,8 +518,6 @@ export function FileTree() {
   return (
     <div
       className="relative flex h-full flex-col"
-      onDragOver={onNativeDragOver}
-      onDrop={onNativeDrop}
       onContextMenu={onRootContextMenu}
     >
       <SearchInput onActiveChange={setSearchActive} placeholder="Search notes…" />
@@ -736,28 +549,6 @@ export function FileTree() {
               >
                 <FolderPlus size={12} strokeWidth={1.75} />
               </button>
-              <button
-                type="button"
-                onClick={onHeaderUploadClick}
-                title="Upload attachment(s) to Attachments/"
-                className="flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
-              >
-                <Paperclip size={12} strokeWidth={1.75} />
-              </button>
-              <input
-                ref={headerUploadInputRef}
-                type="file"
-                multiple
-                hidden
-                onChange={onHeaderUploadChange}
-              />
-              <input
-                ref={folderUploadInputRef}
-                type="file"
-                multiple
-                hidden
-                onChange={onFolderUploadChange}
-              />
             </div>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -818,17 +609,6 @@ export function FileTree() {
           >
             New folder
           </MenuItem>
-          {!/\.[a-z0-9]+$/i.test(menu.path) && (
-            <MenuItem
-              onClick={() => {
-                const p = folderForPath(menu.path, treeQ.data);
-                setMenu(null);
-                onFolderUploadClick(p);
-              }}
-            >
-              Upload…
-            </MenuItem>
-          )}
           {menu.path !== '' && (
             <MenuItem
               onClick={() => {

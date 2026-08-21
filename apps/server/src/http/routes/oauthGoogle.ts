@@ -69,6 +69,7 @@ export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<Au
       const user = await opts.auth.upsertGoogleUser({
         googleId: profile.googleId,
         email: profile.email,
+        googleEmailVerified: profile.emailVerified,
         displayName: profile.name,
       });
       const session = await opts.auth.createSession(user.id, {

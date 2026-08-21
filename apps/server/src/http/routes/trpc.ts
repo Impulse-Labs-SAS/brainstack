@@ -25,7 +25,7 @@ export interface TrpcRouterOptions {
   sharing: SharingService;
   invites: InviteService;
   crossOwner: CrossOwnerReader;
-  resolveUserForApiKey(apiKey: ApiKey): User;
+  resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
 }
 
 export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings> {

@@ -41,6 +41,8 @@ export interface BuildServicesOptions {
   logger: Logger;
   publicOrigin: string;
   authorizedEmails: Set<string>;
+  /** Must match the `basePath` given to `buildApp`. */
+  apiBasePath?: string;
   /** Defaults to self-host, where there is one user and no sharing. */
   deployment?: 'self-host' | 'hosted';
   resendApiKey?: string | undefined;
@@ -70,6 +72,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     logger: opts.logger,
     publicOrigin: opts.publicOrigin,
     authorizedEmails: opts.authorizedEmails,
+    ...(opts.apiBasePath ? { apiBasePath: opts.apiBasePath } : {}),
     totp,
   });
 

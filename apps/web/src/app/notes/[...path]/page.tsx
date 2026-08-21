@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
 } from 'react';
 import { useParams } from 'next/navigation';
 import { keepPreviousData } from '@tanstack/react-query';
@@ -15,8 +14,6 @@ const MAX_TREE_DEPTH = 20;
 const SPLIT_MIN_WIDTH = 900;
 
 import { Columns, Eye, Pencil } from 'lucide-react';
-
-import { BLOCKED_UPLOAD_MESSAGE, isBlockedUpload } from '@/lib/uploads';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
@@ -49,7 +46,6 @@ export default function NotePage() {
     { enabled: !!path, placeholderData: keepPreviousData },
   );
   const update = trpc.notes.update.useMutation();
-  const upload = trpc.notes.uploadAttachment.useMutation();
   const tree = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
 
   const treeIndex = useMemo(() => buildIndex(tree.data ?? null), [tree.data]);
@@ -107,8 +103,6 @@ export default function NotePage() {
   const [draft, setDraft] = useState<string | null>(null);
   const [draftPath, setDraftPath] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [dropActive, setDropActive] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const draftRef = useRef<string | null>(null);
   draftRef.current = draft;
 
@@ -136,54 +130,6 @@ export default function NotePage() {
     }, 600);
     return () => clearTimeout(handle);
   }, [draft, path, note.data, update]);
-
-  const onDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-    setDropActive(true);
-  };
-
-  const onDragLeave = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (e.currentTarget === e.target) setDropActive(false);
-  };
-
-  const onDrop = useCallback(
-    async (e: ReactDragEvent<HTMLDivElement>) => {
-      if (!e.dataTransfer.types.includes('Files')) return;
-      e.preventDefault();
-      setDropActive(false);
-      const files = Array.from(e.dataTransfer.files);
-      if (files.length === 0) return;
-
-      const inserted: string[] = [];
-      for (const file of files) {
-        if (isBlockedUpload({ mime: file.type, filename: file.name })) {
-          setUploadError(`${file.name}: ${BLOCKED_UPLOAD_MESSAGE}`);
-          continue;
-        }
-        try {
-          const dataBase64 = await readAsBase64(file);
-          const dest = attachmentDestForFile(file);
-          const finalPath = await upload.mutateAsync({
-            path: dest,
-            dataBase64,
-            mime: file.type || undefined,
-          });
-          inserted.push(finalPath);
-        } catch (err) {
-          setUploadError(`${file.name}: ${(err as Error).message}`);
-        }
-      }
-      if (inserted.length > 0) {
-        const current = draftRef.current ?? '';
-        const trail = current.endsWith('\n') ? '' : '\n';
-        const next = current + trail + '\n' + inserted.map((p) => `![[${p}]]`).join('\n') + '\n';
-        setDraft(next);
-      }
-    },
-    [upload],
-  );
 
   const treePanel = (
     <ResizablePanel
@@ -240,13 +186,11 @@ export default function NotePage() {
                 splitDisabled={narrow}
               />
               <div className="font-mono text-[11px] text-fg-muted">
-                {upload.isPending
-                  ? 'uploading…'
-                  : update.isPending
-                    ? 'saving…'
-                    : savedAt
-                      ? `saved ${new Date(savedAt).toISOString().slice(11, 19)}`
-                      : 'idle'}
+                {update.isPending
+                  ? 'saving…'
+                  : savedAt
+                    ? `saved ${new Date(savedAt).toISOString().slice(11, 19)}`
+                    : 'idle'}
               </div>
             </div>
           </div>
@@ -254,11 +198,7 @@ export default function NotePage() {
           <div
             className={cn(
               'relative flex-1 overflow-hidden transition-colors',
-              dropActive && 'bg-accent/5 ring-2 ring-inset ring-accent/60',
             )}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onDrop={onDrop}
           >
             {draft !== null && effectiveMode === 'edit' && (
               <NoteEditor value={draft} onChange={setDraft} />
@@ -286,26 +226,9 @@ export default function NotePage() {
                 </div>
               </div>
             )}
-            {dropActive && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[12px] text-accent">
-                drop to upload as attachment
-              </div>
-            )}
-          </div>
+                      </div>
 
-          {uploadError && (
-            <div className="border-t border-red-900/40 bg-red-950/40 px-4 py-1.5 font-mono text-[11px] text-red-300">
-              {uploadError}{' '}
-              <button
-                type="button"
-                onClick={() => setUploadError(null)}
-                className="ml-2 underline"
-              >
-                dismiss
-              </button>
-            </div>
-          )}
-        </div>
+                  </div>
 
         <ResizablePanel
           side="right"
@@ -401,27 +324,3 @@ function reconstructBody(note: NoteData): string {
   return `---\n${fmYaml}\n---\n${note.body}`;
 }
 
-function attachmentDestForFile(file: File): string {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const safeName = file.name.replace(/[/\\]+/g, '_');
-  return `Attachments/${yyyy}/${mm}/${safeName}`;
-}
-
-function readAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== 'string') {
-        reject(new Error('unexpected reader result type'));
-        return;
-      }
-      const comma = result.indexOf(',');
-      resolve(comma === -1 ? result : result.slice(comma + 1));
-    };
-    reader.readAsDataURL(file);
-  });
-}

@@ -173,20 +173,42 @@ export class NoteService {
     return this.toLogical(userId, saved.path);
   }
 
+  /**
+   * Delete a note, or a folder and everything under it.
+   *
+   * A folder has no row of its own, so a recursive delete on one removes its
+   * descendants and finds nothing at the path itself. That is a success, not a
+   * miss — which is what makes "delete this folder" work from the tree.
+   */
   async remove(userId: string, path: string, opts: { recursive?: boolean } = {}): Promise<void> {
     const physical = this.toPhysical(userId, path);
 
-    if (opts.recursive) {
-      const under = await this.opts.db
-        .select({ path: notes.path })
-        .from(notes)
-        .where(and(this.ownedBy(userId), like(notes.path, `${physical}/%`)));
-      if (under.length > 0) {
-        await this.store.removeMany(under.map((r) => r.path));
-      }
+    if (!opts.recursive) {
+      await this.store.remove(physical);
+      return;
     }
 
-    await this.store.remove(physical);
+    const under = await this.opts.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(and(this.ownedBy(userId), like(notes.path, `${physical}/%`)));
+
+    if (under.length > 0) {
+      await this.store.removeMany(under.map((r) => r.path));
+    }
+
+    const [self] = await this.opts.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(eq(notes.path, physical))
+      .limit(1);
+
+    if (self) {
+      await this.store.remove(physical);
+    } else if (under.length === 0) {
+      // Neither a note nor a folder with anything in it.
+      throw new AppError(`not found: ${path}`, 'NOT_FOUND', 404);
+    }
   }
 
   async move(userId: string, fromPath: string, toPath: string): Promise<MutationResult> {

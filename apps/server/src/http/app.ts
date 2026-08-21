@@ -45,7 +45,7 @@ export interface BuildAppOptions {
   sharing: SharingService;
   invites: InviteService;
   crossOwner: CrossOwnerReader;
-  resolveUserForApiKey(apiKey: ApiKey): User;
+  resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
   rateLimitPerMinute: number;
   secureCookies: boolean;
   /** Allowed origins for CORS (web app, etc.). Empty array disables CORS. */
