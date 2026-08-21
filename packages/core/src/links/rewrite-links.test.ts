@@ -1,21 +1,25 @@
-import { promises as fsp } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  rewriteLinkTargets,
+  _rewriteBodyForTest as rewriteBody,
+  type NoteBodySource,
+} from './rewrite-links.js';
 
-import { readNote, writeNote } from './notes.js';
-import { rewriteLinkTargets, _rewriteBodyForTest as rewriteBody } from './rewrite-links.js';
-
-let root: string;
-
-beforeEach(async () => {
-  root = await fsp.mkdtemp(join(tmpdir(), 'brain-rewrite-'));
-});
-
-afterEach(async () => {
-  await fsp.rm(root, { recursive: true, force: true });
-});
+/** The bodies these tests rewrite, held in memory rather than on disk. */
+function sourceOf(bodies: Record<string, string>): NoteBodySource & {
+  bodies: Record<string, string>;
+} {
+  const store = { ...bodies };
+  return {
+    bodies: store,
+    list: async () => Object.keys(store),
+    read: async (path) => store[path] ?? '',
+    write: async (path, body) => {
+      store[path] = body;
+    },
+  };
+}
 
 describe('rewriteBody — wikilink forms', () => {
   it('rewrites a plain wikilink by full path', () => {
@@ -176,36 +180,30 @@ describe('rewriteBody — code mask', () => {
   });
 });
 
-describe('rewriteLinkTargets — disk integration', () => {
-  it('rewrites references across multiple files and reports filesChanged', async () => {
-    await writeNote(
-      root,
-      'BRUTUS/index.md',
-      '# Index\n- [[Zuno/Pricing]]\n- [[Zuno/Pricing|el doc]]\n',
-    );
-    await writeNote(root, 'General/notes.md', 'see [[Zuno/Pricing#tier]]');
-    await writeNote(root, 'unrelated.md', 'nothing here');
+describe('rewriteLinkTargets across a set of notes', () => {
+  it('rewrites references across multiple notes and reports filesChanged', async () => {
+    const notes = sourceOf({
+      'BRUTUS/index.md': '# Index\n- [[Zuno/Pricing]]\n- [[Zuno/Pricing|el doc]]\n',
+      'General/notes.md': 'see [[Zuno/Pricing#tier]]',
+      'unrelated.md': 'nothing here',
+    });
 
-    const { filesChanged } = await rewriteLinkTargets(root, [
+    const { filesChanged } = await rewriteLinkTargets(notes, [
       { from: 'Zuno/Pricing.md', to: 'Zuno/decisiones/Pricing.md' },
     ]);
 
     expect(filesChanged.sort()).toEqual(['BRUTUS/index.md', 'General/notes.md']);
 
-    expect((await readNote(root, 'BRUTUS/index.md')).content).toBe(
+    expect(notes.bodies['BRUTUS/index.md']).toBe(
       '# Index\n- [[Zuno/decisiones/Pricing]]\n- [[Zuno/decisiones/Pricing|el doc]]\n',
     );
-    expect((await readNote(root, 'General/notes.md')).content).toBe(
-      'see [[Zuno/decisiones/Pricing#tier]]',
-    );
-    expect((await readNote(root, 'unrelated.md')).content).toBe('nothing here');
+    expect(notes.bodies['General/notes.md']).toBe('see [[Zuno/decisiones/Pricing#tier]]');
+    expect(notes.bodies['unrelated.md']).toBe('nothing here');
   });
 
   it('is a no-op when no mappings match', async () => {
-    await writeNote(root, 'a.md', 'see [[B]]');
-    const { filesChanged } = await rewriteLinkTargets(root, [
-      { from: 'C.md', to: 'D.md' },
-    ]);
+    const notes = sourceOf({ 'a.md': 'see [[B]]' });
+    const { filesChanged } = await rewriteLinkTargets(notes, [{ from: 'C.md', to: 'D.md' }]);
     expect(filesChanged).toEqual([]);
   });
 });

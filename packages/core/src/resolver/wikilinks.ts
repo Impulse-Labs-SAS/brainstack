@@ -8,7 +8,7 @@
 
 import type { LinkTargetType, ParsedLink, ResolvedLink } from '../types.js';
 
-import { toPosixPath } from '../fs/paths.js';
+import { toPosixPath } from '../paths.js';
 
 export interface ResolutionInputs {
   /** Posix path of the source note (relative to NOTES_DIR). */

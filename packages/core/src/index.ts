@@ -1,11 +1,14 @@
 // @brainstack/core — public API.
 //
-// Framework-agnostic primitives for parsing, resolving, storing, and watching
-// the BrainStack markdown brain. Higher layers (apps/server, packages/skill)
-// import from here only.
+// Framework-agnostic primitives for parsing, resolving and rewriting the
+// BrainStack markdown brain. Higher layers (apps/server, packages/skill) import
+// from here only.
+//
+// Storage is not here: it lives behind the `/pg` subpath, because Postgres is
+// the source of truth and nothing above this package should be able to reach
+// for a filesystem that no longer exists.
 
 export type {
-  AttachmentRow,
   Frontmatter,
   LinkKind,
   LinkTargetType,
@@ -15,54 +18,21 @@ export type {
   ResolvedLink,
 } from './types.js';
 
-// --- Database ----------------------------------------------------------------
-export {
-  openDatabase,
-  runMigrations,
-  type BrainStackDatabase,
-  type DrizzleDb,
-  type OpenDatabaseOptions,
-} from './db/client.js';
-export * as schema from './db/schema.js';
-export { migrations, type Migration } from './db/migrations/index.js';
-
-// --- Filesystem --------------------------------------------------------------
+// --- Paths -------------------------------------------------------------------
 export {
   PathTraversalError,
-  relativeToRoot,
-  safeResolve,
+  normalizeNoteKey,
+  normalizeRelativePath,
   toPosixPath,
-} from './fs/paths.js';
-export {
-  FolderNotEmptyError,
-  NoteAlreadyExistsError,
-  NoteNotFoundError,
-  createFolder,
-  deleteNote,
-  deletePath,
-  listFolders,
-  listNoteFiles,
-  moveNote,
-  movePath,
-  readNote,
-  writeNote,
-  type ReadNoteResult,
-  type WriteNoteOptions,
-} from './fs/notes.js';
-export {
-  ATTACHMENTS_DIR,
-  listAttachments,
-  readAttachment,
-  readBinaryFile,
-  writeAttachment,
-  writeBinaryFile,
-  type AttachmentInfo,
-} from './fs/attachments.js';
+} from './paths.js';
+
+// --- Links -------------------------------------------------------------------
 export {
   rewriteLinkTargets,
   type LinkRewriteMapping,
+  type NoteBodySource,
   type RewriteResult,
-} from './fs/rewrite-links.js';
+} from './links/rewrite-links.js';
 
 // --- Parser ------------------------------------------------------------------
 export {
@@ -81,30 +51,5 @@ export {
   type ResolutionInputs,
   type ResolutionResult,
 } from './resolver/wikilinks.js';
-
-// --- Indexer / Watcher -------------------------------------------------------
-export {
-  bootstrapIndex,
-  ensureRootExists,
-  reindexFile,
-  removeFromIndex,
-  type BootstrapResult,
-  type ReindexResult,
-} from './indexer/bootstrap.js';
-export {
-  startWatcher,
-  type WatcherEvent,
-  type WatcherHandle,
-  type WatcherOptions,
-} from './indexer/watcher.js';
-
-// --- Uploads -----------------------------------------------------------------
-export {
-  BLOCKED_UPLOAD_EXTS,
-  BLOCKED_UPLOAD_MIMES,
-  BLOCKED_UPLOAD_MESSAGE,
-  isBlockedUpload,
-  type BlockedCheck,
-} from './uploads/blocked.js';
 
 export const CORE_PACKAGE_VERSION = '0.1.0';

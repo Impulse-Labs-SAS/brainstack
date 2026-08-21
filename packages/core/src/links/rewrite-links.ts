@@ -5,8 +5,6 @@
 
 import { buildCodeMask, isMasked } from '../parser/code-mask.js';
 
-import { listNoteFiles, readNote, writeNote } from './notes.js';
-
 const WIKILINK_RE = /(!)?\[\[([^\]\n]+)\]\]/g;
 
 export interface LinkRewriteMapping {
@@ -21,8 +19,20 @@ export interface LinkRewriteMapping {
 }
 
 export interface RewriteResult {
-  /** Posix paths (relative to root) whose body was modified. */
+  /** Posix paths whose body was modified. */
   filesChanged: string[];
+}
+
+/**
+ * Where the bodies to rewrite come from. Injected rather than reached for
+ * directly, because the notes used to live on disk and now live in Postgres —
+ * the rewriting itself never cared which.
+ */
+export interface NoteBodySource {
+  /** Every note path in scope. */
+  list(): Promise<readonly string[]>;
+  read(path: string): Promise<string>;
+  write(path: string, body: string): Promise<void>;
 }
 
 function stripMd(p: string): string {
@@ -124,25 +134,23 @@ function rewriteBody(
 }
 
 /**
- * Rewrite wikilinks/embeds in every `.md` file under `root` according to the
- * given mappings. Use this after `movePath` to keep references in sync. Each
- * changed file is written back atomically via `writeNote`.
+ * Rewrite wikilinks/embeds across every note the source lists, according to the
+ * given mappings. Use it after a move so references do not go stale.
  */
 export async function rewriteLinkTargets(
-  root: string,
+  notes: NoteBodySource,
   mappings: readonly LinkRewriteMapping[],
 ): Promise<RewriteResult> {
   if (mappings.length === 0) return { filesChanged: [] };
 
-  const files = await listNoteFiles(root);
+  const paths = await notes.list();
   const filesChanged: string[] = [];
 
-  for (const file of files) {
-    const note = await readNote(root, file);
-    const { body, changed } = rewriteBody(note.content, mappings);
+  for (const path of paths) {
+    const { body, changed } = rewriteBody(await notes.read(path), mappings);
     if (changed) {
-      await writeNote(root, file, body);
-      filesChanged.push(file);
+      await notes.write(path, body);
+      filesChanged.push(path);
     }
   }
 
