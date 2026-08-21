@@ -66,8 +66,17 @@ async function main(): Promise<void> {
     secureCookies: cfg.PUBLIC_ORIGIN.startsWith('https://'),
     corsOrigins: cfg.corsOrigins,
     appHome: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
-    // Dev only: lets the web app read tokens the email would otherwise carry.
-    exposeDevTokens: cfg.NODE_ENV === 'development',
+    /*
+     * Returns verification and reset links in the response body, so signing up
+     * locally does not need a mail server.
+     *
+     * Derived from the scheme rather than NODE_ENV, which defaults to
+     * 'development' and cannot be scoped to the runtime on Netlify's free plan.
+     * Left to that default in production, this would hand a reset link to
+     * anyone who can POST an address to /auth/forgot-password — which is the
+     * whole account. An https origin is never a development machine.
+     */
+    exposeDevTokens: !cfg.PUBLIC_ORIGIN.startsWith('https://'),
     publicConfig: {
       deployment: cfg.BRAINSTACK_DEPLOYMENT,
       features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },
