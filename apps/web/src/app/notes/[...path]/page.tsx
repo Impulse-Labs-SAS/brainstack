@@ -114,6 +114,20 @@ export default function NotePage() {
   const draftRef = useRef<string | null>(null);
   draftRef.current = draft;
 
+  /**
+   * The body as the server last accepted it.
+   *
+   * Autosave used to compare the draft against `note.data`, which is not
+   * refetched after a write — so once anything was typed the two never matched
+   * again and it saved on a loop, 600ms apart, forever. That is what left the
+   * indicator stuck on "saving…": there was always another write in flight.
+   */
+  const savedContentRef = useRef<string | null>(null);
+
+  /** Stable across renders, unlike the mutation object it comes from. */
+  const saveRef = useRef(update.mutate);
+  saveRef.current = update.mutate;
+
   // Init the draft once the query has *fresh* data for the current path.
   // With keepPreviousData, note.data is the previous note while loading, so
   // we gate on (!isPlaceholderData && draftPath !== path) to avoid loading
@@ -121,23 +135,33 @@ export default function NotePage() {
   useEffect(() => {
     if (!note.data || note.isPlaceholderData) return;
     if (draftPath === path) return;
-    setDraft(reconstructBody(note.data));
+    const body = reconstructBody(note.data);
+    setDraft(body);
     setDraftPath(path);
+    savedContentRef.current = body;
     setSavedAt(null);
   }, [note.data, note.isPlaceholderData, path, draftPath]);
 
   useEffect(() => {
     if (draft === null) return;
-    const original = note.data ? reconstructBody(note.data) : null;
-    if (original == null || original === draft) return;
+    // Belongs to the note on screen, not to one being navigated away from.
+    if (draftPath !== path) return;
+    if (draft === savedContentRef.current) return;
+
     const handle = setTimeout(() => {
-      update.mutate(
-        { path, content: draft },
-        { onSuccess: () => setSavedAt(Date.now()) },
+      const pending = draft;
+      saveRef.current(
+        { path, content: pending },
+        {
+          onSuccess: () => {
+            savedContentRef.current = pending;
+            setSavedAt(Date.now());
+          },
+        },
       );
     }, 600);
     return () => clearTimeout(handle);
-  }, [draft, path, note.data, update]);
+  }, [draft, draftPath, path]);
 
   const treePanel = (
     <ResizablePanel
