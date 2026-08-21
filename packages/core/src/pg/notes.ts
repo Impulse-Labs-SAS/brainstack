@@ -145,7 +145,7 @@ export class PgNoteStore {
       })
       .returning();
 
-    await this.rebuildGraph(key, parsed.links, parsed.tags);
+    await this.rebuildGraph(key, parsed.links, parsed.tags, ownerId);
     return row as StoredNote;
   }
 
@@ -253,19 +253,46 @@ export class PgNoteStore {
     path: string,
     parsedLinks: readonly ParsedLink[],
     noteTags: readonly string[],
+    ownerId?: string,
   ): Promise<void> {
-    const noteIndex = await this.allNotePaths();
+    // A wikilink is written the way its author sees the path, which in a
+    // multi-user database is not the way it is stored: `[[proyectos/b]]` in a
+    // note kept at `alice/proyectos/a.md` means `alice/proyectos/b.md`. So the
+    // resolving happens inside the owner's slice — index and source stripped of
+    // the prefix on the way in, targets given it back on the way out.
+    //
+    // Without this, no link in a hosted database would ever resolve, and every
+    // backlink panel would sit empty for reasons nothing would report.
+    const prefix = ownerId && path.startsWith(`${ownerId}/`) ? `${ownerId}/` : '';
+    const stored = await this.allNotePaths();
+    const noteIndex = prefix
+      ? new Set(
+          [...stored].filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length)),
+        )
+      : stored;
+
     const { resolved } = resolveLinks(parsedLinks, {
-      sourcePath: path,
+      sourcePath: prefix ? path.slice(prefix.length) : path,
       noteIndex,
       // Attachments are not stored yet, so every non-note target stays
       // unresolved rather than being silently mislabelled.
       attachmentIndex: new Set<string>(),
     });
 
+    const scoped = prefix
+      ? resolved.map((link) => ({
+          ...link,
+          sourcePath: path,
+          // An unresolved target names nothing that exists, so prefixing it
+          // would invent a path.
+          targetPath:
+            link.targetType === 'unresolved' ? link.targetPath : `${prefix}${link.targetPath}`,
+        }))
+      : resolved;
+
     await this.db.delete(links).where(eq(links.sourcePath, path));
-    if (resolved.length > 0) {
-      await this.db.insert(links).values(dedupeLinks(resolved)).onConflictDoNothing();
+    if (scoped.length > 0) {
+      await this.db.insert(links).values(dedupeLinks(scoped)).onConflictDoNothing();
     }
 
     await this.db.delete(tags).where(eq(tags.notePath, path));

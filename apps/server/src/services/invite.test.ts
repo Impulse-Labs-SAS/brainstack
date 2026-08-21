@@ -1,39 +1,46 @@
-import { openDatabase, type BrainStackDatabase } from '@brainstack/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pgSchema } from '@brainstack/core/pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CapturingEmailSender } from './EmailSender.js';
 import { InviteService } from './InviteService.js';
 import { SharingService } from './SharingService.js';
+import { createTestDatabase, type TestDatabase } from './testDb.js';
 
-let bs: BrainStackDatabase;
+const { users } = pgSchema;
+
+let database: TestDatabase;
 let sharing: SharingService;
 let email: CapturingEmailSender;
 let svc: InviteService;
 let now = 1_000_000;
 
-function seedUser(id: string, em: string): void {
-  bs.sqlite
-    .prepare(`INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?)`)
-    .run(id, em, now, now);
+async function seedUser(id: string, em: string): Promise<void> {
+  await database.db.insert(users).values({ id, email: em, createdAt: now, updatedAt: now });
 }
 
-beforeEach(() => {
-  bs = openDatabase(':memory:');
+beforeAll(async () => {
+  database = await createTestDatabase();
+});
+
+afterAll(async () => {
+  await database.close();
+});
+
+beforeEach(async () => {
+  await database.reset();
   now = 1_000_000;
-  sharing = new SharingService({ db: bs, deployment: 'hosted', now: () => ++now });
+  sharing = new SharingService({ db: database.db, deployment: 'hosted', now: () => ++now });
   email = new CapturingEmailSender();
   svc = new InviteService({
-    db: bs,
+    db: database.db,
     email,
     sharing,
     publicOrigin: 'https://app.test',
     now: () => ++now,
   });
-  seedUser('owner', 'o@x.com');
-  seedUser('alice', 'a@x.com');
+  await seedUser('owner', 'o@x.com');
+  await seedUser('alice', 'a@x.com');
 });
-
-afterEach(() => bs.close());
 
 describe('InviteService — email mode', () => {
   it('crea invite, manda email y permite accept por el email correcto', async () => {
@@ -47,12 +54,12 @@ describe('InviteService — email mode', () => {
     expect(email.sent[0]!.to).toBe('a@x.com');
     expect(email.sent[0]!.text).toContain(inv.acceptUrl);
 
-    const out = svc.accept({
+    const out = await svc.accept({
       token: inv.token,
       user: { id: 'alice', email: 'a@x.com' },
     });
     expect(out.folderPath).toBe('proyectos');
-    expect(sharing.canRead('alice', 'owner', 'proyectos/x.md')).toBe(true);
+    expect(await sharing.canRead('alice', 'owner', 'proyectos/x.md')).toBe(true);
   });
 
   it('rechaza accept con email distinto', async () => {
@@ -62,10 +69,8 @@ describe('InviteService — email mode', () => {
       mode: 'email',
       inviteeEmail: 'a@x.com',
     });
-    seedUser('eve', 'e@x.com');
-    expect(() =>
-      svc.accept({ token: inv.token, user: { id: 'eve', email: 'e@x.com' } }),
-    ).toThrow(/otro email/);
+    await seedUser('eve', 'e@x.com');
+    await expect(svc.accept({ token: inv.token, user: { id: 'eve', email: 'e@x.com' } })).rejects.toThrow(/otro email/);
   });
 
   it('email mode es single-use', async () => {
@@ -75,10 +80,8 @@ describe('InviteService — email mode', () => {
       mode: 'email',
       inviteeEmail: 'a@x.com',
     });
-    svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
-    expect(() =>
-      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).toThrow(/ya aceptada/);
+    await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/ya aceptada/);
   });
 });
 
@@ -91,12 +94,12 @@ describe('InviteService — link mode', () => {
     });
     expect(email.sent).toHaveLength(0);
 
-    svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
-    seedUser('bob', 'b@x.com');
-    svc.accept({ token: inv.token, user: { id: 'bob', email: 'b@x.com' } });
+    await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
+    await seedUser('bob', 'b@x.com');
+    await svc.accept({ token: inv.token, user: { id: 'bob', email: 'b@x.com' } });
 
-    expect(sharing.canRead('alice', 'owner', 'p/x.md')).toBe(true);
-    expect(sharing.canRead('bob', 'owner', 'p/x.md')).toBe(true);
+    expect(await sharing.canRead('alice', 'owner', 'p/x.md')).toBe(true);
+    expect(await sharing.canRead('bob', 'owner', 'p/x.md')).toBe(true);
   });
 
   it('no permite aceptar tu propia invite', async () => {
@@ -105,9 +108,7 @@ describe('InviteService — link mode', () => {
       folderPath: 'p',
       mode: 'link',
     });
-    expect(() =>
-      svc.accept({ token: inv.token, user: { id: 'owner', email: 'o@x.com' } }),
-    ).toThrow(/propia invitación/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'owner', email: 'o@x.com' } })).rejects.toThrow(/propia invitación/);
   });
 });
 
@@ -119,9 +120,7 @@ describe('InviteService — expiración y revocación', () => {
       mode: 'link',
     });
     now = inv.expiresAt + 1000;
-    expect(() =>
-      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).toThrow(/expirada/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/expirada/);
   });
 
   it('revoke bloquea accept', async () => {
@@ -130,10 +129,8 @@ describe('InviteService — expiración y revocación', () => {
       folderPath: 'p',
       mode: 'link',
     });
-    svc.revoke('owner', inv.inviteId);
-    expect(() =>
-      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).toThrow(/revocada/);
+    await svc.revoke('owner', inv.inviteId);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/revocada/);
   });
 
   it('listPending no incluye aceptadas, revocadas ni expiradas', async () => {
@@ -148,8 +145,8 @@ describe('InviteService — expiración y revocación', () => {
       mode: 'email',
       inviteeEmail: 'a@x.com',
     });
-    svc.accept({ token: b.token, user: { id: 'alice', email: 'a@x.com' } });
-    const out = svc.listPending('owner');
+    await svc.accept({ token: b.token, user: { id: 'alice', email: 'a@x.com' } });
+    const out = await svc.listPending('owner');
     expect(out.map((p) => p.id)).toEqual([a.inviteId]);
   });
 });

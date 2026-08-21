@@ -1,99 +1,124 @@
-// Tests del backfill de owner_id.
+// Tests for the owner_id backfill.
 
-import { openDatabase, type BrainStackDatabase } from '@brainstack/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pgSchema } from '@brainstack/core/pg';
+import { eq } from 'drizzle-orm';
 import pino from 'pino';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { backfillOwnerId } from './OwnerBackfill.js';
+import { createTestDatabase, type TestDatabase } from './testDb.js';
 
+const { notes, users } = pgSchema;
 const logger = pino({ level: 'silent' });
 
-let bs: BrainStackDatabase;
+let database: TestDatabase;
 
-function seedUser(id: string, email: string): void {
-  bs.sqlite
-    .prepare(
-      `INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-    )
-    .run(id, email, Date.now(), Date.now());
+async function seedUser(id: string, email: string): Promise<void> {
+  await database.db.insert(users).values({ id, email, createdAt: Date.now(), updatedAt: 0 });
 }
 
-function seedNote(path: string, ownerId: string | null = null): void {
-  bs.sqlite
-    .prepare(
-      `INSERT INTO notes (path, title, frontmatter, body, mtime, checksum, owner_id)
-       VALUES (?, ?, '{}', ?, ?, ?, ?)`,
-    )
-    .run(path, path, `body of ${path}`, Date.now(), 'cs-' + path, ownerId);
+async function seedNote(path: string, ownerId: string | null = null): Promise<void> {
+  await database.db.insert(notes).values({
+    path,
+    title: path,
+    frontmatter: {},
+    body: `body of ${path}`,
+    checksum: `cs-${path}`,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    ownerId,
+  });
 }
 
-beforeEach(() => {
-  bs = openDatabase(':memory:');
+async function ownerOf(path: string): Promise<string | null> {
+  const [row] = await database.db
+    .select({ ownerId: notes.ownerId })
+    .from(notes)
+    .where(eq(notes.path, path))
+    .limit(1);
+  return row?.ownerId ?? null;
+}
+
+beforeAll(async () => {
+  database = await createTestDatabase();
 });
 
-afterEach(() => {
-  bs.close();
+afterAll(async () => {
+  await database.close();
 });
 
-describe('backfillOwnerId — self-host', () => {
-  it('no hace nada si no hay nulls', () => {
-    seedUser('u1', 'u1@x.com');
-    seedNote('a.md', 'u1');
-    const res = backfillOwnerId(bs, { deployment: 'self-host', logger });
+beforeEach(async () => {
+  await database.reset();
+});
+
+describe('backfillOwnerId in self-host', () => {
+  it('does nothing when there are no nulls', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('a.md', 'u1');
+
+    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
     expect(res).toMatchObject({ skipped: true, reason: 'no-nulls' });
   });
 
-  it('asigna NULLs al único user', () => {
-    seedUser('u1', 'u1@x.com');
-    seedNote('a.md');
-    seedNote('b.md');
-    seedNote('c.md', 'u1');
-    const res = backfillOwnerId(bs, { deployment: 'self-host', logger });
+  it('assigns unowned notes to the only user', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('a.md');
+    await seedNote('b.md');
+    await seedNote('c.md', 'u1');
+
+    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
     expect(res.notesUpdated).toBe(2);
     expect(res.skipped).toBe(false);
-    const rows = bs.sqlite
-      .prepare<unknown[], { path: string; owner_id: string | null }>(
-        'SELECT path, owner_id FROM notes ORDER BY path',
-      )
-      .all();
-    for (const r of rows) expect(r.owner_id).toBe('u1');
+
+    for (const path of ['a.md', 'b.md', 'c.md']) {
+      expect(await ownerOf(path)).toBe('u1');
+    }
   });
 
-  it('skip cuando no hay users (backfill diferido)', () => {
-    seedNote('a.md');
-    const res = backfillOwnerId(bs, { deployment: 'self-host', logger });
+  it('defers when there is no user yet', async () => {
+    await seedNote('a.md');
+    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
     expect(res).toMatchObject({ skipped: true, reason: 'no-users' });
   });
 
-  it('skip cuando hay más de un user en self-host', () => {
-    seedUser('u1', 'u1@x.com');
-    seedUser('u2', 'u2@x.com');
-    seedNote('a.md');
-    const res = backfillOwnerId(bs, { deployment: 'self-host', logger });
-    expect(res).toMatchObject({
-      skipped: true,
-      reason: 'multiple-users-in-self-host',
-    });
+  it('refuses to guess when self-host somehow has two users', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedUser('u2', 'u2@x.com');
+    await seedNote('a.md');
+
+    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
+    expect(res).toMatchObject({ skipped: true, reason: 'multiple-users-in-self-host' });
+    expect(await ownerOf('a.md')).toBeNull();
   });
 
-  it('es idempotente — segunda corrida no toca nada', () => {
-    seedUser('u1', 'u1@x.com');
-    seedNote('a.md');
-    backfillOwnerId(bs, { deployment: 'self-host', logger });
-    const res = backfillOwnerId(bs, { deployment: 'self-host', logger });
+  it('is idempotent', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('a.md');
+
+    await backfillOwnerId(database.db, { deployment: 'self-host', logger });
+    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
     expect(res).toMatchObject({ skipped: true, reason: 'no-nulls' });
   });
 });
 
-describe('backfillOwnerId — hosted', () => {
-  it('nunca asigna en hosted (deja para fix manual)', () => {
-    seedUser('u1', 'u1@x.com');
-    seedNote('a.md');
-    const res = backfillOwnerId(bs, { deployment: 'hosted', logger });
-    expect(res).toMatchObject({ skipped: true });
-    const owner = bs.sqlite
-      .prepare<[string], { owner_id: string | null }>('SELECT owner_id FROM notes WHERE path=?')
-      .get('a.md')!.owner_id;
-    expect(owner).toBeNull();
+describe('backfillOwnerId in hosted', () => {
+  // The sqlite line left these alone for an admin to sort out, because the
+  // owner lived in a directory the database could not see. Here the stored path
+  // starts with the owner, so an unowned row names its own owner.
+  it('takes the owner from the path prefix', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('u1/a.md');
+
+    const res = await backfillOwnerId(database.db, { deployment: 'hosted', logger });
+    expect(res.notesUpdated).toBe(1);
+    expect(await ownerOf('u1/a.md')).toBe('u1');
+  });
+
+  it('does nothing when every note already has an owner', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('u1/a.md', 'u1');
+
+    const res = await backfillOwnerId(database.db, { deployment: 'hosted', logger });
+    expect(res).toMatchObject({ skipped: true, reason: 'no-nulls' });
   });
 });
