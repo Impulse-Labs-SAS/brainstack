@@ -211,3 +211,42 @@ describe('el id interno no se escapa a las respuestas', () => {
     ).rejects.toThrow('note already exists: proyectos/uno.md');
   });
 });
+
+/**
+ * El caso tal como apareció probando la app a mano: crear la nota que enlaza
+ * antes que su destino, con el prefijo de dueño en el medio. Ahí el backlink no
+ * salía marcado como no resuelto — no salía en absoluto, porque el destino
+ * pendiente se guarda sin prefijo y la búsqueda lo pide con prefijo.
+ */
+describe('enlaces pendientes con varios dueños', () => {
+  it('el backlink aparece cuando alice crea el destino después', async () => {
+    await notes.createFolder('alice', 'proyectos');
+    await notes.create('alice', 'proyectos/brainstack.md', 'Ver [[proyectos/ideas]].');
+    expect(await notes.listLinks('alice', 'proyectos/ideas.md')).toHaveLength(0);
+
+    await notes.create('alice', 'proyectos/ideas.md', '# Ideas');
+
+    const back = await notes.listLinks('alice', 'proyectos/ideas.md');
+    expect(back).toHaveLength(1);
+    expect(back[0]!.sourcePath).toBe('proyectos/brainstack.md');
+    expect(back[0]!.targetType).toBe('note');
+  });
+
+  it('la nota de bob no reclama los enlaces pendientes de alice', async () => {
+    await notes.createFolder('alice', 'proyectos');
+    await notes.create('alice', 'proyectos/uno.md', 'Ver [[proyectos/compartida]].');
+
+    // Bob crea una nota en la misma ruta lógica: no es la que alice esperaba.
+    await notes.createFolder('bob', 'proyectos');
+    await notes.create('bob', 'proyectos/compartida.md', '# La de bob');
+
+    expect(await notes.listLinks('alice', 'proyectos/compartida.md')).toHaveLength(0);
+    expect(await notes.listLinks('bob', 'proyectos/compartida.md')).toHaveLength(0);
+
+    // Y cuando alice sí la crea, el enlace se conecta con la suya.
+    await notes.create('alice', 'proyectos/compartida.md', '# La de alice');
+    const back = await notes.listLinks('alice', 'proyectos/compartida.md');
+    expect(back).toHaveLength(1);
+    expect(back[0]!.sourcePath).toBe('proyectos/uno.md');
+  });
+});

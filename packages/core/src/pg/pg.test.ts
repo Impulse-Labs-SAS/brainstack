@@ -282,3 +282,59 @@ describe('PgSearchService', () => {
     expect(hits.length).toBeLessThanOrEqual(1);
   });
 });
+
+/**
+ * Links resolve when the note holding them is written, so a target created
+ * afterwards used to stay `unresolved` forever — which is backwards for how
+ * anyone writes: the link comes first, the note second.
+ */
+describe('enlaces que esperaban a su destino', () => {
+  it('conecta el wikilink cuando la nota destino aparece después', async () => {
+    await notes.upsert('espera/origen.md', '# Origen\n\nVer [[espera/destino]].');
+    /*
+     * El enlace queda registrado apuntando a un nombre que todavia no existe.
+     * Sin prefijo de dueno ese nombre coincide con el de la nota futura, asi
+     * que el backlink asoma marcado como no resuelto; con prefijo ni siquiera
+     * asoma. En los dos casos la nota destino no lo reclama.
+     */
+    const antes = await notes.listBacklinks('espera/destino.md');
+    expect(antes.every((l) => l.targetType === 'unresolved')).toBe(true);
+
+    await notes.upsert('espera/destino.md', '# Destino');
+
+    const back = await notes.listBacklinks('espera/destino.md');
+    expect(back).toHaveLength(1);
+    expect(back[0]!.sourcePath).toBe('espera/origen.md');
+    expect(back[0]!.targetType).toBe('note');
+  });
+
+  it('también con el nombre corto, sin carpeta', async () => {
+    await notes.upsert('corto/origen.md', 'Apunta a [[solitaria]].');
+    expect(await notes.listBacklinks('corto/solitaria.md')).toHaveLength(0);
+
+    await notes.upsert('corto/solitaria.md', '# Solitaria');
+
+    expect(await notes.listBacklinks('corto/solitaria.md')).toHaveLength(1);
+  });
+
+  it('no toca enlaces que esperaban otra cosa', async () => {
+    await notes.upsert('otros/origen.md', 'Ver [[nunca-existira]].');
+    await notes.upsert('otros/algo.md', '# Algo');
+
+    expect(await notes.listBacklinks('otros/algo.md')).toHaveLength(0);
+    // Y el pendiente sigue pendiente: la nota nueva no se lo llevó puesto.
+    const pendiente = await notes.listBacklinks('nunca-existira.md');
+    expect(pendiente).toHaveLength(1);
+    expect(pendiente[0]!.targetType).toBe('unresolved');
+  });
+
+  it('reescribir una nota existente no dispara el trabajo extra', async () => {
+    await notes.upsert('idem/uno.md', '# Uno');
+    await notes.upsert('idem/dos.md', 'Ver [[idem/uno]].');
+    expect(await notes.listBacklinks('idem/uno.md')).toHaveLength(1);
+
+    // Un update, no un insert: el backlink sigue igual y nada se duplica.
+    await notes.upsert('idem/uno.md', '# Uno, editado');
+    expect(await notes.listBacklinks('idem/uno.md')).toHaveLength(1);
+  });
+});

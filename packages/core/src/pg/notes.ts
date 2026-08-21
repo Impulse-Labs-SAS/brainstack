@@ -9,7 +9,7 @@
 // used to belong to the indexer and the watcher; with no filesystem to watch,
 // deriving it inline is both simpler and impossible to get out of sync.
 
-import { and, desc, eq, inArray, like, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import matter from 'gray-matter';
 
 import { parseNote } from '../parser/index.js';
@@ -163,10 +163,80 @@ export class PgNoteStore {
           ownerId: sql`COALESCE(${notes.ownerId}, excluded.owner_id)`,
         },
       })
-      .returning();
+      /*
+       * `xmax = 0` is true only on the row this statement inserted. ON CONFLICT
+       * gives no other way to tell an insert from an update, and the difference
+       * matters below: only a note that did not exist a moment ago can settle
+       * links that were waiting for it.
+       */
+      .returning({ ...NOTE_COLUMNS, inserted: sql<boolean>`(xmax = 0)` });
 
     await this.rebuildGraph(key, parsed.links, parsed.tags, ownerId);
-    return row as StoredNote;
+    if (row?.inserted) await this.resolvePendingLinksTo(key);
+
+    const { inserted: _inserted, ...stored } = row!;
+    return stored as StoredNote;
+  }
+
+  /**
+   * Reconnect the links that were pointing at this note before it existed.
+   *
+   * Links are resolved when the note holding them is written, and a target that
+   * is not there yet is recorded as `unresolved` — then nothing looks at it
+   * again. That is backwards for the way anyone actually writes: you type
+   * `[[ideas]]` first and create `ideas.md` afterwards, and the backlink never
+   * appears. Found by hand: two notes, one link, an empty panel.
+   *
+   * Only the notes that could plausibly match are re-resolved, not the whole
+   * vault. A pending target is stored either as the full path the author wrote
+   * (`proyectos/ideas.md`) or as a bare filename (`ideas.md`) — those are the
+   * only two shapes `resolveNote` leaves behind, so those are the two to look
+   * for. Whether a candidate really resolves now is decided by rebuilding it,
+   * which runs the same ladder as an ordinary write.
+   *
+   * The reverse case — a new note making an already-resolved link ambiguous —
+   * is left alone: rewriting a link that currently works is worse than leaving
+   * it pointing where its author last saw it go.
+   */
+  private async resolvePendingLinksTo(path: string): Promise<void> {
+    const [target] = await this.db
+      .select({ ownerId: notes.ownerId })
+      .from(notes)
+      .where(eq(notes.path, path))
+      .limit(1);
+    if (!target) return;
+
+    const prefix = target.ownerId ? `${target.ownerId}/` : '';
+    const logical = prefix && path.startsWith(prefix) ? path.slice(prefix.length) : path;
+    const filename = logical.slice(logical.lastIndexOf('/') + 1);
+
+    // Scoped to the same owner: a pending link in someone else's vault is not
+    // waiting for this note, and rebuilding it would resolve nothing.
+    const candidates = await this.db
+      .selectDistinct({ sourcePath: links.sourcePath })
+      .from(links)
+      .innerJoin(notes, eq(notes.path, links.sourcePath))
+      .where(
+        and(
+          eq(links.targetType, 'unresolved'),
+          or(eq(links.targetPath, logical), eq(links.targetPath, filename)),
+          sql`${notes.ownerId} IS NOT DISTINCT FROM ${target.ownerId}`,
+        ),
+      );
+
+    for (const { sourcePath } of candidates) {
+      if (sourcePath === path) continue;
+      const [source] = await this.db
+        .select({ body: notes.body, frontmatter: notes.frontmatter })
+        .from(notes)
+        .where(eq(notes.path, sourcePath))
+        .limit(1);
+      if (!source) continue;
+      const parsed = parseNote(toMarkdown(source as Pick<StoredNote, 'frontmatter' | 'body'>), {
+        path: sourcePath,
+      });
+      await this.rebuildGraph(sourcePath, parsed.links, parsed.tags, target.ownerId ?? undefined);
+    }
   }
 
   async remove(path: string): Promise<void> {
