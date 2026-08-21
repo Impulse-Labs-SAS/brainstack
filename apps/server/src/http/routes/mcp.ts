@@ -56,8 +56,18 @@ export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOption
       }
     }
 
-    // Hono needs *something* returned; the transport already wrote to outgoing.
-    return new Response(null, { status: outgoing.statusCode || 200 });
+    /*
+     * The transport already wrote the whole response to `outgoing`, headers
+     * included. Returning a normal Response makes the Node adapter write
+     * headers onto a response that has gone out, which throws
+     * ERR_HTTP_HEADERS_SENT after every successful MCP call — the request
+     * succeeds and the server logs a crash right behind it.
+     *
+     * This header is how @hono/node-server is told a handler answered by hand.
+     * It is not in the package's public exports, so it is spelled out here;
+     * the adapter looks for it by this name (dist/constants, X_ALREADY_SENT).
+     */
+    return new Response(null, { headers: { 'x-hono-already-sent': 'true' } });
   });
 
   return router;
