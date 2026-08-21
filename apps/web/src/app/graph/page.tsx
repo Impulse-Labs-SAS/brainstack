@@ -14,6 +14,8 @@ export default function GraphPage() {
   const { data, isLoading, error } = trpc.notes.graph.useQuery({
     scope: includeShared && sharingEnabled ? 'all' : 'mine',
   });
+  // Which nodes are somebody else's, and so open under the shared route.
+  const me = trpc.auth.me.useQuery();
 
   return (
     <AppShell>
@@ -43,7 +45,13 @@ export default function GraphPage() {
             {error.message}
           </div>
         )}
-        {data && <GraphView nodes={data.nodes} edges={data.edges} />}
+        {data && (
+          <GraphView
+            nodes={data.nodes}
+            edges={data.edges}
+            viewerId={me.data?.user?.id ?? null}
+          />
+        )}
       </div>
     </AppShell>
   );

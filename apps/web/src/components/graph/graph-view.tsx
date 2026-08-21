@@ -9,8 +9,12 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface InputNode {
+  /** Stored path: unique across owners, used to join nodes to edges. */
+  id: string;
+  /** Path as its owner writes it, for display and navigation. */
   path: string;
   title: string;
+  ownerId: string | null;
 }
 interface InputEdge {
   source: string;
@@ -18,8 +22,10 @@ interface InputEdge {
   weight: number;
 }
 interface SimNode {
+  id: string;
   path: string;
   title: string;
+  ownerId: string | null;
   x: number;
   y: number;
   vx: number;
@@ -35,6 +41,8 @@ interface SimEdge {
 interface GraphViewProps {
   nodes: InputNode[];
   edges: InputEdge[];
+  /** Who is looking: a node owned by anyone else opens as a shared note. */
+  viewerId: string | null;
 }
 
 const LINK_DISTANCE = 140;
@@ -46,7 +54,7 @@ const NODE_DEGREE_SCALE = 3.2;
 const DAMPING = 0.85;
 const MAX_VELOCITY = 12;
 
-export function GraphView({ nodes, edges }: GraphViewProps) {
+export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -59,9 +67,11 @@ export function GraphView({ nodes, edges }: GraphViewProps) {
   const { simNodes, simEdges } = useMemo(() => {
     const map = new Map<string, SimNode>();
     for (const n of nodes) {
-      map.set(n.path, {
+      map.set(n.id, {
+        id: n.id,
         path: n.path,
         title: n.title,
+        ownerId: n.ownerId,
         x: (Math.random() - 0.5) * 400,
         y: (Math.random() - 0.5) * 400,
         vx: 0,
@@ -87,7 +97,7 @@ export function GraphView({ nodes, edges }: GraphViewProps) {
     return new Set(
       simNodes
         .filter((n) => n.title.toLowerCase().includes(q) || n.path.toLowerCase().includes(q))
-        .map((n) => n.path),
+        .map((n) => n.id),
     );
   }, [query, simNodes]);
 
@@ -163,8 +173,8 @@ export function GraphView({ nodes, edges }: GraphViewProps) {
     for (const e of simEdges) {
       const dim =
         matchedPaths &&
-        !matchedPaths.has(e.source.path) &&
-        !matchedPaths.has(e.target.path);
+        !matchedPaths.has(e.source.id) &&
+        !matchedPaths.has(e.target.id);
       ctx.strokeStyle = dim ? 'rgba(120,120,140,0.08)' : 'rgba(140,140,160,0.35)';
       ctx.lineWidth = Math.min(4, 1 + Math.log2(e.weight + 1) * 0.8);
       ctx.beginPath();
@@ -308,7 +318,7 @@ export function GraphView({ nodes, edges }: GraphViewProps) {
     if (state?.kind === 'node') {
       const moved = Math.hypot(state.node.vx, state.node.vy);
       if (moved < 0.5) {
-        router.push(`/notes/${state.node.path.replace(/\.md$/i, '')}`);
+        router.push(noteHref(state.node, viewerId));
       }
     }
   };
@@ -354,4 +364,18 @@ export function GraphView({ nodes, edges }: GraphViewProps) {
       </div>
     </div>
   );
+}
+
+/**
+ * Where clicking a node goes.
+ *
+ * Someone else's note lives under the shared route, which carries the owner;
+ * the plain route resolves against the viewer and would miss.
+ */
+function noteHref(node: SimNode, viewerId: string | null): string {
+  const path = node.path.replace(/\.md$/i, '');
+  const foreign = node.ownerId && viewerId && node.ownerId !== viewerId;
+  return foreign
+    ? `/notes/shared/${node.ownerId}/${node.path}`
+    : `/notes/${path}`;
 }

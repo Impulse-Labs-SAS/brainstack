@@ -10,6 +10,8 @@
 // a second table.
 
 import {
+  PgNoteAlreadyExistsError,
+  PgNoteNotFoundError,
   PgNoteStore,
   pgSchema,
   toMarkdown,
@@ -97,6 +99,54 @@ export class NoteService {
     return toLogical(userId, physical, this.opts.cfg);
   }
 
+  /**
+   * The logical path when the prefix is this user's, and the value untouched
+   * when it is not.
+   *
+   * Unlike `toLogical`, this never throws. It is for values that are only
+   * sometimes prefixed — an unresolved link target names a note that does not
+   * exist, so it carries no owner and must survive the trip unchanged.
+   */
+  private toLogicalIfMine(userId: string, value: string): string {
+    if (!this.hosted) return value;
+    const prefix = `${userId}/`;
+    return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+  }
+
+  /**
+   * A stored path without its owner segment.
+   *
+   * Unlike `toLogicalIfMine` the owner is given rather than assumed, which is
+   * what a listing spanning several owners needs.
+   */
+  /**
+   * Runs a store call and, if it fails naming a path, names the one the caller
+   * used instead.
+   *
+   * The store only knows stored paths, so "note not found: u_42/nota.md" was
+   * reaching the user with somebody's id in it — theirs, but still an internal
+   * detail they never typed and cannot act on.
+   */
+  private async asCaller<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof PgNoteNotFoundError) {
+        throw new PgNoteNotFoundError(this.toLogicalIfMine(userId, err.path));
+      }
+      if (err instanceof PgNoteAlreadyExistsError) {
+        throw new PgNoteAlreadyExistsError(this.toLogicalIfMine(userId, err.path));
+      }
+      throw err;
+    }
+  }
+
+  private stripOwner(physical: string, ownerId: string | null): string {
+    if (!this.hosted || !ownerId) return physical;
+    const prefix = `${ownerId}/`;
+    return physical.startsWith(prefix) ? physical.slice(prefix.length) : physical;
+  }
+
   private normalizeLogical(path: string): string {
     return path.replace(/^[\\/]+/, '').replace(/\/+$/, '');
   }
@@ -114,12 +164,14 @@ export class NoteService {
   // -- Reads -----------------------------------------------------------------
 
   async get(userId: string, path: string): Promise<NoteRowDto> {
-    const row = await this.store.get(this.toPhysical(userId, path));
+    const row = await this.asCaller(userId, () => this.store.get(this.toPhysical(userId, path)));
     return this.toDto(userId, row);
   }
 
   async getMarkdown(userId: string, path: string): Promise<string> {
-    return toMarkdown(await this.store.get(this.toPhysical(userId, path)));
+    return toMarkdown(
+      await this.asCaller(userId, () => this.store.get(this.toPhysical(userId, path))),
+    );
   }
 
   async list(userId: string, filter: ListFilter = {}): Promise<NoteSummary[]> {
@@ -135,7 +187,13 @@ export class NoteService {
 
   async listLinks(userId: string, path: string): Promise<Backlink[]> {
     const rows = await this.store.listBacklinks(this.toPhysical(userId, path));
-    return rows.map((r) => ({ ...r, sourcePath: this.toLogical(userId, r.sourcePath) }));
+    // `targetPath` used to go out prefixed while `sourcePath` went out clean,
+    // so the backlinks panel showed the caller their own user id.
+    return rows.map((r) => ({
+      ...r,
+      sourcePath: this.toLogical(userId, r.sourcePath),
+      targetPath: this.toLogicalIfMine(userId, r.targetPath),
+    }));
   }
 
   async listTags(userId: string): Promise<{ tag: string; count: number }[]> {
@@ -159,7 +217,7 @@ export class NoteService {
   ): Promise<MutationResult> {
     const physical = this.toPhysical(userId, path);
     const raw = frontmatter ? matter.stringify(content, frontmatter) : content;
-    const saved = await this.store.create(physical, raw, userId);
+    const saved = await this.asCaller(userId, () => this.store.create(physical, raw, userId));
     const logical = this.toLogical(userId, saved.path);
 
     // A note can be created straight into a folder nobody made, so the folders
@@ -172,7 +230,7 @@ export class NoteService {
   async update(userId: string, path: string, content: string): Promise<string> {
     const physical = this.toPhysical(userId, path);
     // Preserve existing frontmatter unless the incoming content carries its own.
-    const existing = await this.store.get(physical);
+    const existing = await this.asCaller(userId, () => this.store.get(physical));
     const incoming = matter(content);
     const raw =
       Object.keys(incoming.data).length > 0
@@ -235,7 +293,7 @@ export class NoteService {
   async move(userId: string, fromPath: string, toPath: string): Promise<MutationResult> {
     const from = this.toPhysical(userId, fromPath);
     const to = this.toPhysical(userId, toPath);
-    const saved = await this.store.move(from, to);
+    const saved = await this.asCaller(userId, () => this.store.move(from, to));
 
     // Keep every wikilink that pointed at the old path pointing at the new one.
     await rewriteLinkTargets(this.bodySource(userId), [{ from, to }]);
@@ -316,7 +374,7 @@ export class NoteService {
     userId: string,
     opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }> } = {},
   ): Promise<{
-    nodes: Array<{ path: string; title: string; ownerId: string | null }>;
+    nodes: Array<{ id: string; path: string; title: string; ownerId: string | null }>;
     edges: Array<{ source: string; target: string; weight: number }>;
   }> {
     const scopes = [this.ownedBy(userId)];
@@ -342,8 +400,16 @@ export class NoteService {
       .groupBy(links.sourcePath, links.targetPath);
 
     return {
+      /*
+       * Two identifiers, because one cannot do both jobs here. A graph that
+       * includes shared folders can hold two notes whose logical path is the
+       * same "proyectos/nota.md" under different owners, so the stored path is
+       * what keeps nodes and edges apart — but showing it puts a user id on
+       * screen and in the URL. `id` joins, `path` is read.
+       */
       nodes: nodeRows.map((r) => ({
-        path: r.path,
+        id: r.path,
+        path: this.stripOwner(r.path, r.ownerId),
         title: r.title,
         ownerId: r.ownerId ?? null,
       })),

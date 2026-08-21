@@ -159,3 +159,55 @@ describe('hosted multi-user with a shared folder', () => {
     ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
   });
 });
+
+/**
+ * The stored path carries the owner's id as its first segment. That is an
+ * implementation detail of how one database holds several vaults, and it kept
+ * escaping: into the graph, into a backlink target, into the text of a
+ * "not found". Users saw an id they never typed, in a URL they could not share.
+ */
+describe('el id interno no se escapa a las respuestas', () => {
+  beforeEach(async () => {
+    await notes.createFolder('alice', 'proyectos');
+    // El destino primero: enlazar a una nota que todavia no existe es su propio
+    // caso, y vive en el test de enlaces pendientes.
+    await notes.create('alice', 'proyectos/dos.md', '# Dos');
+    await notes.create('alice', 'proyectos/uno.md', '# Uno\n\nMira [[proyectos/dos]].');
+  });
+
+  it('el grafo muestra rutas sin el dueño, y las une por id aparte', async () => {
+    const g = await notes.graph('alice');
+
+    for (const node of g.nodes) {
+      expect(node.path).not.toContain('alice/');
+      expect(node.id).toContain('alice/');
+    }
+    expect(g.nodes.map((n) => n.path).sort()).toEqual(['proyectos/dos.md', 'proyectos/uno.md']);
+
+    // Las aristas siguen hablando en ids, que es lo que las mantiene únicas
+    // cuando el grafo incluye carpetas de otro dueño.
+    for (const edge of g.edges) {
+      expect(g.nodes.some((n) => n.id === edge.source)).toBe(true);
+      expect(g.nodes.some((n) => n.id === edge.target)).toBe(true);
+    }
+  });
+
+  it('el backlink no expone el dueño en el destino', async () => {
+    const back = await notes.listLinks('alice', 'proyectos/dos.md');
+    expect(back).toHaveLength(1);
+    expect(back[0]!.sourcePath).toBe('proyectos/uno.md');
+    expect(back[0]!.targetPath).toBe('proyectos/dos.md');
+  });
+
+  it('el "no encontrado" nombra la ruta que pidió el usuario', async () => {
+    await expect(notes.get('alice', 'proyectos/no-existe.md')).rejects.toThrow(
+      'note not found: proyectos/no-existe.md',
+    );
+  });
+
+  it('el "ya existe" tampoco lo expone', async () => {
+    await expect(
+      notes.create('alice', 'proyectos/uno.md', 'otra cosa'),
+    ).rejects.toThrow('note already exists: proyectos/uno.md');
+  });
+});
