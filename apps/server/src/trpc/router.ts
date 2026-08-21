@@ -340,7 +340,7 @@ export const appRouter = t.router({
     revoke: protectedProcedure
       .input(z.object({ id: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
-        await wrap(() => Promise.resolve(ctx.apiKeys.revoke(input.id)));
+        await wrap(() => ctx.apiKeys.revoke(input.id, ctx.user.id));
         return { ok: true };
       }),
   }),

@@ -105,12 +105,22 @@ export class ApiKeyService {
     return toApiKey({ ...row, userId: row.userId });
   }
 
-  async revoke(id: string): Promise<void> {
+  /**
+   * `userId` is not optional in practice: without it this revokes by id alone,
+   * and one user could retire another's key by guessing one.
+   */
+  async revoke(id: string, userId?: string): Promise<void> {
     const now = this.now();
     const revoked = await this.opts.db
       .update(apiKeys)
       .set({ revokedAt: now })
-      .where(and(eq(apiKeys.id, id), isNull(apiKeys.revokedAt)))
+      .where(
+        and(
+          eq(apiKeys.id, id),
+          isNull(apiKeys.revokedAt),
+          ...(userId ? [eq(apiKeys.userId, userId)] : []),
+        ),
+      )
       .returning({ id: apiKeys.id });
 
     if (revoked.length === 0) {

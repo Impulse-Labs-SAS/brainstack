@@ -35,15 +35,26 @@ import {
 
 export default function NotePage() {
   const params = useParams<{ path: string[] }>();
-  const path = decodeURIComponent((params.path ?? []).join('/'));
+  /** What the URL carries: the note path with the `.md` stripped by the tree. */
+  const urlPath = decodeURIComponent((params.path ?? []).join('/'));
+
+  /**
+   * What the server calls this note. Every path in the database ends in `.md`,
+   * and the API rejects one that does not — so the extension the URL dropped
+   * has to be put back before anything is asked for.
+   */
+  const path = useMemo(
+    () => (urlPath.toLowerCase().endsWith('.md') ? urlPath : `${urlPath}.md`),
+    [urlPath],
+  );
 
   const note = trpc.notes.get.useQuery(
     { path },
-    { enabled: !!path, placeholderData: keepPreviousData },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
   );
   const backlinks = trpc.notes.backlinks.useQuery(
     { path },
-    { enabled: !!path, placeholderData: keepPreviousData },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
   );
   const update = trpc.notes.update.useMutation();
   const tree = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
@@ -62,9 +73,6 @@ export default function NotePage() {
   }, []);
   const effectiveMode: ViewMode = narrow && viewMode === 'split' ? 'edit' : viewMode;
 
-  // Note path WITH .md extension for the resolver — the URL strips it.
-  const sourcePath = useMemo(() => (path.toLowerCase().endsWith('.md') ? path : `${path}.md`), [path]);
-
   const resolveLink = useCallback(
     (target: string): { href: string; resolved: boolean } => {
       // Extensión no-.md → tratamos el wikilink como referencia a attachment
@@ -77,7 +85,7 @@ export default function NotePage() {
         if (attPath) return { href: attachmentPathToRoute(attPath), resolved: true };
         return { href: `/files/${encodePath(target)}`, resolved: false };
       }
-      const notePath = resolveNoteTarget(target, sourcePath, treeIndex);
+      const notePath = resolveNoteTarget(target, path, treeIndex);
       if (notePath) {
         return { href: `/notes/${encodePath(notePath.replace(/\.md$/i, ''))}`, resolved: true };
       }
@@ -86,12 +94,12 @@ export default function NotePage() {
         resolved: false,
       };
     },
-    [sourcePath, treeIndex],
+    [path, treeIndex],
   );
 
   const resolveEmbed = useCallback(
-    (target: string) => resolveEmbedClient(target, sourcePath, treeIndex),
-    [sourcePath, treeIndex],
+    (target: string) => resolveEmbedClient(target, path, treeIndex),
+    [path, treeIndex],
   );
 
   const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 320);
