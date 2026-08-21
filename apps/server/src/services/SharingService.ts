@@ -6,14 +6,14 @@
 // Grants are per folder, not per note, so a share keeps covering notes created
 // after it was handed out.
 
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
 
-const { folderShares, users } = pgSchema;
+const { folderShares, folderShareInvites, users } = pgSchema;
 
 export type Deployment = 'self-host' | 'hosted';
 
@@ -198,20 +198,61 @@ export class SharingService {
     return existing.id;
   }
 
-  /** Revoke a grant. No-op when there is nothing to revoke. */
+  /**
+   * Revoke a grant, and with it the invites that could hand it straight back.
+   *
+   * Deleting the row alone was not enough: a link invite is deliberately
+   * reusable, so anyone still holding the URL — including the person who was
+   * just removed — could accept it again and be back in. Taking someone out of
+   * a folder has to mean they are out.
+   *
+   * Two kinds of invite die here:
+   *
+   *  - every live link invite for the folder, because a link names nobody and
+   *    there is no way to keep it working for the others without also keeping
+   *    it working for the person removed;
+   *  - the pending email invite addressed to that person, which would otherwise
+   *    still be sitting in their inbox.
+   *
+   * People who already accepted keep their access; only the way back in closes.
+   * To keep inviting, the owner issues a new link.
+   *
+   * No-op when there is nothing to revoke.
+   */
   async revoke(params: {
     ownerId: string;
     sharedWithUserId: string;
     folderPath: string;
   }): Promise<void> {
     if (!this.enabled) return;
+    const folderPath = normalizeFolderPath(params.folderPath);
+
     await this.opts.db
       .delete(folderShares)
       .where(
         and(
-          eq(folderShares.folderPath, normalizeFolderPath(params.folderPath)),
+          eq(folderShares.folderPath, folderPath),
           eq(folderShares.ownerId, params.ownerId),
           eq(folderShares.sharedWithUserId, params.sharedWithUserId),
+        ),
+      );
+
+    // One statement, because the HTTP driver opens no transaction: the email
+    // is matched with a subquery rather than read first and passed back in.
+    await this.opts.db
+      .update(folderShareInvites)
+      .set({ revokedAt: this.now() })
+      .where(
+        and(
+          eq(folderShareInvites.ownerId, params.ownerId),
+          eq(folderShareInvites.folderPath, folderPath),
+          isNull(folderShareInvites.revokedAt),
+          or(
+            eq(folderShareInvites.mode, 'link'),
+            sql`${folderShareInvites.inviteeEmail} = (
+                  SELECT ${users.email} FROM ${users} WHERE ${users.id} = ${params.sharedWithUserId}
+                )`,
+          ),
         ),
       );
   }

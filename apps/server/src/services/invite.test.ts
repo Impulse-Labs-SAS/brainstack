@@ -150,3 +150,89 @@ describe('InviteService — expiración y revocación', () => {
     expect(out.map((p) => p.id)).toEqual([a.inviteId]);
   });
 });
+
+/**
+ * The hole this closes: a link invite is reusable on purpose, so revoking
+ * someone's access used to leave them a way straight back in. Found by walking
+ * the app by hand — alice was removed from a folder and returned with the same
+ * URL seconds later.
+ */
+describe('revocar el acceso cierra la puerta de atrás', () => {
+  it('alice no puede volver con el mismo link tras ser revocada', async () => {
+    const inv = await svc.create({ ownerId: 'owner', folderPath: 'proyectos', mode: 'link' });
+    await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
+    expect(await sharing.canRead('alice', 'owner', 'proyectos/nota.md')).toBe(true);
+
+    await sharing.revoke({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+    });
+    expect(await sharing.canRead('alice', 'owner', 'proyectos/nota.md')).toBe(false);
+
+    await expect(
+      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
+    ).rejects.toThrow(/revocada/);
+    expect(await sharing.canRead('alice', 'owner', 'proyectos/nota.md')).toBe(false);
+  });
+
+  it('también mata la invitación por email que seguía pendiente', async () => {
+    const inv = await svc.create({
+      ownerId: 'owner',
+      folderPath: 'proyectos',
+      mode: 'email',
+      inviteeEmail: 'a@x.com',
+    });
+    await sharing.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+    });
+
+    await sharing.revoke({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+    });
+
+    await expect(
+      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
+    ).rejects.toThrow(/revocada/);
+  });
+
+  it('no toca los links de otras carpetas', async () => {
+    const otra = await svc.create({ ownerId: 'owner', folderPath: 'otra', mode: 'link' });
+    await sharing.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+    });
+
+    await sharing.revoke({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+    });
+
+    const out = await svc.accept({ token: otra.token, user: { id: 'alice', email: 'a@x.com' } });
+    expect(out.folderPath).toBe('otra');
+  });
+
+  it('quien ya entró conserva el acceso: sólo se cierra el regreso', async () => {
+    await seedUser('bob', 'b@x.com');
+    const inv = await svc.create({ ownerId: 'owner', folderPath: 'proyectos', mode: 'link' });
+    await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
+    await svc.accept({ token: inv.token, user: { id: 'bob', email: 'b@x.com' } });
+
+    await sharing.revoke({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+    });
+
+    expect(await sharing.canRead('bob', 'owner', 'proyectos/nota.md')).toBe(true);
+    expect(await sharing.canRead('alice', 'owner', 'proyectos/nota.md')).toBe(false);
+  });
+});
