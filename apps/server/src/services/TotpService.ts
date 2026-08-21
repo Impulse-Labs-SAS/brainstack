@@ -1,16 +1,27 @@
-// TOTP 2FA. Secrets are stored base32-encoded in users.totp_secret. Backup
-// codes (one-time, 8 chars) live in totp_backup_codes as sha256 hashes —
-// we never store them in plaintext. The user can present a backup code in
-// place of a TOTP code; using one marks it consumed.
+// TOTP 2FA: enrollment, verification, backup codes.
+//
+// The crypto is unchanged from the sqlite version — same secret size, same
+// grace period, same backup-code alphabet. What changed is the storage: every
+// method that reads or writes is async now, and the two transactions are gone.
+//
+// Neither needed atomicity against a race; they needed to not leave an account
+// locked out halfway through. So the writes are ordered such that a failure in
+// between is harmless: backup codes are stored before 2FA is switched on, and
+// switched off before they are removed. The worst outcome either way is codes
+// belonging to nobody, which nothing reads.
 
-import type { BrainStackDatabase } from '@brainstack/core';
 import { decodeBase32, encodeBase32NoPadding } from '@oslojs/encoding';
 import { createTOTPKeyURI, verifyTOTPWithGracePeriod } from '@oslojs/otp';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { randomBytes } from 'node:crypto';
 
+import { pgSchema, type PgDb } from '@brainstack/core/pg';
+
 import { AppError } from '../lib/errors.js';
 import { sha256 } from '../lib/tokens.js';
+
+const { totpBackupCodes, users } = pgSchema;
 
 const TOTP_PERIOD = 30;
 const TOTP_DIGITS = 6;
@@ -18,7 +29,7 @@ const TOTP_GRACE = 30; // accept the previous step too
 const BACKUP_CODE_COUNT = 10;
 
 export interface TotpServiceOptions {
-  db: BrainStackDatabase;
+  db: PgDb;
   /** Used as the issuer in otpauth:// URIs. */
   issuer: string;
   now?: () => number;
@@ -73,9 +84,6 @@ export class TotpService {
     return this.opts.now ? this.opts.now() : Date.now();
   }
 
-  /** Return a fresh secret + otpauth URI WITHOUT persisting it. The caller
-   * shows it to the user; they confirm by entering a current TOTP code, and
-   * we persist via {@link confirmEnrollment}. */
   beginEnrollment(accountName: string): TotpEnrollment {
     const { secret, bytes } = newSecret();
     const otpauthUri = createTOTPKeyURI(
@@ -88,92 +96,109 @@ export class TotpService {
     return { secret, otpauthUri };
   }
 
-  /** Persist the secret after the user has proved they can generate codes
-   * from it. Generates and returns the backup codes (plaintext — show once). */
-  confirmEnrollment(userId: string, secret: string, code: string): { backupCodes: string[] } {
+  /**
+   * Persist the secret after the user has proved they can generate codes from
+   * it. Returns the backup codes in plaintext — they are shown once and stored
+   * only as hashes.
+   */
+  async confirmEnrollment(
+    userId: string,
+    secret: string,
+    code: string,
+  ): Promise<{ backupCodes: string[] }> {
     const nowSec = Math.floor(this.now() / 1000);
     if (!verifySecret(secret, code, nowSec)) {
       throw new AppError('invalid TOTP code', 'UNAUTHORIZED', 401);
     }
-    const tx = this.opts.db.sqlite.transaction(() => {
-      this.opts.db.sqlite
-        .prepare('UPDATE users SET totp_secret = ?, updated_at = ? WHERE id = ?')
-        .run(secret, this.now(), userId);
-      // Wipe old backup codes if re-enrolling.
-      this.opts.db.sqlite.prepare('DELETE FROM totp_backup_codes WHERE user_id = ?').run(userId);
-      const codes: string[] = [];
-      const insert = this.opts.db.sqlite.prepare(
-        `INSERT INTO totp_backup_codes (id, user_id, code_hash, used_at, created_at)
-         VALUES (?, ?, ?, NULL, ?)`,
-      );
-      for (let i = 0; i < BACKUP_CODE_COUNT; i++) {
-        const code = generateBackupCode();
-        insert.run(nanoid(), userId, sha256(code), this.now());
-        codes.push(code);
-      }
-      return codes;
-    });
-    return { backupCodes: tx() };
+
+    // Old codes go first: re-enrolling must not leave the previous set valid.
+    await this.opts.db.delete(totpBackupCodes).where(eq(totpBackupCodes.userId, userId));
+
+    const codes = Array.from({ length: BACKUP_CODE_COUNT }, generateBackupCode);
+    const now = this.now();
+    await this.opts.db.insert(totpBackupCodes).values(
+      codes.map((c) => ({
+        id: nanoid(),
+        userId,
+        codeHash: sha256(c),
+        usedAt: null,
+        createdAt: now,
+      })),
+    );
+
+    // Only now is 2FA on, so a failure above cannot lock the user out of an
+    // account whose second factor exists without any way around it.
+    await this.opts.db
+      .update(users)
+      .set({ totpSecret: secret, updatedAt: now })
+      .where(eq(users.id, userId));
+
+    return { backupCodes: codes };
   }
 
   /** Verify a code against a stored secret (login second-factor step). */
-  verifyForUser(userId: string, code: string): boolean {
-    const row = this.opts.db.sqlite
-      .prepare<[string], { totp_secret: string | null }>(
-        'SELECT totp_secret FROM users WHERE id = ?',
-      )
-      .get(userId);
-    if (!row?.totp_secret) return false;
+  async verifyForUser(userId: string, code: string): Promise<boolean> {
+    const [row] = await this.opts.db
+      .select({ totpSecret: users.totpSecret })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!row?.totpSecret) return false;
     const nowSec = Math.floor(this.now() / 1000);
-    if (verifySecret(row.totp_secret, code, nowSec)) return true;
+    if (verifySecret(row.totpSecret, code, nowSec)) return true;
     return this.consumeBackupCode(userId, code);
   }
 
-  private consumeBackupCode(userId: string, raw: string): boolean {
+  private async consumeBackupCode(userId: string, raw: string): Promise<boolean> {
     const normalised = raw.replace(/[\s-]/g, '').toUpperCase();
     if (normalised.length !== 10) return false;
     const candidate = `${normalised.slice(0, 5)}-${normalised.slice(5)}`;
-    const hash = sha256(candidate);
-    const row = this.opts.db.sqlite
-      .prepare<[string, string], { id: string }>(
-        `SELECT id FROM totp_backup_codes
-           WHERE user_id = ? AND code_hash = ? AND used_at IS NULL`,
+
+    // Claimed in one statement, so the same code submitted twice at once is
+    // spent once. The sqlite version read and then wrote, and could not say so.
+    const [claimed] = await this.opts.db
+      .update(totpBackupCodes)
+      .set({ usedAt: this.now() })
+      .where(
+        and(
+          eq(totpBackupCodes.userId, userId),
+          eq(totpBackupCodes.codeHash, sha256(candidate)),
+          isNull(totpBackupCodes.usedAt),
+        ),
       )
-      .get(userId, hash);
-    if (!row) return false;
-    this.opts.db.sqlite
-      .prepare('UPDATE totp_backup_codes SET used_at = ? WHERE id = ?')
-      .run(this.now(), row.id);
-    return true;
+      .returning({ id: totpBackupCodes.id });
+
+    return claimed != null;
   }
 
-  /** Drop the secret + every backup code. Requires the user to prove they
-   * can still produce a code (or hand a backup) so a hijacked session can't
-   * silently disable 2FA. */
-  disable(userId: string, code: string): void {
-    if (!this.verifyForUser(userId, code)) {
+  /**
+   * Drop the secret and every backup code. Requires the user to prove they can
+   * still produce a code, so a hijacked session cannot silently disable 2FA.
+   */
+  async disable(userId: string, code: string): Promise<void> {
+    if (!(await this.verifyForUser(userId, code))) {
       throw new AppError('invalid TOTP code', 'UNAUTHORIZED', 401);
     }
-    const tx = this.opts.db.sqlite.transaction(() => {
-      this.opts.db.sqlite
-        .prepare('UPDATE users SET totp_secret = NULL, updated_at = ? WHERE id = ?')
-        .run(this.now(), userId);
-      this.opts.db.sqlite
-        .prepare('DELETE FROM totp_backup_codes WHERE user_id = ?')
-        .run(userId);
-    });
-    tx();
+
+    // Secret first: 2FA is off from here, so a failure below leaves stray codes
+    // rather than a second factor the user believes they removed.
+    await this.opts.db
+      .update(users)
+      .set({ totpSecret: null, updatedAt: this.now() })
+      .where(eq(users.id, userId));
+
+    await this.opts.db.delete(totpBackupCodes).where(eq(totpBackupCodes.userId, userId));
   }
 
-  /** Returns how many unused backup codes remain. Useful for the settings UI. */
-  remainingBackupCodes(userId: string): number {
-    const row = this.opts.db.sqlite
-      .prepare<[string], { c: number }>(
-        `SELECT COUNT(*) AS c FROM totp_backup_codes
-           WHERE user_id = ? AND used_at IS NULL`,
-      )
-      .get(userId);
-    return row?.c ?? 0;
+  /** How many unused backup codes remain. Shown in the settings UI. */
+  async remainingBackupCodes(userId: string): Promise<number> {
+    const [row] = await this.opts.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(totpBackupCodes)
+      .where(and(eq(totpBackupCodes.userId, userId), isNull(totpBackupCodes.usedAt)));
+
+    return row?.count ?? 0;
   }
 }
 

@@ -1,18 +1,26 @@
 // AuthService: email + password auth, email verification, password reset and
 // session lifecycle. Google OAuth and TOTP 2FA live in their own files but
-// reuse the helpers exported here (createSession, ensureUserByGoogleId, etc.).
+// reuse the helpers here.
 //
-// Security invariants:
+// Security invariants, unchanged from the sqlite version:
 //   - Plaintext tokens are never persisted. Only sha256 hashes hit the DB.
 //   - Passwords are hashed with argon2id (@node-rs/argon2 defaults).
-//   - All comparisons that depend on user input are timing-safe.
-//   - Email enumeration is avoided at the route layer (always return 200 OK
-//     for "forgot password" and signup-on-existing-email).
+//   - Email enumeration is avoided: "forgot password" and login report the
+//     same thing whether or not the account exists, and cost the same time.
+//
+// What Postgres changed: every read is a round trip now, so the methods that
+// used to return straight are async. And there are no interactive transactions
+// over the Neon HTTP driver, so the two read-then-write flows — verifying an
+// email, resetting a password — claim their token in a single conditional
+// UPDATE instead. That is stronger than the transaction was: two concurrent
+// clicks on the same link race inside one statement and exactly one wins.
 
-import type { BrainStackDatabase } from '@brainstack/core';
 import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
+
+import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
 import { generateToken, sha256 } from '../lib/tokens.js';
@@ -20,16 +28,33 @@ import { generateToken, sha256 } from '../lib/tokens.js';
 import type { EmailSender } from './EmailSender.js';
 import type { TotpService } from './TotpService.js';
 
+const { emailVerificationTokens, passwordResetTokens, sessions, users } = pgSchema;
+
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+const PASSWORD_MIN = 12;
+
+/**
+ * Verified against a constant when the account does not exist, so a wrong
+ * email and a wrong password take the same time to fail.
+ */
+const DECOY_HASH =
+  '$argon2id$v=19$m=19456,t=2,p=1$ZGVjb3lkZWNveWRlY295ZGU$' +
+  'lZbZx0WgPa1xQp4qF2tQE3W3uX7YBgmkOdGqQyMS7C0';
+
 export interface AuthServiceOptions {
-  db: BrainStackDatabase;
+  db: PgDb;
   email: EmailSender;
   logger: Logger;
   /** Used to build verification / reset URLs in outgoing email. */
   publicOrigin: string;
   /** Lowercased emails allowed to sign in. Empty set = open (dev only). */
   authorizedEmails: Set<string>;
-  /** Optional TOTP gate. When set and a user has totp_secret, login()
-   * requires a `code` and verifies it before creating a session. */
+  /**
+   * Optional TOTP gate. When set and the user has a secret, `login` requires a
+   * code and verifies it before handing out a session.
+   */
   totp?: TotpService;
   /** Override timestamp source for tests. */
   now?: () => number;
@@ -62,49 +87,47 @@ export interface SignupResult {
 }
 
 export interface PasswordResetRequestResult {
-  /** Null when no user matched the email (we still pretend success at the route). */
   token: string | null;
   url: string | null;
   expiresAt: number | null;
 }
 
+/** Row shape shared by every select that builds a `User`. */
 interface UserRow {
   id: string;
   email: string;
-  display_name: string | null;
-  email_verified: number;
-  password_hash: string | null;
-  google_id: string | null;
-  totp_secret: string | null;
-  created_at: number;
-  last_login_at: number | null;
+  displayName: string | null;
+  emailVerified: boolean;
+  passwordHash: string | null;
+  googleId: string | null;
+  totpSecret: string | null;
+  createdAt: number;
+  lastLoginAt: number | null;
 }
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
-const PASSWORD_MIN = 12;
+export function validatePassword(password: string): string | null {
+  if (password.length < PASSWORD_MIN) return `password must be at least ${PASSWORD_MIN} characters`;
+  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) =>
+    re.test(password),
+  ).length;
+  if (classes < 3) {
+    return 'password must include at least 3 of: lowercase, uppercase, digit, symbol';
+  }
+  return null;
+}
 
-function rowToUser(row: UserRow): User {
+function toUser(row: UserRow): User {
   return {
     id: row.id,
     email: row.email,
-    displayName: row.display_name,
-    emailVerified: row.email_verified === 1,
-    hasPassword: row.password_hash != null,
-    hasGoogle: row.google_id != null,
-    hasTotp: row.totp_secret != null,
-    createdAt: row.created_at,
-    lastLoginAt: row.last_login_at,
+    displayName: row.displayName,
+    emailVerified: row.emailVerified,
+    hasPassword: row.passwordHash != null,
+    hasGoogle: row.googleId != null,
+    hasTotp: row.totpSecret != null,
+    createdAt: Number(row.createdAt),
+    lastLoginAt: row.lastLoginAt === null ? null : Number(row.lastLoginAt),
   };
-}
-
-/** Validate password complexity. Returns null if OK, or an error message. */
-export function validatePassword(password: string): string | null {
-  if (password.length < PASSWORD_MIN) return `password must be at least ${PASSWORD_MIN} characters`;
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) => re.test(password)).length;
-  if (classes < 3) return 'password must include at least 3 of: lowercase, uppercase, digit, symbol';
-  return null;
 }
 
 export class AuthService {
@@ -124,40 +147,38 @@ export class AuthService {
 
   assertAuthorized(email: string): void {
     if (this.opts.authorizedEmails.size === 0) return; // open in dev
-    if (!this.opts.authorizedEmails.has(this.normaliseEmail(email))) {
+    if (!this.opts.authorizedEmails.has(email)) {
       throw new AppError('email not authorized', 'FORBIDDEN', 403);
     }
   }
 
-  private findUserByEmail(email: string): UserRow | undefined {
-    return this.opts.db.sqlite
-      .prepare<[string], UserRow>(
-        `SELECT id, email, display_name, email_verified, password_hash, google_id,
-                totp_secret, created_at, last_login_at
-           FROM users WHERE email = ?`,
-      )
-      .get(this.normaliseEmail(email));
+  // -- Lookups ---------------------------------------------------------------
+
+  private async rowById(id: string): Promise<UserRow | null> {
+    const [row] = await this.opts.db.select().from(users).where(eq(users.id, id)).limit(1);
+    return (row as UserRow | undefined) ?? null;
   }
 
-  private findUserById(userId: string): UserRow | undefined {
-    return this.opts.db.sqlite
-      .prepare<[string], UserRow>(
-        `SELECT id, email, display_name, email_verified, password_hash, google_id,
-                totp_secret, created_at, last_login_at
-           FROM users WHERE id = ?`,
-      )
-      .get(userId);
+  private async rowByEmail(email: string): Promise<UserRow | null> {
+    const [row] = await this.opts.db
+      .select()
+      .from(users)
+      .where(eq(users.email, this.normaliseEmail(email)))
+      .limit(1);
+    return (row as UserRow | undefined) ?? null;
   }
 
-  getUser(userId: string): User | null {
-    const row = this.findUserById(userId);
-    return row ? rowToUser(row) : null;
+  async findUserById(id: string): Promise<User | null> {
+    const row = await this.rowById(id);
+    return row ? toUser(row) : null;
   }
 
-  getUserByEmail(email: string): User | null {
-    const row = this.findUserByEmail(email);
-    return row ? rowToUser(row) : null;
+  async findUserByEmail(email: string): Promise<User | null> {
+    const row = await this.rowByEmail(email);
+    return row ? toUser(row) : null;
   }
+
+  // -- Signup and login ------------------------------------------------------
 
   async signup(
     rawEmail: string,
@@ -171,25 +192,30 @@ export class AuthService {
     const policyError = validatePassword(password);
     if (policyError) throw new AppError(policyError, 'INVALID_INPUT', 400);
 
-    if (this.findUserByEmail(email)) {
-      throw new AppError('email already registered', 'ALREADY_EXISTS', 409);
-    }
-
     const passwordHash = await argonHash(password);
     const now = this.now();
-    const id = nanoid();
-    this.opts.db.sqlite
-      .prepare(
-        `INSERT INTO users
-           (id, email, display_name, email_verified, password_hash, google_id,
-            totp_secret, created_at, updated_at, last_login_at)
-         VALUES (?, ?, ?, 0, ?, NULL, NULL, ?, ?, NULL)`,
-      )
-      .run(id, email, displayName ?? null, passwordHash, now, now);
 
-    const row = this.findUserById(id)!;
-    const verification = await this.issueEmailVerification(row, email);
-    return { user: rowToUser(row), verification };
+    // Insert-or-nothing, so a duplicate email is one statement rather than a
+    // check followed by a write that could race with another signup.
+    const [row] = await this.opts.db
+      .insert(users)
+      .values({
+        id: nanoid(),
+        email,
+        displayName: displayName ?? null,
+        emailVerified: false,
+        passwordHash,
+        createdAt: now,
+        updatedAt: now,
+        lastLoginAt: null,
+      })
+      .onConflictDoNothing({ target: users.email })
+      .returning();
+
+    if (!row) throw new AppError('email already registered', 'ALREADY_EXISTS', 409);
+
+    const verification = await this.issueEmailVerification(row as UserRow, email);
+    return { user: toUser(row as UserRow), verification };
   }
 
   async login(
@@ -197,94 +223,100 @@ export class AuthService {
     password: string,
     context: { userAgent?: string; ipAddress?: string; totpCode?: string } = {},
   ): Promise<{ user: User; session: Session }> {
-    const email = this.normaliseEmail(rawEmail);
-    // Always look up — we still hash a dummy password if the user is missing
-    // so the timing of the response doesn't leak account existence.
-    const row = this.findUserByEmail(email);
+    const row = await this.rowByEmail(rawEmail);
 
-    // Argon2 verify against the stored hash, or against a constant dummy
-    // when the account is absent or only uses Google.
-    const dummy = '$argon2id$v=19$m=19456,t=2,p=1$ZGVjb3lkZWNveWRlY295ZGU$' +
-      'lZbZx0WgPa1xQp4qF2tQE3W3uX7YBgmkOdGqQyMS7C0';
-    const hashToCheck = row?.password_hash ?? dummy;
+    // Always verify against something, so a missing account and a wrong
+    // password are indistinguishable from the outside.
     let ok = false;
     try {
-      ok = await argonVerify(hashToCheck, password);
+      ok = await argonVerify(row?.passwordHash ?? DECOY_HASH, password);
     } catch {
       ok = false;
     }
 
-    if (!row || !row.password_hash || !ok) {
+    if (!row || !row.passwordHash || !ok) {
       throw new AppError('invalid email or password', 'UNAUTHORIZED', 401);
     }
-    if (row.email_verified !== 1) {
+    if (!row.emailVerified) {
       throw new AppError('email not verified', 'FORBIDDEN', 403);
     }
+    this.assertAuthorized(row.email);
 
-    if (row.totp_secret && this.opts.totp) {
-      if (!context.totpCode) {
-        throw new AppError('totp code required', 'UNAUTHORIZED', 401);
-      }
-      if (!this.opts.totp.verifyForUser(row.id, context.totpCode)) {
-        throw new AppError('invalid totp code', 'UNAUTHORIZED', 401);
-      }
+    if (row.totpSecret && this.opts.totp) {
+      if (!context.totpCode) throw new AppError('totp code required', 'UNAUTHORIZED', 401);
+      const valid = await this.opts.totp.verifyForUser(row.id, context.totpCode);
+      if (!valid) throw new AppError('invalid totp code', 'UNAUTHORIZED', 401);
     }
 
     const now = this.now();
-    this.opts.db.sqlite
-      .prepare(`UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?`)
-      .run(now, now, row.id);
+    await this.opts.db
+      .update(users)
+      .set({ lastLoginAt: now, updatedAt: now })
+      .where(eq(users.id, row.id));
 
-    const session = this.createSession(row.id, context);
-    const refreshed = this.findUserById(row.id)!;
-    return { user: rowToUser(refreshed), session };
+    const session = await this.createSession(row.id, context);
+    return { user: toUser({ ...row, lastLoginAt: now }), session };
   }
 
-  createSession(
+  // -- Sessions --------------------------------------------------------------
+
+  async createSession(
     userId: string,
     context: { userAgent?: string; ipAddress?: string } = {},
-  ): Session {
+  ): Promise<Session> {
     const now = this.now();
     const expiresAt = now + SESSION_TTL_MS;
     const token = generateToken(32);
     const id = nanoid();
 
-    this.opts.db.sqlite
-      .prepare(
-        `INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, user_agent, ip_address)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(id, userId, sha256(token), now, expiresAt, context.userAgent ?? null, context.ipAddress ?? null);
+    await this.opts.db.insert(sessions).values({
+      id,
+      userId,
+      tokenHash: sha256(token),
+      createdAt: now,
+      expiresAt,
+      userAgent: context.userAgent ?? null,
+      ipAddress: context.ipAddress ?? null,
+    });
 
     return { id, userId, token, createdAt: now, expiresAt };
   }
 
-  validateSession(token: string): User | null {
+  async validateSession(token: string): Promise<User | null> {
     if (!token) return null;
     const now = this.now();
-    const row = this.opts.db.sqlite
-      .prepare<[string, number], UserRow>(
-        `SELECT u.id, u.email, u.display_name, u.email_verified, u.password_hash,
-                u.google_id, u.totp_secret, u.created_at, u.last_login_at
-         FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = ? AND s.expires_at > ?`,
-      )
-      .get(sha256(token), now);
-    return row ? rowToUser(row) : null;
+
+    const [row] = await this.opts.db
+      .select({
+        id: users.id,
+        email: users.email,
+        displayName: users.displayName,
+        emailVerified: users.emailVerified,
+        passwordHash: users.passwordHash,
+        googleId: users.googleId,
+        totpSecret: users.totpSecret,
+        createdAt: users.createdAt,
+        lastLoginAt: users.lastLoginAt,
+      })
+      .from(sessions)
+      .innerJoin(users, eq(users.id, sessions.userId))
+      .where(and(eq(sessions.tokenHash, sha256(token)), gt(sessions.expiresAt, now)))
+      .limit(1);
+
+    return row ? toUser(row as UserRow) : null;
   }
 
-  revokeSession(token: string): void {
+  async revokeSession(token: string): Promise<void> {
     if (!token) return;
-    this.opts.db.sqlite
-      .prepare('DELETE FROM sessions WHERE token_hash = ?')
-      .run(sha256(token));
+    await this.opts.db.delete(sessions).where(eq(sessions.tokenHash, sha256(token)));
   }
 
-  revokeAllSessionsFor(userId: string): void {
-    this.opts.db.sqlite.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  /** Used after a password change, so other devices do not stay signed in. */
+  async revokeAllSessionsFor(userId: string): Promise<void> {
+    await this.opts.db.delete(sessions).where(eq(sessions.userId, userId));
   }
 
-  // -- Email verification --------------------------------------------------
+  // -- Email verification ----------------------------------------------------
 
   private async issueEmailVerification(
     row: UserRow,
@@ -293,16 +325,19 @@ export class AuthService {
     const now = this.now();
     const expiresAt = now + VERIFICATION_TTL_MS;
     const token = generateToken(32);
-    const id = nanoid();
     const email = this.normaliseEmail(targetEmail);
-    this.opts.db.sqlite
-      .prepare(
-        `INSERT INTO email_verification_tokens (id, user_id, email, token_hash, created_at, expires_at, used_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL)`,
-      )
-      .run(id, row.id, email, sha256(token), now, expiresAt);
 
-    const url = `${this.originBase()}/auth/verify-email?token=${token}`;
+    await this.opts.db.insert(emailVerificationTokens).values({
+      id: nanoid(),
+      userId: row.id,
+      email,
+      tokenHash: sha256(token),
+      createdAt: now,
+      expiresAt,
+      usedAt: null,
+    });
+
+    const url = `${this.originBase()}/verify-email?token=${token}`;
     await this.opts.email.send({
       to: email,
       subject: 'Verify your BrainStack email',
@@ -313,63 +348,64 @@ export class AuthService {
   }
 
   async resendVerification(rawEmail: string): Promise<{ url: string | null }> {
-    const row = this.findUserByEmail(rawEmail);
-    if (!row || row.email_verified === 1) return { url: null };
-    const v = await this.issueEmailVerification(row, row.email);
-    return { url: v.url };
+    const row = await this.rowByEmail(rawEmail);
+    if (!row || row.emailVerified) return { url: null };
+    const issued = await this.issueEmailVerification(row, row.email);
+    return { url: issued.url };
   }
 
-  consumeEmailVerification(token: string): User {
+  async consumeEmailVerification(token: string): Promise<User> {
     const tokenHash = sha256(token);
     const now = this.now();
-    const tx = this.opts.db.sqlite.transaction(() => {
-      const row = this.opts.db.sqlite
-        .prepare<[string], {
-          id: string;
-          user_id: string;
-          email: string;
-          expires_at: number;
-          used_at: number | null;
-        }>(
-          `SELECT id, user_id, email, expires_at, used_at
-             FROM email_verification_tokens WHERE token_hash = ?`,
-        )
-        .get(tokenHash);
-      if (!row) throw new AppError('invalid token', 'UNAUTHORIZED', 401);
-      if (row.used_at != null) throw new AppError('token already used', 'UNAUTHORIZED', 401);
-      if (row.expires_at < now) throw new AppError('token expired', 'UNAUTHORIZED', 401);
 
-      this.opts.db.sqlite
-        .prepare('UPDATE email_verification_tokens SET used_at = ? WHERE id = ?')
-        .run(now, row.id);
-      this.opts.db.sqlite
-        .prepare('UPDATE users SET email_verified = 1, updated_at = ? WHERE id = ?')
-        .run(now, row.user_id);
-      const userRow = this.findUserById(row.user_id);
-      if (!userRow) throw new AppError('user not found', 'NOT_FOUND', 404);
-      return userRow;
-    });
-    return rowToUser(tx());
+    const [claimed] = await this.opts.db
+      .update(emailVerificationTokens)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(emailVerificationTokens.tokenHash, tokenHash),
+          isNull(emailVerificationTokens.usedAt),
+          gt(emailVerificationTokens.expiresAt, now),
+        ),
+      )
+      .returning({ userId: emailVerificationTokens.userId });
+
+    if (!claimed) {
+      throw await this.explainFailedClaim(emailVerificationTokens, tokenHash, now);
+    }
+
+    const [row] = await this.opts.db
+      .update(users)
+      .set({ emailVerified: true, updatedAt: now })
+      .where(eq(users.id, claimed.userId))
+      .returning();
+
+    if (!row) throw new AppError('user not found', 'NOT_FOUND', 404);
+    return toUser(row as UserRow);
   }
 
-  // -- Password reset ------------------------------------------------------
+  // -- Password reset --------------------------------------------------------
 
   async requestPasswordReset(rawEmail: string): Promise<PasswordResetRequestResult> {
-    const row = this.findUserByEmail(rawEmail);
-    if (!row || !row.password_hash) {
-      // Don't leak account existence — caller treats this as a success.
+    const row = await this.rowByEmail(rawEmail);
+    if (!row || !row.passwordHash) {
+      // Do not leak account existence — the caller reports success either way.
       return { token: null, url: null, expiresAt: null };
     }
+
     const now = this.now();
     const expiresAt = now + RESET_TTL_MS;
     const token = generateToken(32);
-    const id = nanoid();
-    this.opts.db.sqlite
-      .prepare(
-        `INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at, used_at)
-         VALUES (?, ?, ?, ?, ?, NULL)`,
-      )
-      .run(id, row.id, sha256(token), now, expiresAt);
+
+    await this.opts.db.insert(passwordResetTokens).values({
+      id: nanoid(),
+      userId: row.id,
+      tokenHash: sha256(token),
+      createdAt: now,
+      expiresAt,
+      usedAt: null,
+    });
+
     const url = `${this.originBase()}/reset-password?token=${token}`;
     await this.opts.email.send({
       to: row.email,
@@ -383,169 +419,170 @@ export class AuthService {
   async consumePasswordReset(token: string, newPassword: string): Promise<User> {
     const policyError = validatePassword(newPassword);
     if (policyError) throw new AppError(policyError, 'INVALID_INPUT', 400);
+
     const tokenHash = sha256(token);
     const now = this.now();
     const newHash = await argonHash(newPassword);
 
-    const tx = this.opts.db.sqlite.transaction(() => {
-      const row = this.opts.db.sqlite
-        .prepare<[string], {
-          id: string;
-          user_id: string;
-          expires_at: number;
-          used_at: number | null;
-        }>(
-          `SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?`,
-        )
-        .get(tokenHash);
-      if (!row) throw new AppError('invalid token', 'UNAUTHORIZED', 401);
-      if (row.used_at != null) throw new AppError('token already used', 'UNAUTHORIZED', 401);
-      if (row.expires_at < now) throw new AppError('token expired', 'UNAUTHORIZED', 401);
+    const [claimed] = await this.opts.db
+      .update(passwordResetTokens)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(passwordResetTokens.tokenHash, tokenHash),
+          isNull(passwordResetTokens.usedAt),
+          gt(passwordResetTokens.expiresAt, now),
+        ),
+      )
+      .returning({ userId: passwordResetTokens.userId });
 
-      this.opts.db.sqlite
-        .prepare('UPDATE password_reset_tokens SET used_at = ? WHERE id = ?')
-        .run(now, row.id);
-      this.opts.db.sqlite
-        .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
-        .run(newHash, now, row.user_id);
-      this.opts.db.sqlite.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.user_id);
-      const userRow = this.findUserById(row.user_id);
-      if (!userRow) throw new AppError('user not found', 'NOT_FOUND', 404);
-      return userRow;
-    });
-    return rowToUser(tx());
+    if (!claimed) {
+      throw await this.explainFailedClaim(passwordResetTokens, tokenHash, now);
+    }
+
+    const [row] = await this.opts.db
+      .update(users)
+      .set({ passwordHash: newHash, updatedAt: now })
+      .where(eq(users.id, claimed.userId))
+      .returning();
+
+    if (!row) throw new AppError('user not found', 'NOT_FOUND', 404);
+
+    // Whoever knew the old password loses their sessions with it.
+    await this.revokeAllSessionsFor(claimed.userId);
+    return toUser(row as UserRow);
   }
-
-  // -- Password change (already logged in) ---------------------------------
 
   async changePassword(
     userId: string,
     currentPassword: string,
     newPassword: string,
   ): Promise<void> {
-    const row = this.findUserById(userId);
-    if (!row || !row.password_hash) {
+    const row = await this.rowById(userId);
+    if (!row || !row.passwordHash) {
       throw new AppError('no password set on this account', 'INVALID_INPUT', 400);
     }
-    const ok = await argonVerify(row.password_hash, currentPassword).catch(() => false);
+
+    const ok = await argonVerify(row.passwordHash, currentPassword).catch(() => false);
     if (!ok) throw new AppError('current password is incorrect', 'UNAUTHORIZED', 401);
+
     const policyError = validatePassword(newPassword);
     if (policyError) throw new AppError(policyError, 'INVALID_INPUT', 400);
-    const newHash = await argonHash(newPassword);
+
     const now = this.now();
-    this.opts.db.sqlite
-      .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
-      .run(newHash, now, userId);
+    await this.opts.db
+      .update(users)
+      .set({ passwordHash: await argonHash(newPassword), updatedAt: now })
+      .where(eq(users.id, userId));
   }
 
-  // -- Google OAuth helpers ------------------------------------------------
+  // -- Google OAuth helpers --------------------------------------------------
 
-  findUserByGoogleId(googleId: string): User | null {
-    const row = this.opts.db.sqlite
-      .prepare<[string], UserRow>(
-        `SELECT id, email, display_name, email_verified, password_hash, google_id,
-                totp_secret, created_at, last_login_at
-           FROM users WHERE google_id = ?`,
-      )
-      .get(googleId);
-    return row ? rowToUser(row) : null;
-  }
-
-  /** Get-or-link a user by Google. Throws if linking would be unsafe. */
-  upsertGoogleUser(input: {
-    googleId: string;
-    email: string;
-    googleEmailVerified: boolean;
-    displayName?: string | null;
-  }): User {
-    const email = this.normaliseEmail(input.email);
-    const now = this.now();
-
-    const byGoogle = this.findUserByGoogleId(input.googleId);
-    if (byGoogle) {
-      this.opts.db.sqlite
-        .prepare('UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?')
-        .run(now, now, byGoogle.id);
-      return { ...byGoogle, lastLoginAt: now };
-    }
-
-    if (!input.googleEmailVerified) {
-      throw new AppError(
-        'google account has an unverified email — cannot link',
-        'FORBIDDEN',
-        403,
-      );
-    }
-
-    const byEmail = this.findUserByEmail(email);
-    if (byEmail) {
-      if (byEmail.email_verified !== 1) {
-        // Refuse to auto-link to an unverified local account — would
-        // let an attacker pre-register the victim's email and inherit
-        // the Google sign-in later.
-        throw new AppError(
-          'local account exists but is not verified — verify by email first',
-          'FORBIDDEN',
-          403,
-        );
-      }
-      this.opts.db.sqlite
-        .prepare(
-          `UPDATE users SET google_id = ?, last_login_at = ?, updated_at = ? WHERE id = ?`,
-        )
-        .run(input.googleId, now, now, byEmail.id);
-      const refreshed = this.findUserById(byEmail.id)!;
-      return rowToUser(refreshed);
-    }
-
-    this.assertAuthorized(email);
-    const id = nanoid();
-    this.opts.db.sqlite
-      .prepare(
-        `INSERT INTO users
-           (id, email, display_name, email_verified, password_hash, google_id,
-            totp_secret, created_at, updated_at, last_login_at)
-         VALUES (?, ?, ?, 1, NULL, ?, NULL, ?, ?, ?)`,
-      )
-      .run(id, email, input.displayName ?? null, input.googleId, now, now, now);
-    const row = this.findUserById(id)!;
-    return rowToUser(row);
-  }
-
-  unlinkGoogle(userId: string): void {
-    const row = this.findUserById(userId);
-    if (!row) throw new AppError('user not found', 'NOT_FOUND', 404);
-    if (!row.password_hash) {
-      throw new AppError(
-        'cannot unlink Google: no password is set, account would be locked out',
-        'INVALID_INPUT',
-        400,
-      );
-    }
-    const now = this.now();
-    this.opts.db.sqlite
-      .prepare('UPDATE users SET google_id = NULL, updated_at = ? WHERE id = ?')
-      .run(now, userId);
+  async findUserByGoogleId(googleId: string): Promise<User | null> {
+    const [row] = await this.opts.db
+      .select()
+      .from(users)
+      .where(eq(users.googleId, googleId))
+      .limit(1);
+    return row ? toUser(row as UserRow) : null;
   }
 
   /**
-   * Get-or-create a user by email without going through any flow. Used by
-   * tests and as a primitive in OAuth bootstrap.
+   * Link a Google identity to an account, creating it if the email is new.
+   * Google has verified the address already, so the account arrives verified.
    */
-  ensureUser(rawEmail: string): User {
-    const email = this.normaliseEmail(rawEmail);
-    const existing = this.findUserByEmail(email);
-    if (existing) return rowToUser(existing);
+  async upsertGoogleUser(input: {
+    googleId: string;
+    email: string;
+    displayName?: string | null;
+  }): Promise<User> {
+    const email = this.normaliseEmail(input.email);
+    this.assertAuthorized(email);
     const now = this.now();
-    const id = nanoid();
-    this.opts.db.sqlite
-      .prepare(
-        `INSERT INTO users
-           (id, email, display_name, email_verified, password_hash, google_id,
-            totp_secret, created_at, updated_at, last_login_at)
-         VALUES (?, ?, NULL, 0, NULL, NULL, NULL, ?, ?, NULL)`,
-      )
-      .run(id, email, now, now);
-    return rowToUser(this.findUserById(id)!);
+
+    const [row] = await this.opts.db
+      .insert(users)
+      .values({
+        id: nanoid(),
+        email,
+        displayName: input.displayName ?? null,
+        emailVerified: true,
+        googleId: input.googleId,
+        createdAt: now,
+        updatedAt: now,
+        lastLoginAt: now,
+      })
+      .onConflictDoUpdate({
+        target: users.email,
+        set: {
+          googleId: input.googleId,
+          emailVerified: true,
+          lastLoginAt: now,
+          updatedAt: now,
+        },
+      })
+      .returning();
+
+    if (!row) throw new AppError('could not create user', 'INTERNAL', 500);
+    return toUser(row as UserRow);
+  }
+
+  async unlinkGoogle(userId: string): Promise<void> {
+    const row = await this.rowById(userId);
+    if (!row) throw new AppError('user not found', 'NOT_FOUND', 404);
+    if (!row.passwordHash) {
+      // Unlinking the only way in would lock the account.
+      throw new AppError('set a password before unlinking Google', 'INVALID_INPUT', 400);
+    }
+    await this.opts.db
+      .update(users)
+      .set({ googleId: null, updatedAt: this.now() })
+      .where(eq(users.id, userId));
+  }
+
+  // -- Misc ------------------------------------------------------------------
+
+  /** Get-or-create without a password, for invites and for seeding. */
+  async ensureUser(rawEmail: string): Promise<User> {
+    const email = this.normaliseEmail(rawEmail);
+    const now = this.now();
+
+    const [row] = await this.opts.db
+      .insert(users)
+      .values({
+        id: nanoid(),
+        email,
+        displayName: null,
+        createdAt: now,
+        updatedAt: now,
+        lastLoginAt: null,
+      })
+      // No-op update rather than DO NOTHING, so RETURNING always yields a row.
+      .onConflictDoUpdate({ target: users.email, set: { email: sql`excluded.email` } })
+      .returning();
+
+    if (!row) throw new AppError('could not create user', 'INTERNAL', 500);
+    return toUser(row as UserRow);
+  }
+
+  /**
+   * The claim already failed; this only decides which error to report. Kept
+   * separate so the atomic path stays a single statement.
+   */
+  private async explainFailedClaim(
+    table: typeof emailVerificationTokens | typeof passwordResetTokens,
+    tokenHash: string,
+    now: number,
+  ): Promise<AppError> {
+    const [row] = await this.opts.db
+      .select({ usedAt: table.usedAt, expiresAt: table.expiresAt })
+      .from(table)
+      .where(eq(table.tokenHash, tokenHash))
+      .limit(1);
+
+    if (!row) return new AppError('invalid token', 'UNAUTHORIZED', 401);
+    if (row.usedAt != null) return new AppError('token already used', 'UNAUTHORIZED', 401);
+    if (row.expiresAt < now) return new AppError('token expired', 'UNAUTHORIZED', 401);
+    return new AppError('invalid token', 'UNAUTHORIZED', 401);
   }
 }
