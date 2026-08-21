@@ -47,8 +47,17 @@ export interface AuthServiceOptions {
   db: PgDb;
   email: EmailSender;
   logger: Logger;
-  /** Used to build verification / reset URLs in outgoing email. */
+  /** Where this server answers. Links to endpoints are built from it. */
   publicOrigin: string;
+  /**
+   * Where the web app lives. Links to pages are built from this instead.
+   *
+   * In production both are one origin and this can be omitted. In development
+   * the server is on :3000 and the app on :3001, and sending somebody to a page
+   * on the server's origin lands them on a 404 — which is exactly the mistake
+   * that made the magic link fail on the Netlify line.
+   */
+  appOrigin?: string;
   /** Lowercased emails allowed to sign in. Empty set = open (dev only). */
   authorizedEmails: Set<string>;
   /**
@@ -155,6 +164,11 @@ export class AuthService {
   /** Base for links that land on an endpoint. Pages do not get the prefix. */
   private apiBase(): string {
     return `${this.originBase()}${this.opts.apiBasePath ?? ''}`;
+  }
+
+  /** Base for links that land on a page of the web app. */
+  private appBase(): string {
+    return (this.opts.appOrigin ?? this.opts.publicOrigin).replace(/\/+$/, '');
   }
 
   assertAuthorized(email: string): void {
@@ -398,9 +412,17 @@ export class AuthService {
 
   // -- Password reset --------------------------------------------------------
 
+  /**
+   * Also the way an account without a password gets one.
+   *
+   * The accounts that predate password sign-in have no hash, and would
+   * otherwise be stuck: signup rejects them as existing, and a reset that
+   * required a current password would never issue. Whoever opens the link
+   * controls the address, which is the same proof a reset ever had.
+   */
   async requestPasswordReset(rawEmail: string): Promise<PasswordResetRequestResult> {
     const row = await this.rowByEmail(rawEmail);
-    if (!row || !row.passwordHash) {
+    if (!row) {
       // Do not leak account existence — the caller reports success either way.
       return { token: null, url: null, expiresAt: null };
     }
@@ -418,7 +440,7 @@ export class AuthService {
       usedAt: null,
     });
 
-    const url = `${this.originBase()}/reset-password?token=${token}`;
+    const url = `${this.appBase()}/reset-password?token=${token}`;
     await this.opts.email.send({
       to: row.email,
       subject: 'Reset your BrainStack password',
@@ -454,7 +476,10 @@ export class AuthService {
 
     const [row] = await this.opts.db
       .update(users)
-      .set({ passwordHash: newHash, updatedAt: now })
+      // Opening the link proves control of the address, which is exactly what
+      // verification asks for — so an account that arrives here unverified
+      // leaves verified, rather than setting a password it cannot sign in with.
+      .set({ passwordHash: newHash, emailVerified: true, updatedAt: now })
       .where(eq(users.id, claimed.userId))
       .returning();
 

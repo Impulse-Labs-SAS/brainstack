@@ -268,3 +268,57 @@ describe('ApiKeyService', () => {
     expect(list.map((k) => k.name)).toEqual(['New', 'Old']);
   });
 });
+
+describe('AuthService accounts with no password', () => {
+  // These exist because the Netlify line signed people in with magic links and
+  // never stored a hash. Without this path they cannot sign in at all: signup
+  // rejects them as existing, and a reset had nothing to reset.
+  it('lets an account created without a password set one, and verifies it', async () => {
+    const seeded = await auth.ensureUser('user@brain.test');
+    expect(seeded.hasPassword).toBe(false);
+    expect(seeded.emailVerified).toBe(false);
+
+    const reset = await auth.requestPasswordReset('user@brain.test');
+    expect(reset.token).not.toBeNull();
+
+    const after = await auth.consumePasswordReset(reset.token!, STRONG);
+    expect(after.hasPassword).toBe(true);
+    // Opening the link proved control of the address.
+    expect(after.emailVerified).toBe(true);
+
+    const { user } = await auth.login('user@brain.test', STRONG);
+    expect(user.id).toBe(seeded.id);
+  });
+
+  it('still says nothing about an address that has no account', async () => {
+    const reset = await auth.requestPasswordReset('nobody@brain.test');
+    expect(reset).toMatchObject({ token: null, url: null });
+  });
+});
+
+describe('AuthService link destinations', () => {
+  // Three links, two destinations. Getting this backwards is what made the
+  // magic link 404 in production: a page link built from the API's origin.
+  it('sends verification to the endpoint and reset to the page', async () => {
+    const withSplitOrigins = new AuthService({
+      db: database.db,
+      email: mailer,
+      logger,
+      publicOrigin: 'https://api.brain.test',
+      appOrigin: 'https://app.brain.test',
+      apiBasePath: '/api',
+      authorizedEmails: new Set(),
+      now: () => now,
+    });
+
+    const { verification } = await withSplitOrigins.signup('user@brain.test', STRONG);
+    // Consumed by the server, which redirects to the app afterwards.
+    expect(verification.url).toBe(
+      `https://api.brain.test/api/auth/verify-email?token=${verification.token}`,
+    );
+
+    const reset = await withSplitOrigins.requestPasswordReset('user@brain.test');
+    // Opened by a person, so it has to be a page.
+    expect(reset.url).toContain('https://app.brain.test/reset-password?token=');
+  });
+});

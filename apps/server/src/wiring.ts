@@ -40,6 +40,8 @@ export interface BuildServicesOptions {
   db: PgDb;
   logger: Logger;
   publicOrigin: string;
+  /** Origin of the web app, when it differs from this server's. */
+  appOrigin?: string;
   authorizedEmails: Set<string>;
   /** Must match the `basePath` given to `buildApp`. */
   apiBasePath?: string;
@@ -71,6 +73,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     email: emailSender,
     logger: opts.logger,
     publicOrigin: opts.publicOrigin,
+    ...(opts.appOrigin ? { appOrigin: opts.appOrigin } : {}),
     authorizedEmails: opts.authorizedEmails,
     ...(opts.apiBasePath ? { apiBasePath: opts.apiBasePath } : {}),
     totp,
@@ -80,7 +83,8 @@ export function buildServices(opts: BuildServicesOptions): Services {
     db: opts.db,
     email: emailSender,
     sharing,
-    publicOrigin: opts.publicOrigin,
+    // Invite links land on a page too.
+    publicOrigin: opts.appOrigin ?? opts.publicOrigin,
   });
 
   const crossOwner = new CrossOwnerReader({ db: opts.db, sharing, vaultCfg: cfg });

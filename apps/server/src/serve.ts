@@ -30,6 +30,8 @@ async function main(): Promise<void> {
     db,
     logger,
     publicOrigin: cfg.PUBLIC_ORIGIN,
+    // The web app runs on its own port in development.
+    appOrigin: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
     authorizedEmails: cfg.authorizedEmails,
     deployment: cfg.BRAINSTACK_DEPLOYMENT,
     resendApiKey: cfg.RESEND_API_KEY,
