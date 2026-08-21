@@ -7,14 +7,12 @@ import superjson from 'superjson';
 
 import type { AppRouter } from '@brainstack/server/src/trpc/router.js';
 
+import { apiBase } from './server-url';
+
 export const trpc: CreateTRPCReact<AppRouter, unknown> = createTRPCReact<AppRouter>();
 
 export function trpcClientConfig() {
-  const url = `${
-    typeof window === 'undefined'
-      ? (process.env.NEXT_PUBLIC_SERVER_URL ?? 'http://localhost:3000')
-      : (process.env.NEXT_PUBLIC_SERVER_URL ?? window.location.origin.replace(':3001', ':3000'))
-  }/trpc`;
+  const url = `${apiBase()}/trpc`;
   return {
     links: [
       httpBatchLink({

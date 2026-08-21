@@ -2,12 +2,9 @@
 // tRPC because the auth flows set cookies directly and tRPC's mutations
 // would just add ceremony.
 
-function serverUrl(): string {
-  if (typeof window === 'undefined') {
-    return process.env.NEXT_PUBLIC_SERVER_URL ?? 'http://localhost:3000';
-  }
-  return process.env.NEXT_PUBLIC_SERVER_URL ?? window.location.origin.replace(':3001', ':3000');
-}
+import { apiBase } from './server-url';
+
+
 
 export async function authFetch<T>(
   path: string,
@@ -17,7 +14,7 @@ export async function authFetch<T>(
   const headers = new Headers(init?.headers ?? {});
   if (init?.json !== undefined) headers.set('Content-Type', 'application/json');
 
-  const res = await fetch(`${serverUrl()}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     ...init,
     credentials: 'include',
     headers,
@@ -45,7 +42,7 @@ export class AuthApiError extends Error {
 }
 
 export function googleSignInHref(redirectTo?: string): string {
-  const target = `${serverUrl()}/auth/google`;
+  const target = `${apiBase()}/auth/google`;
   if (!redirectTo) return target;
   return `${target}?redirect_to=${encodeURIComponent(redirectTo)}`;
 }

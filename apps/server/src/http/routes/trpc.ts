@@ -26,6 +26,14 @@ export interface TrpcRouterOptions {
   invites: InviteService;
   crossOwner: CrossOwnerReader;
   resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
+  /**
+   * The URL this router answers on, prefix included.
+   *
+   * tRPC strips this from the path to find the procedure name, so a router
+   * mounted under `/api` has to be told — otherwise every call 404s, and only
+   * once deployed, because development had no prefix.
+   */
+  endpoint?: string;
 }
 
 export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings> {
@@ -35,7 +43,7 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
     const principal = await resolvePrincipal(c, options);
 
     const response = await fetchRequestHandler({
-      endpoint: '/trpc',
+      endpoint: options.endpoint ?? '/trpc',
       req: c.req.raw,
       router: appRouter,
       createContext: () =>

@@ -24,7 +24,11 @@ interface Harness {
   fetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-function buildHarness(deployment: Deployment, bs: TestDatabase['db']): Harness {
+function buildHarness(
+  deployment: Deployment,
+  bs: TestDatabase['db'],
+  basePath?: string,
+): Harness {
   const vaultCfg = { deployment };
   const notes = new NoteService({ cfg: vaultCfg, db: bs });
   const search = new SearchService({ db: bs, cfg: vaultCfg });
@@ -70,6 +74,7 @@ function buildHarness(deployment: Deployment, bs: TestDatabase['db']): Harness {
       features: { sharing: deployment === 'hosted' },
     },
     vaultCfg,
+    ...(basePath ? { basePath } : {}),
   });
 
   return {
@@ -93,13 +98,13 @@ describe('dual-mode: /api/config', () => {
   });
 
   it('reporta deployment y feature flag por modo', async () => {
-    const a = await (await selfHost.fetch('/api/config')).json();
+    const a = await (await selfHost.fetch('/config')).json();
     expect(a).toEqual({
       deployment: 'self-host',
       features: { sharing: false },
     });
 
-    const b = await (await hosted.fetch('/api/config')).json();
+    const b = await (await hosted.fetch('/config')).json();
     expect(b).toEqual({
       deployment: 'hosted',
       features: { sharing: true },
@@ -107,7 +112,49 @@ describe('dual-mode: /api/config', () => {
   });
 
   it('endpoint /api/config no requiere auth en ningún modo', async () => {
-    expect((await selfHost.fetch('/api/config')).status).toBe(200);
-    expect((await hosted.fetch('/api/config')).status).toBe(200);
+    expect((await selfHost.fetch('/config')).status).toBe(200);
+    expect((await hosted.fetch('/config')).status).toBe(200);
+  });
+});
+
+/**
+ * Netlify routes one path pattern to one function, so deployed the whole API
+ * answers under `/api`. Development mounts it the same way: a layout that only
+ * exists in production is a layout nobody tests.
+ */
+describe('basePath', () => {
+  let db: TestDatabase;
+  let app: Harness;
+
+  beforeAll(async () => {
+    db = await createTestDatabase();
+    app = buildHarness('hosted', db.db, '/api');
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('mueve todas las rutas detrás del prefijo', async () => {
+
+    expect((await app.fetch('/api/config')).status).toBe(200);
+    expect((await app.fetch('/api/health')).status).toBe(200);
+    // Sin sesión, pero enrutada: el 401 dice que la ruta existe.
+    expect((await app.fetch('/api/trpc/notes.tree?input=%7B%7D')).status).toBe(401);
+  });
+
+  it('sin el prefijo no responde nada', async () => {
+    expect((await app.fetch('/config')).status).toBe(404);
+    expect((await app.fetch('/health')).status).toBe(404);
+  });
+
+  it('el MCP también vive bajo el prefijo', async () => {
+    // 401 y no 404: la ruta está, falta la credencial.
+    const res = await app.fetch('/api/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+    expect(res.status).toBe(401);
   });
 });

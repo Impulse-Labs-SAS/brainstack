@@ -12,6 +12,7 @@
 import { serve } from '@hono/node-server';
 import { ensurePgSchema, openPgDatabase } from '@brainstack/core/pg';
 
+import { API_BASE_PATH } from './config/api.js';
 import { loadConfig } from './config/env.js';
 import { buildApp } from './http/app.js';
 import { getLogger } from './lib/logger.js';
@@ -33,6 +34,8 @@ async function main(): Promise<void> {
     // The web app runs on its own port in development.
     appOrigin: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
     authorizedEmails: cfg.authorizedEmails,
+    // Verification and reset links point at endpoints, which sit behind it.
+    apiBasePath: API_BASE_PATH,
     deployment: cfg.BRAINSTACK_DEPLOYMENT,
     resendApiKey: cfg.RESEND_API_KEY,
     emailFrom: cfg.AUTH_EMAIL_FROM,
@@ -82,6 +85,8 @@ async function main(): Promise<void> {
       features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },
     },
     vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT },
+    // Same prefix as production, so a URL that works here works deployed.
+    basePath: API_BASE_PATH,
     buildMcpServer: (principal) =>
       buildMcpServer({
         notes: services.notes,

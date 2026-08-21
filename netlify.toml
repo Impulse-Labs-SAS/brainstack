@@ -1,0 +1,33 @@
+# Netlify deployment for BrainStack.
+#
+# One site serves everything: the Next.js web app, and — under `/api` — the HTTP
+# API, the auth endpoints, tRPC and the MCP endpoint AI clients connect to.
+# Storage is Neon Postgres; nothing is written to disk at runtime and no process
+# outlives a request.
+#
+# The schema migrates itself on the first request a container serves, so a
+# deploy cannot land with code ahead of its database and there is nothing to
+# remember to run afterwards.
+
+[build]
+  command = "pnpm --filter @brainstack/web build"
+  publish = "apps/web/.next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+  # The MCP server reads the skill instructions from disk at request time, and a
+  # bundle contains only what was imported. Without this the `instructions` tool
+  # answers "INSTRUCTIONS.md not found" while every other tool works — the kind
+  # of failure that looks like a bad deploy rather than a missing file.
+  included_files = ["packages/skill/INSTRUCTIONS.md"]
+  # `node_bundler` is deliberately absent. It is a v1-era setting, and declaring
+  # it made Netlify treat these .mts files as v1 functions: the runtime looked
+  # for a named `handler` export and answered 502 with
+  # "D.handler is not a function", even though the bundle exported `default`
+  # correctly. v2 functions are bundled by Netlify's own pipeline.
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

@@ -64,6 +64,17 @@ export interface BuildAppOptions {
   publicConfig: PublicConfig;
   /** Deployment mode: decides whether paths carry an owner prefix. */
   vaultCfg: VaultConfig;
+  /**
+   * Prefix every route sits behind, e.g. `/api`.
+   *
+   * Netlify routes a path pattern to a function, so the API has to answer under
+   * one prefix there. Development uses the same prefix rather than none, so a
+   * URL that works locally works deployed — the alternative is two layouts and
+   * a class of bug that only exists in production.
+   *
+   * Defaults to no prefix, which is what the tests build.
+   */
+  basePath?: string;
 }
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
@@ -100,7 +111,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const loginLimiter = opts.loginLimiter ?? createLoginRateLimiter();
 
   app.route('/health', healthRouter);
-  app.route('/api/config', createConfigRouter(opts.publicConfig));
+  app.route('/config', createConfigRouter(opts.publicConfig));
 
   // /invite/accept/:token corre con optional-auth: el handler maneja
   // los casos logueado/no-logueado y redirige al frontend acorde.
@@ -165,10 +176,18 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       invites: opts.invites,
       crossOwner: opts.crossOwner,
       resolveUserForApiKey: opts.resolveUserForApiKey,
+      endpoint: `${opts.basePath ?? ''}/trpc`,
     }),
   );
 
   app.notFound((c) => c.json({ error: 'not found' }, 404));
 
-  return app;
+  if (!opts.basePath) return app;
+
+  // Mounted rather than declared per route, so the prefix cannot drift away
+  // from one handler while the others move.
+  const prefixed = new Hono<AuthBindings>();
+  prefixed.route(opts.basePath, app);
+  prefixed.notFound((c) => c.json({ error: 'not found' }, 404));
+  return prefixed;
 }
