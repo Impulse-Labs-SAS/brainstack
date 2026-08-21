@@ -1,88 +1,58 @@
-// Resolver de vault-root deployment-aware.
+// Logical vs physical note paths.
 //
-// Self-host: todos los users (en la práctica, el único user) comparten el
-// vault físico apuntado por NOTES_DIR.
+// `notes.path` is the primary key, so two users cannot both own "Inbox/idea.md"
+// unless something distinguishes them. The sqlite line solved this on disk, by
+// giving each user a directory under NOTES_DIR. Postgres keeps the same shape
+// without the disk: the stored path carries the owner as its first segment, and
+// the callers never see it.
 //
-// Hosted: cada user vive bajo NOTES_DIR/<userId>/. El aislamiento físico
-// es una segunda línea de defensa además de la authz lógica del
-// SharingService. Ver docs/Sharing-design.md §5.
+// So `Inbox/idea.md` for user u_42 is stored as `u_42/Inbox/idea.md`, and the
+// web app, the MCP client and the agent all keep speaking in logical paths.
+// `notes.owner_id` holds the same owner as a column, because a prefix is not
+// something you can index or join on.
+//
+// Self-host has one user and no prefix: both functions are the identity there.
 
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+export type Deployment = 'self-host' | 'hosted';
 
-export interface VaultRootResolverConfig {
-  deployment: 'self-host' | 'hosted';
-  notesDirAbs: string;
+export interface VaultConfig {
+  deployment: Deployment;
 }
 
 /**
- * Devuelve el path absoluto del vault root del user dado. En hosted, crea
- * el subdir si todavía no existe (idempotente).
+ * Logical to physical. Idempotent: a path that already carries the prefix is
+ * returned unchanged, so passing a stored path back through is harmless.
  */
-export function resolveVaultRoot(
-  userId: string,
-  cfg: VaultRootResolverConfig,
-): string {
-  if (cfg.deployment === 'self-host') return cfg.notesDirAbs;
-  if (!userId) throw new Error('resolveVaultRoot: userId requerido en hosted');
-  const root = join(cfg.notesDirAbs, userId);
-  mkdirSync(root, { recursive: true });
-  return root;
-}
-
-/**
- * Dado el path físico absoluto de un archivo dentro de NOTES_DIR, devuelve
- * el userId dueño según la convención de hosted (primer segmento del
- * subdir). En self-host devuelve null porque no hay convención por path.
- */
-export function ownerIdFromPhysicalPath(
-  absoluteFilePath: string,
-  cfg: VaultRootResolverConfig,
-): string | null {
-  if (cfg.deployment === 'self-host') return null;
-  const rel = absoluteFilePath
-    .slice(cfg.notesDirAbs.length)
-    .replace(/^[\\/]+/, '');
-  const segs = rel.split(/[\\/]/);
-  if (segs.length === 0 || !segs[0]) return null;
-  return segs[0];
-}
-
-/**
- * Convierte un path lógico (el que conoce el frontend o el agente MCP,
- * sin prefix de owner) al path físico que vive en DB/FS. En self-host es
- * identity; en hosted prefixea `<userId>/`. Idempotente: si el input ya
- * arranca con `<userId>/`, no duplica.
- */
-export function toPhysical(
-  userId: string,
-  logicalPath: string,
-  cfg: VaultRootResolverConfig,
-): string {
+export function toPhysical(userId: string, logicalPath: string, cfg: VaultConfig): string {
   if (cfg.deployment === 'self-host') return logicalPath;
-  if (!userId) throw new Error('toPhysical: userId requerido en hosted');
+  if (!userId) throw new Error('toPhysical: userId required in hosted');
   const norm = logicalPath.replace(/^[\\/]+/, '');
-  if (norm === userId || norm.startsWith(userId + '/')) return norm;
+  if (norm === userId || norm.startsWith(`${userId}/`)) return norm;
   return `${userId}/${norm}`;
 }
 
 /**
- * Inverso de `toPhysical`. En self-host es identity. En hosted strippea
- * el prefix `<userId>/`. Si el path no empieza con el prefix esperado,
- * throw — señal de que un row de otro user se filtró sin querer.
+ * Physical to logical.
+ *
+ * Throws when the path belongs to somebody else, and that is the point: it is
+ * the last line of defence for a query that forgot to filter by owner. A leak
+ * shows up as an error rather than as another user's note on screen.
  */
-export function toLogical(
-  userId: string,
-  physicalPath: string,
-  cfg: VaultRootResolverConfig,
-): string {
+export function toLogical(userId: string, physicalPath: string, cfg: VaultConfig): string {
   if (cfg.deployment === 'self-host') return physicalPath;
-  if (!userId) throw new Error('toLogical: userId requerido en hosted');
+  if (!userId) throw new Error('toLogical: userId required in hosted');
   const norm = physicalPath.replace(/^[\\/]+/, '');
-  const prefix = userId + '/';
   if (norm === userId) return '';
+  const prefix = `${userId}/`;
   if (!norm.startsWith(prefix)) {
-    throw new Error(`toLogical: path "${physicalPath}" no pertenece a user "${userId}"`);
+    throw new Error(`toLogical: path "${physicalPath}" does not belong to user "${userId}"`);
   }
   return norm.slice(prefix.length);
+}
+
+/** The owner a stored path belongs to, by convention. Null in self-host. */
+export function ownerIdFromPhysicalPath(physicalPath: string, cfg: VaultConfig): string | null {
+  if (cfg.deployment === 'self-host') return null;
+  const segs = physicalPath.replace(/^[\\/]+/, '').split('/');
+  return segs[0] || null;
 }

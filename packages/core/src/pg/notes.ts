@@ -99,10 +99,10 @@ export class PgNoteStore {
    * Create a note. Fails if the path is taken — callers meaning "create or
    * replace" should use `upsert`.
    */
-  async create(path: string, rawMarkdown: string): Promise<StoredNote> {
+  async create(path: string, rawMarkdown: string, ownerId?: string): Promise<StoredNote> {
     const key = normalizeNoteKey(path);
     if (await this.exists(key)) throw new NoteAlreadyExistsError(key);
-    return this.upsert(key, rawMarkdown);
+    return this.upsert(key, rawMarkdown, ownerId);
   }
 
   /**
@@ -111,7 +111,7 @@ export class PgNoteStore {
    * Idempotent by checksum: rewriting identical content leaves `updated_at`
    * untouched, which preserves the property the old watcher gave us for free.
    */
-  async upsert(path: string, rawMarkdown: string): Promise<StoredNote> {
+  async upsert(path: string, rawMarkdown: string, ownerId?: string): Promise<StoredNote> {
     const key = normalizeNoteKey(path);
     const parsed = parseNote(rawMarkdown, { path: key });
     const now = Date.now();
@@ -126,6 +126,7 @@ export class PgNoteStore {
         checksum: parsed.checksum,
         createdAt: now,
         updatedAt: now,
+        ownerId: ownerId ?? null,
       })
       .onConflictDoUpdate({
         target: notes.path,
@@ -137,6 +138,9 @@ export class PgNoteStore {
           // Only bump the timestamp when the content actually changed.
           updatedAt: sql`CASE WHEN ${notes.checksum} = excluded.checksum
                               THEN ${notes.updatedAt} ELSE excluded.updated_at END`,
+          // An update never reassigns ownership; it only fills it in when the
+          // row predates owners and the caller knows who it belongs to.
+          ownerId: sql`COALESCE(${notes.ownerId}, excluded.owner_id)`,
         },
       })
       .returning();

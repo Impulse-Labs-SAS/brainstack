@@ -37,9 +37,9 @@ function setSessionCookie(c: Context<AuthBindings>, token: string, secure: boole
 export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<AuthBindings> {
   const router = new Hono<AuthBindings>();
 
-  router.get('/google', (c) => {
+  router.get('/google', async (c) => {
     const redirectTo = c.req.query('redirect_to') ?? undefined;
-    const { url, state } = opts.google.startAuthorization(redirectTo);
+    const { url, state } = await opts.google.startAuthorization(redirectTo);
     setCookie(c, STATE_COOKIE, state, {
       httpOnly: true,
       secure: opts.secureCookies,
@@ -66,13 +66,12 @@ export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<Au
         code,
         stateCookie,
       });
-      const user = opts.auth.upsertGoogleUser({
+      const user = await opts.auth.upsertGoogleUser({
         googleId: profile.googleId,
         email: profile.email,
-        googleEmailVerified: profile.emailVerified,
         displayName: profile.name,
       });
-      const session = opts.auth.createSession(user.id, {
+      const session = await opts.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
         ipAddress: c.req.header('x-forwarded-for') ?? undefined,
       });

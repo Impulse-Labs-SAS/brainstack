@@ -40,7 +40,7 @@ export function createTotpRouter(options: TotpRouterOptions): Hono<AuthBindings>
       .safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
     try {
-      const result = options.totp.confirmEnrollment(
+      const result = await options.totp.confirmEnrollment(
         principal.user.id,
         parsed.data.secret,
         parsed.data.code,
@@ -62,7 +62,7 @@ export function createTotpRouter(options: TotpRouterOptions): Hono<AuthBindings>
       .safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
     try {
-      options.totp.disable(principal.user.id, parsed.data.code);
+      await options.totp.disable(principal.user.id, parsed.data.code);
       return c.json({ ok: true });
     } catch (err) {
       const status = err instanceof AppError ? err.status : 500;
@@ -71,13 +71,13 @@ export function createTotpRouter(options: TotpRouterOptions): Hono<AuthBindings>
     }
   });
 
-  router.get('/status', requireAuth, (c) => {
+  router.get('/status', requireAuth, async (c) => {
     const principal = c.var.principal;
     if (principal.kind !== 'user') return c.json({ error: 'session required' }, 403);
     return c.json({
       enabled: principal.user.hasTotp,
       remainingBackupCodes: principal.user.hasTotp
-        ? options.totp.remainingBackupCodes(principal.user.id)
+        ? await options.totp.remainingBackupCodes(principal.user.id)
         : 0,
     });
   });

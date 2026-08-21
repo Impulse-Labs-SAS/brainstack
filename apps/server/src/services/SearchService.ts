@@ -1,22 +1,25 @@
-// Search over the BrainStack cache. V1 = full-text via FTS5; semantic search
-// es V2. La query es sanitised — los callers pueden pasar input crudo.
+// Search across a user's own notes and the folders shared with them.
 //
-// Owner-aware: en hosted los hits se restringen a notas del user (por
-// owner_id en la tabla notes, via JOIN sobre notes_fts.path). En self-host
-// no se filtra. Los paths devueltos pasan por toLogical para que el caller
-// reciba paths sin prefix.
+// The ranking itself belongs to PgSearchService, which indexes each note twice
+// — unstemmed for prefix matching, stemmed for morphology — and querying the
+// union of both is what makes Spanish search behave. Nothing here touches that.
+//
+// What this adds is scope. Hits are restricted to notes the caller may see, and
+// paths come back logical, without the owner prefix.
 
-import type { BrainStackDatabase } from '@brainstack/core';
+import { PgSearchService, type PgDb } from '@brainstack/core/pg';
 
-import { toLogical, type VaultRootResolverConfig } from '../lib/vault.js';
+import { ownerIdFromPhysicalPath, toLogical, type VaultConfig } from '../lib/vault.js';
+
+import { pathFallsUnder } from './SharingService.js';
 
 export interface SearchHit {
   path: string;
   title: string;
   snippet: string;
-  /** FTS5 bm25 score (lower is better). */
+  /** Relevance, lower is better. */
   score: number;
-  /** Owner del hit. NULL en self-host. Si != userId, es un hit shared. */
+  /** Owner of the hit. Null in self-host. When it differs from the caller, the hit is shared. */
   ownerId: string | null;
 }
 
@@ -27,101 +30,87 @@ export interface SearchScope {
 
 export interface SearchOptions {
   limit?: number;
-  /** Si false, excluye notas del propio user. Default true. */
+  /** When false, the caller's own notes are excluded. Defaults to true. */
   includeMine?: boolean;
   /**
-   * Lista de (owner, folder) compartidos al user. Los hits dentro de estos
-   * scopes se incluyen además de los propios (si includeMine=true).
-   * Omitir o pasar [] desactiva la búsqueda cross-owner.
+   * Folders other people shared with the caller. Hits inside these are included
+   * alongside their own. Omitting it turns cross-owner search off.
    */
   sharedScopes?: SearchScope[];
 }
 
 export interface SearchServiceOptions {
-  db: BrainStackDatabase;
-  cfg: VaultRootResolverConfig;
+  db: PgDb;
+  cfg: VaultConfig;
+  search?: PgSearchService;
 }
 
-export class SearchService {
-  constructor(private readonly opts: SearchServiceOptions) {}
+/**
+ * How much wider than the requested limit to search before filtering by scope.
+ *
+ * Scope is applied after ranking rather than inside the query, because pushing
+ * it down would mean rewriting the two-vector SQL that makes search work. The
+ * cost is that a caller whose visible notes are a small slice of a large
+ * database could see fewer hits than they asked for; with a handful of users
+ * sharing folders, that does not happen.
+ */
+const OVERSCAN = 4;
 
-  search(userId: string, query: string, options: SearchOptions = {}): SearchHit[] {
+export class SearchService {
+  private readonly engine: PgSearchService;
+
+  constructor(private readonly opts: SearchServiceOptions) {
+    this.engine = opts.search ?? new PgSearchService(opts.db);
+  }
+
+  async search(userId: string, query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
     const trimmed = query.trim();
     if (trimmed === '') return [];
+
     const limit = options.limit ?? 10;
-    const ftsQuery = toFtsMatch(trimmed);
     const hosted = this.opts.cfg.deployment === 'hosted';
+    const hits = await this.engine.search(trimmed, { limit: hosted ? limit * OVERSCAN : limit });
+
+    if (!hosted) {
+      return hits.map((h) => ({ ...h, score: Number(h.score), ownerId: null }));
+    }
+
     const includeMine = options.includeMine ?? true;
     const sharedScopes = options.sharedScopes ?? [];
 
-    if (!hosted) {
-      // Self-host: comportamiento previo, sin filtro de owner.
-      return this.opts.db.sqlite
-        .prepare<unknown[], { path: string; title: string; snippet: string; score: number }>(
-          `SELECT path, title,
-                  snippet(notes_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet,
-                  bm25(notes_fts) AS score
-           FROM notes_fts
-           WHERE notes_fts MATCH ?
-           ORDER BY score LIMIT ?`,
-        )
-        .all(ftsQuery, limit)
-        .map((r) => ({ ...r, ownerId: null }));
+    const visible: SearchHit[] = [];
+    for (const hit of hits) {
+      const ownerId = ownerIdFromPhysicalPath(hit.path, this.opts.cfg);
+      if (!ownerId) continue;
+
+      const mine = ownerId === userId;
+      if (mine && !includeMine) continue;
+
+      if (!mine) {
+        const relative = stripOwner(hit.path, ownerId);
+        const shared = sharedScopes.some(
+          (s) => s.ownerId === ownerId && pathFallsUnder(relative, s.folderPath),
+        );
+        if (!shared) continue;
+      }
+
+      visible.push({
+        path: mine ? toLogical(userId, hit.path, this.opts.cfg) : stripOwner(hit.path, ownerId),
+        title: hit.title,
+        snippet: hit.snippet,
+        score: Number(hit.score),
+        ownerId,
+      });
+
+      if (visible.length === limit) break;
     }
 
-    // Hosted: construir WHERE como OR de bloques (mine, shared scopes).
-    const params: unknown[] = [ftsQuery];
-    const blocks: string[] = [];
-    if (includeMine) {
-      blocks.push('n.owner_id = ?');
-      params.push(userId);
-    }
-    for (const scope of sharedScopes) {
-      blocks.push('(n.owner_id = ? AND n.path LIKE ?)');
-      params.push(scope.ownerId, `${scope.ownerId}/${scope.folderPath}/%`);
-    }
-    if (blocks.length === 0) return [];
-
-    const where = blocks.join(' OR ');
-    params.push(limit);
-
-    const sql = `SELECT f.path,
-                f.title,
-                snippet(notes_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet,
-                bm25(notes_fts) AS score,
-                n.owner_id AS owner_id
-         FROM notes_fts f
-         JOIN notes n ON n.path = f.path
-         WHERE notes_fts MATCH ? AND (${where})
-         ORDER BY score
-         LIMIT ?`;
-
-    return this.opts.db.sqlite
-      .prepare<
-        unknown[],
-        { path: string; title: string; snippet: string; score: number; owner_id: string }
-      >(sql)
-      .all(...params)
-      .map((r) => ({
-        // Path lógico relativo al owner; el frontend infiere mine/shared
-        // viendo si ownerId === userId.
-        path: toLogical(r.owner_id, r.path, this.opts.cfg),
-        title: r.title,
-        snippet: r.snippet,
-        score: r.score,
-        ownerId: r.owner_id,
-      }));
+    return visible;
   }
 }
 
-/** Convert free-form input into a safe FTS5 MATCH expression. */
-function toFtsMatch(input: string): string {
-  // Tokenise on whitespace, drop FTS metacharacters, and OR-join the terms
-  // wrapped as prefix queries to keep search forgiving.
-  const tokens = input
-    .split(/\s+/)
-    .map((t) => t.replace(/["()*:^]/g, '').trim())
-    .filter(Boolean);
-  if (tokens.length === 0) return '""';
-  return tokens.map((t) => `"${t}"*`).join(' OR ');
+/** Drop a known owner prefix. Used for hits belonging to somebody else. */
+function stripOwner(physicalPath: string, ownerId: string): string {
+  const prefix = `${ownerId}/`;
+  return physicalPath.startsWith(prefix) ? physicalPath.slice(prefix.length) : physicalPath;
 }

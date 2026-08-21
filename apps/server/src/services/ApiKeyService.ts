@@ -1,15 +1,21 @@
-// API keys for MCP clients. Each key is shown to the user once at creation;
-// only the sha256 hash and a short prefix are stored. Prefix lets us identify
-// keys in audit logs without leaking the secret.
+// API keys for MCP clients, backed by Postgres.
+//
+// Each key is shown to the user once at creation; only the sha256 hash and a
+// short prefix are stored. The prefix lets us identify keys in audit logs and
+// in the UI without ever holding the secret.
 
-import type { BrainStackDatabase } from '@brainstack/core';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+
+import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
 import { generateToken, sha256 } from '../lib/tokens.js';
 
+const { apiKeys } = pgSchema;
+
 export interface ApiKeyServiceOptions {
-  db: BrainStackDatabase;
+  db: PgDb;
   now?: () => number;
 }
 
@@ -40,19 +46,22 @@ export class ApiKeyService {
     return this.opts.now ? this.opts.now() : Date.now();
   }
 
-  create(userId: string, name: string, scopes: string[] = []): CreatedApiKey {
+  async create(userId: string, name: string, scopes: string[] = []): Promise<CreatedApiKey> {
     const random = generateToken(TOKEN_BYTES);
     const token = `${API_KEY_PREFIX}${random}`;
     const prefix = token.slice(0, API_KEY_PREFIX.length + PREFIX_VISIBLE_CHARS);
     const id = nanoid();
     const createdAt = this.now();
 
-    this.opts.db.sqlite
-      .prepare(
-        `INSERT INTO api_keys (id, user_id, name, prefix, token_hash, scopes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(id, userId, name, prefix, sha256(token), JSON.stringify(scopes), createdAt);
+    await this.opts.db.insert(apiKeys).values({
+      id,
+      userId,
+      name,
+      prefix,
+      tokenHash: sha256(token),
+      scopes,
+      createdAt,
+    });
 
     return {
       id,
@@ -67,78 +76,77 @@ export class ApiKeyService {
     };
   }
 
-  validate(token: string): ApiKey | null {
+  /**
+   * Resolve a bearer token to its key, stamping `last_used_at`.
+   *
+   * Returns null for unknown, malformed and revoked tokens alike — callers get
+   * no signal about which, by design.
+   */
+  async validate(token: string): Promise<ApiKey | null> {
     if (!token.startsWith(API_KEY_PREFIX)) return null;
-    const hash = sha256(token);
-    const row = this.opts.db.sqlite
-      .prepare<[string], {
-        id: string;
-        user_id: string;
-        name: string;
-        prefix: string;
-        scopes: string;
-        created_at: number;
-        last_used_at: number | null;
-        revoked_at: number | null;
-      }>(
-        `SELECT id, user_id, name, prefix, scopes, created_at, last_used_at, revoked_at
-         FROM api_keys WHERE token_hash = ?`,
-      )
-      .get(hash);
-    if (!row || row.revoked_at != null) return null;
-
-    const now = this.now();
-    this.opts.db.sqlite
-      .prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?')
-      .run(now, row.id);
-
-    return {
-      id: row.id,
-      userId: row.user_id,
-      name: row.name,
-      prefix: row.prefix,
-      scopes: JSON.parse(row.scopes) as string[],
-      createdAt: row.created_at,
-      lastUsedAt: now,
-      revokedAt: null,
-    };
+    return this.validateByHash(sha256(token));
   }
 
-  revoke(id: string): void {
+  /**
+   * Same as `validate`, for callers that already hashed the token. The MCP
+   * endpoint uses this so the plaintext never travels further than it must.
+   */
+  async validateByHash(tokenHash: string): Promise<ApiKey | null> {
     const now = this.now();
-    const result = this.opts.db.sqlite
-      .prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
-      .run(now, id);
-    if (result.changes === 0) {
+    // Stamping and fetching in one statement keeps a revoked key from slipping
+    // through between a read and a write.
+    const [row] = await this.opts.db
+      .update(apiKeys)
+      .set({ lastUsedAt: now })
+      .where(and(eq(apiKeys.tokenHash, tokenHash), isNull(apiKeys.revokedAt)))
+      .returning();
+
+    if (!row || row.userId === null) return null;
+    return toApiKey({ ...row, userId: row.userId });
+  }
+
+  async revoke(id: string): Promise<void> {
+    const now = this.now();
+    const revoked = await this.opts.db
+      .update(apiKeys)
+      .set({ revokedAt: now })
+      .where(and(eq(apiKeys.id, id), isNull(apiKeys.revokedAt)))
+      .returning({ id: apiKeys.id });
+
+    if (revoked.length === 0) {
       throw new AppError('api key not found or already revoked', 'NOT_FOUND', 404);
     }
   }
 
-  list(userId: string): ApiKey[] {
-    return this.opts.db.sqlite
-      .prepare<[string], {
-        id: string;
-        user_id: string;
-        name: string;
-        prefix: string;
-        scopes: string;
-        created_at: number;
-        last_used_at: number | null;
-        revoked_at: number | null;
-      }>(
-        `SELECT id, user_id, name, prefix, scopes, created_at, last_used_at, revoked_at
-         FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`,
-      )
-      .all(userId)
-      .map((row) => ({
-        id: row.id,
-        userId: row.user_id,
-        name: row.name,
-        prefix: row.prefix,
-        scopes: JSON.parse(row.scopes) as string[],
-        createdAt: row.created_at,
-        lastUsedAt: row.last_used_at,
-        revokedAt: row.revoked_at,
-      }));
+  async list(userId: string): Promise<ApiKey[]> {
+    const rows = await this.opts.db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.userId, userId))
+      .orderBy(desc(apiKeys.createdAt));
+
+    return rows.map((row) => toApiKey({ ...row, userId }));
   }
+}
+
+function toApiKey(row: {
+  id: string;
+  userId: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  createdAt: number;
+  lastUsedAt: number | null;
+  revokedAt: number | null;
+}): ApiKey {
+  return {
+    id: row.id,
+    userId: row.userId,
+    name: row.name,
+    prefix: row.prefix,
+    scopes: row.scopes ?? [],
+    createdAt: Number(row.createdAt),
+    lastUsedAt: row.lastUsedAt === null ? null : Number(row.lastUsedAt),
+    revokedAt: row.revokedAt === null ? null : Number(row.revokedAt),
+  };
 }

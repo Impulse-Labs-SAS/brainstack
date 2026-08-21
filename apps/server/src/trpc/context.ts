@@ -30,7 +30,7 @@ export interface TrpcContext extends ServerServices {
   /** Convenience accessor for the logged-in user (null when unauthenticated). */
   user: User | null;
   /** Carpetas compartidas CONMIGO, calculadas a demanda y cacheadas por request. */
-  sharedRoots(): SharedRoot[];
+  sharedRoots(): Promise<SharedRoot[]>;
 }
 
 export function buildContext(
@@ -42,10 +42,10 @@ export function buildContext(
     ...services,
     principal,
     user: principal?.user ?? null,
-    sharedRoots(): SharedRoot[] {
+    async sharedRoots(): Promise<SharedRoot[]> {
       if (cache) return cache;
       const userId = principal?.user.id;
-      cache = userId ? services.sharing.listSharedRoots(userId) : [];
+      cache = userId ? await services.sharing.listSharedRoots(userId) : [];
       return cache;
     },
   };

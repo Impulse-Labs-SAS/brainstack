@@ -32,7 +32,7 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
   const router = new Hono<AuthBindings>();
 
   router.all('*', async (c) => {
-    const principal = resolvePrincipal(c, options);
+    const principal = await resolvePrincipal(c, options);
 
     const response = await fetchRequestHandler({
       endpoint: '/trpc',
@@ -58,21 +58,21 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
   return router;
 }
 
-function resolvePrincipal(
+async function resolvePrincipal(
   c: { req: { header(name: string): string | undefined } },
   options: TrpcRouterOptions,
-): Principal | null {
+): Promise<Principal | null> {
   const authHeader = c.req.header('authorization');
   if (authHeader?.toLowerCase().startsWith('bearer ')) {
-    const apiKey = options.apiKeys.validate(authHeader.slice(7).trim());
+    const apiKey = await options.apiKeys.validate(authHeader.slice(7).trim());
     if (apiKey) {
-      const user = options.resolveUserForApiKey(apiKey);
+      const user = await options.resolveUserForApiKey(apiKey);
       return { kind: 'apiKey', apiKey, user };
     }
   }
   const sessionToken = getCookie(c as unknown as Parameters<typeof getCookie>[0], SESSION_COOKIE);
   if (sessionToken) {
-    const user = options.auth.validateSession(sessionToken);
+    const user = await options.auth.validateSession(sessionToken);
     if (user) return { kind: 'user', user };
   }
   return null;

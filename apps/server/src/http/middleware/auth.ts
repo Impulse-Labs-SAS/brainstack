@@ -31,7 +31,7 @@ export function buildAuthMiddleware(
   options: AuthMiddlewareOptions,
 ): MiddlewareHandler<AuthBindings> {
   return async (c, next) => {
-    const principal = resolvePrincipal(c, options);
+    const principal = await resolvePrincipal(c, options);
     if (!principal) {
       return c.json({ error: 'unauthorized' }, 401);
     }
@@ -45,23 +45,23 @@ export function buildOptionalAuthMiddleware(
   options: AuthMiddlewareOptions,
 ): MiddlewareHandler<AuthBindings> {
   return async (c, next) => {
-    const principal = resolvePrincipal(c, options);
+    const principal = await resolvePrincipal(c, options);
     if (principal) c.set('principal', principal);
     return next();
   };
 }
 
-function resolvePrincipal(
+async function resolvePrincipal(
   c: Parameters<MiddlewareHandler<AuthBindings>>[0],
   { auth, apiKeys, resolveUser }: AuthMiddlewareOptions,
-): Principal | null {
+): Promise<Principal | null> {
   // 1. Bearer API key.
   const authHeader = c.req.header('authorization');
   if (authHeader?.toLowerCase().startsWith('bearer ')) {
     const token = authHeader.slice(7).trim();
-    const apiKey = apiKeys.validate(token);
+    const apiKey = await apiKeys.validate(token);
     if (apiKey) {
-      const user = resolveUser(apiKey);
+      const user = await resolveUser(apiKey);
       return { kind: 'apiKey', apiKey, user };
     }
   }
@@ -69,7 +69,7 @@ function resolvePrincipal(
   // 2. Session cookie.
   const sessionToken = getCookie(c, SESSION_COOKIE);
   if (sessionToken) {
-    const user = auth.validateSession(sessionToken);
+    const user = await auth.validateSession(sessionToken);
     if (user) return { kind: 'user', user };
   }
 

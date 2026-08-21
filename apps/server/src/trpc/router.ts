@@ -67,8 +67,8 @@ export const appRouter = t.router({
     get: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .query(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
+        wrap(async () => {
+          await ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
           return ctx.notes.get(ctx.user.id, input.path);
         }),
       ),
@@ -154,36 +154,10 @@ export const appRouter = t.router({
           .optional(),
       )
       .query(({ ctx, input }) => ctx.notes.listDecisions(ctx.user.id, input ?? {})),
-    uploadAttachment: protectedProcedure
-      .input(
-        z.object({
-          path: z.string().min(1),
-          dataBase64: z.string().min(1),
-          mime: z.string().optional(),
-        }),
-      )
-      .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.uploadAttachment(ctx.user.id, {
-            path: input.path,
-            dataBase64: input.dataBase64,
-            mime: input.mime,
-          });
-        }),
-      ),
-    getAttachment: protectedProcedure
-      .input(z.object({ path: z.string().min(1) }))
-      .query(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.getAttachment(ctx.user.id, input.path);
-        }),
-      ),
     backlinks: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
-      .query(({ ctx, input }) => {
-        ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
+      .query(async ({ ctx, input }) => {
+        await ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
         return ctx.notes.listLinks(ctx.user.id, input.path);
       }),
     graph: protectedProcedure
@@ -192,13 +166,14 @@ export const appRouter = t.router({
           .object({ scope: z.enum(['mine', 'shared', 'all']).optional() })
           .optional(),
       )
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         const scope = input?.scope ?? 'mine';
         const sharedScopes =
           scope !== 'mine'
-            ? ctx
-                .sharedRoots()
-                .map((r) => ({ ownerId: r.ownerId, folderPath: r.folderPath }))
+            ? (await ctx.sharedRoots()).map((r) => ({
+                ownerId: r.ownerId,
+                folderPath: r.folderPath,
+              }))
             : [];
         return ctx.notes.graph(ctx.user.id, { sharedScopes });
       }),
@@ -220,11 +195,6 @@ export const appRouter = t.router({
           ctx.crossOwner.listTree(ctx.user.id, input.ownerId, input.path, input.depth),
         ),
       ),
-    getAttachmentForOwner: protectedProcedure
-      .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
-      .query(async ({ ctx, input }) =>
-        wrap(() => ctx.crossOwner.getAttachment(ctx.user.id, input.ownerId, input.path)),
-      ),
     linksForOwner: protectedProcedure
       .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
       .query(({ ctx, input }) =>
@@ -240,14 +210,15 @@ export const appRouter = t.router({
           scope: z.enum(['mine', 'shared', 'all']).optional(),
         }),
       )
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         const scope = input.scope ?? 'mine';
         const includeMine = scope !== 'shared';
         const sharedScopes =
           scope !== 'mine'
-            ? ctx
-                .sharedRoots()
-                .map((r) => ({ ownerId: r.ownerId, folderPath: r.folderPath }))
+            ? (await ctx.sharedRoots()).map((r) => ({
+                ownerId: r.ownerId,
+                folderPath: r.folderPath,
+              }))
             : [];
         return ctx.search.search(ctx.user.id, input.query, {
           limit: input.limit,
@@ -271,11 +242,11 @@ export const appRouter = t.router({
         }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
+        wrap(async () => {
           if (!ctx.sharing.enabled) {
             throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
           }
-          const target = ctx.auth.getUserByEmail(input.email);
+          const target = await ctx.auth.findUserByEmail(input.email);
           if (!target) {
             // El flow con invitación por email/link entra en el paso 9.
             throw new AppError('user no encontrado; usar invitación', 'NOT_FOUND', 404);
@@ -297,7 +268,7 @@ export const appRouter = t.router({
         }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
+        wrap(async () => {
           if (!ctx.sharing.enabled) {
             throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
           }

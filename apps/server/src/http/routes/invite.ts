@@ -23,7 +23,7 @@ export interface InviteRouterOptions {
 export function createInviteRouter(opts: InviteRouterOptions): Hono<AuthBindings> {
   const router = new Hono<AuthBindings>();
 
-  router.get('/accept/:token', (c) => {
+  router.get('/accept/:token', async (c) => {
     const token = c.req.param('token');
     const principal = c.get('principal');
     const next = `/invite/accept/${encodeURIComponent(token)}`;
@@ -36,7 +36,7 @@ export function createInviteRouter(opts: InviteRouterOptions): Hono<AuthBindings
     }
 
     try {
-      const result = opts.invites.accept({
+      const result = await opts.invites.accept({
         token,
         user: { id: principal.user.id, email: principal.user.email },
       });

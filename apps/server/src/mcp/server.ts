@@ -72,7 +72,7 @@ export function buildMcpServer({
     }
     return '';
   };
-  const assertRead = (path: string): void =>
+  const assertRead = (path: string): Promise<void> =>
     sharing.assertCanRead(requireUserId(), requireUserId(), path);
   const assertWrite = (path: string): void =>
     sharing.assertCanWrite(requireUserId(), requireUserId(), path);
@@ -96,11 +96,12 @@ export function buildMcpServer({
         const includeMine = effectiveScope !== 'shared';
         const sharedScopes =
           effectiveScope !== 'mine' && sharing.enabled
-            ? sharing
-                .listSharedRoots(userId)
-                .map((r) => ({ ownerId: r.ownerId, folderPath: r.folderPath }))
+            ? (await sharing.listSharedRoots(userId)).map((r) => ({
+                ownerId: r.ownerId,
+                folderPath: r.folderPath,
+              }))
             : [];
-        const hits = search.search(userId, query, { limit, includeMine, sharedScopes });
+        const hits = await search.search(userId, query, { limit, includeMine, sharedScopes });
         logger.debug({ query, hits: hits.length, scope: effectiveScope }, 'search_brain');
         return JSON_TEXT(hits);
       } catch (err) {
@@ -119,7 +120,7 @@ export function buildMcpServer({
     },
     async ({ path }) => {
       try {
-        assertRead(path);
+        await assertRead(path);
         const note = await notes.get(requireUserId(), path);
         return JSON_TEXT(note);
       } catch (err) {
@@ -298,52 +299,6 @@ export function buildMcpServer({
   );
 
   server.registerTool(
-    'upload_attachment',
-    {
-      title: 'Upload an attachment',
-      description:
-        'Write a binary attachment under Attachments/. `data_base64` is the file content base64-encoded. Returns the final path so it can be embedded as ![[…]].',
-      inputSchema: {
-        path: z.string().min(1),
-        data_base64: z.string().min(1),
-        mime: z.string().optional(),
-      },
-    },
-    async ({ path, data_base64, mime }) => {
-      try {
-        assertWrite(path);
-        const final = await notes.uploadAttachment(requireUserId(), {
-          path,
-          dataBase64: data_base64,
-          mime,
-        });
-        return TEXT(final);
-      } catch (err) {
-        return toMcpError(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    'get_attachment',
-    {
-      title: 'Read an attachment',
-      description:
-        'Return the bytes of an attachment under Attachments/, base64-encoded, along with size and mtime.',
-      inputSchema: { path: z.string().min(1) },
-    },
-    async ({ path }) => {
-      try {
-        assertRead(path);
-        const result = await notes.getAttachment(requireUserId(), path);
-        return JSON_TEXT(result);
-      } catch (err) {
-        return toMcpError(err);
-      }
-    },
-  );
-
-  server.registerTool(
     'list_links',
     {
       title: 'List backlinks',
@@ -352,7 +307,7 @@ export function buildMcpServer({
     },
     async ({ path }) => {
       try {
-        assertRead(path);
+        await assertRead(path);
         const rows = notes.listLinks(requireUserId(), path);
         return JSON_TEXT(rows);
       } catch (err) {

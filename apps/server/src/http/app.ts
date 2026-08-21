@@ -17,7 +17,6 @@ import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitL
 
 import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
 import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
-import { createAttachmentsRouter } from './routes/attachments.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
 import { createOAuthGoogleRouter } from './routes/oauthGoogle.js';
@@ -34,7 +33,7 @@ import type { SearchService } from '../services/SearchService.js';
 import type { SharingService } from '../services/SharingService.js';
 
 import type { McpPrincipal } from '../mcp/server.js';
-import type { VaultRootResolverConfig } from '../lib/vault.js';
+import type { VaultConfig } from '../lib/vault.js';
 
 export interface BuildAppOptions {
   buildMcpServer(principal: McpPrincipal | null): McpServer;
@@ -63,8 +62,8 @@ export interface BuildAppOptions {
   totp?: TotpService;
   /** Public deployment config exposed at GET /api/config. */
   publicConfig: PublicConfig;
-  /** Vault root + deployment, used by the attachments HTTP route. */
-  vaultCfg: VaultRootResolverConfig;
+  /** Deployment mode: decides whether paths carry an owner prefix. */
+  vaultCfg: VaultConfig;
 }
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
@@ -154,12 +153,6 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   app.use('/mcp', requireAuth);
   app.use('/mcp', rateLimit);
   app.route('/mcp', mcpRouter);
-
-  app.use('/api/attachments/*', requireAuth);
-  app.route(
-    '/api/attachments',
-    createAttachmentsRouter({ vaultCfg: opts.vaultCfg, sharing: opts.sharing }),
-  );
 
   app.route(
     '/trpc',

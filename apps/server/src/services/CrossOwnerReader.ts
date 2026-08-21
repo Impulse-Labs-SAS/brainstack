@@ -1,32 +1,22 @@
-// Reader read-only de notas/carpetas que pertenecen a OTRO user.
-// Sólo aplica en hosted; en self-host no hay multi-tenant y todo método
-// tira NOT_FOUND. Bypasa la sqlite (que no separa por owner_id de manera
-// confiable en V1) y va directo al disco vía resolveVaultRoot(ownerId).
+// Reading somebody else's notes, through a folder they shared.
 //
-// Cada método consulta SharingService.assertCanRead antes de leer.
+// Separate from NoteService on purpose: NoteService acts for one user over
+// their own vault and never needs to think about permission, while everything
+// here crosses an ownership boundary and checks SharingService first.
+//
+// Paths in and out are relative to the owner's root, not the viewer's, because
+// that is how a shared folder is addressed: "this path, in that person's brain".
 
-import {
-  NoteNotFoundError,
-  PathTraversalError,
-  listFolders,
-  listNoteFiles,
-  parseNote,
-  readAttachment,
-  readNote,
-  type BrainStackDatabase,
-  type Frontmatter,
-} from '@brainstack/core';
+import { pgSchema, type PgDb } from '@brainstack/core/pg';
+import { asc, eq, like } from 'drizzle-orm';
 
 import { AppError } from '../lib/errors.js';
-import {
-  resolveVaultRoot,
-  toLogical,
-  toPhysical,
-  type VaultRootResolverConfig,
-} from '../lib/vault.js';
+import { toPhysical, type VaultConfig } from '../lib/vault.js';
 
+import { buildTree, type NoteRowDto, type TreeNode } from './NoteService.js';
 import type { SharingService } from './SharingService.js';
-import type { AttachmentPayload, NoteRowDto, TreeNode } from './NoteService.js';
+
+const { links, notes } = pgSchema;
 
 export interface CrossOwnerLink {
   sourcePath: string;
@@ -39,8 +29,8 @@ export interface CrossOwnerLink {
 
 export interface CrossOwnerReaderOptions {
   sharing: SharingService;
-  vaultCfg: VaultRootResolverConfig;
-  db: BrainStackDatabase;
+  vaultCfg: VaultConfig;
+  db: PgDb;
 }
 
 const DEFAULT_TREE_DEPTH = 4;
@@ -48,69 +38,40 @@ const DEFAULT_TREE_DEPTH = 4;
 export class CrossOwnerReader {
   constructor(private readonly opts: CrossOwnerReaderOptions) {}
 
-  /** True si el deployment soporta esto. En self-host es false. */
+  /** False in self-host, where there is nobody to read across from. */
   get enabled(): boolean {
     return this.opts.vaultCfg.deployment === 'hosted';
   }
 
+  private requireEnabled(): void {
+    if (!this.enabled) {
+      throw new AppError('cross-owner reads no disponibles en self-host', 'FORBIDDEN', 403);
+    }
+  }
+
   async getNote(viewerId: string, ownerId: string, path: string): Promise<NoteRowDto> {
     this.requireEnabled();
-    this.opts.sharing.assertCanRead(viewerId, ownerId, path);
-    const root = resolveVaultRoot(ownerId, this.opts.vaultCfg);
-    try {
-      const file = await readNote(root, path);
-      const parsed = parseNote(file.content, { path: file.path });
-      return {
-        path: parsed.path,
-        title: parsed.title,
-        frontmatter: parsed.frontmatter as Frontmatter,
-        body: parsed.body,
-        mtime: file.mtime,
-        checksum: parsed.checksum,
-      };
-    } catch (err) {
-      if (err instanceof NoteNotFoundError) {
-        throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
-      }
-      if (err instanceof PathTraversalError) {
-        throw new AppError(err.message, 'INVALID_INPUT', 400);
-      }
-      throw err;
-    }
+    await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
+
+    const physical = toPhysical(ownerId, path, this.opts.vaultCfg);
+    const [row] = await this.opts.db
+      .select()
+      .from(notes)
+      .where(eq(notes.path, physical))
+      .limit(1);
+
+    if (!row) throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
+
+    return {
+      path,
+      title: row.title,
+      frontmatter: row.frontmatter,
+      body: row.body,
+      mtime: Number(row.updatedAt),
+      checksum: row.checksum,
+    };
   }
 
-  async getAttachment(
-    viewerId: string,
-    ownerId: string,
-    path: string,
-  ): Promise<AttachmentPayload> {
-    this.requireEnabled();
-    this.opts.sharing.assertCanRead(viewerId, ownerId, path);
-    const root = resolveVaultRoot(ownerId, this.opts.vaultCfg);
-    try {
-      const result = await readAttachment(root, path);
-      return {
-        path: result.path,
-        sizeBytes: result.sizeBytes,
-        mtime: result.mtime,
-        dataBase64: result.bytes.toString('base64'),
-      };
-    } catch (err) {
-      if (err instanceof PathTraversalError) {
-        throw new AppError(err.message, 'INVALID_INPUT', 400);
-      }
-      if (err instanceof Error && err.message.startsWith('attachment not found')) {
-        throw new AppError(`attachment not found: ${path}`, 'NOT_FOUND', 404);
-      }
-      throw err;
-    }
-  }
-
-  /**
-   * Tree de la carpeta `scopePath` dentro del vault de `ownerId`. El path
-   * scope DEBE caer dentro de algún grant activo — si no, FORBIDDEN. Esto
-   * impide listar el root del vault ajeno.
-   */
   async listTree(
     viewerId: string,
     ownerId: string,
@@ -121,166 +82,83 @@ export class CrossOwnerReader {
     if (!scopePath || scopePath.trim() === '') {
       throw new AppError('scopePath requerido', 'INVALID_INPUT', 400);
     }
-    this.opts.sharing.assertCanRead(viewerId, ownerId, scopePath);
-    const maxDepth = depth ?? DEFAULT_TREE_DEPTH;
-    const root = resolveVaultRoot(ownerId, this.opts.vaultCfg);
-
-    const [notePaths, allFolders] = await Promise.all([
-      listNoteFiles(root),
-      listFolders(root),
-    ]);
+    await this.opts.sharing.assertCanRead(viewerId, ownerId, scopePath);
 
     const scope = scopePath.replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
-    const scopePrefix = scope + '/';
+    const prefix = toPhysical(ownerId, scope, this.opts.vaultCfg);
 
-    const rootNode: TreeNode = {
-      path: scope,
-      name: scope.split('/').pop() ?? scope,
-      type: 'folder',
-      children: [],
-    };
-    const folderIndex = new Map<string, TreeNode>();
-    folderIndex.set(scope, rootNode);
+    // Only inside the shared folder: a grant on one folder must not reveal the
+    // shape of the rest of the owner's brain.
+    const rows = await this.opts.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(like(notes.path, `${prefix}/%`));
 
-    for (const folderPath of allFolders) {
-      const inScope = folderPath === scope || folderPath.startsWith(scopePrefix);
-      if (!inScope) continue;
-      const rel = folderPath === scope ? '' : folderPath.slice(scope.length + 1);
-      if (rel === '') continue;
-      const segments = rel.split('/');
-      if (segments.length > maxDepth) continue;
-      let parentPath = scope;
-      for (let i = 0; i < segments.length; i++) {
-        const segment = segments[i] ?? '';
-        const fp = `${parentPath}/${segment}`;
-        if (!folderIndex.has(fp)) {
-          const node: TreeNode = {
-            path: fp,
-            name: segment,
-            type: 'folder',
-            children: [],
-          };
-          folderIndex.set(fp, node);
-          folderIndex.get(parentPath)?.children?.push(node);
-        }
-        parentPath = fp;
-      }
-    }
+    const ownerPrefix = `${ownerId}/`;
+    const logical = rows.map((r) =>
+      r.path.startsWith(ownerPrefix) ? r.path.slice(ownerPrefix.length) : r.path,
+    );
 
-    for (const notePath of notePaths) {
-      if (!notePath.startsWith(scopePrefix) && notePath !== scope) continue;
-      const rel = notePath.slice(scope.length + 1);
-      if (rel === '') continue;
-      const segments = rel.split('/');
-      if (segments.length > maxDepth) continue;
-      let parentPath = scope;
-      for (let i = 0; i < segments.length - 1; i++) {
-        const segment = segments[i] ?? '';
-        const fp = `${parentPath}/${segment}`;
-        let folderNode = folderIndex.get(fp);
-        if (!folderNode) {
-          folderNode = { path: fp, name: segment, type: 'folder', children: [] };
-          folderIndex.set(fp, folderNode);
-          folderIndex.get(parentPath)?.children?.push(folderNode);
-        }
-        parentPath = fp;
-      }
-      const leaf: TreeNode = {
-        path: notePath,
-        name: segments[segments.length - 1] ?? notePath,
-        type: 'note',
-      };
-      folderIndex.get(parentPath)?.children?.push(leaf);
-    }
-
-    sortTree(rootNode);
-    return rootNode;
+    return buildTree(scope, logical, depth ?? DEFAULT_TREE_DEPTH);
   }
 
   /**
-   * Lista outgoing links de una nota ajena. El viewer debe poder leer la
-   * nota. Cada link, si su target apunta a una nota/attachment fuera del
-   * scope que el viewer puede leer, se downgradea a `unresolved` — esto
-   * enmascara cross-border desde la perspectiva del viewer.
+   * Outgoing links of a shared note, with targets the viewer cannot reach
+   * reported as unresolved.
+   *
+   * That masking is the point: the link is real, but naming what it points at
+   * would leak a path out of a folder nobody shared.
    */
-  linksForOwner(viewerId: string, ownerId: string, path: string): CrossOwnerLink[] {
+  async linksForOwner(
+    viewerId: string,
+    ownerId: string,
+    path: string,
+  ): Promise<CrossOwnerLink[]> {
     this.requireEnabled();
-    this.opts.sharing.assertCanRead(viewerId, ownerId, path);
+    await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
+
     const sourcePhysical = toPhysical(ownerId, path, this.opts.vaultCfg);
+    const rows = await this.opts.db
+      .select({
+        sourcePath: links.sourcePath,
+        targetPath: links.targetPath,
+        targetType: links.targetType,
+        linkKind: links.linkKind,
+        alias: links.alias,
+        section: links.section,
+      })
+      .from(links)
+      .where(eq(links.sourcePath, sourcePhysical))
+      .orderBy(asc(links.position));
 
-    const rows = this.opts.db.sqlite
-      .prepare<
-        [string],
-        {
-          source_path: string;
-          target_path: string;
-          target_type: string;
-          link_kind: string;
-          alias: string | null;
-          section: string | null;
-        }
-      >(
-        `SELECT source_path, target_path, target_type, link_kind, alias, section
-         FROM links WHERE source_path = ?
-         ORDER BY position`,
-      )
-      .all(sourcePhysical);
+    const out: CrossOwnerLink[] = [];
+    for (const r of rows) {
+      const targetOwner = r.targetPath.split('/')[0] ?? null;
+      const unresolved = r.targetType === 'unresolved';
 
-    return rows.map((r) => {
-      const targetOwner = ownerOfPhysical(r.target_path);
-      const isUnresolved = r.target_type === 'unresolved';
-      const viewerCanReadTarget =
-        !isUnresolved &&
+      const readable =
+        !unresolved &&
         targetOwner !== null &&
-        this.opts.sharing.canRead(
+        (await this.opts.sharing.canRead(
           viewerId,
           targetOwner,
-          stripOwnerPrefix(r.target_path, targetOwner),
-        );
-      const targetType = (
-        isUnresolved || !viewerCanReadTarget ? 'unresolved' : (r.target_type as 'note' | 'attachment')
-      );
-      // Para el frontend devolvemos paths LÓGICOS desde la perspectiva del
-      // owner de la source: el editor de la página shared muestra paths sin
-      // prefix del owner.
-      return {
-        sourcePath: toLogical(ownerId, r.source_path, this.opts.vaultCfg),
-        targetPath:
-          targetOwner === ownerId && !isUnresolved
-            ? toLogical(ownerId, r.target_path, this.opts.vaultCfg)
-            : r.target_path,
-        targetType,
-        linkKind: r.link_kind,
+          stripOwnerPrefix(r.targetPath, targetOwner),
+        ));
+
+      out.push({
+        sourcePath: path,
+        targetPath: readable ? stripOwnerPrefix(r.targetPath, targetOwner ?? '') : '',
+        targetType: readable ? (r.targetType as CrossOwnerLink['targetType']) : 'unresolved',
+        linkKind: r.linkKind,
         alias: r.alias,
         section: r.section,
-      };
-    });
-  }
-
-  private requireEnabled(): void {
-    if (!this.enabled) {
-      throw new AppError('cross-owner reads no disponibles en self-host', 'NOT_FOUND', 404);
+      });
     }
+    return out;
   }
 }
 
-function ownerOfPhysical(physicalPath: string): string | null {
-  const i = physicalPath.indexOf('/');
-  if (i <= 0) return null;
-  return physicalPath.slice(0, i);
-}
-
-function stripOwnerPrefix(physicalPath: string, owner: string): string {
-  const prefix = owner + '/';
+function stripOwnerPrefix(physicalPath: string, ownerId: string): string {
+  const prefix = `${ownerId}/`;
   return physicalPath.startsWith(prefix) ? physicalPath.slice(prefix.length) : physicalPath;
-}
-
-function sortTree(node: TreeNode): void {
-  if (!node.children) return;
-  node.children.sort((a, b) => {
-    if (a.type === 'folder' && b.type !== 'folder') return -1;
-    if (a.type !== 'folder' && b.type === 'folder') return 1;
-    return a.name.localeCompare(b.name);
-  });
-  for (const child of node.children) sortTree(child);
 }

@@ -171,7 +171,7 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
     try {
       const user = await options.auth.consumePasswordReset(parsed.data.token, parsed.data.password);
       // Create a fresh session so the user lands logged in.
-      const session = options.auth.createSession(user.id, {
+      const session = await options.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
         ipAddress: clientIp(c),
       });
@@ -188,8 +188,8 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
     const token = c.req.query('token');
     if (!token) return c.redirect(`${options.appHome}/verify-email?error=missing_token`);
     try {
-      const user = options.auth.consumeEmailVerification(token);
-      const session = options.auth.createSession(user.id, {
+      const user = await options.auth.consumeEmailVerification(token);
+      const session = await options.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
         ipAddress: clientIp(c),
       });
