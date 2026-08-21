@@ -33,7 +33,12 @@ const { emailVerificationTokens, passwordResetTokens, sessions, users } = pgSche
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
-const PASSWORD_MIN = 12;
+/*
+ * Eight, with the character-class rule below still in force. Short for a
+ * password on its own; this one is behind an email allowlist of three people,
+ * with TOTP available, so the length is not what is holding the door.
+ */
+const PASSWORD_MIN = 8;
 
 /**
  * Verified against a constant when the account does not exist, so a wrong

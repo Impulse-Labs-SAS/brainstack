@@ -43,7 +43,7 @@ beforeEach(async () => {
 
 describe('validatePassword', () => {
   it('rejects short passwords', async () => {
-    expect(validatePassword('Short1!')).toMatch(/at least 12/);
+    expect(validatePassword('Sh0rt!')).toMatch(/at least 8/);
   });
   it('rejects low-complexity passwords', async () => {
     expect(validatePassword('alllowercaseyo')).toMatch(/3 of/);
