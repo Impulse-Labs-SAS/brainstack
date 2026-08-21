@@ -8,8 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js"
+    "dev": "tsx watch src/serve.ts",
+    "start": "node dist/serve.js"
   },
   "dependencies": {
     "@brainstack/core": "workspace:*",
