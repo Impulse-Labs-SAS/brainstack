@@ -59,3 +59,6 @@ coverage/
 /image.png
 /image-*.png
 /screenshot*.png
+
+# Netlify build output
+apps/web/.netlify/
