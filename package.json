@@ -14,6 +14,7 @@
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
+    "db:generate": "pnpm --filter @brainstack/core db:generate",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml}\""
   },

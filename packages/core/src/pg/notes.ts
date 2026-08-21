@@ -75,12 +75,32 @@ export function toMarkdown(note: Pick<StoredNote, 'frontmatter' | 'body'>): stri
   return hasFrontmatter ? matter.stringify(note.body, note.frontmatter) : note.body;
 }
 
+/**
+ * Every column of `notes` except the generated search vector, which is large,
+ * is never read by name, and would otherwise ride along on every read now that
+ * the schema declares it.
+ */
+const NOTE_COLUMNS = {
+  path: notes.path,
+  title: notes.title,
+  frontmatter: notes.frontmatter,
+  body: notes.body,
+  updatedAt: notes.updatedAt,
+  createdAt: notes.createdAt,
+  checksum: notes.checksum,
+  ownerId: notes.ownerId,
+} as const;
+
 export class PgNoteStore {
   constructor(private readonly db: PgDb) {}
 
   async get(path: string): Promise<StoredNote> {
     const key = normalizeNoteKey(path);
-    const [row] = await this.db.select().from(notes).where(eq(notes.path, key)).limit(1);
+    const [row] = await this.db
+      .select(NOTE_COLUMNS)
+      .from(notes)
+      .where(eq(notes.path, key))
+      .limit(1);
     if (!row) throw new NoteNotFoundError(key);
     return row as StoredNote;
   }

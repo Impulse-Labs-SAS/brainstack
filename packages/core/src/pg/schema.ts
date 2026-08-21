@@ -4,41 +4,104 @@
 // written, with frontmatter split into its own jsonb column. `links` and `tags`
 // are derived from the body on every write and are rebuildable from `notes`
 // alone.
+//
+// It has to describe the database *completely*, not just the parts the queries
+// read. Drizzle only needs column names and types to build SQL, so foreign
+// keys, indexes and checks were omitted for a long time and nothing broke —
+// but `drizzle-kit` diffs new migrations against this file, and what is not
+// declared here reads as something to drop. `schema-parity.test.ts` applies
+// this schema and `migrations.ts` to two empty databases and fails if the
+// results differ.
 
+import { desc, sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  check,
+  customType,
   index,
   integer,
   jsonb,
   pgTable,
   primaryKey,
   text,
+  unique,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
-export const notes = pgTable('notes', {
-  /** Posix path relative to the brain root, ending in `.md`. Primary key. */
-  path: text('path').primaryKey(),
-  title: text('title').notNull(),
-  frontmatter: jsonb('frontmatter').notNull().$type<Record<string, unknown>>().default({}),
-  body: text('body').notNull(),
-  /** Epoch millis of the last write. Mirrors the old `mtime` column. */
-  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  /** sha256 of the body, so writes stay idempotent like the watcher used to be. */
-  checksum: text('checksum').notNull(),
-  /**
-   * Owning user. Nullable because the notes written before ownership existed
-   * have no owner until OwnerBackfill claims them; a null note belongs to
-   * nobody and is listed by nobody.
-   */
-  ownerId: text('owner_id'),
+/**
+ * Postgres' full-text type. Drizzle has no built-in for it, and the column is
+ * generated anyway, so nothing ever writes this — it exists to be indexed and
+ * matched against.
+ */
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType: () => 'tsvector',
 });
+
+/**
+ * Text-search configurations used by the generated `body_tsv` column.
+ *
+ * The vector indexes each note twice, and both halves earn their place:
+ *
+ *  - `simple` keeps words unstemmed, which is what makes prefix search work.
+ *    FTS5 behaved this way, so `despleg` still finds "desplegamos".
+ *  - `spanish` stores stems, so "notas" also finds "nota".
+ *
+ * Inlined as literals in the expression below because Postgres only accepts
+ * `to_tsvector` in a generated column when the config is constant — that is
+ * what makes it IMMUTABLE. Change them here and in `migrations.ts` together.
+ */
+export const PREFIX_CONFIG = 'simple';
+export const STEM_CONFIG = 'spanish';
+
+const bodyTsvExpression = sql`(
+       setweight(to_tsvector('simple',  coalesce(title, '')), 'A') ||
+       setweight(to_tsvector('spanish', coalesce(title, '')), 'A') ||
+       setweight(to_tsvector('simple',  coalesce(body,  '')), 'B') ||
+       setweight(to_tsvector('spanish', coalesce(body,  '')), 'B')
+     )`;
+
+export const notes = pgTable(
+  'notes',
+  {
+    /** Posix path relative to the brain root, ending in `.md`. Primary key. */
+    path: text('path').primaryKey(),
+    title: text('title').notNull(),
+    frontmatter: jsonb('frontmatter').notNull().$type<Record<string, unknown>>().default({}),
+    body: text('body').notNull(),
+    /** Epoch millis of the last write. Mirrors the old `mtime` column. */
+    updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    /** sha256 of the body, so writes stay idempotent like the watcher used to be. */
+    checksum: text('checksum').notNull(),
+    /**
+     * Owning user. Nullable because the notes written before ownership existed
+     * have no owner until OwnerBackfill claims them; a null note belongs to
+     * nobody and is listed by nobody.
+     *
+     * No cascade: deleting a user must not silently take their notes with it.
+     */
+    ownerId: text('owner_id').references(() => users.id),
+    /**
+     * Maintained by Postgres from `title` and `body`. Never selected by name —
+     * it is large, and pulling it over HTTP on every read would double the
+     * payload for something only the index uses.
+     */
+    bodyTsv: tsvector('body_tsv').generatedAlwaysAs(bodyTsvExpression),
+  },
+  (t) => ({
+    tsvIdx: index('idx_notes_tsv').using('gin', t.bodyTsv),
+    updatedIdx: index('idx_notes_updated_at').on(desc(t.updatedAt)),
+    ownerIdx: index('idx_notes_owner').on(t.ownerId),
+  }),
+);
 
 export const links = pgTable(
   'links',
   {
-    sourcePath: text('source_path').notNull(),
+    sourcePath: text('source_path')
+      .notNull()
+      .references(() => notes.path, { onDelete: 'cascade' }),
     targetPath: text('target_path').notNull(),
     targetType: text('target_type').notNull().$type<'note' | 'attachment' | 'unresolved'>(),
     linkKind: text('link_kind').notNull().$type<'wikilink' | 'embed' | 'markdown'>(),
@@ -47,7 +110,7 @@ export const links = pgTable(
     position: integer('position').notNull(),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.sourcePath, t.targetPath, t.position] }),
+    pk: primaryKey({ name: 'links_pkey', columns: [t.sourcePath, t.targetPath, t.position] }),
     targetIdx: index('idx_links_target').on(t.targetPath),
     sourceIdx: index('idx_links_source').on(t.sourcePath),
   }),
@@ -56,38 +119,52 @@ export const links = pgTable(
 export const tags = pgTable(
   'tags',
   {
-    notePath: text('note_path').notNull(),
+    notePath: text('note_path')
+      .notNull()
+      .references(() => notes.path, { onDelete: 'cascade' }),
     tag: text('tag').notNull(),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.notePath, t.tag] }),
+    pk: primaryKey({ name: 'tags_pkey', columns: [t.notePath, t.tag] }),
     tagIdx: index('idx_tags_tag').on(t.tag),
   }),
 );
 
-export const users = pgTable('users', {
-  id: text('id').primaryKey(),
-  email: text('email').notNull().unique(),
-  displayName: text('display_name'),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  lastLoginAt: bigint('last_login_at', { mode: 'number' }),
-  /** Until this is true the account exists but cannot sign in. */
-  emailVerified: boolean('email_verified').notNull().default(false),
-  /** Null for an account that only ever signed in through Google. */
-  passwordHash: text('password_hash'),
-  googleId: text('google_id'),
-  /** Null unless the user turned 2FA on. */
-  totpSecret: text('totp_secret'),
-  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(0),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: text('id').primaryKey(),
+    email: text('email').notNull().unique('users_email_key'),
+    displayName: text('display_name'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    lastLoginAt: bigint('last_login_at', { mode: 'number' }),
+    /** Until this is true the account exists but cannot sign in. */
+    emailVerified: boolean('email_verified').notNull().default(false),
+    /** Null for an account that only ever signed in through Google. */
+    passwordHash: text('password_hash'),
+    googleId: text('google_id'),
+    /** Null unless the user turned 2FA on. */
+    totpSecret: text('totp_secret'),
+    updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(0),
+  },
+  (t) => ({
+    emailIdx: index('idx_users_email').on(t.email),
+    // Partial, so the many users without a Google account do not collide on null.
+    googleIdx: uniqueIndex('idx_users_google_id')
+      .on(t.googleId)
+      .where(sql`google_id IS NOT NULL`),
+  }),
+);
 
 /** Single-use, hashed, short-lived: the three properties every token here has. */
 export const passwordResetTokens = pgTable(
   'password_reset_tokens',
   {
     id: text('id').primaryKey(),
-    userId: text('user_id').notNull(),
-    tokenHash: text('token_hash').notNull().unique(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique('password_reset_tokens_token_hash_key'),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     usedAt: bigint('used_at', { mode: 'number' }),
@@ -99,10 +176,12 @@ export const emailVerificationTokens = pgTable(
   'email_verification_tokens',
   {
     id: text('id').primaryKey(),
-    userId: text('user_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     /** Stored alongside the user so changing an email re-verifies it. */
     email: text('email').notNull(),
-    tokenHash: text('token_hash').notNull().unique(),
+    tokenHash: text('token_hash').notNull().unique('email_verification_tokens_token_hash_key'),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     usedAt: bigint('used_at', { mode: 'number' }),
@@ -115,8 +194,10 @@ export const totpBackupCodes = pgTable(
   'totp_backup_codes',
   {
     id: text('id').primaryKey(),
-    userId: text('user_id').notNull(),
-    codeHash: text('code_hash').notNull().unique(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull().unique('totp_backup_codes_code_hash_key'),
     usedAt: bigint('used_at', { mode: 'number' }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
   },
@@ -136,8 +217,10 @@ export const sessions = pgTable(
   'sessions',
   {
     id: text('id').primaryKey(),
-    userId: text('user_id').notNull(),
-    tokenHash: text('token_hash').notNull().unique(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique('sessions_token_hash_key'),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     userAgent: text('user_agent'),
@@ -146,14 +229,18 @@ export const sessions = pgTable(
   (t) => ({ userIdx: index('idx_sessions_user').on(t.userId) }),
 );
 
-export const magicLinkTokens = pgTable('magic_link_tokens', {
-  id: text('id').primaryKey(),
-  email: text('email').notNull(),
-  tokenHash: text('token_hash').notNull().unique(),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
-  consumedAt: bigint('consumed_at', { mode: 'number' }),
-});
+export const magicLinkTokens = pgTable(
+  'magic_link_tokens',
+  {
+    id: text('id').primaryKey(),
+    email: text('email').notNull(),
+    tokenHash: text('token_hash').notNull().unique('magic_link_tokens_token_hash_key'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    consumedAt: bigint('consumed_at', { mode: 'number' }),
+  },
+  (t) => ({ hashIdx: index('idx_magic_token_hash').on(t.tokenHash) }),
+);
 
 export const apiKeys = pgTable(
   'api_keys',
@@ -164,12 +251,12 @@ export const apiKeys = pgTable(
      * key issued through ApiKeyService has an owner; a null means a leftover row
      * from the spike, which belongs to nobody and is listed by nobody.
      */
-    userId: text('user_id'),
+    userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     /** First few chars of the token, shown in the UI to identify the key. */
     prefix: text('prefix').notNull(),
     /** sha256 of the full token. The plaintext is only ever shown once. */
-    tokenHash: text('token_hash').notNull().unique(),
+    tokenHash: text('token_hash').notNull().unique('api_keys_token_hash_key'),
     scopes: jsonb('scopes').notNull().$type<string[]>().default([]),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
     lastUsedAt: bigint('last_used_at', { mode: 'number' }),
@@ -192,7 +279,7 @@ export const folders = pgTable(
   {
     /** Stored path, owner prefix included. No trailing slash. */
     path: text('path').primaryKey(),
-    ownerId: text('owner_id'),
+    ownerId: text('owner_id').references(() => users.id, { onDelete: 'cascade' }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
   },
   (t) => ({ ownerIdx: index('idx_folders_owner').on(t.ownerId) }),
@@ -211,12 +298,24 @@ export const folderShares = pgTable(
     id: text('id').primaryKey(),
     /** Relative to the owner's root, no leading slash. */
     folderPath: text('folder_path').notNull(),
-    ownerId: text('owner_id').notNull(),
-    sharedWithUserId: text('shared_with_user_id').notNull(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    sharedWithUserId: text('shared_with_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     grantedAt: bigint('granted_at', { mode: 'number' }).notNull(),
-    grantedBy: text('granted_by').notNull(),
+    grantedBy: text('granted_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
   },
   (t) => ({
+    /** Granting the same folder to the same person twice is one grant. */
+    oneGrant: unique('folder_shares_folder_path_owner_id_shared_with_user_id_key').on(
+      t.folderPath,
+      t.ownerId,
+      t.sharedWithUserId,
+    ),
     targetIdx: index('idx_folder_shares_target').on(t.sharedWithUserId, t.folderPath),
     ownerIdx: index('idx_folder_shares_owner').on(t.ownerId, t.folderPath),
   }),
@@ -228,30 +327,26 @@ export const folderShareInvites = pgTable(
   {
     id: text('id').primaryKey(),
     folderPath: text('folder_path').notNull(),
-    ownerId: text('owner_id').notNull(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     mode: text('mode').notNull().$type<'email' | 'link'>(),
     /** Null when the invite is a link anyone holding it can accept. */
     inviteeEmail: text('invitee_email'),
     /** sha256 of the token. The plaintext only ever exists in the invite URL. */
-    tokenHash: text('token_hash').notNull().unique(),
+    tokenHash: text('token_hash').notNull().unique('folder_share_invites_token_hash_key'),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     acceptedAt: bigint('accepted_at', { mode: 'number' }),
-    acceptedByUserId: text('accepted_by_user_id'),
+    /** Cleared rather than cascaded: the invite is a record of what happened. */
+    acceptedByUserId: text('accepted_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     revokedAt: bigint('revoked_at', { mode: 'number' }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
   },
   (t) => ({
+    modeValues: check('folder_share_invites_mode_check', sql`mode IN ('email', 'link')`),
     ownerIdx: index('idx_share_invites_owner').on(t.ownerId, t.folderPath),
     emailIdx: index('idx_share_invites_email').on(t.inviteeEmail),
   }),
 );
-
-/**
- * Text-search configurations used by the generated `body_tsv` column. Change
- * these in `migrations.ts` too — the column is generated, so the two must agree.
- *
- * `PREFIX_CONFIG` is unstemmed and carries prefix matching; `STEM_CONFIG` adds
- * morphology. See the comment on the migration for why both are indexed.
- */
-export const PREFIX_CONFIG = 'simple';
-export const STEM_CONFIG = 'spanish';

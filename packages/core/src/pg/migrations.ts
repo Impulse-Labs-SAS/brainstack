@@ -6,6 +6,25 @@
 // trip. Every statement is `IF NOT EXISTS`, so a partially applied migration is
 // safe to re-run — which is what stands in for the transaction we cannot open
 // over HTTP.
+//
+// ## Adding one
+//
+// Do not write the SQL by hand. Edit `schema.ts`, then:
+//
+//     pnpm db:generate
+//
+// `drizzle-kit` diffs the schema against its snapshot and writes the statements
+// to `src/pg/drizzle/`. Copy them into a new `PgMigration` at the end of the
+// list below, adding `IF NOT EXISTS` where it applies — the generator does not,
+// because it assumes a migration runs exactly once inside a transaction, and
+// ours cannot.
+//
+// `schema-parity.test.ts` applies both this list and the generated SQL to two
+// empty databases and fails if the results differ, so a migration that does not
+// match the schema it came from does not get past the test run.
+//
+// 0001-0005 predate the generator and were written by hand. The snapshot was
+// baselined against them, so diffs from here on are real diffs.
 
 export interface PgMigration {
   name: string;
