@@ -40,6 +40,11 @@ export function middleware(req: NextRequest): NextResponse {
    */
   if (pathname === '/api' || pathname.startsWith('/api/')) return NextResponse.next();
 
+  // OAuth discovery documents (RFC 8414/9728). Same deal as /api: they belong
+  // to the function, and a redirect to /login here would read as "this server
+  // does not speak OAuth" to every MCP client that probes them.
+  if (pathname.startsWith('/.well-known/')) return NextResponse.next();
+
   const hasSession = req.cookies.get(SESSION_COOKIE)?.value;
 
   if (isPublic(pathname)) {
@@ -65,7 +70,9 @@ export function middleware(req: NextRequest): NextResponse {
 }
 
 export const config = {
-  // Skip the matcher for the API, framework internals and static assets.
-  // Everything else flows through the middleware above.
-  matcher: ['/((?!api/|_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)).*)'],
+  // Skip the matcher for the API, OAuth discovery, framework internals and
+  // static assets. Everything else flows through the middleware above.
+  matcher: [
+    '/((?!api/|\\.well-known/|_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)).*)',
+  ],
 };

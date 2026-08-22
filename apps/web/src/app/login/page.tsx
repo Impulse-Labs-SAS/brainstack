@@ -32,6 +32,20 @@ function LoginInner() {
         method: 'POST',
         json: { email, password, totpCode: totpCode || undefined },
       });
+      // The middleware (and the OAuth authorize endpoint) preserve where the
+      // user was headed in ?redirect_to. Relative paths only — anything with a
+      // host in it is someone else's destination, not ours. API paths (the
+      // OAuth consent screen) are not client routes, so those take a full
+      // navigation instead of the router.
+      const redirectTo = params.get('redirect_to');
+      if (redirectTo?.startsWith('/') && !redirectTo.startsWith('//') && !redirectTo.startsWith('/\\')) {
+        if (redirectTo.startsWith('/api/')) {
+          window.location.replace(redirectTo);
+          return;
+        }
+        router.replace(redirectTo);
+        return;
+      }
       router.replace('/');
     } catch (err) {
       if (err instanceof AuthApiError && err.message.toLowerCase().includes('totp code required')) {
