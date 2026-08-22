@@ -26,6 +26,20 @@ function isPublic(pathname: string): boolean {
 
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
+
+  /*
+   * The API is not a page and must never be redirected.
+   *
+   * Deployed, it is served from this same origin under `/api`, so it passes
+   * through here — and a request carrying no session cookie was answered with
+   * a 307 to /login instead of reaching the function at all. Locally the two
+   * live on different ports, so this only ever appears in production.
+   *
+   * The matcher below already excludes it. This is the second lock: whoever
+   * edits that regex next should not be able to take the API down with it.
+   */
+  if (pathname === '/api' || pathname.startsWith('/api/')) return NextResponse.next();
+
   const hasSession = req.cookies.get(SESSION_COOKIE)?.value;
 
   if (isPublic(pathname)) {
@@ -51,7 +65,7 @@ export function middleware(req: NextRequest): NextResponse {
 }
 
 export const config = {
-  // Skip the matcher for framework internals and static assets. Everything
-  // else flows through the middleware above.
-  matcher: ['/((?!_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)).*)'],
+  // Skip the matcher for the API, framework internals and static assets.
+  // Everything else flows through the middleware above.
+  matcher: ['/((?!api/|_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)).*)'],
 };
