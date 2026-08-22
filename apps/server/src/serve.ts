@@ -80,6 +80,8 @@ async function main(): Promise<void> {
      * whole account. An https origin is never a development machine.
      */
     exposeDevTokens: !cfg.PUBLIC_ORIGIN.startsWith('https://'),
+    // Same OAuth provider as production, so the whole flow is testable locally.
+    oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
     publicConfig: {
       deployment: cfg.BRAINSTACK_DEPLOYMENT,
       features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },

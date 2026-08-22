@@ -350,3 +350,85 @@ export const folderShareInvites = pgTable(
     emailIdx: index('idx_share_invites_email').on(t.inviteeEmail),
   }),
 );
+
+/**
+ * OAuth clients that connect MCP hosts (claude.ai, Claude Code, Cursor) to the
+ * API. Most register themselves (RFC 7591): the row is the registration.
+ *
+ * `secretHash` is null for public clients, which is what MCP hosts are — they
+ * cannot keep a secret and prove themselves with PKCE instead.
+ */
+export const oauthClients = pgTable('oauth_clients', {
+  id: text('id').primaryKey(),
+  /** Null for public clients. sha256 of the secret otherwise, shown once. */
+  secretHash: text('secret_hash'),
+  name: text('name').notNull(),
+  /** Exact-match allowlist. The authorize endpoint refuses anything else. */
+  redirectUris: jsonb('redirect_uris').notNull().$type<string[]>().default([]),
+  tokenEndpointAuthMethod: text('token_endpoint_auth_method').notNull().default('none'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+});
+
+/** Single-use, hashed, ten minutes to live: an authorization code in flight. */
+export const oauthAuthorizationCodes = pgTable(
+  'oauth_authorization_codes',
+  {
+    id: text('id').primaryKey(),
+    codeHash: text('code_hash').notNull().unique('oauth_authorization_codes_code_hash_key'),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Stored at issuance and compared verbatim at exchange (OAuth 2.1). */
+    redirectUri: text('redirect_uri').notNull(),
+    /** S256 challenge. The verifier never reaches this table. */
+    codeChallenge: text('code_challenge').notNull(),
+    scope: text('scope').notNull(),
+    /** RFC 8707 audience the client asked for, when it sent one. */
+    resource: text('resource'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    consumedAt: bigint('consumed_at', { mode: 'number' }),
+  },
+  (t) => ({ userIdx: index('idx_oauth_codes_user').on(t.userId) }),
+);
+
+/**
+ * Access and refresh tokens, one row each, linked by `pairId` so a refresh
+ * rotation can retire both halves of the pair it replaces.
+ */
+export const oauthTokens = pgTable(
+  'oauth_tokens',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').notNull().$type<'access' | 'refresh'>(),
+    tokenHash: text('token_hash').notNull().unique('oauth_tokens_token_hash_key'),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    scope: text('scope').notNull(),
+    /** Shared by the access/refresh pair issued together. */
+    pairId: text('pair_id').notNull(),
+    /**
+     * Constant across every rotation descended from one authorization. When a
+     * revoked refresh token is presented again — the signal of a stolen token
+     * that was already used — the whole family is revoked at once.
+     */
+    familyId: text('family_id').notNull().default(''),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    revokedAt: bigint('revoked_at', { mode: 'number' }),
+    lastUsedAt: bigint('last_used_at', { mode: 'number' }),
+  },
+  (t) => ({
+    kindValues: check('oauth_tokens_kind_check', sql`kind IN ('access', 'refresh')`),
+    userIdx: index('idx_oauth_tokens_user').on(t.userId),
+    pairIdx: index('idx_oauth_tokens_pair').on(t.pairId),
+    familyIdx: index('idx_oauth_tokens_family').on(t.familyId),
+  }),
+);

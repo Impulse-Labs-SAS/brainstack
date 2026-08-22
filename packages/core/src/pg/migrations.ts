@@ -283,10 +283,67 @@ const folders: PgMigration = {
   ],
 };
 
+/**
+ * BrainStack as an OAuth provider, so MCP hosts (claude.ai, Claude Code,
+ * Cursor) can connect without pasting API keys.
+ *
+ * Three tables, one per lifetime: clients live until deleted, authorization
+ * codes for ten minutes, tokens for hours to days. Everything secret is stored
+ * as a sha256 hash, same rule as api_keys and every token table above.
+ */
+const oauthProvider: PgMigration = {
+  name: '0006_pg_oauth_provider',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS oauth_clients (
+       id                         TEXT PRIMARY KEY,
+       secret_hash                TEXT,
+       name                       TEXT NOT NULL,
+       redirect_uris              JSONB NOT NULL DEFAULT '[]'::jsonb,
+       token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
+       created_at                 BIGINT NOT NULL
+     )`,
+
+    `CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+       id             TEXT PRIMARY KEY,
+       code_hash      TEXT NOT NULL UNIQUE,
+       client_id      TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+       user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       redirect_uri   TEXT NOT NULL,
+       code_challenge TEXT NOT NULL,
+       scope          TEXT NOT NULL,
+       resource       TEXT,
+       created_at     BIGINT NOT NULL,
+       expires_at     BIGINT NOT NULL,
+       consumed_at    BIGINT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_oauth_codes_user
+       ON oauth_authorization_codes (user_id)`,
+
+    `CREATE TABLE IF NOT EXISTS oauth_tokens (
+       id           TEXT PRIMARY KEY,
+       kind         TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
+       token_hash   TEXT NOT NULL UNIQUE,
+       client_id    TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+       user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       scope        TEXT NOT NULL,
+       pair_id      TEXT NOT NULL,
+       family_id    TEXT NOT NULL DEFAULT '',
+       created_at   BIGINT NOT NULL,
+       expires_at   BIGINT NOT NULL,
+       revoked_at   BIGINT,
+       last_used_at BIGINT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens (user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_oauth_tokens_pair ON oauth_tokens (pair_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family ON oauth_tokens (family_id)`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
   ownerAndSharing,
   fullAuth,
   folders,
+  oauthProvider,
 ];

@@ -11,6 +11,7 @@ import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
 import type { ApiKey } from '../services/ApiKeyService.js';
 import type { GoogleOAuthService } from '../services/GoogleOAuthService.js';
+import type { OAuthProviderService } from '../services/OAuthProviderService.js';
 import type { TotpService } from '../services/TotpService.js';
 
 import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
@@ -20,6 +21,11 @@ import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
 import { createOAuthGoogleRouter } from './routes/oauthGoogle.js';
+import {
+  buildOAuthChallenge,
+  createOAuthMetadataRouter,
+  createOAuthProviderRouter,
+} from './routes/oauthProvider.js';
 import { createTotpRouter } from './routes/totp.js';
 import { createTrpcRouter } from './routes/trpc.js';
 import { healthRouter } from './routes/health.js';
@@ -58,6 +64,14 @@ export interface BuildAppOptions {
   loginLimiter?: LoginRateLimiter;
   /** Google OAuth service. When omitted, /auth/google* routes are disabled. */
   google?: GoogleOAuthService;
+  /**
+   * BrainStack acting as an OAuth provider for MCP hosts. When present, the
+   * `.well-known` documents and `/oauth/*` endpoints are mounted, the MCP 401
+   * carries the discovery challenge, and provider-issued access tokens
+   * authenticate wherever API keys do. `issuer` is the public origin tokens
+   * are bound to — never a request's Host header, which anyone can send.
+   */
+  oauth?: { service: OAuthProviderService; issuer: string };
   /** TOTP service. When omitted, /auth/totp/* routes are disabled. */
   totp?: TotpService;
   /** Public deployment config exposed at GET /api/config. */
@@ -106,6 +120,12 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
     auth: opts.auth,
     apiKeys: opts.apiKeys,
     resolveUser: opts.resolveUserForApiKey,
+    ...(opts.oauth
+      ? {
+          oauthTokens: opts.oauth.service,
+          challenge: buildOAuthChallenge(opts.oauth.issuer),
+        }
+      : {}),
   };
 
   const loginLimiter = opts.loginLimiter ?? createLoginRateLimiter();
@@ -159,6 +179,23 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const rateLimit = buildRateLimitMiddleware({ perMinute: opts.rateLimitPerMinute });
   const mcpRouter = createMcpHttpRouter({ buildServer: opts.buildMcpServer, logger: opts.logger });
 
+  if (opts.oauth) {
+    // Register and token are unauthenticated by design; the rate limiter is
+    // what stands between them and whoever finds them.
+    app.use('/oauth/*', rateLimit);
+    app.route(
+      '/oauth',
+      createOAuthProviderRouter({
+        oauth: opts.oauth.service,
+        auth: opts.auth,
+        logger: opts.logger,
+        issuer: opts.oauth.issuer,
+        appHome: opts.appHome,
+        basePath: opts.basePath ?? '',
+      }),
+    );
+  }
+
   app.use('/mcp/*', requireAuth);
   app.use('/mcp/*', rateLimit);
   app.use('/mcp', requireAuth);
@@ -182,11 +219,24 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
 
   app.notFound((c) => c.json({ error: 'not found' }, 404));
 
-  if (!opts.basePath) return app;
+  // `.well-known` is only well-known at the origin root, so the discovery
+  // documents mount outside the API prefix — on whichever Hono answers first.
+  const metadata = opts.oauth
+    ? createOAuthMetadataRouter({
+        issuer: opts.oauth.issuer,
+        basePath: opts.basePath ?? '',
+      })
+    : null;
+
+  if (!opts.basePath) {
+    if (metadata) app.route('/', metadata);
+    return app;
+  }
 
   // Mounted rather than declared per route, so the prefix cannot drift away
   // from one handler while the others move.
   const prefixed = new Hono<AuthBindings>();
+  if (metadata) prefixed.route('/', metadata);
   prefixed.route(opts.basePath, app);
   prefixed.notFound((c) => c.json({ error: 'not found' }, 404));
   return prefixed;

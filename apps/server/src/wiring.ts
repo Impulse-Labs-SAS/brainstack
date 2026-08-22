@@ -16,6 +16,7 @@ import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
+import { OAuthProviderService } from './services/OAuthProviderService.js';
 import { SearchService } from './services/SearchService.js';
 import { SharingService } from './services/SharingService.js';
 import { TotpService } from './services/TotpService.js';
@@ -30,6 +31,7 @@ export interface Services {
   sharing: SharingService;
   invites: InviteService;
   totp: TotpService;
+  oauthProvider: OAuthProviderService;
   crossOwner: CrossOwnerReader;
   /** Present only when Google credentials are configured. */
   google?: GoogleOAuthService;
@@ -67,6 +69,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
 
   const sharing = new SharingService({ db: opts.db, deployment: cfg.deployment });
   const totp = new TotpService({ db: opts.db, issuer: 'BrainStack' });
+  const oauthProvider = new OAuthProviderService({ db: opts.db });
 
   const auth = new AuthService({
     db: opts.db,
@@ -110,6 +113,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     sharing,
     invites,
     totp,
+    oauthProvider,
     crossOwner,
     ...(google ? { google } : {}),
     resolveUserForApiKey: async (apiKey: ApiKey): Promise<User> => {
