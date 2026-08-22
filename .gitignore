@@ -62,3 +62,6 @@ coverage/
 
 # Netlify build output
 apps/web/.netlify/
+
+# Salida temporal de scripts/check-functions.mjs
+.netlify-check/

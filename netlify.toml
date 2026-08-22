@@ -10,7 +10,9 @@
 # remember to run afterwards.
 
 [build]
-  command = "pnpm --filter @brainstack/web build"
+  # core first: the functions resolve @brainstack/core to its compiled dist/,
+  # and the function bundler runs after this command.
+  command = "pnpm --filter @brainstack/core build && pnpm --filter @brainstack/web build"
   publish = "apps/web/.next"
 
 [build.environment]

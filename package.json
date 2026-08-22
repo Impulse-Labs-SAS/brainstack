@@ -11,13 +11,14 @@
   },
   "scripts": {
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck && tsc -p netlify/tsconfig.json --noEmit",
+    "typecheck": "pnpm --filter @brainstack/core build && pnpm -r typecheck && tsc -p netlify/tsconfig.json --noEmit",
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
     "db:generate": "pnpm --filter @brainstack/core db:generate",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml}\""
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml}\"",
+    "check:functions": "pnpm --filter @brainstack/core build && node scripts/check-functions.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@netlify/functions": "^6.0.0",
+    "@netlify/zip-it-and-ship-it": "^15.4.0",
     "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
