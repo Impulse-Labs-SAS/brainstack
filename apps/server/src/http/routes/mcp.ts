@@ -1,8 +1,15 @@
 // MCP HTTP transport mounted under /mcp. Uses StreamableHTTPServerTransport
 // in stateless mode (one transport per request) — fine for V1, switch to
 // session-aware transports when we add auth in Fase 3.
+//
+// Two transports for two runtimes. In development @hono/node-server hands us
+// Node's IncomingMessage/ServerResponse and the SDK's Node transport writes
+// into them. On Netlify the request is a Fetch Request and there is no Node
+// pair — the SDK's web-standard transport takes the Request and returns a
+// Response, which is the whole adaptation.
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { Hono } from 'hono';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
@@ -22,16 +29,37 @@ export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOption
 
   router.all('/', async (c) => {
     // @hono/node-server exposes the raw Node objects on `c.env`.
-    const { incoming, outgoing } = c.env as {
+    const nodeEnv = c.env as
+      | { incoming?: IncomingMessage; outgoing?: ServerResponse }
+      | undefined;
+
+    const principal = c.get('principal');
+    const mcpPrincipal: McpPrincipal | null = principal
+      ? { userId: principal.user.id }
+      : null;
+    const server = buildServer(mcpPrincipal);
+
+    if (!nodeEnv?.incoming || !nodeEnv.outgoing) {
+      // Fetch runtime (Netlify): Request in, Response out, nothing to bridge.
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      try {
+        await server.connect(transport);
+        return await transport.handleRequest(c.req.raw);
+      } catch (err) {
+        logger.error({ err }, 'MCP HTTP request failed');
+        return c.json({ error: 'mcp internal error' }, 500);
+      }
+    }
+
+    const { incoming, outgoing } = nodeEnv as {
       incoming: IncomingMessage;
       outgoing: ServerResponse;
     };
-    if (!incoming || !outgoing) {
-      return c.json({ error: 'MCP HTTP transport requires the Node adapter' }, 500);
-    }
 
     let body: unknown;
-    if (incoming.method === 'POST') {
+    if (c.req.method === 'POST') {
       try {
         body = await c.req.json();
       } catch {
@@ -39,12 +67,7 @@ export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOption
       }
     }
 
-    const principal = c.get('principal');
-    const mcpPrincipal: McpPrincipal | null = principal
-      ? { userId: principal.user.id }
-      : null;
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    const server = buildServer(mcpPrincipal);
     try {
       await server.connect(transport);
       await transport.handleRequest(incoming, outgoing, body);
