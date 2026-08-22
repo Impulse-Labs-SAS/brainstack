@@ -27,6 +27,11 @@ out/
 *.sqlite
 *.sqlite3
 
+# Netlify CLI state. Which site this checkout deploys to is the deployer's
+# business, not the repo's — tracked, it pointed every clone at one person's
+# personal site.
+.netlify/
+
 # BrainStack runtime data (mounted in container)
 data/
 brain/
