@@ -4,7 +4,7 @@
 //
 // Security invariants, unchanged from the sqlite version:
 //   - Plaintext tokens are never persisted. Only sha256 hashes hit the DB.
-//   - Passwords are hashed with argon2id (@node-rs/argon2 defaults).
+//   - Passwords are hashed with scrypt from node:crypto (see lib/password.ts).
 //   - Email enumeration is avoided: "forgot password" and login report the
 //     same thing whether or not the account exists, and cost the same time.
 //
@@ -15,7 +15,6 @@
 // UPDATE instead. That is stronger than the transaction was: two concurrent
 // clicks on the same link race inside one statement and exactly one wins.
 
-import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
@@ -23,6 +22,7 @@ import type { Logger } from 'pino';
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
+import { DECOY_HASH, hashPassword, verifyPassword } from '../lib/password.js';
 import { generateToken, sha256 } from '../lib/tokens.js';
 
 import type { EmailSender } from './EmailSender.js';
@@ -40,13 +40,6 @@ const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
  */
 const PASSWORD_MIN = 8;
 
-/**
- * Verified against a constant when the account does not exist, so a wrong
- * email and a wrong password take the same time to fail.
- */
-const DECOY_HASH =
-  '$argon2id$v=19$m=19456,t=2,p=1$ZGVjb3lkZWNveWRlY295ZGU$' +
-  'lZbZx0WgPa1xQp4qF2tQE3W3uX7YBgmkOdGqQyMS7C0';
 
 export interface AuthServiceOptions {
   db: PgDb;
@@ -223,7 +216,7 @@ export class AuthService {
     const policyError = validatePassword(password);
     if (policyError) throw new AppError(policyError, 'INVALID_INPUT', 400);
 
-    const passwordHash = await argonHash(password);
+    const passwordHash = await hashPassword(password);
     const now = this.now();
 
     // Insert-or-nothing, so a duplicate email is one statement rather than a
@@ -260,7 +253,7 @@ export class AuthService {
     // password are indistinguishable from the outside.
     let ok = false;
     try {
-      ok = await argonVerify(row?.passwordHash ?? DECOY_HASH, password);
+      ok = await verifyPassword(row?.passwordHash ?? DECOY_HASH, password);
     } catch {
       ok = false;
     }
@@ -461,7 +454,7 @@ export class AuthService {
 
     const tokenHash = sha256(token);
     const now = this.now();
-    const newHash = await argonHash(newPassword);
+    const newHash = await hashPassword(newPassword);
 
     const [claimed] = await this.opts.db
       .update(passwordResetTokens)
@@ -505,7 +498,7 @@ export class AuthService {
       throw new AppError('no password set on this account', 'INVALID_INPUT', 400);
     }
 
-    const ok = await argonVerify(row.passwordHash, currentPassword).catch(() => false);
+    const ok = await verifyPassword(row.passwordHash, currentPassword);
     if (!ok) throw new AppError('current password is incorrect', 'UNAUTHORIZED', 401);
 
     const policyError = validatePassword(newPassword);
@@ -514,7 +507,7 @@ export class AuthService {
     const now = this.now();
     await this.opts.db
       .update(users)
-      .set({ passwordHash: await argonHash(newPassword), updatedAt: now })
+      .set({ passwordHash: await hashPassword(newPassword), updatedAt: now })
       .where(eq(users.id, userId));
   }
 
