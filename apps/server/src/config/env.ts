@@ -19,7 +19,15 @@ const Env = z.object({
         'from when notes lived in sqlite; storage is Postgres now.',
     }),
   PORT: z.coerce.number().int().positive().default(3000),
-  PUBLIC_ORIGIN: z.string().url().default('http://localhost:3000'),
+  // Trailing slash stripped: this becomes the OAuth issuer and is concatenated
+  // with paths, so 'https://site/' would produce 'https://site//api/oauth/...'
+  // and break discovery. Every other consumer already strips it; this is the
+  // one place it is guaranteed once.
+  PUBLIC_ORIGIN: z
+    .string()
+    .url()
+    .default('http://localhost:3000')
+    .transform((v) => v.replace(/\/+$/, '')),
   SESSION_SECRET: z.string().min(16).default('dev-secret-please-change-at-least-32-bytes'),
   MCP_STDIO: z
     .string()

@@ -89,12 +89,24 @@ export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<Au
   return router;
 }
 
-/** Only allow relative paths or paths within `appHome` to prevent open-redirect. */
+/**
+ * Only allow relative paths, or absolute URLs whose origin is exactly appHome.
+ *
+ * The origin has to be compared as an origin, not as a string prefix: with a
+ * prefix check `https://brainstack.app.evil.com` starts with
+ * `https://brainstack.app` and sails through, which is the open redirect. A
+ * protocol-relative `//evil.com` is a URL to another host too, so it is
+ * refused alongside.
+ */
 function sanitizeRedirect(redirectTo: string | null, appHome: string): string {
   if (!redirectTo) return `${appHome}/`;
-  if (redirectTo.startsWith('/') && !redirectTo.startsWith('//')) {
+  if (redirectTo.startsWith('/') && !redirectTo.startsWith('//') && !redirectTo.startsWith('/\\')) {
     return `${appHome}${redirectTo}`;
   }
-  if (redirectTo.startsWith(appHome)) return redirectTo;
+  try {
+    if (new URL(redirectTo).origin === new URL(appHome).origin) return redirectTo;
+  } catch {
+    // Not a parseable absolute URL; fall through to the safe default.
+  }
   return `${appHome}/`;
 }

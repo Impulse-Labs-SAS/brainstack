@@ -1,6 +1,10 @@
-// In-memory token-bucket rate limiter keyed by principal (user id or api key
-// id). One bucket per key, refilled at `perMinute` tokens per minute. Good
-// enough for V1 single-node deploys; replace with Redis if we ever scale out.
+// In-memory token-bucket rate limiter. One bucket per key, refilled at
+// `perMinute` tokens per minute. Good enough for V1 single-node deploys;
+// replace with Redis if we ever scale out.
+//
+// Keyed by principal where there is one, and by client IP where there is not —
+// the OAuth endpoints (register, token, authorize) are anonymous by design, and
+// keying only by principal would leave them with no limit at all.
 
 import type { MiddlewareHandler } from 'hono';
 
@@ -17,6 +21,15 @@ export interface RateLimitOptions {
   now?: () => number;
 }
 
+/** Best-effort client IP. Netlify sets the first; a proxy sets the second. */
+function clientIp(c: Parameters<MiddlewareHandler>[0]): string {
+  return (
+    c.req.header('x-nf-client-connection-ip') ??
+    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
+    'unknown'
+  ).slice(0, 64);
+}
+
 export function buildRateLimitMiddleware(
   options: RateLimitOptions,
 ): MiddlewareHandler<AuthBindings> {
@@ -27,11 +40,9 @@ export function buildRateLimitMiddleware(
 
   return async (c, next) => {
     const principal = c.var.principal;
-    if (!principal) {
-      return next();
-    }
-    const key =
-      principal.kind === 'apiKey'
+    const key = !principal
+      ? `ip:${clientIp(c)}`
+      : principal.kind === 'apiKey'
         ? `key:${principal.apiKey.id}`
         : `user:${principal.user.id}`;
 
