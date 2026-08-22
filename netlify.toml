@@ -18,24 +18,23 @@
 
 [functions]
   directory = "netlify/functions"
-  # Password hashing is a Rust addon, and a `.node` binary is not something a
-  # bundler can inline — esbuild has no loader for it and the build stops with
-  # "No loader is configured for .node files". Marked external, it is copied
-  # into the bundle and required at runtime instead.
+  # Nothing else goes in this block.
   #
-  # The platform build is named explicitly as well: `@node-rs/argon2` picks its
-  # binary through optional dependencies, and Netlify runs on linux-x64-gnu.
-  external_node_modules = ["@node-rs/argon2", "@node-rs/argon2-linux-x64-gnu"]
-  # The MCP server reads the skill instructions from disk at request time, and a
-  # bundle contains only what was imported. Without this the `instructions` tool
-  # answers "INSTRUCTIONS.md not found" while every other tool works — the kind
-  # of failure that looks like a bad deploy rather than a missing file.
-  included_files = ["packages/skill/INSTRUCTIONS.md"]
-  # `node_bundler` is deliberately absent. It is a v1-era setting, and declaring
-  # it made Netlify treat these .mts files as v1 functions: the runtime looked
-  # for a named `handler` export and answered 502 with
-  # "D.handler is not a function", even though the bundle exported `default`
-  # correctly. v2 functions are bundled by Netlify's own pipeline.
+  # Every option here — `node_bundler`, `external_node_modules`,
+  # `included_files` — belongs to the older bundler, and declaring any of them
+  # makes Netlify treat these .mts files as v1 functions: the runtime looks for
+  # a named `handler` export and answers 502 with "D.handler is not a function",
+  # even though the bundle exports `default` correctly. v2 functions are bundled
+  # by Netlify's own pipeline and want to be left alone.
+  #
+  # `external_node_modules` was added here to keep esbuild away from the argon2
+  # binary. That turned out to be the wrong cure: the `.node` file it choked on
+  # was the *Windows* build, riding along in a node_modules directory that was
+  # being uploaded by mistake. A clean install on Linux does not produce it.
+  #
+  # Losing `included_files` costs the MCP `instructions` tool, which reads
+  # INSTRUCTIONS.md from disk and will not find it in a bundle. One tool
+  # degraded beats every route returning 502.
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
