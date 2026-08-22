@@ -356,13 +356,37 @@ export function buildMcpServer({
   return server;
 }
 
+/**
+ * Where this module lives, when that can be known.
+ *
+ * `import.meta` exists in ES modules and nowhere else. A bundler that emits
+ * CommonJS — Netlify's does, for some entry points — leaves it undefined, and
+ * reading `.url` off it throws before any fallback gets a chance. So the
+ * question is asked carefully and answered with null when it cannot be.
+ */
+function moduleDir(): string | null {
+  try {
+    const url = import.meta?.url;
+    return typeof url === 'string' ? dirname(fileURLToPath(url)) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readInstructions(): Promise<string> {
-  // Resolve relative to this file regardless of where the server is launched.
-  const here = dirname(fileURLToPath(import.meta.url));
+  const here = moduleDir();
   const candidates = [
-    resolve(here, '../../../../packages/skill/INSTRUCTIONS.md'),
-    resolve(here, '../../../packages/skill/INSTRUCTIONS.md'),
+    // First, because it is the one that holds in a bundle: the file is carried
+    // in by `included_files` and lands relative to the function's root.
     resolve(process.cwd(), 'packages/skill/INSTRUCTIONS.md'),
+    // Then relative to this file, which is what works when running from source
+    // regardless of where the process was launched.
+    ...(here
+      ? [
+          resolve(here, '../../../../packages/skill/INSTRUCTIONS.md'),
+          resolve(here, '../../../packages/skill/INSTRUCTIONS.md'),
+        ]
+      : []),
   ];
   for (const path of candidates) {
     try {

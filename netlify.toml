@@ -18,6 +18,14 @@
 
 [functions]
   directory = "netlify/functions"
+  # Password hashing is a Rust addon, and a `.node` binary is not something a
+  # bundler can inline — esbuild has no loader for it and the build stops with
+  # "No loader is configured for .node files". Marked external, it is copied
+  # into the bundle and required at runtime instead.
+  #
+  # The platform build is named explicitly as well: `@node-rs/argon2` picks its
+  # binary through optional dependencies, and Netlify runs on linux-x64-gnu.
+  external_node_modules = ["@node-rs/argon2", "@node-rs/argon2-linux-x64-gnu"]
   # The MCP server reads the skill instructions from disk at request time, and a
   # bundle contains only what was imported. Without this the `instructions` tool
   # answers "INSTRUCTIONS.md not found" while every other tool works — the kind
