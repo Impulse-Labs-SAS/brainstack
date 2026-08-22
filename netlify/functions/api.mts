@@ -116,6 +116,10 @@ async function boot(): Promise<Hono<never>> {
      * address to /api/auth/forgot-password — which is the whole account.
      */
     exposeDevTokens: false,
+    // MCP hosts (claude.ai, Claude Code, Cursor) authenticate via OAuth: the
+    // `.well-known` documents, /api/oauth/* and provider-issued tokens all
+    // hang off this. The issuer is the configured origin, never the request's.
+    oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
     publicConfig: {
       deployment: cfg.BRAINSTACK_DEPLOYMENT,
       features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },
@@ -138,4 +142,12 @@ export default async (req: Request): Promise<Response> => {
   return app.fetch(req);
 };
 
-export const config: Config = { path: '/api/*' };
+/*
+ * No `path` on purpose. Declaring one enters this function in the same routing
+ * table as the Next.js catch-all, and which of the two wins `/api/*` turned
+ * out to vary between otherwise identical deploys — same config, one deploy
+ * answers 200 and the next 404. With no path the function keeps only its
+ * canonical `/.netlify/functions/api` route and the `[[redirects]] /api/*`
+ * rule in netlify.toml does the routing, which nothing competes with.
+ */
+export const config: Config = {};

@@ -40,3 +40,28 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+# The api function declares no `path` (see the comment in api.mts): these
+# rules are its only routing, so nothing races the Next.js catch-all for them.
+# First match wins, and `force` keeps Next from answering with a prerendered
+# 404 before the rule is consulted.
+
+# OAuth discovery (RFC 8414/9728). Only well-known at the origin root, which
+# is Next's territory — carved out here and in the web middleware's matcher.
+[[redirects]]
+  from = "/.well-known/oauth-protected-resource*"
+  to = "/.netlify/functions/api/.well-known/oauth-protected-resource:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/.well-known/oauth-authorization-server*"
+  to = "/.netlify/functions/api/.well-known/oauth-authorization-server:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
