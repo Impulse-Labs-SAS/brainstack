@@ -94,6 +94,8 @@ async function main(): Promise<void> {
         notes: services.notes,
         search: services.search,
         sharing: services.sharing,
+        auth: services.auth,
+        invites: services.invites,
         logger,
         principal,
       }),

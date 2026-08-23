@@ -11,9 +11,11 @@ import type { Logger } from 'pino';
 
 import { AppError } from '../lib/errors.js';
 
+import type { AuthService } from '../services/AuthService.js';
+import type { InviteService } from '../services/InviteService.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
-import type { SharingService } from '../services/SharingService.js';
+import { normalizeFolderPath, type SharingService } from '../services/SharingService.js';
 
 export interface McpPrincipal {
   /** ID del user autenticado que invoca el MCP. */
@@ -24,6 +26,10 @@ export interface BuildMcpServerOptions {
   notes: NoteService;
   search: SearchService;
   sharing: SharingService;
+  /** Resolves the email a caller shares with into an account. */
+  auth: AuthService;
+  /** Used when that email has no account yet. */
+  invites: InviteService;
   logger: Logger;
   /**
    * Principal del request actual. Requerido en hosted; opcional en
@@ -55,6 +61,8 @@ export function buildMcpServer({
   notes,
   search,
   sharing,
+  auth,
+  invites,
   logger,
   principal,
 }: BuildMcpServerOptions): McpServer {
@@ -329,6 +337,106 @@ export function buildMcpServer({
         try {
           const userId = requireUserId();
           return JSON_TEXT(await sharing.listSharedRoots(userId));
+        } catch (err) {
+          return toMcpError(err);
+        }
+      },
+    );
+
+    server.registerTool(
+      'list_shares',
+      {
+        title: 'List folders I shared',
+        description:
+          'List the folders I have shared and who can read each one. Optionally filter to a single folder with `path`.',
+        inputSchema: { path: z.string().optional() },
+      },
+      async ({ path }) => {
+        try {
+          const rows = await sharing.listMyShares(requireUserId());
+          const wanted = path ? normalizeFolderPath(path) : null;
+          return JSON_TEXT(wanted === null ? rows : rows.filter((r) => r.folderPath === wanted));
+        } catch (err) {
+          return toMcpError(err);
+        }
+      },
+    );
+
+    server.registerTool(
+      'share_folder',
+      {
+        title: 'Share a folder with someone',
+        description:
+          'Give another person read access to a folder, by email. Someone who already has a BrainStack account is granted access immediately; anyone else is emailed an invitation that expires in 7 days. Access covers the folder and everything under it, including notes created later.',
+        inputSchema: { path: z.string().min(1), email: z.string().email() },
+      },
+      async ({ path, email }) => {
+        try {
+          const ownerId = requireUserId();
+          const target = await auth.findUserByEmail(email);
+
+          if (target && target.id !== ownerId) {
+            const shareId = await sharing.grant({
+              ownerId,
+              sharedWithUserId: target.id,
+              folderPath: path,
+              grantedBy: ownerId,
+            });
+            return JSON_TEXT({
+              status: 'granted',
+              shareId,
+              folderPath: normalizeFolderPath(path),
+              sharedWith: { userId: target.id, email: target.email },
+            });
+          }
+
+          const invite = await invites.create({
+            ownerId,
+            folderPath: path,
+            mode: 'email',
+            inviteeEmail: email,
+          });
+          // The accept token is deliberately left out of the answer. It is a
+          // bearer credential, and the invitee already has it in their inbox;
+          // repeating it here would copy it into a chat transcript for no gain.
+          return JSON_TEXT({
+            status: 'invited',
+            inviteId: invite.inviteId,
+            folderPath: normalizeFolderPath(path),
+            invitedEmail: email,
+            expiresAt: invite.expiresAt,
+          });
+        } catch (err) {
+          return toMcpError(err);
+        }
+      },
+    );
+
+    server.registerTool(
+      'unshare',
+      {
+        title: 'Revoke someone from a folder',
+        description:
+          'Take away one person’s access to a folder, by email. Also kills the invitations that could hand it straight back. A no-op when they had no access.',
+        inputSchema: { path: z.string().min(1), email: z.string().email() },
+      },
+      async ({ path, email }) => {
+        try {
+          const ownerId = requireUserId();
+          const target = await auth.findUserByEmail(email);
+          if (!target) {
+            throw new AppError(`no account for ${email}`, 'NOT_FOUND', 404);
+          }
+          await sharing.revoke({
+            ownerId,
+            sharedWithUserId: target.id,
+            folderPath: path,
+          });
+          return JSON_TEXT({
+            status: 'revoked',
+            folderPath: normalizeFolderPath(path),
+            revokedFrom: { userId: target.id, email: target.email },
+          });
         } catch (err) {
           return toMcpError(err);
         }

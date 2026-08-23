@@ -131,6 +131,8 @@ async function boot(): Promise<Hono<never>> {
         notes: services.notes,
         search: services.search,
         sharing: services.sharing,
+        auth: services.auth,
+        invites: services.invites,
         logger,
         principal,
       }),
