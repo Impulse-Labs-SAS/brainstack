@@ -347,3 +347,41 @@ describe('ApiKeyService', () => {
     expect(await apiKeys.validate(key.token)).not.toBeNull();
   });
 });
+
+describe('AuthService.updateProfile', () => {
+  async function verifiedUser(): Promise<string> {
+    const { user, verification } = await auth.signup('user@brain.test', STRONG, null);
+    await auth.consumeEmailVerification(verification.token);
+    return user.id;
+  }
+
+  it('sets the display name', async () => {
+    const id = await verifiedUser();
+    const updated = await auth.updateProfile(id, { displayName: 'Federico Linardelli' });
+    expect(updated.displayName).toBe('Federico Linardelli');
+    expect((await auth.findUserById(id))?.displayName).toBe('Federico Linardelli');
+  });
+
+  it('trims, and stores a blank name as unset rather than as an empty string', async () => {
+    const id = await verifiedUser();
+    expect((await auth.updateProfile(id, { displayName: '  Fede  ' })).displayName).toBe('Fede');
+    expect((await auth.updateProfile(id, { displayName: '   ' })).displayName).toBeNull();
+  });
+
+  it('refuses a name past the column budget', async () => {
+    const id = await verifiedUser();
+    await expect(auth.updateProfile(id, { displayName: 'x'.repeat(121) })).rejects.toThrow(
+      AppError,
+    );
+  });
+
+  it('leaves the name alone when the field is not part of the patch', async () => {
+    const id = await verifiedUser();
+    await auth.updateProfile(id, { displayName: 'Fede' });
+    expect((await auth.updateProfile(id, {})).displayName).toBe('Fede');
+  });
+
+  it('fails on an unknown user', async () => {
+    await expect(auth.updateProfile('nope', { displayName: 'x' })).rejects.toThrow(AppError);
+  });
+});

@@ -46,15 +46,11 @@ export default function AccountSettingsPage() {
       </div>
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl space-y-8">
-          <section>
-            <h2 className="mb-2 text-base font-medium text-fg-primary">Profile</h2>
-            <div className="rounded border border-border bg-bg-surface p-4 text-sm">
-              <div className="text-fg-muted">Email</div>
-              <div className="mb-2 font-mono text-fg-primary">{user?.email ?? '—'}</div>
-              <div className="text-fg-muted">Display name</div>
-              <div className="font-mono text-fg-primary">{user?.displayName ?? '—'}</div>
-            </div>
-          </section>
+          <ProfileCard
+            email={user?.email ?? null}
+            displayName={user?.displayName ?? null}
+            onSaved={() => me.refetch()}
+          />
 
           <ChangePasswordCard hasPassword={Boolean(user?.hasPassword)} />
 
@@ -78,6 +74,93 @@ export default function AccountSettingsPage() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * Email is fixed — it identifies the account and every share is addressed to
+ * it. The name is not, and until now there was nowhere to set it, so people
+ * you shared a folder with saw your address and nothing else.
+ */
+function ProfileCard({
+  email,
+  displayName,
+  onSaved,
+}: {
+  email: string | null;
+  displayName: string | null;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(displayName ?? '');
+  const [status, setStatus] = useState<{ ok?: boolean; error?: string } | null>(null);
+  const update = trpc.auth.updateProfile.useMutation();
+
+  // The query resolves after the first render, so the field has to pick the
+  // name up when it lands — but only while untouched, or it would overwrite
+  // what is being typed on every refetch.
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (!touched) setName(displayName ?? '');
+  }, [displayName, touched]);
+
+  async function submit(e: React.FormEvent): Promise<void> {
+    e.preventDefault();
+    setStatus(null);
+    try {
+      await update.mutateAsync({ displayName: name });
+      setTouched(false);
+      setStatus({ ok: true });
+      onSaved();
+    } catch (err) {
+      setStatus({ error: err instanceof Error ? err.message : 'failed' });
+    }
+  }
+
+  return (
+    <section>
+      <h2 className="mb-2 text-base font-medium text-fg-primary">Profile</h2>
+      <form
+        onSubmit={submit}
+        className="space-y-3 rounded border border-border bg-bg-surface p-4 text-sm"
+      >
+        <div>
+          <label className="mb-1 block font-mono text-[11px] text-fg-muted">EMAIL</label>
+          <div className="font-mono text-fg-primary">{email ?? '—'}</div>
+        </div>
+        <div>
+          <label
+            htmlFor="display-name"
+            className="mb-1 block font-mono text-[11px] text-fg-muted"
+          >
+            NAME
+          </label>
+          <Input
+            id="display-name"
+            value={name}
+            maxLength={120}
+            placeholder="Your name"
+            autoComplete="name"
+            onChange={(e) => {
+              setTouched(true);
+              setName(e.target.value);
+              setStatus(null);
+            }}
+          />
+          <p className="mt-1 text-xs text-fg-muted">
+            Shown to the people you share folders with. Leave it empty to go by your email.
+          </p>
+        </div>
+        {status?.error && <div className="text-xs text-danger">{status.error}</div>}
+        {status?.ok && <div className="text-xs text-success">Profile updated.</div>}
+        <Button
+          intent="primary"
+          type="submit"
+          isDisabled={update.isPending || name.trim() === (displayName ?? '')}
+        >
+          {update.isPending ? 'Saving…' : 'Save'}
+        </Button>
+      </form>
+    </section>
   );
 }
 

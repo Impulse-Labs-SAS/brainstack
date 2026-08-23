@@ -40,6 +40,9 @@ const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
  */
 const PASSWORD_MIN = 8;
 
+/** Room for a long name, short of enough to break the layouts that print it. */
+const MAX_DISPLAY_NAME = 120;
+
 
 export interface AuthServiceOptions {
   db: PgDb;
@@ -597,6 +600,43 @@ export class AuthService {
       .update(users)
       .set({ googleId: null, updatedAt: this.now() })
       .where(eq(users.id, userId));
+  }
+
+  // -- Profile ---------------------------------------------------------------
+
+  /**
+   * Set the name other people see.
+   *
+   * It is not decoration: this is what shows up next to a folder in someone
+   * else's "shared with me", so an account with no name is an email address
+   * to whoever received the share. Blank clears it back to null rather than
+   * storing an empty string, so "unset" has one representation.
+   */
+  async updateProfile(userId: string, input: { displayName?: string | null }): Promise<User> {
+    const row = await this.rowById(userId);
+    if (!row) throw new AppError('user not found', 'NOT_FOUND', 404);
+
+    const patch: { displayName?: string | null; updatedAt: number } = { updatedAt: this.now() };
+
+    if (input.displayName !== undefined) {
+      const trimmed = (input.displayName ?? '').trim();
+      if (trimmed.length > MAX_DISPLAY_NAME) {
+        throw new AppError(
+          `display name is longer than ${MAX_DISPLAY_NAME} characters`,
+          'INVALID_INPUT',
+          400,
+        );
+      }
+      patch.displayName = trimmed === '' ? null : trimmed;
+    }
+
+    const [updated] = await this.opts.db
+      .update(users)
+      .set(patch)
+      .where(eq(users.id, userId))
+      .returning();
+
+    return toUser(updated as UserRow);
   }
 
   // -- Misc ------------------------------------------------------------------

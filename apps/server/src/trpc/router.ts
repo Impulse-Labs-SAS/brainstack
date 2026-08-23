@@ -62,6 +62,13 @@ export const appRouter = t.router({
   auth: t.router({
     me: t.procedure.query(({ ctx }) => ({ user: ctx.user })),
     logout: protectedProcedure.mutation(() => ({ ok: true })),
+    updateProfile: protectedProcedure
+      .input(z.object({ displayName: z.string().max(120) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => ({
+          user: await ctx.auth.updateProfile(ctx.user.id, { displayName: input.displayName }),
+        })),
+      ),
   }),
   notes: t.router({
     get: protectedProcedure
