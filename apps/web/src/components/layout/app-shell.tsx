@@ -4,14 +4,17 @@ import Link from 'next/link';
 import {
   FileText,
   KeyRound,
+  LogOut,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
 } from 'lucide-react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
+import { authFetch } from '@/lib/authApi';
+import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { CommandPalette } from '@/components/search/command-palette';
 
@@ -108,14 +111,73 @@ export function AppShell({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
-        {!collapsed && (
-          <div className="border-t border-border-subtle p-3 font-mono text-[11px] text-fg-muted">
-            v0.1.0 · pre-alpha
-          </div>
-        )}
+        <UserFooter collapsed={collapsed} />
       </aside>
       <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+    </div>
+  );
+}
+
+/**
+ * Who is signed in, and the way out.
+ *
+ * Signing out used to live three clicks deep inside Settings › Account, which
+ * is a fine place for it to also be and a bad place for it to only be: on a
+ * shared machine the way out has to be in sight.
+ */
+function UserFooter({ collapsed }: { collapsed: boolean }) {
+  const router = useRouter();
+  const me = trpc.auth.me.useQuery();
+  const [signingOut, setSigningOut] = useState(false);
+
+  const user = me.data?.user;
+  const label = user?.displayName?.trim() || user?.email || '';
+
+  const signOut = useCallback(async () => {
+    setSigningOut(true);
+    try {
+      await authFetch('/auth/logout', { method: 'POST' });
+    } catch {
+      // The cookie is HttpOnly, so there is nothing to clean up here; land on
+      // /login either way and let it sort the session out.
+    }
+    router.replace('/login');
+  }, [router]);
+
+  return (
+    <div className="border-t border-border-subtle">
+      <div className={cn('flex items-center', collapsed ? 'justify-center p-1.5' : 'gap-2 p-2')}>
+        {!collapsed && (
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs text-fg-secondary" title={label}>
+              {label || '—'}
+            </div>
+            {user?.displayName && (
+              <div className="truncate font-mono text-[11px] text-fg-muted" title={user.email}>
+                {user.email}
+              </div>
+            )}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => void signOut()}
+          disabled={signingOut}
+          title="Sign out"
+          aria-label="Sign out"
+          className={cn(
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded',
+            'text-fg-muted hover:bg-bg-elevated hover:text-danger',
+            'disabled:pointer-events-none disabled:opacity-50',
+          )}
+        >
+          <LogOut size={14} strokeWidth={1.75} />
+        </button>
+      </div>
+      {!collapsed && (
+        <div className="px-3 pb-2 font-mono text-[11px] text-fg-muted">v0.1.0 · pre-alpha</div>
+      )}
     </div>
   );
 }
