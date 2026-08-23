@@ -72,7 +72,14 @@ rm -rf apps/web/.next/_next
 cp -r .netlify/static/_next apps/web/.next/_next
 
 echo "== deploy draft =="
-OUT=$(npx -y "$CLI" deploy --no-build --site "$SITE_ID" 2>&1 | tee /dev/stderr)
+# Through a file rather than `tee /dev/stderr`: a shell with no terminal
+# attached — anything driving this script non-interactively — cannot open
+# /dev/stderr for writing, and tee dies before the deploy output is read.
+# That failed after the build had already run, which is a slow way to learn it.
+DEPLOY_LOG="$(mktemp)"
+npx -y "$CLI" deploy --no-build --site "$SITE_ID" 2>&1 | tee "$DEPLOY_LOG"
+OUT=$(cat "$DEPLOY_LOG")
+rm -f "$DEPLOY_LOG"
 DEPLOY_ID=$(printf '%s' "$OUT" | grep -oE 'app.netlify.com/projects/[^/]+/deploys/[a-f0-9]+' | grep -oE '[a-f0-9]{24}' | head -1)
 DRAFT_URL=$(printf '%s' "$OUT" | grep -oE 'https://[a-f0-9]+--[a-z0-9-]+\.netlify\.app' | head -1)
 [ -n "$DRAFT_URL" ] || { echo "no encontré la Draft URL en la salida"; exit 1; }
