@@ -328,7 +328,7 @@ export function buildMcpServer({
       async () => {
         try {
           const userId = requireUserId();
-          return JSON_TEXT(sharing.listSharedRoots(userId));
+          return JSON_TEXT(await sharing.listSharedRoots(userId));
         } catch (err) {
           return toMcpError(err);
         }

@@ -251,7 +251,7 @@ export const appRouter = t.router({
             // El flow con invitación por email/link entra en el paso 9.
             throw new AppError('user no encontrado; usar invitación', 'NOT_FOUND', 404);
           }
-          const id = ctx.sharing.grant({
+          const id = await ctx.sharing.grant({
             ownerId: ctx.user.id,
             sharedWithUserId: target.id,
             folderPath: input.folderPath,
@@ -272,7 +272,7 @@ export const appRouter = t.router({
           if (!ctx.sharing.enabled) {
             throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
           }
-          ctx.sharing.revoke({
+          await ctx.sharing.revoke({
             ownerId: ctx.user.id,
             sharedWithUserId: input.sharedWithUserId,
             folderPath: input.folderPath,
@@ -314,8 +314,8 @@ export const appRouter = t.router({
     revokeInvite: protectedProcedure
       .input(z.object({ inviteId: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.invites.revoke(ctx.user.id, input.inviteId);
+        wrap(async () => {
+          await ctx.invites.revoke(ctx.user.id, input.inviteId);
           return { ok: true };
         }),
       ),
