@@ -46,6 +46,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# El CLI guarda varias cuentas y usa una sola a la vez. Si la activa no es la
+# duena del sitio, `deploy` corta con "Project not found" — pero recien despues
+# de que corrieron check:functions y el build entero, tres minutos mas tarde.
+# Preguntarlo primero cuesta un request.
+echo "== la cuenta activa ve el sitio =="
+if ! npx -y "$CLI" api getSite --data "{\"site_id\":\"$SITE_ID\"}" >/dev/null 2>&1; then
+  who=$(npx -y "$CLI" api getCurrentUser 2>/dev/null | grep -o '"email": *"[^"]*"' | head -1)
+  echo "✗ el CLI no ve el sitio $SITE_ID"
+  echo "  cuenta activa: ${who:-desconocida}"
+  echo "  corregilo con 'npx netlify switch' y elegi la cuenta duena del sitio"
+  exit 1
+fi
+echo "   si"
+
 echo "== check:functions (la regla: sin verde no se sube) =="
 pnpm check:functions
 
