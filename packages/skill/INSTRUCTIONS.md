@@ -10,6 +10,7 @@ You are connected to a **BrainStack** server: a shared second brain for humans a
 You interact with BrainStack via these MCP tools:
 
 **Read:**
+
 - `search_brain(query, limit?)`
 - `get_note(path)`
 - `list_notes(folder?, tag?, status?, limit?)`
@@ -20,6 +21,7 @@ You interact with BrainStack via these MCP tools:
 - `get_brainstack_guide()` — returns this document at runtime
 
 **Write / structure (require user approval — see below):**
+
 - `create_note(path, content, frontmatter?)` — returns `{ path, affectedMocs }`
 - `update_note(path, content)`
 - `create_folder(path)`
@@ -49,6 +51,9 @@ Always verify with the brain before claiming a fact about the user's domain. Nev
 - `list_tree(path?)` — when you need to understand the vault's shape (where things live, what top-levels exist). **Always start here when deciding where to save something.**
 - `list_links(path)` — backlinks to a note or attachment. Useful for "what referenced this PDF?" or "what links back here?".
 - `list_decisions(folder?)` — decisions only, sorted by recency. Useful when the user asks "what have we decided about X".
+- `list_shared_with_me()` — folders other people shared with the user. See
+  **Shared folders** below: these live in someone else's vault and every tool
+  above takes an `ownerId` to reach them.
 
 Rules:
 
@@ -56,9 +61,42 @@ Rules:
 - If a tool returns nothing, say so. Don't fabricate a plausible-looking path or summary.
 - If a query is scoped to a folder by intent ("what's in BRUTUS?"), prefer `list_notes(folder="BRUTUS")` over `search_brain`.
 
+## Shared folders
+
+A vault is one person's. Someone can share a folder with the user, and that
+folder is **not** part of their vault: it lives in the owner's, and every tool
+reaches it by naming that owner.
+
+- `list_shared_with_me()` — what has been shared with the user, and with what
+  permission. Each row carries the `ownerId` you need below.
+- Every note tool takes an optional **`ownerId`**. Omit it for the user's own
+  notes. Pass it to reach a shared folder — `get_note(ownerId=..., path=...)`,
+  `list_tree(ownerId=..., path=...)`, `create_note(ownerId=..., ...)`.
+- Paths inside a shared folder are relative to **the owner's** root, exactly as
+  `list_shared_with_me` prints them. Never prefix them with anything.
+- `search_brain(scope="shared" | "all")` searches them. A hit whose `ownerId`
+  differs from the user's is in somebody else's vault: open it by passing that
+  same `ownerId` to `get_note`.
+
+Permission is per grant: `read` lets you read, `write` also lets you create and
+edit inside that folder. A note you create there belongs to the folder's owner,
+which is what keeps it visible to everyone the folder is shared with.
+
+**The trap worth naming.** Writing a path without `ownerId` always means the
+user's own vault. So `create_note(path="Impulse Labs/nota.md")` does _not_ write
+to a shared folder called "Impulse Labs" — it makes a private folder of the same
+name that nobody else can see. The server now refuses that call rather than
+doing it silently, and tells you which `ownerId` to pass. If you get that error,
+pass the id; do not rename the note to get around it.
+
+When the user says "put this in <shared folder>", check `list_shared_with_me`
+for the owner before writing, not after.
+
 ## Saving to the brain (write) — ask first
 
 You never write to the brain without explicit user consent. **Every** write/structure tool requires approval: `create_note`, `update_note`, `create_folder`, `move`, `delete`, `upload_attachment`.
+
+This holds just as much for a folder somebody shared with write permission — more so, because there the user is not the only one who will see it.
 
 The "ask before save" pattern:
 
@@ -84,6 +122,7 @@ There is no inbox or quick-capture bucket. Every saved note gets classified at s
    - **Yes** → propose `<top-level>/<subfolder-by-type>/<filename>.md`. Type subfolders are typically `decisiones/`, `ideas/`, `reuniones/`, `referencias/`. If the right type subfolder already exists, use it. If it doesn't but at least 3 sibling notes would fit, propose creating it. Otherwise put the note at the root of the top-level.
    - **No** → ask the user with 2–3 concrete alternatives. Format:
      > "Where should this live? Some options:
+     >
      > 1. `<existing-top-level>/<new-or-existing-subfolder>/` (recommended — fits with X)
      > 2. `<another-existing-top-level>/`
      > 3. A new top-level `<proposed-name>/` (architectural change)
@@ -144,11 +183,11 @@ Every new note gets minimal frontmatter:
 
 ```yaml
 ---
-created: YYYY-MM-DD       # always, ISO format
-tags: [...]               # array, hierarchical with /
-status: ...               # optional: idea | en-progreso | decidido | archivado
-owner: ...                # optional
-title: ...                # optional, overrides H1 / filename for the title
+created: YYYY-MM-DD # always, ISO format
+tags: [...] # array, hierarchical with /
+status: ... # optional: idea | en-progreso | decidido | archivado
+owner: ... # optional
+title: ... # optional, overrides H1 / filename for the title
 ---
 ```
 
