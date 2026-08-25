@@ -107,7 +107,12 @@ export function buildMcpServer({
     const userId = requireUserId();
     const owner = ownerOf(ownerId);
     await sharing.assertCanWrite(userId, owner, path);
-    if (owner === userId) await sharing.assertNotShadowingShare(userId, path);
+    // Only when no owner was named. What makes a path ambiguous is the
+    // *silence* about whose folder it means, not who it turns out to be —
+    // checking the resolved owner instead left somebody who had been given a
+    // folder called "impulse-labs" unable to write to their own folder of that
+    // name, with no way to say which one they meant.
+    if (ownerId === undefined) await sharing.assertNotShadowingShare(userId, path);
   };
 
   /** The `ownerId` argument, described once for every tool that takes it. */

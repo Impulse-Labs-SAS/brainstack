@@ -280,6 +280,17 @@ export function FileTree() {
     enabled: sharingEnabled,
   });
   const sharedRoots = useMemo(() => sharedRootsQ.data ?? [], [sharedRootsQ.data]);
+
+  /**
+   * Every write from this tree names this vault explicitly.
+   *
+   * The server refuses a write whose path could mean a folder somebody shared
+   * with you, because a bare path is ambiguous. Here it never is — you clicked
+   * a node in your own tree. Saying so is what keeps a folder of yours writable
+   * when somebody happens to share one of the same name.
+   */
+  const meQ = trpc.auth.me.useQuery();
+  const mine = meQ.data?.user?.id;
   const sharedWith = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const m of mySharesQ.data ?? []) {
@@ -446,7 +457,7 @@ export function FileTree() {
 
       markBusy(from, true);
       try {
-        const result = await moveM.mutateAsync({ from, to });
+        const result = await moveM.mutateAsync({ from, to, ownerId: mine });
         await refresh();
         const mocs = result.affectedMocs.length
           ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
@@ -458,7 +469,7 @@ export function FileTree() {
         markBusy(from, false);
       }
     },
-    [moveM, moveToOwnerM, sharedRoots, pushToast, refresh, markBusy],
+    [moveM, moveToOwnerM, sharedRoots, mine, pushToast, refresh, markBusy],
   );
 
   const folderForPath = useCallback((path: string, tree: TreeNode | undefined): string => {
@@ -519,6 +530,7 @@ export function FileTree() {
         try {
           const result = await createM.mutateAsync({
             path,
+            ownerId: mine,
             content: `# ${name}\n`,
             frontmatter: { created: new Date().toISOString().slice(0, 10), tags: [] },
           });
@@ -534,7 +546,7 @@ export function FileTree() {
         const folder = folderForPath(targetPath, treeQ.data);
         const path = folder === '' ? name : `${folder}/${name}`;
         try {
-          await createFolderM.mutateAsync({ path });
+          await createFolderM.mutateAsync({ path, ownerId: mine });
           setExpanded((prev) => new Set(prev).add(path));
           await refresh();
           pushToast('info', `created folder ${path}`);
@@ -548,7 +560,7 @@ export function FileTree() {
         const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
         const to = parent === '' ? name : `${parent}/${name}`;
         try {
-          const result = await moveM.mutateAsync({ from, to });
+          const result = await moveM.mutateAsync({ from, to, ownerId: mine });
           await refresh();
           pushToast('info', `renamed to ${result.path}`);
         } catch (err) {
@@ -556,7 +568,7 @@ export function FileTree() {
         }
       }
     },
-    [prompt, folderForPath, treeQ.data, createM, createFolderM, moveM, refresh, pushToast],
+    [prompt, folderForPath, treeQ.data, createM, createFolderM, moveM, mine, refresh, pushToast],
   );
 
   const runDelete = useCallback(async () => {
@@ -565,7 +577,7 @@ export function FileTree() {
     if (!target) return;
     markBusy(target, true);
     try {
-      await removeM.mutateAsync({ path: target, recursive: true });
+      await removeM.mutateAsync({ path: target, recursive: true, ownerId: mine });
       await refresh();
       pushToast('info', `deleted ${target}`);
     } catch (err) {
@@ -573,7 +585,7 @@ export function FileTree() {
     } finally {
       markBusy(target, false);
     }
-  }, [confirmDelete, removeM, refresh, pushToast, markBusy]);
+  }, [confirmDelete, removeM, mine, refresh, pushToast, markBusy]);
 
   // ---------------------------------------------------------------------------
   // Render

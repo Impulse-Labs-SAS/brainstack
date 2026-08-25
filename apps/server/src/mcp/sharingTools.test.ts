@@ -566,3 +566,31 @@ describe('migrar una carpeta de la bóveda personal a la compartida', () => {
     expect(error).toContain('FORBIDDEN');
   });
 });
+
+// Dos carpetas con el mismo nombre: una tuya, una que te compartieron.
+describe('cuando el nombre coincide con una carpeta propia', () => {
+  beforeEach(async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', { path: 'impulse-labs', email: PABLO.email });
+  });
+
+  it('Pablo sigue pudiendo escribir en la suya si dice que es la suya', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { value, error } = await call(pablo, 'create_note', {
+      ownerId: PABLO.id,
+      path: 'impulse-labs/mia.md',
+      content: 'esta es mi carpeta, no la de ella',
+    });
+    expect(error).toBeUndefined();
+    expect(value).toMatchObject({ path: 'impulse-labs/mia.md' });
+  });
+
+  it('sin decir de quién sigue siendo ambiguo, y se rechaza', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { error } = await call(pablo, 'create_note', {
+      path: 'impulse-labs/mia.md',
+      content: 'x',
+    });
+    expect(error).toContain('FORBIDDEN');
+  });
+});

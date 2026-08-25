@@ -86,9 +86,15 @@ const ownerOf = (ctx: AuthedContext, ownerId?: string): string => ownerId ?? ctx
  * `ctx.sharedRoots()` is memoised per request, so a move checking both of its
  * ends still costs a single query.
  */
-const assertWritable = async (ctx: AuthedContext, ownerId: string, path: string): Promise<void> => {
+const assertWritable = async (
+  ctx: AuthedContext,
+  ownerId: string,
+  path: string,
+  /** True when the request named an owner. See below. */
+  ownerWasNamed: boolean,
+): Promise<void> => {
   await ctx.sharing.assertCanWrite(ctx.user.id, ownerId, path);
-  if (ownerId === ctx.user.id) {
+  if (!ownerWasNamed) {
     await ctx.sharing.assertNotShadowingShare(ctx.user.id, path, await ctx.sharedRoots());
   }
 };
@@ -139,7 +145,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
-          await assertWritable(ctx, owner, input.path);
+          await assertWritable(ctx, owner, input.path, input.ownerId !== undefined);
           return ctx.notes.create(owner, input.path, input.content, input.frontmatter);
         }),
       ),
@@ -148,7 +154,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
-          await assertWritable(ctx, owner, input.path);
+          await assertWritable(ctx, owner, input.path, input.ownerId !== undefined);
           return ctx.notes.update(owner, input.path, input.content);
         }),
       ),
@@ -163,7 +169,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
-          await assertWritable(ctx, owner, input.path);
+          await assertWritable(ctx, owner, input.path, input.ownerId !== undefined);
           return ctx.notes.remove(owner, input.path, { recursive: input.recursive });
         }),
       ),
@@ -174,8 +180,8 @@ export const appRouter = t.router({
           // One owner for both ends: a move stays inside a single vault, and
           // both paths are read against the same root.
           const owner = ownerOf(ctx, input.ownerId);
-          await assertWritable(ctx, owner, input.from);
-          await assertWritable(ctx, owner, input.to);
+          await assertWritable(ctx, owner, input.from, input.ownerId !== undefined);
+          await assertWritable(ctx, owner, input.to, input.ownerId !== undefined);
           return ctx.notes.move(owner, input.from, input.to);
         }),
       ),
@@ -199,8 +205,8 @@ export const appRouter = t.router({
         wrap(async () => {
           const fromOwner = ownerOf(ctx, input.fromOwnerId);
           // Taking something out is a write on the source, not a read.
-          await assertWritable(ctx, fromOwner, input.from);
-          await assertWritable(ctx, input.toOwnerId, input.to);
+          await assertWritable(ctx, fromOwner, input.from, input.fromOwnerId !== undefined);
+          await assertWritable(ctx, input.toOwnerId, input.to, true);
           return ctx.notes.moveAcrossVaults({
             fromOwnerId: fromOwner,
             fromPath: input.from,
@@ -214,7 +220,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
-          await assertWritable(ctx, owner, input.path);
+          await assertWritable(ctx, owner, input.path, input.ownerId !== undefined);
           return ctx.notes.createFolder(owner, input.path);
         }),
       ),
