@@ -304,12 +304,21 @@ export const folderShares = pgTable(
     sharedWithUserId: text('shared_with_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * What the grant allows: 'read' or 'write'.
+     *
+     * Defaulted rather than backfilled, because 'read' is what every grant
+     * made before this column meant. A share that predates writing keeps
+     * behaving exactly as it did.
+     */
+    permission: text('permission').notNull().default('read').$type<'read' | 'write'>(),
     grantedAt: bigint('granted_at', { mode: 'number' }).notNull(),
     grantedBy: text('granted_by')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
   },
   (t) => ({
+    permissionValues: check('folder_shares_permission_check', sql`permission IN ('read', 'write')`),
     /** Granting the same folder to the same person twice is one grant. */
     oneGrant: unique('folder_shares_folder_path_owner_id_shared_with_user_id_key').on(
       t.folderPath,

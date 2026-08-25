@@ -52,7 +52,7 @@ describe('SharingService — self-host', () => {
   it('canRead/canWrite siempre true; listSharedRoots vacío', async () => {
     const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
     expect(await selfHost.canRead('alice', 'owner', 'anything')).toBe(true);
-    expect(selfHost.canWrite('alice', 'owner', 'anything')).toBe(true);
+    expect(await selfHost.canWrite('alice', 'owner', 'anything')).toBe(true);
     expect(await selfHost.listSharedRoots('alice')).toEqual([]);
     expect(await selfHost.listMyShares('owner')).toEqual([]);
   });
@@ -73,15 +73,109 @@ describe('SharingService — self-host', () => {
 describe('SharingService — hosted: canRead/canWrite', () => {
   it('dueño siempre puede leer/escribir', async () => {
     expect(await svc.canRead('owner', 'owner', 'cualquiera/x.md')).toBe(true);
-    expect(svc.canWrite('owner', 'owner', 'cualquiera/x.md')).toBe(true);
+    expect(await svc.canWrite('owner', 'owner', 'cualquiera/x.md')).toBe(true);
   });
 
   it('user sin grant no puede leer ni escribir', async () => {
     expect(await svc.canRead('alice', 'owner', 'proyectos/x.md')).toBe(false);
-    expect(svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(false);
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(false);
   });
 
-  it('grant habilita read pero no write (V1 read-only)', async () => {
+  it('un grant de write habilita las dos cosas', async () => {
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+      permission: 'write',
+    });
+    expect(await svc.canRead('alice', 'owner', 'proyectos/x.md')).toBe(true);
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(true);
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/sub/y.md')).toBe(true);
+    // El grant no se desborda fuera de su carpeta.
+    expect(await svc.canWrite('alice', 'owner', 'otra/x.md')).toBe(false);
+  });
+
+  it('re-grant cambia el permiso en vez de no hacer nada', async () => {
+    const first = await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+    });
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(false);
+
+    const second = await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+      permission: 'write',
+    });
+
+    // La misma fila, con otro permiso: subir a write no duplica el share.
+    expect(second).toBe(first);
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(true);
+
+    // Y baja igual de bien.
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+      permission: 'read',
+    });
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(false);
+    expect(await svc.canRead('alice', 'owner', 'proyectos/x.md')).toBe(true);
+  });
+
+  it('entre grants anidados gana el más ancho, sin importar el orden', async () => {
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+      permission: 'read',
+    });
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos/abierto',
+      grantedBy: 'owner',
+      permission: 'write',
+    });
+
+    // El read del padre no cancela el write del hijo.
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/abierto/x.md')).toBe(true);
+    // Y el write del hijo no se derrama sobre el resto del padre.
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/otro/x.md')).toBe(false);
+    expect(await svc.canRead('alice', 'owner', 'proyectos/otro/x.md')).toBe(true);
+  });
+
+  it('las listas dicen qué permiso tiene cada share', async () => {
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+      permission: 'write',
+    });
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'bob',
+      folderPath: 'proyectos',
+      grantedBy: 'owner',
+    });
+
+    const roots = await svc.listSharedRoots('alice');
+    expect(roots).toMatchObject([{ folderPath: 'proyectos', permission: 'write' }]);
+
+    const members = await svc.listMyShares('owner');
+    expect(members.find((m) => m.userId === 'alice')?.permission).toBe('write');
+    expect(members.find((m) => m.userId === 'bob')?.permission).toBe('read');
+  });
+
+  it('un grant sin permiso explícito es de lectura', async () => {
     await svc.grant({
       ownerId: 'owner',
       sharedWithUserId: 'alice',
@@ -90,7 +184,7 @@ describe('SharingService — hosted: canRead/canWrite', () => {
     });
     expect(await svc.canRead('alice', 'owner', 'proyectos/x.md')).toBe(true);
     expect(await svc.canRead('alice', 'owner', 'proyectos/sub/y.md')).toBe(true);
-    expect(svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(false);
+    expect(await svc.canWrite('alice', 'owner', 'proyectos/x.md')).toBe(false);
     expect(await svc.canRead('alice', 'owner', 'otra/x.md')).toBe(false);
   });
 

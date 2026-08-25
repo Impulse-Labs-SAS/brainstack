@@ -17,6 +17,9 @@ const { folderShares, folderShareInvites, users } = pgSchema;
 
 export type Deployment = 'self-host' | 'hosted';
 
+/** What a grant allows. Ordered: 'write' implies 'read'. */
+export type SharePermission = 'read' | 'write';
+
 export interface SharingServiceOptions {
   db: PgDb;
   deployment: Deployment;
@@ -28,6 +31,7 @@ export interface SharedRoot {
   ownerId: string;
   ownerDisplayName: string | null;
   ownerEmail: string;
+  permission: SharePermission;
   grantedAt: number;
 }
 
@@ -37,6 +41,7 @@ export interface ShareMember {
   userId: string;
   email: string;
   displayName: string | null;
+  permission: SharePermission;
   grantedAt: number;
 }
 
@@ -72,10 +77,18 @@ export class SharingService {
     return (await this.findGrantForPath(userId, ownerId, relPath)) !== null;
   }
 
-  canWrite(userId: string, ownerId: string, _relPath: string): boolean {
+  /**
+   * Async because it has to ask the database now.
+   *
+   * Sharing was read-only, so this could answer `userId === ownerId` without a
+   * query. A grant can carry write since 0007, and a permission nobody looks
+   * up is not a permission.
+   */
+  async canWrite(userId: string, ownerId: string, relPath: string): Promise<boolean> {
     if (!this.enabled) return true;
-    // V1 is read-only sharing: only the owner writes.
-    return userId === ownerId;
+    if (userId === ownerId) return true;
+    const grant = await this.findGrantForPath(userId, ownerId, relPath);
+    return grant?.permission === 'write';
   }
 
   async assertCanRead(userId: string, ownerId: string, relPath: string): Promise<void> {
@@ -84,8 +97,8 @@ export class SharingService {
     }
   }
 
-  assertCanWrite(userId: string, ownerId: string, relPath: string): void {
-    if (!this.canWrite(userId, ownerId, relPath)) {
+  async assertCanWrite(userId: string, ownerId: string, relPath: string): Promise<void> {
+    if (!(await this.canWrite(userId, ownerId, relPath))) {
       throw new AppError('sin acceso de escritura a este path', 'FORBIDDEN', 403);
     }
   }
@@ -151,6 +164,7 @@ export class SharingService {
         ownerId: folderShares.ownerId,
         displayName: users.displayName,
         email: users.email,
+        permission: folderShares.permission,
         grantedAt: folderShares.grantedAt,
       })
       .from(folderShares)
@@ -163,6 +177,7 @@ export class SharingService {
       ownerId: r.ownerId,
       ownerDisplayName: r.displayName,
       ownerEmail: r.email,
+      permission: r.permission,
       grantedAt: Number(r.grantedAt),
     }));
   }
@@ -178,6 +193,7 @@ export class SharingService {
         userId: folderShares.sharedWithUserId,
         email: users.email,
         displayName: users.displayName,
+        permission: folderShares.permission,
         grantedAt: folderShares.grantedAt,
       })
       .from(folderShares)
@@ -191,6 +207,7 @@ export class SharingService {
       userId: r.userId,
       email: r.email,
       displayName: r.displayName,
+      permission: r.permission,
       grantedAt: Number(r.grantedAt),
     }));
   }
@@ -204,6 +221,7 @@ export class SharingService {
     sharedWithUserId: string;
     folderPath: string;
     grantedBy: string;
+    permission?: SharePermission;
   }): Promise<string> {
     if (!this.enabled) {
       throw new AppError('sharing no disponible en self-host', 'FORBIDDEN', 403);
@@ -215,6 +233,7 @@ export class SharingService {
     if (params.ownerId === params.sharedWithUserId) {
       throw new AppError('no se puede compartir consigo mismo', 'INVALID_INPUT', 400);
     }
+    const permission = params.permission ?? 'read';
 
     // The unique index does the deduplicating, so this is one statement rather
     // than a lookup followed by an insert that could race with itself.
@@ -225,6 +244,7 @@ export class SharingService {
         folderPath,
         ownerId: params.ownerId,
         sharedWithUserId: params.sharedWithUserId,
+        permission,
         grantedAt: this.now(),
         grantedBy: params.grantedBy,
       })
@@ -233,9 +253,12 @@ export class SharingService {
 
     if (inserted) return inserted.id;
 
-    const [existing] = await this.opts.db
-      .select({ id: folderShares.id })
-      .from(folderShares)
+    // Already shared. Re-granting is how the permission is changed — the owner
+    // picks 'write' in the same dialog that first said 'read' — so the existing
+    // row is updated rather than left as it was.
+    const [updated] = await this.opts.db
+      .update(folderShares)
+      .set({ permission, grantedAt: this.now(), grantedBy: params.grantedBy })
       .where(
         and(
           eq(folderShares.folderPath, folderPath),
@@ -243,10 +266,10 @@ export class SharingService {
           eq(folderShares.sharedWithUserId, params.sharedWithUserId),
         ),
       )
-      .limit(1);
+      .returning({ id: folderShares.id });
 
-    if (!existing) throw new AppError('could not create share', 'INTERNAL', 500);
-    return existing.id;
+    if (!updated) throw new AppError('could not create share', 'INTERNAL', 500);
+    return updated.id;
   }
 
   /**
@@ -318,15 +341,22 @@ export class SharingService {
     userId: string,
     ownerId: string,
     relPath: string,
-  ): Promise<{ folderPath: string } | null> {
+  ): Promise<{ folderPath: string; permission: SharePermission } | null> {
     const rows = await this.opts.db
-      .select({ folderPath: folderShares.folderPath })
+      .select({ folderPath: folderShares.folderPath, permission: folderShares.permission })
       .from(folderShares)
       .where(and(eq(folderShares.sharedWithUserId, userId), eq(folderShares.ownerId, ownerId)));
 
+    // A folder and something under it can both be shared, at different levels.
+    // The widest permission wins, so a write grant on a subfolder is not
+    // cancelled by a read grant on its parent.
+    let best: { folderPath: string; permission: SharePermission } | null = null;
     for (const r of rows) {
-      if (pathFallsUnder(relPath, r.folderPath)) return { folderPath: r.folderPath };
+      if (!pathFallsUnder(relPath, r.folderPath)) continue;
+      const grant = { folderPath: r.folderPath, permission: r.permission };
+      if (grant.permission === 'write') return grant;
+      best ??= grant;
     }
-    return null;
+    return best;
   }
 }

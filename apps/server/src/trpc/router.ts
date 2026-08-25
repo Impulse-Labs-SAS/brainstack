@@ -72,7 +72,7 @@ type AuthedContext = TrpcContext & { user: NonNullable<TrpcContext['user']> };
  * ends still costs a single query.
  */
 const assertWritable = async (ctx: AuthedContext, path: string): Promise<void> => {
-  ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, path);
+  await ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, path);
   await ctx.sharing.assertNotShadowingShare(ctx.user.id, path, await ctx.sharedRoots());
 };
 

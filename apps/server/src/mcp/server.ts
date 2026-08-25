@@ -92,7 +92,7 @@ export function buildMcpServer({
    */
   const assertWrite = async (path: string): Promise<void> => {
     const userId = requireUserId();
-    sharing.assertCanWrite(userId, userId, path);
+    await sharing.assertCanWrite(userId, userId, path);
     await sharing.assertNotShadowingShare(userId, path);
   };
 

@@ -1,0 +1,2 @@
+ALTER TABLE "folder_shares" ADD COLUMN "permission" text DEFAULT 'read' NOT NULL;--> statement-breakpoint
+ALTER TABLE "folder_shares" ADD CONSTRAINT "folder_shares_permission_check" CHECK (permission IN ('read', 'write'));

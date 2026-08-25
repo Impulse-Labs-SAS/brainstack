@@ -339,6 +339,35 @@ const oauthProvider: PgMigration = {
   ],
 };
 
+/**
+ * What a share allows.
+ *
+ * Sharing was read-only until here, so the column defaults to 'read' and every
+ * grant that predates it keeps meaning exactly what it meant.
+ *
+ * The check constraint cannot say IF NOT EXISTS — Postgres has no such form for
+ * ADD CONSTRAINT — so it is asked for by name first. Every other statement in
+ * this file is re-runnable and this one has to be too: the HTTP driver opens no
+ * transaction, so a migration that dies halfway is resumed by running it again.
+ */
+const sharePermission: PgMigration = {
+  name: '0007_pg_share_permission',
+  statements: [
+    `ALTER TABLE folder_shares
+       ADD COLUMN IF NOT EXISTS permission TEXT NOT NULL DEFAULT 'read'`,
+    `DO $$
+     BEGIN
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_constraint WHERE conname = 'folder_shares_permission_check'
+       ) THEN
+         ALTER TABLE folder_shares
+           ADD CONSTRAINT folder_shares_permission_check
+           CHECK (permission IN ('read', 'write'));
+       END IF;
+     END $$`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -346,4 +375,5 @@ export const pgMigrations: readonly PgMigration[] = [
   fullAuth,
   folders,
   oauthProvider,
+  sharePermission,
 ];
