@@ -152,7 +152,7 @@ export function buildMcpServer({
     },
     async (args) => {
       try {
-        const rows = notes.list(requireUserId(), args);
+        const rows = await notes.list(requireUserId(), args);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -237,7 +237,7 @@ export function buildMcpServer({
     },
     async (args) => {
       try {
-        const rows = notes.listDecisions(requireUserId(), args);
+        const rows = await notes.listDecisions(requireUserId(), args);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -316,7 +316,7 @@ export function buildMcpServer({
     async ({ path }) => {
       try {
         await assertRead(path);
-        const rows = notes.listLinks(requireUserId(), path);
+        const rows = await notes.listLinks(requireUserId(), path);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);

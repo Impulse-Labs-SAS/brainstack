@@ -259,3 +259,43 @@ describe('unshare', () => {
     expect(await sharing.canRead(PABLO.id, OWNER.id, 'Impulse Labs/nota.md')).toBe(true);
   });
 });
+
+// `list_shared_with_me` was fixed for returning an unawaited promise, which
+// serialises to `{}` — a tool that answers "nothing" no matter what is true.
+// Three listing tools still had it, so an assistant asking what was in a folder
+// got `{}` and could reasonably conclude the folder was empty, or absent.
+describe('the listing tools answer with their rows, not with a pending promise', () => {
+  it('list_notes returns what was written', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'mis-cosas/idea.md', content: 'una idea' });
+
+    const { value } = await call(pablo, 'list_notes', {});
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ path: 'mis-cosas/idea.md' }]);
+  });
+
+  it('list_decisions returns the notes flagged as decisions', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      path: 'decisiones/usar-pg.md',
+      content: 'vamos con Postgres',
+      // By tag: `listDecisions` matches on the tag alone, despite the tool
+      // description also promising `status: decidido`.
+      frontmatter: { tags: ['decisión'] },
+    });
+
+    const { value } = await call(pablo, 'list_decisions', {});
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ path: 'decisiones/usar-pg.md' }]);
+  });
+
+  it('list_links returns the backlinks of a note', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'destino.md', content: 'acá se llega' });
+    await call(pablo, 'create_note', { path: 'origen.md', content: 'ver [[destino]]' });
+
+    const { value } = await call(pablo, 'list_links', { path: 'destino.md' });
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ sourcePath: 'origen.md' }]);
+  });
+});
