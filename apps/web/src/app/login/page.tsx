@@ -38,11 +38,7 @@ function LoginInner() {
       // OAuth consent screen) are not client routes, so those take a full
       // navigation instead of the router.
       const redirectTo = params.get('redirect_to');
-      if (
-        redirectTo?.startsWith('/') &&
-        !redirectTo.startsWith('//') &&
-        !redirectTo.startsWith('/\\')
-      ) {
+      if (redirectTo?.startsWith('/') && !redirectTo.startsWith('//') && !redirectTo.startsWith('/\\')) {
         if (redirectTo.startsWith('/api/')) {
           window.location.replace(redirectTo);
           return;
@@ -93,7 +89,9 @@ function LoginInner() {
           </div>
           {needsTotp && (
             <div>
-              <label className="mb-1 block font-mono text-[11px] text-fg-muted">2FA CODE</label>
+              <label className="mb-1 block font-mono text-[11px] text-fg-muted">
+                2FA CODE
+              </label>
               <Input
                 inputMode="numeric"
                 value={totpCode}
@@ -130,11 +128,7 @@ function LoginInner() {
 
 export default function LoginPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>
-      }
-    >
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>}>
       <LoginInner />
     </Suspense>
   );

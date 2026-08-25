@@ -99,7 +99,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       '*',
       cors({
         origin: (origin) =>
-          opts.corsOrigins.includes(origin) ? origin : (opts.corsOrigins[0] ?? null),
+          opts.corsOrigins.includes(origin) ? origin : opts.corsOrigins[0] ?? null,
         credentials: true,
         allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
         allowHeaders: ['Content-Type', 'Authorization', 'x-session-token'],
@@ -137,7 +137,10 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   // los casos logueado/no-logueado y redirige al frontend acorde.
   const optionalAuth = buildOptionalAuthMiddleware(middlewareOpts);
   app.use('/invite/*', optionalAuth);
-  app.route('/invite', createInviteRouter({ invites: opts.invites, appHome: opts.appHome }));
+  app.route(
+    '/invite',
+    createInviteRouter({ invites: opts.invites, appHome: opts.appHome }),
+  );
   app.route(
     '/auth',
     createAuthRouter({

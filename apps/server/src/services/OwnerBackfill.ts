@@ -60,7 +60,9 @@ export async function backfillOwnerId(
     return { notesUpdated: 0, skipped: true, reason: 'no-users' };
   }
   if (rows.length > 1) {
-    opts.logger.warn('self-host database has more than one user; leaving unowned notes alone');
+    opts.logger.warn(
+      'self-host database has more than one user; leaving unowned notes alone',
+    );
     return { notesUpdated: 0, skipped: true, reason: 'multiple-users-in-self-host' };
   }
 

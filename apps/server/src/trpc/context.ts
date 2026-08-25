@@ -33,7 +33,10 @@ export interface TrpcContext extends ServerServices {
   sharedRoots(): Promise<SharedRoot[]>;
 }
 
-export function buildContext(services: ServerServices, principal: Principal | null): TrpcContext {
+export function buildContext(
+  services: ServerServices,
+  principal: Principal | null,
+): TrpcContext {
   let cache: SharedRoot[] | null = null;
   return {
     ...services,

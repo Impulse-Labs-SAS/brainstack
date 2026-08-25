@@ -108,7 +108,10 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       options.loginLimiter.check(limiterKey);
     } catch (err) {
       if ((err as { code?: string }).code === 'RATE_LIMITED') {
-        return c.json({ error: 'too many attempts, try again later' }, 429);
+        return c.json(
+          { error: 'too many attempts, try again later' },
+          429,
+        );
       }
       throw err;
     }

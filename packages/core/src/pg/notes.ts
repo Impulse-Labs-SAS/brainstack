@@ -356,7 +356,9 @@ export class PgNoteStore {
     const prefix = ownerId && path.startsWith(`${ownerId}/`) ? `${ownerId}/` : '';
     const stored = await this.allNotePaths();
     const noteIndex = prefix
-      ? new Set([...stored].filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length)))
+      ? new Set(
+          [...stored].filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length)),
+        )
       : stored;
 
     const { resolved } = resolveLinks(parsedLinks, {

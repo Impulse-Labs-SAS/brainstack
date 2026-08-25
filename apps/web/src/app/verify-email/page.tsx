@@ -20,10 +20,7 @@ function VerifyInner() {
             ? `We couldn't verify your email (${error}). The link may have expired — sign in to resend.`
             : 'Your email is verified. You can now sign in.'}
         </p>
-        <Link
-          href="/login"
-          className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary"
-        >
+        <Link href="/login" className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary">
           Go to sign in →
         </Link>
       </div>
@@ -33,11 +30,7 @@ function VerifyInner() {
 
 export default function VerifyEmailPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>
-      }
-    >
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>}>
       <VerifyInner />
     </Suspense>
   );

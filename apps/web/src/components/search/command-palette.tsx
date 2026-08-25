@@ -30,7 +30,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         className="flex h-[60vh] w-[min(640px,90vw)] flex-col overflow-hidden rounded-lg border border-border bg-bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <SearchInput autoFocus placeholder="Search the brain… (Esc to close)" onPick={onClose} />
+        <SearchInput
+          autoFocus
+          placeholder="Search the brain… (Esc to close)"
+          onPick={onClose}
+        />
       </div>
     </div>
   );

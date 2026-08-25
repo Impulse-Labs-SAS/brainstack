@@ -29,7 +29,10 @@ export function createInviteRouter(opts: InviteRouterOptions): Hono<AuthBindings
     const next = `/invite/accept/${encodeURIComponent(token)}`;
 
     if (!principal) {
-      return c.redirect(`${opts.appHome}/login?next=${encodeURIComponent(next)}`, 302);
+      return c.redirect(
+        `${opts.appHome}/login?next=${encodeURIComponent(next)}`,
+        302,
+      );
     }
 
     try {
@@ -37,10 +40,19 @@ export function createInviteRouter(opts: InviteRouterOptions): Hono<AuthBindings
         token,
         user: { id: principal.user.id, email: principal.user.email },
       });
-      return c.redirect(`${opts.appHome}/notes/${encodeURIComponent(result.folderPath)}`, 302);
+      return c.redirect(
+        `${opts.appHome}/notes/${encodeURIComponent(result.folderPath)}`,
+        302,
+      );
     } catch (err) {
-      const reason = err instanceof AppError ? err.code.toLowerCase() : 'internal';
-      return c.redirect(`${opts.appHome}/invite/error?reason=${reason}`, 302);
+      const reason =
+        err instanceof AppError
+          ? err.code.toLowerCase()
+          : 'internal';
+      return c.redirect(
+        `${opts.appHome}/invite/error?reason=${reason}`,
+        302,
+      );
     }
   });
 

@@ -59,7 +59,10 @@ export function ResizablePanel({
   }, [dragging, min, max, side, onWidthChange]);
 
   return (
-    <div className={cn('relative shrink-0', className)} style={{ width }}>
+    <div
+      className={cn('relative shrink-0', className)}
+      style={{ width }}
+    >
       {children}
       <div
         onMouseDown={onMouseDown}
@@ -74,10 +77,7 @@ export function ResizablePanel({
   );
 }
 
-export function usePersistedWidth(
-  key: string,
-  defaultWidth: number,
-): [number, (n: number) => void] {
+export function usePersistedWidth(key: string, defaultWidth: number): [number, (n: number) => void] {
   const [width, setWidth] = useState(defaultWidth);
 
   useEffect(() => {

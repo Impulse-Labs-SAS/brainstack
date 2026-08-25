@@ -33,7 +33,11 @@ export function SharedTree({ ownerId, rootPath, activePath }: Props) {
     return <div className="px-3 py-2 font-mono text-[11px] text-fg-muted">cargando…</div>;
   }
   if (q.error) {
-    return <div className="px-3 py-2 font-mono text-[11px] text-red-300">{q.error.message}</div>;
+    return (
+      <div className="px-3 py-2 font-mono text-[11px] text-red-300">
+        {q.error.message}
+      </div>
+    );
   }
   if (!q.data) return null;
   return (

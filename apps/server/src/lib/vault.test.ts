@@ -31,7 +31,9 @@ describe('toPhysical / toLogical', () => {
   });
 
   it('hosted toPhysical is idempotent on an already-prefixed path', () => {
-    expect(toPhysical('alice', 'alice/proyectos/foo.md', hostedCfg)).toBe('alice/proyectos/foo.md');
+    expect(toPhysical('alice', 'alice/proyectos/foo.md', hostedCfg)).toBe(
+      'alice/proyectos/foo.md',
+    );
   });
 
   it('hosted toLogical throws on a path belonging to somebody else', () => {

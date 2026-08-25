@@ -11,11 +11,8 @@ const Env = z.object({
   /** Postgres connection string. No default: there is nothing sensible to guess. */
   DATABASE_URL: z
     .string()
-    .min(
-      1,
-      'DATABASE_URL is required: a Postgres connection string (postgres://...). ' +
-        'Use a Neon development branch, not production.',
-    )
+    .min(1, 'DATABASE_URL is required: a Postgres connection string (postgres://...). ' +
+      'Use a Neon development branch, not production.')
     .refine((v) => v.startsWith('postgres://') || v.startsWith('postgresql://'), {
       message:
         'DATABASE_URL must be a Postgres connection string. A file path is a leftover ' +
@@ -36,7 +33,9 @@ const Env = z.object({
     .string()
     .default('false')
     .transform((v) => trueish.has(v.toLowerCase())),
-  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  LOG_LEVEL: z
+    .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
+    .default('info'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(60),
   RESEND_API_KEY: z.string().optional(),
   AUTH_EMAIL_FROM: z.string().optional(),
@@ -73,9 +72,7 @@ export function loadConfig(): AppConfig {
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
   );
-  const corsOrigins = parsed.CORS_ORIGINS.split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const corsOrigins = parsed.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
   cached = { ...parsed, authorizedEmails, corsOrigins };
   return cached;
 }

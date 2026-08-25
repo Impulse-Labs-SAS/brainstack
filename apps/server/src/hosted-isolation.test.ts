@@ -142,9 +142,9 @@ describe('hosted multi-user with a shared folder', () => {
     const note = await crossOwner.getNote('bob', 'alice', 'Proyectos/zuno.md');
     expect(note.body).toContain('compartido');
 
-    await expect(crossOwner.getNote('bob', 'alice', 'Privado/diario.md')).rejects.toThrow(
-      expect.objectContaining({ code: 'FORBIDDEN' }),
-    );
+    await expect(
+      crossOwner.getNote('bob', 'alice', 'Privado/diario.md'),
+    ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
   });
 
   it('revoking the grant closes the door again', async () => {
@@ -154,9 +154,9 @@ describe('hosted multi-user with a shared folder', () => {
       folderPath: 'Proyectos',
     });
 
-    await expect(crossOwner.getNote('bob', 'alice', 'Proyectos/zuno.md')).rejects.toThrow(
-      expect.objectContaining({ code: 'FORBIDDEN' }),
-    );
+    await expect(
+      crossOwner.getNote('bob', 'alice', 'Proyectos/zuno.md'),
+    ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
   });
 });
 
@@ -206,9 +206,9 @@ describe('el id interno no se escapa a las respuestas', () => {
   });
 
   it('el "ya existe" tampoco lo expone', async () => {
-    await expect(notes.create('alice', 'proyectos/uno.md', 'otra cosa')).rejects.toThrow(
-      'note already exists: proyectos/uno.md',
-    );
+    await expect(
+      notes.create('alice', 'proyectos/uno.md', 'otra cosa'),
+    ).rejects.toThrow('note already exists: proyectos/uno.md');
   });
 });
 

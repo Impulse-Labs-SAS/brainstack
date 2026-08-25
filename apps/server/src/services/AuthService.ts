@@ -43,6 +43,7 @@ const PASSWORD_MIN = 8;
 /** Room for a long name, short of enough to break the layouts that print it. */
 const MAX_DISPLAY_NAME = 120;
 
+
 export interface AuthServiceOptions {
   db: PgDb;
   email: EmailSender;

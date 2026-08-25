@@ -24,18 +24,19 @@ export interface McpHttpRouterOptions {
   logger: Logger;
 }
 
-export function createMcpHttpRouter({
-  buildServer,
-  logger,
-}: McpHttpRouterOptions): Hono<AuthBindings> {
+export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOptions): Hono<AuthBindings> {
   const router = new Hono<AuthBindings>();
 
   router.all('/', async (c) => {
     // @hono/node-server exposes the raw Node objects on `c.env`.
-    const nodeEnv = c.env as { incoming?: IncomingMessage; outgoing?: ServerResponse } | undefined;
+    const nodeEnv = c.env as
+      | { incoming?: IncomingMessage; outgoing?: ServerResponse }
+      | undefined;
 
     const principal = c.get('principal');
-    const mcpPrincipal: McpPrincipal | null = principal ? { userId: principal.user.id } : null;
+    const mcpPrincipal: McpPrincipal | null = principal
+      ? { userId: principal.user.id }
+      : null;
     const server = buildServer(mcpPrincipal);
 
     if (!nodeEnv?.incoming || !nodeEnv.outgoing) {

@@ -24,7 +24,11 @@ interface Harness {
   fetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-function buildHarness(deployment: Deployment, bs: TestDatabase['db'], basePath?: string): Harness {
+function buildHarness(
+  deployment: Deployment,
+  bs: TestDatabase['db'],
+  basePath?: string,
+): Harness {
   const vaultCfg = { deployment };
   const notes = new NoteService({ cfg: vaultCfg, db: bs });
   const search = new SearchService({ db: bs, cfg: vaultCfg });
@@ -132,6 +136,7 @@ describe('basePath', () => {
   });
 
   it('mueve todas las rutas detrás del prefijo', async () => {
+
     expect((await app.fetch('/api/config')).status).toBe(200);
     expect((await app.fetch('/api/health')).status).toBe(200);
     // Sin sesión, pero enrutada: el 401 dice que la ruta existe.
