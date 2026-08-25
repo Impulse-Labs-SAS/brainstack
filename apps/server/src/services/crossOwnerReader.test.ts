@@ -128,3 +128,48 @@ describe('CrossOwnerReader in hosted', () => {
     expect(JSON.stringify(links)).not.toContain('secreto');
   });
 });
+
+/*
+ * Una carpeta vacía no la implica ninguna nota, así que si el árbol del dueño
+ * solo mira `notes`, nunca aparece. Crear una carpeta dentro de una carpeta
+ * compartida decía "creada" y después no se veía.
+ */
+describe('listTree — carpetas vacías', () => {
+  beforeEach(async () => {
+    await grant('proyectos');
+  });
+
+  it('muestra una carpeta vacía creada dentro de lo compartido', async () => {
+    await seedNote('owner', 'proyectos/nota.md', 'algo');
+    await database.db
+      .insert(pgSchema.folders)
+      .values({ path: 'owner/proyectos/nueva', ownerId: 'owner', createdAt: Date.now() });
+
+    const tree = await reader.listTree('viewer', 'owner', 'proyectos');
+
+    expect(JSON.stringify(tree)).toContain('nueva');
+  });
+
+  it('las carpetas vacías anidadas también', async () => {
+    await seedNote('owner', 'proyectos/nota.md', 'algo');
+    await database.db.insert(pgSchema.folders).values([
+      { path: 'owner/proyectos/a', ownerId: 'owner', createdAt: Date.now() },
+      { path: 'owner/proyectos/a/b', ownerId: 'owner', createdAt: Date.now() },
+    ]);
+
+    const names = JSON.stringify(await reader.listTree('viewer', 'owner', 'proyectos'));
+    expect(names).toContain('"a"');
+    expect(names).toContain('"b"');
+  });
+
+  it('no se lleva carpetas de fuera de lo compartido', async () => {
+    await seedNote('owner', 'proyectos/nota.md', 'algo');
+    await database.db
+      .insert(pgSchema.folders)
+      .values({ path: 'owner/privado', ownerId: 'owner', createdAt: Date.now() });
+
+    const tree = await reader.listTree('viewer', 'owner', 'proyectos');
+
+    expect(JSON.stringify(tree)).not.toContain('privado');
+  });
+});

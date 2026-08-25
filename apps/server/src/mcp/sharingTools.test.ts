@@ -594,3 +594,43 @@ describe('cuando el nombre coincide con una carpeta propia', () => {
     expect(error).toContain('FORBIDDEN');
   });
 });
+
+// Crear una carpeta dentro de una compartida decía "creada" y después no
+// aparecía: el árbol del dueño leía sólo `notes`, y una carpeta vacía no la
+// implica ninguna nota.
+describe('una carpeta creada dentro de lo compartido se ve', () => {
+  beforeEach(async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', {
+      path: 'Brutus',
+      email: PABLO.email,
+      permission: 'write',
+    });
+    await call(owner, 'create_note', { path: 'Brutus/App/x.md', content: 'algo' });
+  });
+
+  it('aparece en el árbol apenas se crea, aun estando vacía', async () => {
+    const pablo = await clientFor(PABLO.id);
+
+    const { error } = await call(pablo, 'create_folder', {
+      ownerId: OWNER.id,
+      path: 'Brutus/App/prueba3',
+    });
+    expect(error).toBeUndefined();
+
+    const { value } = await call(pablo, 'list_tree', {
+      ownerId: OWNER.id,
+      path: 'Brutus',
+    });
+    expect(JSON.stringify(value)).toContain('prueba3');
+  });
+
+  it('el dueño la ve igual que quien la creó', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_folder', { ownerId: OWNER.id, path: 'Brutus/App/prueba3' });
+
+    const owner = await clientFor(OWNER.id);
+    const { value } = await call(owner, 'list_tree', { path: 'Brutus' });
+    expect(JSON.stringify(value)).toContain('prueba3');
+  });
+});

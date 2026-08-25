@@ -545,6 +545,7 @@ export function FileTree() {
             content: `# ${name}\n`,
             frontmatter: { created: new Date().toISOString().slice(0, 10), tags: [] },
           });
+          setExpanded((prev) => new Set(prev).add(nodeId({ ownerId: owner, path: targetPath })));
           await refresh();
           const mocs = result.affectedMocs.length
             ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
@@ -557,7 +558,14 @@ export function FileTree() {
         const path = targetPath === '' ? name : `${targetPath}/${name}`;
         try {
           await createFolderM.mutateAsync({ path, ownerId: owner });
-          setExpanded((prev) => new Set(prev).add(nodeId({ ownerId: owner, path })));
+          // La nueva y la que la contiene: crear dentro de una carpeta colapsada
+          // dejaba lo recién creado fuera de la vista, y el cartel de éxito
+          // parecía estar mintiendo.
+          setExpanded((prev) =>
+            new Set(prev)
+              .add(nodeId({ ownerId: owner, path }))
+              .add(nodeId({ ownerId: owner, path: targetPath })),
+          );
           await refresh();
           pushToast('info', `created folder ${path}`);
         } catch (err) {

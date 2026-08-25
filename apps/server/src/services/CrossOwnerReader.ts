@@ -8,7 +8,7 @@
 // that is how a shared folder is addressed: "this path, in that person's brain".
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
-import { asc, eq, like } from 'drizzle-orm';
+import { asc, eq, like, or } from 'drizzle-orm';
 
 import { AppError } from '../lib/errors.js';
 import { toPhysical, type VaultConfig } from '../lib/vault.js';
@@ -16,7 +16,7 @@ import { toPhysical, type VaultConfig } from '../lib/vault.js';
 import { buildTree, type NoteRowDto, type TreeNode } from './NoteService.js';
 import type { SharingService } from './SharingService.js';
 
-const { links, notes } = pgSchema;
+const { folders, links, notes } = pgSchema;
 
 export interface CrossOwnerLink {
   sourcePath: string;
@@ -54,11 +54,7 @@ export class CrossOwnerReader {
     await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
 
     const physical = toPhysical(ownerId, path, this.opts.vaultCfg);
-    const [row] = await this.opts.db
-      .select()
-      .from(notes)
-      .where(eq(notes.path, physical))
-      .limit(1);
+    const [row] = await this.opts.db.select().from(notes).where(eq(notes.path, physical)).limit(1);
 
     if (!row) throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
 
@@ -89,17 +85,33 @@ export class CrossOwnerReader {
 
     // Only inside the shared folder: a grant on one folder must not reveal the
     // shape of the rest of the owner's brain.
-    const rows = await this.opts.db
-      .select({ path: notes.path })
-      .from(notes)
-      .where(like(notes.path, `${prefix}/%`));
+    //
+    // Both tables, like the owner's own tree does. A folder with notes under it
+    // is implied by their paths, but an empty one is implied by nothing — and
+    // reading only `notes` here meant a folder created inside a shared folder
+    // was reported as created and then never appeared. That was invisible while
+    // shared folders were read-only; making them writable is what surfaced it.
+    const [noteRows, folderRows] = await Promise.all([
+      this.opts.db
+        .select({ path: notes.path })
+        .from(notes)
+        .where(like(notes.path, `${prefix}/%`)),
+      this.opts.db
+        .select({ path: folders.path })
+        .from(folders)
+        .where(or(eq(folders.path, prefix), like(folders.path, `${prefix}/%`))),
+    ]);
 
     const ownerPrefix = `${ownerId}/`;
-    const logical = rows.map((r) =>
-      r.path.startsWith(ownerPrefix) ? r.path.slice(ownerPrefix.length) : r.path,
-    );
+    const strip = (p: string): string =>
+      p.startsWith(ownerPrefix) ? p.slice(ownerPrefix.length) : p;
 
-    return buildTree(scope, logical, depth ?? DEFAULT_TREE_DEPTH);
+    return buildTree(
+      scope,
+      noteRows.map((r) => strip(r.path)),
+      depth ?? DEFAULT_TREE_DEPTH,
+      folderRows.map((r) => strip(r.path)),
+    );
   }
 
   /**
@@ -109,11 +121,7 @@ export class CrossOwnerReader {
    * That masking is the point: the link is real, but naming what it points at
    * would leak a path out of a folder nobody shared.
    */
-  async linksForOwner(
-    viewerId: string,
-    ownerId: string,
-    path: string,
-  ): Promise<CrossOwnerLink[]> {
+  async linksForOwner(viewerId: string, ownerId: string, path: string): Promise<CrossOwnerLink[]> {
     this.requireEnabled();
     await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
 
