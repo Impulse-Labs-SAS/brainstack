@@ -304,12 +304,21 @@ export const folderShares = pgTable(
     sharedWithUserId: text('shared_with_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * What the grant allows: 'read' or 'write'.
+     *
+     * Defaulted rather than backfilled, because 'read' is what every grant
+     * made before this column meant. A share that predates writing keeps
+     * behaving exactly as it did.
+     */
+    permission: text('permission').notNull().default('read').$type<'read' | 'write'>(),
     grantedAt: bigint('granted_at', { mode: 'number' }).notNull(),
     grantedBy: text('granted_by')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
   },
   (t) => ({
+    permissionValues: check('folder_shares_permission_check', sql`permission IN ('read', 'write')`),
     /** Granting the same folder to the same person twice is one grant. */
     oneGrant: unique('folder_shares_folder_path_owner_id_shared_with_user_id_key').on(
       t.folderPath,
@@ -333,6 +342,11 @@ export const folderShareInvites = pgTable(
     mode: text('mode').notNull().$type<'email' | 'link'>(),
     /** Null when the invite is a link anyone holding it can accept. */
     inviteeEmail: text('invitee_email'),
+    /**
+     * What accepting will grant. Carried on the invite because the owner
+     * chooses it when inviting, and acceptance can be days later.
+     */
+    permission: text('permission').notNull().default('read').$type<'read' | 'write'>(),
     /** sha256 of the token. The plaintext only ever exists in the invite URL. */
     tokenHash: text('token_hash').notNull().unique('folder_share_invites_token_hash_key'),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
@@ -346,6 +360,10 @@ export const folderShareInvites = pgTable(
   },
   (t) => ({
     modeValues: check('folder_share_invites_mode_check', sql`mode IN ('email', 'link')`),
+    permissionValues: check(
+      'folder_share_invites_permission_check',
+      sql`permission IN ('read', 'write')`,
+    ),
     ownerIdx: index('idx_share_invites_owner').on(t.ownerId, t.folderPath),
     emailIdx: index('idx_share_invites_email').on(t.inviteeEmail),
   }),

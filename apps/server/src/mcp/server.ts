@@ -41,8 +41,9 @@ export interface BuildMcpServerOptions {
 
 const TEXT = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 
-const JSON_TEXT = (value: unknown) =>
-  ({ content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] });
+const JSON_TEXT = (value: unknown) => ({
+  content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
+});
 
 function toMcpError(err: unknown): { content: { type: 'text'; text: string }[]; isError: true } {
   const message =
@@ -80,10 +81,45 @@ export function buildMcpServer({
     }
     return '';
   };
-  const assertRead = (path: string): Promise<void> =>
-    sharing.assertCanRead(requireUserId(), requireUserId(), path);
-  const assertWrite = (path: string): void =>
-    sharing.assertCanWrite(requireUserId(), requireUserId(), path);
+  /**
+   * Whose vault a call is about.
+   *
+   * Defaults to the caller, which is what nearly every call means. Passing
+   * somebody else's id is how a shared folder is addressed — paths are then
+   * relative to *their* root, which is how the folder was shared and how
+   * `list_shared_with_me` reports it.
+   */
+  const ownerOf = (ownerId?: string): string => ownerId || requireUserId();
+
+  const assertRead = (path: string, ownerId?: string): Promise<void> =>
+    sharing.assertCanRead(requireUserId(), ownerOf(ownerId), path);
+
+  /**
+   * May this write happen, and does the caller mean the folder they named?
+   *
+   * The second question only arises for a write into one's own vault. A path
+   * like "impulse-labs/nota.md" names a folder somebody shared just as well as
+   * it names one of yours, and resolving that silently in favour of yours is
+   * what created private copies of shared folders. Naming an owner settles it,
+   * so the check stands down once one is given.
+   */
+  const assertWrite = async (path: string, ownerId?: string): Promise<void> => {
+    const userId = requireUserId();
+    const owner = ownerOf(ownerId);
+    await sharing.assertCanWrite(userId, owner, path);
+    if (owner === userId) await sharing.assertNotShadowingShare(userId, path);
+  };
+
+  /** The `ownerId` argument, described once for every tool that takes it. */
+  const OWNER_ARG = z
+    .string()
+    .optional()
+    .describe(
+      'Owner of the vault this path belongs to. Omit for your own notes. ' +
+        'To reach a folder someone shared with you, pass their id from ' +
+        'list_shared_with_me or from a search hit, and give the path relative ' +
+        'to their root.',
+    );
 
   server.registerTool(
     'search_brain',
@@ -124,12 +160,12 @@ export function buildMcpServer({
     {
       title: 'Read a note',
       description: 'Read a single note from the brain by its path (relative to NOTES_DIR).',
-      inputSchema: { path: z.string().min(1) },
+      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
     },
-    async ({ path }) => {
+    async ({ path, ownerId }) => {
       try {
-        await assertRead(path);
-        const note = await notes.get(requireUserId(), path);
+        await assertRead(path, ownerId);
+        const note = await notes.get(ownerOf(ownerId), path);
         return JSON_TEXT(note);
       } catch (err) {
         return toMcpError(err);
@@ -148,11 +184,14 @@ export function buildMcpServer({
         tag: z.string().optional(),
         status: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
+        ownerId: OWNER_ARG,
       },
     },
-    async (args) => {
+    async ({ ownerId, ...args }) => {
       try {
-        const rows = notes.list(requireUserId(), args);
+        const owner = ownerOf(ownerId);
+        if (owner !== requireUserId()) await assertRead(args.folder ?? '', ownerId);
+        const rows = await notes.list(owner, args);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -170,12 +209,13 @@ export function buildMcpServer({
         path: z.string().min(1),
         content: z.string(),
         frontmatter: z.record(z.string(), z.unknown()).optional(),
+        ownerId: OWNER_ARG,
       },
     },
-    async ({ path, content, frontmatter }) => {
+    async ({ path, content, frontmatter, ownerId }) => {
       try {
-        assertWrite(path);
-        const result = await notes.create(requireUserId(), path, content, frontmatter);
+        await assertWrite(path, ownerId);
+        const result = await notes.create(ownerOf(ownerId), path, content, frontmatter);
         return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
@@ -188,12 +228,12 @@ export function buildMcpServer({
     {
       title: 'Update a note',
       description: 'Replace the contents of an existing note. Fails if the note does not exist.',
-      inputSchema: { path: z.string().min(1), content: z.string() },
+      inputSchema: { path: z.string().min(1), content: z.string(), ownerId: OWNER_ARG },
     },
-    async ({ path, content }) => {
+    async ({ path, content, ownerId }) => {
       try {
-        assertWrite(path);
-        const final = await notes.update(requireUserId(), path, content);
+        await assertWrite(path, ownerId);
+        const final = await notes.update(ownerOf(ownerId), path, content);
         return TEXT(`Updated ${final}`);
       } catch (err) {
         return toMcpError(err);
@@ -211,11 +251,14 @@ export function buildMcpServer({
       inputSchema: {
         path: z.string().optional(),
         depth: z.number().int().min(1).max(MAX_TREE_DEPTH).optional(),
+        ownerId: OWNER_ARG,
       },
     },
-    async ({ path, depth }) => {
+    async ({ path, depth, ownerId }) => {
       try {
-        const tree = await notes.listTree(requireUserId(), path, depth);
+        const owner = ownerOf(ownerId);
+        if (owner !== requireUserId()) await assertRead(path ?? '', ownerId);
+        const tree = await notes.listTree(owner, path, depth);
         return JSON_TEXT(tree);
       } catch (err) {
         return toMcpError(err);
@@ -233,11 +276,14 @@ export function buildMcpServer({
       inputSchema: {
         folder: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
+        ownerId: OWNER_ARG,
       },
     },
-    async (args) => {
+    async ({ ownerId, ...args }) => {
       try {
-        const rows = notes.listDecisions(requireUserId(), args);
+        const owner = ownerOf(ownerId);
+        if (owner !== requireUserId()) await assertRead(args.folder ?? '', ownerId);
+        const rows = await notes.listDecisions(owner, args);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -251,12 +297,12 @@ export function buildMcpServer({
       title: 'Create a folder',
       description:
         'Create a folder (and any missing parents) under the vault root. Idempotent: a no-op if the folder already exists.',
-      inputSchema: { path: z.string().min(1) },
+      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
     },
-    async ({ path }) => {
+    async ({ path, ownerId }) => {
       try {
-        assertWrite(path);
-        const final = await notes.createFolder(requireUserId(), path);
+        await assertWrite(path, ownerId);
+        const final = await notes.createFolder(ownerOf(ownerId), path);
         return TEXT(`Created folder ${final}`);
       } catch (err) {
         return toMcpError(err);
@@ -270,13 +316,48 @@ export function buildMcpServer({
       title: 'Move or rename a note, attachment, or folder',
       description:
         'Move/rename a path. Wikilinks pointing at the moved path(s) — including aliases, sections, and attachment embeds — are rewritten across the vault. Folders are moved with all their contents. Returns the final path plus `affectedMocs`: existing `_<Folder>.md` index notes in the source and destination parent folders that you should consider updating.',
-      inputSchema: { from: z.string().min(1), to: z.string().min(1) },
+      inputSchema: { from: z.string().min(1), to: z.string().min(1), ownerId: OWNER_ARG },
     },
-    async ({ from, to }) => {
+    async ({ from, to, ownerId }) => {
       try {
-        assertWrite(from);
-        assertWrite(to);
-        const result = await notes.move(requireUserId(), from, to);
+        // One owner for both ends: a move stays inside a single vault.
+        await assertWrite(from, ownerId);
+        await assertWrite(to, ownerId);
+        const result = await notes.move(ownerOf(ownerId), from, to);
+        return JSON_TEXT(result);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'move_to_owner',
+    {
+      title: 'Move a note or folder into another vault',
+      description:
+        'Move a note or folder from one person\u2019s vault into another\u2019s — for example, out of your own notes and into a folder somebody shared with you. Requires write access at both ends. Wikilinks crossing the new boundary cannot be rewritten (a wikilink cannot name a vault), so the answer lists what was left dangling in each direction rather than repairing it silently. Use `move` for anything staying inside one vault.',
+      inputSchema: {
+        from: z.string().min(1),
+        fromOwnerId: OWNER_ARG,
+        to: z.string().min(1),
+        toOwnerId: z
+          .string()
+          .min(1)
+          .describe('Owner of the destination vault. Required, and must differ from the source.'),
+      },
+    },
+    async ({ from, fromOwnerId, to, toOwnerId }) => {
+      try {
+        // Taking something out of a vault is a write on that vault.
+        await assertWrite(from, fromOwnerId);
+        await assertWrite(to, toOwnerId);
+        const result = await notes.moveAcrossVaults({
+          fromOwnerId: ownerOf(fromOwnerId),
+          fromPath: from,
+          toOwnerId,
+          toPath: to,
+        });
         return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
@@ -293,12 +374,13 @@ export function buildMcpServer({
       inputSchema: {
         path: z.string().min(1),
         recursive: z.boolean().optional(),
+        ownerId: OWNER_ARG,
       },
     },
-    async ({ path, recursive }) => {
+    async ({ path, recursive, ownerId }) => {
       try {
-        assertWrite(path);
-        const result = await notes.remove(requireUserId(), path, { recursive });
+        await assertWrite(path, ownerId);
+        const result = await notes.remove(ownerOf(ownerId), path, { recursive });
         return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
@@ -311,12 +393,12 @@ export function buildMcpServer({
     {
       title: 'List backlinks',
       description: 'List every note that links to or embeds the given path (note or attachment).',
-      inputSchema: { path: z.string().min(1) },
+      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
     },
-    async ({ path }) => {
+    async ({ path, ownerId }) => {
       try {
-        await assertRead(path);
-        const rows = notes.listLinks(requireUserId(), path);
+        await assertRead(path, ownerId);
+        const rows = await notes.listLinks(ownerOf(ownerId), path);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -330,7 +412,7 @@ export function buildMcpServer({
       {
         title: 'List shared folders',
         description:
-          'List folders that other users have shared with me. Returns folder path, owner id, owner display name, owner email, and granted_at.',
+          'List folders that other users have shared with me. Returns folder path, owner id, owner display name, owner email, permission ("read" or "write"), and granted_at. Pass the owner id as `ownerId` to the note tools to read — or, with write permission, to edit — inside that folder; paths are relative to the owner\'s root.',
         inputSchema: {},
       },
       async () => {
@@ -348,7 +430,7 @@ export function buildMcpServer({
       {
         title: 'List folders I shared',
         description:
-          'List the folders I have shared and who can read each one. Optionally filter to a single folder with `path`.',
+          'List the folders I have shared, who has access to each, and with what permission. Optionally filter to a single folder with `path`.',
         inputSchema: { path: z.string().optional() },
       },
       async ({ path }) => {
@@ -367,10 +449,14 @@ export function buildMcpServer({
       {
         title: 'Share a folder with someone',
         description:
-          'Give another person read access to a folder, by email. Someone who already has a BrainStack account is granted access immediately; anyone else is emailed an invitation that expires in 7 days. Access covers the folder and everything under it, including notes created later.',
-        inputSchema: { path: z.string().min(1), email: z.string().email() },
+          'Give another person access to a folder, by email. `permission` is "read" (default) or "write"; write lets them create and edit notes in the folder, which they address by passing your id as `ownerId`. Someone who already has a BrainStack account is granted access immediately; anyone else is emailed an invitation that expires in 7 days. Access covers the folder and everything under it, including notes created later. Re-sharing a folder with the same person changes their permission.',
+        inputSchema: {
+          path: z.string().min(1),
+          email: z.string().email(),
+          permission: z.enum(['read', 'write']).optional(),
+        },
       },
-      async ({ path, email }) => {
+      async ({ path, email, permission }) => {
         try {
           const ownerId = requireUserId();
           const target = await auth.findUserByEmail(email);
@@ -381,11 +467,13 @@ export function buildMcpServer({
               sharedWithUserId: target.id,
               folderPath: path,
               grantedBy: ownerId,
+              permission,
             });
             return JSON_TEXT({
               status: 'granted',
               shareId,
               folderPath: normalizeFolderPath(path),
+              permission: permission ?? 'read',
               sharedWith: { userId: target.id, email: target.email },
             });
           }
@@ -395,6 +483,7 @@ export function buildMcpServer({
             folderPath: path,
             mode: 'email',
             inviteeEmail: email,
+            permission,
           });
           // The accept token is deliberately left out of the answer. It is a
           // bearer credential, and the invitee already has it in their inbox;
@@ -403,6 +492,7 @@ export function buildMcpServer({
             status: 'invited',
             inviteId: invite.inviteId,
             folderPath: normalizeFolderPath(path),
+            permission: permission ?? 'read',
             invitedEmail: email,
             expiresAt: invite.expiresAt,
           });
@@ -448,7 +538,8 @@ export function buildMcpServer({
     'get_brainstack_guide',
     {
       title: 'BrainStack guide for AI assistants',
-      description: 'Return the canonical BrainStack instructions for AI assistants (Skill content).',
+      description:
+        'Return the canonical BrainStack instructions for AI assistants (Skill content).',
       inputSchema: {},
     },
     async () => {

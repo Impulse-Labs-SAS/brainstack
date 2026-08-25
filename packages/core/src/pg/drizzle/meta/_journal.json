@@ -15,6 +15,20 @@
       "when": 1787428635519,
       "tag": "0001_gigantic_skin",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787656957070,
+      "tag": "0002_lazy_maverick",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787657492489,
+      "tag": "0003_past_gorilla_man",
+      "breakpoints": true
     }
   ]
 }

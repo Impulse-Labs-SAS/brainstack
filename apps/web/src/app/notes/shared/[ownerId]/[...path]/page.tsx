@@ -1,13 +1,16 @@
 'use client';
 
-// Vista read-only de una nota compartida por otro user. La URL es
+// Vista de una nota compartida por otro user. La URL es
 // /notes/shared/<ownerId>/<...path>. El path puede apuntar a una nota
 // (.md) o a la carpeta raíz del share — en ese caso mostramos solo el
 // tree sin nota seleccionada.
+//
+// Editable o no según el permiso del grant: con 'write' es el mismo editor
+// con autosave que la vista propia, escribiendo contra el vault del dueño.
 
 import { keepPreviousData } from '@tanstack/react-query';
 import { useParams } from 'next/navigation';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { NoteEditor } from '@/components/editor/note-editor';
@@ -44,10 +47,50 @@ export default function SharedNotePage() {
     { enabled: isNote && !!ownerId },
   );
 
-  const [treeWidth, setTreeWidth] = usePersistedWidth(
-    'brainstack:shared-tree-width',
-    320,
-  );
+  const canWrite = shareRoot?.permission === 'write';
+
+  // Autosave, matching the own-note view: the draft is compared against what
+  // the server last accepted rather than against the query data, which is not
+  // refetched after a write and would otherwise never match again.
+  const update = trpc.notes.update.useMutation();
+  const [draft, setDraft] = useState<string | null>(null);
+  const [draftPath, setDraftPath] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const savedContentRef = useRef<string | null>(null);
+  const saveRef = useRef(update.mutate);
+  saveRef.current = update.mutate;
+
+  useEffect(() => {
+    if (!note.data || note.isPlaceholderData) return;
+    if (draftPath === path) return;
+    const body = reconstructBody(note.data);
+    setDraft(body);
+    setDraftPath(path);
+    savedContentRef.current = body;
+    setSavedAt(null);
+  }, [note.data, note.isPlaceholderData, path, draftPath]);
+
+  useEffect(() => {
+    if (!canWrite || draft === null) return;
+    if (draftPath !== path) return;
+    if (draft === savedContentRef.current) return;
+
+    const handle = setTimeout(() => {
+      const pending = draft;
+      saveRef.current(
+        { ownerId, path, content: pending },
+        {
+          onSuccess: () => {
+            savedContentRef.current = pending;
+            setSavedAt(Date.now());
+          },
+        },
+      );
+    }, 600);
+    return () => clearTimeout(handle);
+  }, [canWrite, draft, draftPath, path, ownerId]);
+
+  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:shared-tree-width', 320);
 
   const tree = (
     <ResizablePanel
@@ -146,11 +189,21 @@ export default function SharedNotePage() {
               <div className="font-mono text-[11px] text-fg-muted">{path}</div>
             </div>
             <div className="rounded border border-border-subtle px-2 py-0.5 font-mono text-[10px] uppercase text-fg-muted">
-              read-only
+              {!canWrite
+                ? 'read-only'
+                : update.isPending
+                  ? 'saving…'
+                  : savedAt
+                    ? `saved ${new Date(savedAt).toISOString().slice(11, 19)}`
+                    : 'shared · can edit'}
             </div>
           </div>
           <div className="relative flex-1 overflow-hidden">
-            <NoteEditor value={reconstructBody(note.data)} readOnly />
+            {canWrite ? (
+              <NoteEditor value={draft ?? ''} onChange={setDraft} />
+            ) : (
+              <NoteEditor value={reconstructBody(note.data)} readOnly />
+            )}
           </div>
           <OutgoingLinks links={linksQ.data ?? []} />
         </div>
@@ -184,9 +237,7 @@ function OutgoingLinks({
         {broken.map((l, i) => (
           <li key={`b-${i}`} className="text-fg-muted line-through">
             <span className="mr-1.5 text-red-400/60 no-underline">✕</span>
-            <span title="enmascarado: sin acceso al target">
-              {l.alias ?? l.targetPath}
-            </span>
+            <span title="enmascarado: sin acceso al target">{l.alias ?? l.targetPath}</span>
           </li>
         ))}
       </ul>

@@ -43,6 +43,8 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
   });
 
   const [email, setEmail] = useState('');
+  /** What a new invite will grant. Applies to both the email and the link. */
+  const [permission, setPermission] = useState<'read' | 'write'>('read');
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,10 +54,7 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
     [mySharesQ.data, folderPath],
   );
   const pending = useMemo(
-    () =>
-      (pendingQ.data ?? []).filter(
-        (p) => p.folderPath === folderPath && p.mode === 'email',
-      ),
+    () => (pendingQ.data ?? []).filter((p) => p.folderPath === folderPath && p.mode === 'email'),
     [pendingQ.data, folderPath],
   );
 
@@ -70,6 +69,7 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
         folderPath,
         mode: 'email',
         inviteeEmail: trimmed,
+        permission,
       });
       setEmail('');
     } catch (e) {
@@ -80,7 +80,7 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
   const generateLink = async () => {
     setError(null);
     try {
-      const inv = await inviteLink.mutateAsync({ folderPath, mode: 'link' });
+      const inv = await inviteLink.mutateAsync({ folderPath, mode: 'link', permission });
       if (inv && 'token' in inv && inv.token) {
         setLinkToken(inv.acceptUrl);
       }
@@ -121,6 +121,34 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
           >
             <X size={14} />
           </button>
+        </div>
+
+        {/* Permiso: gobierna tanto la invitación por email como el link */}
+        <div className="mb-3">
+          <div className="mb-1.5 font-mono text-[11px] text-fg-muted">permiso</div>
+          <div className="flex gap-1 rounded border border-border bg-bg-elevated p-0.5">
+            {(
+              [
+                ['read', 'sólo lectura', 'Puede leer todo lo que haya en la carpeta.'],
+                ['write', 'lectura y escritura', 'Además puede crear y editar notas acá.'],
+              ] as const
+            ).map(([value, label, hint]) => (
+              <button
+                key={value}
+                type="button"
+                title={hint}
+                onClick={() => setPermission(value)}
+                className={cn(
+                  'flex-1 rounded px-2 py-1 font-mono text-[11px] transition-colors',
+                  permission === value
+                    ? 'bg-accent/20 text-fg-primary'
+                    : 'text-fg-muted hover:text-fg-secondary',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Invitar por email */}
@@ -199,11 +227,19 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
                       {m.displayName ?? m.email}
                     </div>
                     {m.displayName && (
-                      <div className="truncate font-mono text-[10px] text-fg-muted">
-                        {m.email}
-                      </div>
+                      <div className="truncate font-mono text-[10px] text-fg-muted">{m.email}</div>
                     )}
                   </div>
+                  <span
+                    title={
+                      m.permission === 'write'
+                        ? 'Puede crear y editar notas en esta carpeta'
+                        : 'Sólo puede leer'
+                    }
+                    className="ml-2 shrink-0 rounded border border-border-subtle px-1.5 py-0.5 font-mono text-[9px] uppercase text-fg-muted"
+                  >
+                    {m.permission === 'write' ? 'escritura' : 'lectura'}
+                  </span>
                   <button
                     type="button"
                     onClick={() =>

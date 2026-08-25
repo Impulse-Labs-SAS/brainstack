@@ -16,7 +16,11 @@ import { AppError } from '../lib/errors.js';
 import { generateToken, sha256 } from '../lib/tokens.js';
 
 import type { EmailSender } from './EmailSender.js';
-import { normalizeFolderPath, type SharingService } from './SharingService.js';
+import {
+  normalizeFolderPath,
+  type SharePermission,
+  type SharingService,
+} from './SharingService.js';
 
 const { folderShareInvites } = pgSchema;
 
@@ -61,6 +65,7 @@ export class InviteService {
     folderPath: string;
     mode: 'email' | 'link';
     inviteeEmail?: string;
+    permission?: SharePermission;
   }): Promise<CreatedInvite> {
     if (!this.opts.sharing.enabled) {
       throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
@@ -84,6 +89,7 @@ export class InviteService {
       ownerId: params.ownerId,
       mode: params.mode,
       inviteeEmail: params.mode === 'email' ? (params.inviteeEmail ?? null) : null,
+      permission: params.permission ?? 'read',
       tokenHash: sha256(token),
       expiresAt,
       createdAt: now,
@@ -116,6 +122,7 @@ export class InviteService {
       folderPath: string;
       mode: 'email' | 'link';
       inviteeEmail: string | null;
+      permission: SharePermission;
       expiresAt: number;
       createdAt: number;
     }>
@@ -128,6 +135,7 @@ export class InviteService {
         folderPath: folderShareInvites.folderPath,
         mode: folderShareInvites.mode,
         inviteeEmail: folderShareInvites.inviteeEmail,
+        permission: folderShareInvites.permission,
         expiresAt: folderShareInvites.expiresAt,
         createdAt: folderShareInvites.createdAt,
       })
@@ -186,10 +194,7 @@ export class InviteService {
 
     if (row.mode === 'email') {
       if (row.acceptedAt != null) throw new AppError('invite ya aceptada', 'FORBIDDEN', 403);
-      if (
-        !row.inviteeEmail ||
-        row.inviteeEmail.toLowerCase() !== params.user.email.toLowerCase()
-      ) {
+      if (!row.inviteeEmail || row.inviteeEmail.toLowerCase() !== params.user.email.toLowerCase()) {
         throw new AppError('esta invitación es para otro email', 'FORBIDDEN', 403);
       }
     }
@@ -203,6 +208,9 @@ export class InviteService {
       sharedWithUserId: params.user.id,
       folderPath: row.folderPath,
       grantedBy: row.ownerId,
+      // What the owner chose when inviting, not what the default happens to be
+      // by the time it is accepted.
+      permission: row.permission,
     });
 
     // An email invite is spent here. A link invite records who used it last and

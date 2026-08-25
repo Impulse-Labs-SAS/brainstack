@@ -24,22 +24,17 @@ import {
   Image as ImageIcon,
   Loader2,
   Trash2,
+  Users,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
 import { SharedWithMeSection } from './shared-with-me';
+import { fallsUnderRoot, parseSharedDropId } from '@/lib/shared-drop-id';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 import { useSharingEnabled } from '@/lib/use-deployment';
 
@@ -115,6 +110,14 @@ interface NodeRowProps {
   onDeleteClick(path: string): void;
   onPrefetch(path: string): void;
   busy: Set<string>;
+  /**
+   * Who each folder is shared with, keyed by folder path.
+   *
+   * Sharing a folder used to leave no trace in the tree: "shared with me" only
+   * lists what others shared with you, so an owner had no way to tell a shared
+   * folder from a private one without opening the share dialog.
+   */
+  sharedWith: Map<string, string[]>;
 }
 
 function NodeRow({
@@ -127,6 +130,7 @@ function NodeRow({
   onDeleteClick,
   onPrefetch,
   busy,
+  sharedWith,
 }: NodeRowProps) {
   const router = useRouter();
   const isFolder = node.type === 'folder';
@@ -142,6 +146,7 @@ function NodeRow({
   });
 
   const Icon = isFolder ? Folder : node.type === 'note' ? FileText : ImageIcon;
+  const sharedTo = isFolder ? sharedWith.get(node.path) : undefined;
 
   const onContext = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -202,6 +207,15 @@ function NodeRow({
           <span className="flex-1 truncate font-mono text-[12px] text-fg-secondary">
             {node.name}
           </span>
+          {sharedTo && sharedTo.length > 0 && (
+            <span
+              title={`Shared with ${sharedTo.join(', ')}`}
+              className="flex shrink-0 items-center gap-0.5 rounded border border-border-subtle px-1 font-mono text-[9px] text-fg-muted"
+            >
+              <Users size={9} strokeWidth={2} />
+              {sharedTo.length}
+            </span>
+          )}
           {busy.has(node.path) ? (
             <Loader2 size={11} className="animate-spin text-fg-muted" />
           ) : (
@@ -233,6 +247,7 @@ function NodeRow({
               onDeleteClick={onDeleteClick}
               onPrefetch={onPrefetch}
               busy={busy}
+              sharedWith={sharedWith}
             />
           ))}
           {node.children.length === 0 && node.path !== '' && (
@@ -255,9 +270,30 @@ function NodeRow({
 
 export function FileTree() {
   const treeQ = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
+
+  // What this user has shared, folded into a path -> people map so the tree can
+  // mark it. Only asked for where sharing exists; self-host has nobody to share
+  // with and the procedure returns an empty list there anyway.
+  const sharingEnabled = useSharingEnabled();
+  const mySharesQ = trpc.sharing.listMyShares.useQuery(undefined, { enabled: sharingEnabled });
+  const sharedRootsQ = trpc.sharing.listSharedWithMe.useQuery(undefined, {
+    enabled: sharingEnabled,
+  });
+  const sharedRoots = useMemo(() => sharedRootsQ.data ?? [], [sharedRootsQ.data]);
+  const sharedWith = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const m of mySharesQ.data ?? []) {
+      const who = `${m.displayName ?? m.email} (${m.permission === 'write' ? 'escritura' : 'lectura'})`;
+      const at = map.get(m.folderPath);
+      if (at) at.push(who);
+      else map.set(m.folderPath, [who]);
+    }
+    return map;
+  }, [mySharesQ.data]);
   const utils = trpc.useUtils();
 
   const moveM = trpc.notes.move.useMutation();
+  const moveToOwnerM = trpc.notes.moveToOwner.useMutation();
   const createM = trpc.notes.create.useMutation();
   const createFolderM = trpc.notes.createFolder.useMutation();
   const removeM = trpc.notes.remove.useMutation();
@@ -274,7 +310,6 @@ export function FileTree() {
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [shareFolderPath, setShareFolderPath] = useState<string | null>(null);
-  const sharingEnabled = useSharingEnabled();
   const toastIdRef = useRef(0);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -288,7 +323,13 @@ export function FileTree() {
   }, []);
 
   const refresh = useCallback(async () => {
-    await Promise.all([utils.notes.tree.invalidate(), utils.notes.list.invalidate()]);
+    await Promise.all([
+      utils.notes.tree.invalidate(),
+      utils.notes.list.invalidate(),
+      // A migration into a shared folder changes the other side of the sidebar
+      // too, and that tree is a different query.
+      utils.notes.treeForOwner.invalidate(),
+    ]);
   }, [utils]);
 
   // Warm the cache so clicking a note shows content immediately.
@@ -351,6 +392,46 @@ export function FileTree() {
       const from = String(e.active.id);
       const overId = e.over?.id != null ? String(e.over.id) : null;
       if (!overId) return;
+
+      // Dropped on a folder somebody shared: that is a different operation —
+      // the note leaves this vault for theirs, and links crossing the new
+      // boundary cannot be rewritten. `moveToOwner` reports what it cost.
+      const sharedDrop = parseSharedDropId(overId);
+      const sharedRoot = sharedDrop ? sharedRoots[sharedDrop.index] : undefined;
+      // The id has to resolve to a real share *and* name a path inside it.
+      // Own-tree droppables are raw paths, so a folder literally called
+      // "shared:0:x" would otherwise parse as one of these.
+      const sharedTarget =
+        sharedDrop && sharedRoot && fallsUnderRoot(sharedDrop.folderPath, sharedRoot.folderPath)
+          ? { root: sharedRoot, folderPath: sharedDrop.folderPath }
+          : null;
+
+      if (sharedTarget) {
+        const target = sharedTarget.root;
+        const name = from.split('/').pop() ?? from;
+        markBusy(from, true);
+        try {
+          const result = await moveToOwnerM.mutateAsync({
+            from,
+            to: `${sharedTarget.folderPath}/${name}`,
+            toOwnerId: target.ownerId,
+          });
+          await refresh();
+          const owner = target.ownerDisplayName ?? target.ownerEmail;
+          const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
+          pushToast(
+            'info',
+            `moved to ${owner}'s ${result.path}` +
+              (dangling > 0 ? ` — ${dangling} wikilink(s) no longer resolve` : ''),
+          );
+        } catch (err) {
+          pushToast('error', (err as Error).message);
+        } finally {
+          markBusy(from, false);
+        }
+        return;
+      }
+
       const destFolder = overId === ROOT_DROP_ID ? '' : overId;
 
       if (from === destFolder) return;
@@ -377,7 +458,7 @@ export function FileTree() {
         markBusy(from, false);
       }
     },
-    [moveM, pushToast, refresh, markBusy],
+    [moveM, moveToOwnerM, sharedRoots, pushToast, refresh, markBusy],
   );
 
   const folderForPath = useCallback((path: string, tree: TreeNode | undefined): string => {
@@ -389,29 +470,23 @@ export function FileTree() {
     return lastSlash === -1 ? '' : node.path.slice(0, lastSlash);
   }, []);
 
-  const createNote = useCallback(
-    (targetPath: string) => {
-      setPrompt({
-        kind: 'createNote',
-        targetPath,
-        title: 'New note',
-        label: 'Name (without .md)',
-      });
-    },
-    [],
-  );
+  const createNote = useCallback((targetPath: string) => {
+    setPrompt({
+      kind: 'createNote',
+      targetPath,
+      title: 'New note',
+      label: 'Name (without .md)',
+    });
+  }, []);
 
-  const createFolder = useCallback(
-    (targetPath: string) => {
-      setPrompt({
-        kind: 'createFolder',
-        targetPath,
-        title: 'New folder',
-        label: 'Folder name',
-      });
-    },
-    [],
-  );
+  const createFolder = useCallback((targetPath: string) => {
+    setPrompt({
+      kind: 'createFolder',
+      targetPath,
+      title: 'New folder',
+      label: 'Folder name',
+    });
+  }, []);
 
   const renamePath = useCallback((from: string) => {
     if (from === '') return;
@@ -516,10 +591,7 @@ export function FileTree() {
   );
 
   return (
-    <div
-      className="relative flex h-full flex-col"
-      onContextMenu={onRootContextMenu}
-    >
+    <div className="relative flex h-full flex-col" onContextMenu={onRootContextMenu}>
       <SearchInput onActiveChange={setSearchActive} placeholder="Search notes…" />
 
       {!searchActive && (
@@ -563,6 +635,7 @@ export function FileTree() {
                 onDeleteClick={deletePath}
                 onPrefetch={prefetchNote}
                 busy={busy}
+                sharedWith={sharedWith}
               />
               {root.children && root.children.length === 0 && (
                 <div className="px-4 py-6 text-center font-mono text-[11px] text-fg-muted">
@@ -570,8 +643,8 @@ export function FileTree() {
                 </div>
               )}
             </div>
+            <SharedWithMeSection items={sharedRoots} />
           </DndContext>
-          <SharedWithMeSection />
         </>
       )}
 
@@ -591,58 +664,58 @@ export function FileTree() {
             onClick={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.stopPropagation()}
           >
-          <MenuItem
-            onClick={() => {
-              const p = menu.path;
-              setMenu(null);
-              createNote(p);
-            }}
-          >
-            New note
-          </MenuItem>
-          <MenuItem
-            onClick={() => {
-              const p = menu.path;
-              setMenu(null);
-              createFolder(p);
-            }}
-          >
-            New folder
-          </MenuItem>
-          {menu.path !== '' && (
             <MenuItem
               onClick={() => {
                 const p = menu.path;
                 setMenu(null);
-                renamePath(p);
+                createNote(p);
               }}
             >
-              Rename
+              New note
             </MenuItem>
-          )}
-          {sharingEnabled && menu.path !== '' && !/\.[a-z0-9]+$/i.test(menu.path) && (
             <MenuItem
               onClick={() => {
                 const p = menu.path;
                 setMenu(null);
-                setShareFolderPath(p);
+                createFolder(p);
               }}
             >
-              Share…
+              New folder
             </MenuItem>
-          )}
-          {menu.path !== '' && (
-            <MenuItem
-              danger
-              onClick={() => {
-                const p = menu.path;
-                setMenu(null);
-                deletePath(p);
-              }}
-            >
-              Delete
-            </MenuItem>
-          )}
+            {menu.path !== '' && (
+              <MenuItem
+                onClick={() => {
+                  const p = menu.path;
+                  setMenu(null);
+                  renamePath(p);
+                }}
+              >
+                Rename
+              </MenuItem>
+            )}
+            {sharingEnabled && menu.path !== '' && !/\.[a-z0-9]+$/i.test(menu.path) && (
+              <MenuItem
+                onClick={() => {
+                  const p = menu.path;
+                  setMenu(null);
+                  setShareFolderPath(p);
+                }}
+              >
+                Share…
+              </MenuItem>
+            )}
+            {menu.path !== '' && (
+              <MenuItem
+                danger
+                onClick={() => {
+                  const p = menu.path;
+                  setMenu(null);
+                  deletePath(p);
+                }}
+              >
+                Delete
+              </MenuItem>
+            )}
           </div>
         </>
       )}

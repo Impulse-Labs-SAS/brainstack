@@ -17,8 +17,7 @@ const t = initTRPC.context<TrpcContext>().create({
     ...shape,
     data: {
       ...shape.data,
-      appCode:
-        error.cause instanceof AppError ? error.cause.code : (shape.data.code as string),
+      appCode: error.cause instanceof AppError ? error.cause.code : (shape.data.code as string),
     },
   }),
 });
@@ -58,6 +57,42 @@ const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
 
 const FrontmatterInput = z.record(z.string(), z.unknown()).optional();
 
+/** A logged-in context: `protectedProcedure` has already rejected the alternative. */
+type AuthedContext = TrpcContext & { user: NonNullable<TrpcContext['user']> };
+
+/**
+ * Which vault a request is about.
+ *
+ * Almost every request means "mine", so `ownerId` is optional and defaults to
+ * the caller. Naming somebody else's id is how a shared folder is addressed:
+ * paths are always relative to that person's root, never to yours.
+ */
+const OwnerInput = z.string().min(1).optional();
+const ownerOf = (ctx: AuthedContext, ownerId?: string): string => ownerId ?? ctx.user.id;
+
+/**
+ * The write guard, shared by every mutation that takes a path.
+ *
+ * Two questions, not one. First: may this user write here — which since the
+ * permission column can be yes in somebody else's vault.
+ *
+ * Second, and only when writing into your own vault: does the path name a
+ * folder somebody shared with you? Then it is ambiguous — "impulse-labs/x.md"
+ * could mean your folder or theirs — and it used to be resolved silently in
+ * favour of yours, creating a private copy of a shared folder. Saying `ownerId`
+ * removes the ambiguity, which is why the check does not apply once it is
+ * given.
+ *
+ * `ctx.sharedRoots()` is memoised per request, so a move checking both of its
+ * ends still costs a single query.
+ */
+const assertWritable = async (ctx: AuthedContext, ownerId: string, path: string): Promise<void> => {
+  await ctx.sharing.assertCanWrite(ctx.user.id, ownerId, path);
+  if (ownerId === ctx.user.id) {
+    await ctx.sharing.assertNotShadowingShare(ctx.user.id, path, await ctx.sharedRoots());
+  }
+};
+
 export const appRouter = t.router({
   auth: t.router({
     me: t.procedure.query(({ ctx }) => ({ user: ctx.user })),
@@ -72,11 +107,12 @@ export const appRouter = t.router({
   }),
   notes: t.router({
     get: protectedProcedure
-      .input(z.object({ path: z.string().min(1) }))
+      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
       .query(async ({ ctx, input }) =>
         wrap(async () => {
-          await ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.get(ctx.user.id, input.path);
+          const owner = ownerOf(ctx, input.ownerId);
+          await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
+          return ctx.notes.get(owner, input.path);
         }),
       ),
     list: protectedProcedure
@@ -93,20 +129,27 @@ export const appRouter = t.router({
       .query(({ ctx, input }) => ctx.notes.list(ctx.user.id, input ?? {})),
     create: protectedProcedure
       .input(
-        z.object({ path: z.string().min(1), content: z.string(), frontmatter: FrontmatterInput }),
+        z.object({
+          path: z.string().min(1),
+          content: z.string(),
+          frontmatter: FrontmatterInput,
+          ownerId: OwnerInput,
+        }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.create(ctx.user.id, input.path, input.content, input.frontmatter);
+        wrap(async () => {
+          const owner = ownerOf(ctx, input.ownerId);
+          await assertWritable(ctx, owner, input.path);
+          return ctx.notes.create(owner, input.path, input.content, input.frontmatter);
         }),
       ),
     update: protectedProcedure
-      .input(z.object({ path: z.string().min(1), content: z.string() }))
+      .input(z.object({ path: z.string().min(1), content: z.string(), ownerId: OwnerInput }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.update(ctx.user.id, input.path, input.content);
+        wrap(async () => {
+          const owner = ownerOf(ctx, input.ownerId);
+          await assertWritable(ctx, owner, input.path);
+          return ctx.notes.update(owner, input.path, input.content);
         }),
       ),
     remove: protectedProcedure
@@ -114,29 +157,65 @@ export const appRouter = t.router({
         z.object({
           path: z.string().min(1),
           recursive: z.boolean().optional(),
+          ownerId: OwnerInput,
         }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.remove(ctx.user.id, input.path, { recursive: input.recursive });
+        wrap(async () => {
+          const owner = ownerOf(ctx, input.ownerId);
+          await assertWritable(ctx, owner, input.path);
+          return ctx.notes.remove(owner, input.path, { recursive: input.recursive });
         }),
       ),
     move: protectedProcedure
-      .input(z.object({ from: z.string().min(1), to: z.string().min(1) }))
+      .input(z.object({ from: z.string().min(1), to: z.string().min(1), ownerId: OwnerInput }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.from);
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.to);
-          return ctx.notes.move(ctx.user.id, input.from, input.to);
+        wrap(async () => {
+          // One owner for both ends: a move stays inside a single vault, and
+          // both paths are read against the same root.
+          const owner = ownerOf(ctx, input.ownerId);
+          await assertWritable(ctx, owner, input.from);
+          await assertWritable(ctx, owner, input.to);
+          return ctx.notes.move(owner, input.from, input.to);
+        }),
+      ),
+    /**
+     * Move a note or folder into another person's vault.
+     *
+     * Separate from `move` because the permission question is different: you
+     * must be allowed to take it from where it is *and* to put it where it is
+     * going, and those are two different grants.
+     */
+    moveToOwner: protectedProcedure
+      .input(
+        z.object({
+          from: z.string().min(1),
+          fromOwnerId: OwnerInput,
+          to: z.string().min(1),
+          toOwnerId: z.string().min(1),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          const fromOwner = ownerOf(ctx, input.fromOwnerId);
+          // Taking something out is a write on the source, not a read.
+          await assertWritable(ctx, fromOwner, input.from);
+          await assertWritable(ctx, input.toOwnerId, input.to);
+          return ctx.notes.moveAcrossVaults({
+            fromOwnerId: fromOwner,
+            fromPath: input.from,
+            toOwnerId: input.toOwnerId,
+            toPath: input.to,
+          });
         }),
       ),
     createFolder: protectedProcedure
-      .input(z.object({ path: z.string().min(1) }))
+      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
-          return ctx.notes.createFolder(ctx.user.id, input.path);
+        wrap(async () => {
+          const owner = ownerOf(ctx, input.ownerId);
+          await assertWritable(ctx, owner, input.path);
+          return ctx.notes.createFolder(owner, input.path);
         }),
       ),
     tree: protectedProcedure
@@ -162,17 +241,14 @@ export const appRouter = t.router({
       )
       .query(({ ctx, input }) => ctx.notes.listDecisions(ctx.user.id, input ?? {})),
     backlinks: protectedProcedure
-      .input(z.object({ path: z.string().min(1) }))
+      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
       .query(async ({ ctx, input }) => {
-        await ctx.sharing.assertCanRead(ctx.user.id, ctx.user.id, input.path);
-        return ctx.notes.listLinks(ctx.user.id, input.path);
+        const owner = ownerOf(ctx, input.ownerId);
+        await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
+        return ctx.notes.listLinks(owner, input.path);
       }),
     graph: protectedProcedure
-      .input(
-        z
-          .object({ scope: z.enum(['mine', 'shared', 'all']).optional() })
-          .optional(),
-      )
+      .input(z.object({ scope: z.enum(['mine', 'shared', 'all']).optional() }).optional())
       .query(async ({ ctx, input }) => {
         const scope = input?.scope ?? 'mine';
         const sharedScopes =
@@ -198,9 +274,7 @@ export const appRouter = t.router({
         }),
       )
       .query(async ({ ctx, input }) =>
-        wrap(() =>
-          ctx.crossOwner.listTree(ctx.user.id, input.ownerId, input.path, input.depth),
-        ),
+        wrap(() => ctx.crossOwner.listTree(ctx.user.id, input.ownerId, input.path, input.depth)),
       ),
     linksForOwner: protectedProcedure
       .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
@@ -246,6 +320,7 @@ export const appRouter = t.router({
         z.object({
           folderPath: z.string().min(1),
           email: z.string().email(),
+          permission: z.enum(['read', 'write']).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) =>
@@ -263,8 +338,9 @@ export const appRouter = t.router({
             sharedWithUserId: target.id,
             folderPath: input.folderPath,
             grantedBy: ctx.user.id,
+            permission: input.permission,
           });
-          return { id, sharedWithUserId: target.id };
+          return { id, sharedWithUserId: target.id, permission: input.permission ?? 'read' };
         }),
       ),
     revoke: protectedProcedure
@@ -293,6 +369,7 @@ export const appRouter = t.router({
           folderPath: z.string().min(1),
           mode: z.enum(['email', 'link']),
           inviteeEmail: z.string().email().optional(),
+          permission: z.enum(['read', 'write']).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) =>
@@ -302,6 +379,7 @@ export const appRouter = t.router({
             folderPath: input.folderPath,
             mode: input.mode,
             inviteeEmail: input.inviteeEmail,
+            permission: input.permission,
           });
           // En email mode no devolvemos el token (ya fue enviado por mail).
           return input.mode === 'link'
@@ -315,9 +393,7 @@ export const appRouter = t.router({
               };
         }),
       ),
-    listPendingInvites: protectedProcedure.query(({ ctx }) =>
-      ctx.invites.listPending(ctx.user.id),
-    ),
+    listPendingInvites: protectedProcedure.query(({ ctx }) => ctx.invites.listPending(ctx.user.id)),
     revokeInvite: protectedProcedure
       .input(z.object({ inviteId: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
