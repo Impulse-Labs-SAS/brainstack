@@ -33,8 +33,7 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
-import { SharedWithMeSection } from './shared-with-me';
-import { fallsUnderRoot, parseSharedDropId } from '@/lib/shared-drop-id';
+import { isInside, nodeId, parseNodeId, sameNode, type NodeRef } from '@/lib/tree-node-id';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 import { useSharingEnabled } from '@/lib/use-deployment';
 
@@ -58,7 +57,6 @@ type TreeNode = {
 
 type Toast = { id: number; kind: 'info' | 'error'; text: string };
 
-const ROOT_DROP_ID = '__root__';
 const EXPANDED_KEY = 'brainstack:tree-expanded';
 
 function loadExpanded(): Set<string> {
@@ -87,13 +85,20 @@ function saveExpanded(set: Set<string>): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isDescendantOf(candidate: string, ancestor: string): boolean {
-  if (candidate === ancestor) return true;
-  return candidate.startsWith(`${ancestor}/`);
+/** The folder a path sits in. Empty when it sits at the vault root. */
+function parentOf(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i === -1 ? '' : path.slice(0, i);
 }
 
-function notePathToRoute(path: string): string {
-  return `/notes/${path.replace(/\.md$/i, '')}`;
+function notePathToRoute(ref: NodeRef, mine: string | undefined): string {
+  const clean = ref.path.replace(/\.md$/i, '');
+  // Somebody else's note opens in the shared view; paths there are relative to
+  // their root, which is exactly what the node already carries.
+  if (mine !== undefined && ref.ownerId !== mine) {
+    return `/notes/shared/${encodeURIComponent(ref.ownerId)}/${clean}`;
+  }
+  return `/notes/${clean}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,13 +107,20 @@ function notePathToRoute(path: string): string {
 
 interface NodeRowProps {
   node: TreeNode;
+  /**
+   * Whose vault this subtree is. Yours for your own notes, somebody else's for
+   * a folder they shared — the tree shows both, so no node can assume.
+   */
+  ownerId: string;
+  /** False for a folder shared read-only: no writes, and nothing to drag. */
+  canWrite: boolean;
   depth: number;
   expanded: Set<string>;
-  toggle(path: string): void;
+  toggle(id: string): void;
   menuFor: string | null;
-  openMenu(path: string, x: number, y: number): void;
-  onDeleteClick(path: string): void;
-  onPrefetch(path: string): void;
+  openMenu(ref: NodeRef, canWrite: boolean, isFolder: boolean, x: number, y: number): void;
+  onDeleteClick(ref: NodeRef): void;
+  onPrefetch(ref: NodeRef): void;
   busy: Set<string>;
   /**
    * Who each folder is shared with, keyed by folder path.
@@ -118,10 +130,14 @@ interface NodeRowProps {
    * folder from a private one without opening the share dialog.
    */
   sharedWith: Map<string, string[]>;
+  /** Your own id, so a note routes to your view or to the shared one. */
+  mine: string | undefined;
 }
 
 function NodeRow({
   node,
+  ownerId,
+  canWrite,
   depth,
   expanded,
   toggle,
@@ -131,35 +147,33 @@ function NodeRow({
   onPrefetch,
   busy,
   sharedWith,
+  mine,
 }: NodeRowProps) {
   const router = useRouter();
   const isFolder = node.type === 'folder';
-  const isExpanded = isFolder ? expanded.has(node.path) || node.path === '' : false;
+  const ref: NodeRef = { ownerId, path: node.path };
+  const id = nodeId(ref);
+  const isRoot = node.path === '';
+  const isExpanded = isFolder ? expanded.has(id) || isRoot : false;
 
-  const draggable = useDraggable({
-    id: node.path === '' ? ROOT_DROP_ID : node.path,
-    disabled: node.path === '',
-  });
-  const droppable = useDroppable({
-    id: node.path === '' ? ROOT_DROP_ID : node.path,
-    disabled: !isFolder,
-  });
+  const draggable = useDraggable({ id, disabled: isRoot || !canWrite });
+  const droppable = useDroppable({ id, disabled: !isFolder || !canWrite });
 
   const Icon = isFolder ? Folder : node.type === 'note' ? FileText : ImageIcon;
-  const sharedTo = isFolder ? sharedWith.get(node.path) : undefined;
+  const sharedTo = isFolder && ownerId === mine ? sharedWith.get(node.path) : undefined;
 
   const onContext = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    openMenu(node.path, e.clientX, e.clientY);
+    openMenu(ref, canWrite, isFolder, e.clientX, e.clientY);
   };
 
   const onClick = () => {
-    if (node.path === '') return;
+    if (isRoot) return;
     if (isFolder) {
-      toggle(node.path);
+      toggle(id);
     } else if (node.type === 'note') {
-      router.push(notePathToRoute(node.path));
+      router.push(notePathToRoute(ref, mine));
     } else if (node.type === 'attachment') {
       router.push(`/files/${node.path.split('/').map(encodeURIComponent).join('/')}`);
     }
@@ -167,7 +181,7 @@ function NodeRow({
 
   return (
     <div>
-      {node.path !== '' && (
+      {!isRoot && (
         <div
           ref={(el) => {
             draggable.setNodeRef(el);
@@ -177,7 +191,7 @@ function NodeRow({
           {...draggable.listeners}
           onClick={onClick}
           onMouseEnter={() => {
-            if (node.type === 'note') onPrefetch(node.path);
+            if (node.type === 'note') onPrefetch(ref);
           }}
           onContextMenu={onContext}
           style={{ paddingLeft: 8 + depth * 14 }}
@@ -185,7 +199,7 @@ function NodeRow({
             'group flex h-7 cursor-default select-none items-center gap-1.5 rounded pr-1 text-sm transition-colors',
             'hover:bg-bg-elevated',
             droppable.isOver && isFolder ? 'bg-accent/10 ring-1 ring-accent' : '',
-            menuFor === node.path ? 'bg-bg-elevated' : '',
+            menuFor === id ? 'bg-bg-elevated' : '',
             draggable.isDragging ? 'opacity-40' : '',
           )}
         >
@@ -194,7 +208,7 @@ function NodeRow({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                toggle(node.path);
+                toggle(id);
               }}
               className="flex h-5 w-5 items-center justify-center text-fg-muted"
             >
@@ -216,14 +230,14 @@ function NodeRow({
               {sharedTo.length}
             </span>
           )}
-          {busy.has(node.path) ? (
+          {busy.has(id) ? (
             <Loader2 size={11} className="animate-spin text-fg-muted" />
           ) : (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onDeleteClick(node.path);
+                onDeleteClick(ref);
               }}
               title="Delete"
               className="flex h-5 w-5 items-center justify-center rounded text-fg-muted opacity-0 transition-opacity hover:bg-bg-surface hover:text-red-400 group-hover:opacity-100"
@@ -233,13 +247,15 @@ function NodeRow({
           )}
         </div>
       )}
-      {isFolder && (isExpanded || node.path === '') && node.children && (
+      {isFolder && (isExpanded || isRoot) && node.children && (
         <div>
           {node.children.map((child) => (
             <NodeRow
               key={child.path}
               node={child}
-              depth={node.path === '' ? 0 : depth + 1}
+              ownerId={ownerId}
+              canWrite={canWrite}
+              depth={isRoot ? 0 : depth + 1}
               expanded={expanded}
               toggle={toggle}
               menuFor={menuFor}
@@ -248,9 +264,10 @@ function NodeRow({
               onPrefetch={onPrefetch}
               busy={busy}
               sharedWith={sharedWith}
+              mine={mine}
             />
           ))}
-          {node.children.length === 0 && node.path !== '' && (
+          {node.children.length === 0 && !isRoot && (
             <div
               style={{ paddingLeft: 8 + (depth + 1) * 14 }}
               className="py-1 font-mono text-[11px] text-fg-muted"
@@ -314,13 +331,21 @@ export function FileTree() {
   useEffect(() => {
     saveExpanded(expanded);
   }, [expanded]);
-  const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{
+    ref: NodeRef;
+    canWrite: boolean;
+    isFolder: boolean;
+    x: number;
+    y: number;
+  } | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [searchActive, setSearchActive] = useState(false);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<NodeRef | null>(null);
   const [shareFolderPath, setShareFolderPath] = useState<string | null>(null);
+  /** The node a prompt is about, so create/rename know whose vault to write to. */
+  const [promptRef, setPromptRef] = useState<NodeRef | null>(null);
   const toastIdRef = useRef(0);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -346,35 +371,40 @@ export function FileTree() {
   // Warm the cache so clicking a note shows content immediately.
   const prefetchedRef = useRef<Set<string>>(new Set());
   const prefetchNote = useCallback(
-    (path: string) => {
-      if (prefetchedRef.current.has(path)) return;
-      prefetchedRef.current.add(path);
-      void utils.notes.get.prefetch({ path });
+    (ref: NodeRef) => {
+      const key = nodeId(ref);
+      if (prefetchedRef.current.has(key)) return;
+      prefetchedRef.current.add(key);
+      void utils.notes.get.prefetch({ path: ref.path, ownerId: ref.ownerId });
     },
     [utils],
   );
 
-  const markBusy = useCallback((path: string, on: boolean) => {
+  const markBusy = useCallback((ref: NodeRef, on: boolean) => {
+    const key = nodeId(ref);
     setBusy((prev) => {
       const next = new Set(prev);
-      if (on) next.add(path);
-      else next.delete(path);
+      if (on) next.add(key);
+      else next.delete(key);
       return next;
     });
   }, []);
 
-  const toggle = useCallback((path: string) => {
+  const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
 
-  const openMenu = useCallback((path: string, x: number, y: number) => {
-    setMenu({ path, x, y });
-  }, []);
+  const openMenu = useCallback(
+    (ref: NodeRef, canWrite: boolean, isFolder: boolean, x: number, y: number) => {
+      setMenu({ ref, canWrite, isFolder, x, y });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!menu) return;
@@ -389,9 +419,10 @@ export function FileTree() {
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      openMenu('', e.clientX, e.clientY);
+      // El root del menú de fondo es tu propia bóveda.
+      if (mine) openMenu({ ownerId: mine, path: '' }, true, true, e.clientX, e.clientY);
     },
-    [openMenu],
+    [openMenu, mine],
   );
 
   // ---------------------------------------------------------------------------
@@ -400,137 +431,117 @@ export function FileTree() {
 
   const onDragEnd = useCallback(
     async (e: DragEndEvent) => {
-      const from = String(e.active.id);
-      const overId = e.over?.id != null ? String(e.over.id) : null;
-      if (!overId) return;
+      const src = parseNodeId(String(e.active.id));
+      const dst = e.over?.id != null ? parseNodeId(String(e.over.id)) : null;
+      if (!src || !dst) return;
 
-      // Dropped on a folder somebody shared: that is a different operation —
-      // the note leaves this vault for theirs, and links crossing the new
-      // boundary cannot be rewritten. `moveToOwner` reports what it cost.
-      const sharedDrop = parseSharedDropId(overId);
-      const sharedRoot = sharedDrop ? sharedRoots[sharedDrop.index] : undefined;
-      // The id has to resolve to a real share *and* name a path inside it.
-      // Own-tree droppables are raw paths, so a folder literally called
-      // "shared:0:x" would otherwise parse as one of these.
-      const sharedTarget =
-        sharedDrop && sharedRoot && fallsUnderRoot(sharedDrop.folderPath, sharedRoot.folderPath)
-          ? { root: sharedRoot, folderPath: sharedDrop.folderPath }
-          : null;
-
-      if (sharedTarget) {
-        const target = sharedTarget.root;
-        const name = from.split('/').pop() ?? from;
-        markBusy(from, true);
-        try {
-          const result = await moveToOwnerM.mutateAsync({
-            from,
-            to: `${sharedTarget.folderPath}/${name}`,
-            toOwnerId: target.ownerId,
-          });
-          await refresh();
-          const owner = target.ownerDisplayName ?? target.ownerEmail;
-          const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
-          pushToast(
-            'info',
-            `moved to ${owner}'s ${result.path}` +
-              (dangling > 0 ? ` — ${dangling} wikilink(s) no longer resolve` : ''),
-          );
-        } catch (err) {
-          pushToast('error', (err as Error).message);
-        } finally {
-          markBusy(from, false);
-        }
-        return;
-      }
-
-      const destFolder = overId === ROOT_DROP_ID ? '' : overId;
-
-      if (from === destFolder) return;
-      if (destFolder !== '' && isDescendantOf(destFolder, from)) {
+      // Un nodo dentro de sí mismo no tiene destino. `isInside` no cruza de
+      // bóveda, así que soltar sobre una carpeta ajena del mismo nombre no se
+      // confunde con esto.
+      if (isInside(dst, src)) {
         pushToast('error', "can't move a folder inside itself");
         return;
       }
 
-      const basename = from.split('/').pop() ?? from;
-      const to = destFolder === '' ? basename : `${destFolder}/${basename}`;
-      if (from === to) return;
+      const name = src.path.split('/').pop() ?? src.path;
+      const toPath = dst.path === '' ? name : `${dst.path}/${name}`;
+      if (sameNode(src, { ownerId: dst.ownerId, path: toPath })) return;
 
-      markBusy(from, true);
+      markBusy(src, true);
       try {
-        const result = await moveM.mutateAsync({ from, to, ownerId: mine });
-        await refresh();
-        const mocs = result.affectedMocs.length
-          ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
-          : '';
-        pushToast('info', `moved to ${result.path}${mocs}`);
+        if (src.ownerId === dst.ownerId) {
+          const result = await moveM.mutateAsync({
+            from: src.path,
+            to: toPath,
+            ownerId: src.ownerId,
+          });
+          await refresh();
+          const mocs = result.affectedMocs.length
+            ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
+            : '';
+          pushToast('info', `moved to ${result.path}${mocs}`);
+        } else {
+          // Cruzar de bóveda es otra operación: los wikilinks que cruzan el
+          // borde nuevo no se pueden reescribir, y `moveToOwner` informa cuáles.
+          const result = await moveToOwnerM.mutateAsync({
+            from: src.path,
+            fromOwnerId: src.ownerId,
+            to: toPath,
+            toOwnerId: dst.ownerId,
+          });
+          await refresh();
+          const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
+          pushToast(
+            'info',
+            `moved to ${result.path}` +
+              (dangling > 0 ? ` — ${dangling} wikilink(s) no longer resolve` : ''),
+          );
+        }
       } catch (err) {
         pushToast('error', (err as Error).message);
       } finally {
-        markBusy(from, false);
+        markBusy(src, false);
       }
     },
-    [moveM, moveToOwnerM, sharedRoots, mine, pushToast, refresh, markBusy],
+    [moveM, moveToOwnerM, pushToast, refresh, markBusy],
   );
 
-  const folderForPath = useCallback((path: string, tree: TreeNode | undefined): string => {
-    if (!tree || path === '') return '';
-    const node = findNode(tree, path);
-    if (!node) return '';
-    if (node.type === 'folder') return node.path;
-    const lastSlash = node.path.lastIndexOf('/');
-    return lastSlash === -1 ? '' : node.path.slice(0, lastSlash);
-  }, []);
-
-  const createNote = useCallback((targetPath: string) => {
+  const createNote = useCallback((ref: NodeRef) => {
+    setPromptRef(ref);
     setPrompt({
       kind: 'createNote',
-      targetPath,
+      targetPath: ref.path,
       title: 'New note',
       label: 'Name (without .md)',
     });
   }, []);
 
-  const createFolder = useCallback((targetPath: string) => {
+  const createFolder = useCallback((ref: NodeRef) => {
+    setPromptRef(ref);
     setPrompt({
       kind: 'createFolder',
-      targetPath,
+      targetPath: ref.path,
       title: 'New folder',
       label: 'Folder name',
     });
   }, []);
 
-  const renamePath = useCallback((from: string) => {
-    if (from === '') return;
-    const basename = from.split('/').pop() ?? from;
+  const renamePath = useCallback((ref: NodeRef) => {
+    if (ref.path === '') return;
+    const basename = ref.path.split('/').pop() ?? ref.path;
+    setPromptRef(ref);
     setPrompt({
       kind: 'rename',
-      targetPath: from,
+      targetPath: ref.path,
       title: `Rename ${basename}`,
       label: 'New name',
       defaultValue: basename,
     });
   }, []);
 
-  const deletePath = useCallback((target: string) => {
-    if (target === '') return;
-    setConfirmDelete(target);
+  const deletePath = useCallback((ref: NodeRef) => {
+    if (ref.path === '') return;
+    setConfirmDelete(ref);
   }, []);
 
   const runPrompt = useCallback(
     async (value: string) => {
-      if (!prompt) return;
+      if (!prompt || !promptRef) return;
       const { kind, targetPath } = prompt;
+      // La bóveda la decide el nodo sobre el que se abrió el menú, no quien
+      // está mirando: crear dentro de una carpeta compartida escribe en la
+      // bóveda de su dueño, que es lo que mantiene el share cubriéndola.
+      const owner = promptRef.ownerId;
       setPrompt(null);
       const name = value.trim();
       if (!name) return;
 
       if (kind === 'createNote') {
-        const folder = folderForPath(targetPath, treeQ.data);
-        const path = folder === '' ? `${name}.md` : `${folder}/${name}.md`;
+        const path = targetPath === '' ? `${name}.md` : `${targetPath}/${name}.md`;
         try {
           const result = await createM.mutateAsync({
             path,
-            ownerId: mine,
+            ownerId: owner,
             content: `# ${name}\n`,
             frontmatter: { created: new Date().toISOString().slice(0, 10), tags: [] },
           });
@@ -543,11 +554,10 @@ export function FileTree() {
           pushToast('error', (err as Error).message);
         }
       } else if (kind === 'createFolder') {
-        const folder = folderForPath(targetPath, treeQ.data);
-        const path = folder === '' ? name : `${folder}/${name}`;
+        const path = targetPath === '' ? name : `${targetPath}/${name}`;
         try {
-          await createFolderM.mutateAsync({ path, ownerId: mine });
-          setExpanded((prev) => new Set(prev).add(path));
+          await createFolderM.mutateAsync({ path, ownerId: owner });
+          setExpanded((prev) => new Set(prev).add(nodeId({ ownerId: owner, path })));
           await refresh();
           pushToast('info', `created folder ${path}`);
         } catch (err) {
@@ -560,7 +570,7 @@ export function FileTree() {
         const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
         const to = parent === '' ? name : `${parent}/${name}`;
         try {
-          const result = await moveM.mutateAsync({ from, to, ownerId: mine });
+          const result = await moveM.mutateAsync({ from, to, ownerId: owner });
           await refresh();
           pushToast('info', `renamed to ${result.path}`);
         } catch (err) {
@@ -568,7 +578,7 @@ export function FileTree() {
         }
       }
     },
-    [prompt, folderForPath, treeQ.data, createM, createFolderM, moveM, mine, refresh, pushToast],
+    [prompt, promptRef, createM, createFolderM, moveM, refresh, pushToast],
   );
 
   const runDelete = useCallback(async () => {
@@ -577,15 +587,19 @@ export function FileTree() {
     if (!target) return;
     markBusy(target, true);
     try {
-      await removeM.mutateAsync({ path: target, recursive: true, ownerId: mine });
+      await removeM.mutateAsync({
+        path: target.path,
+        recursive: true,
+        ownerId: target.ownerId,
+      });
       await refresh();
-      pushToast('info', `deleted ${target}`);
+      pushToast('info', `deleted ${target.path}`);
     } catch (err) {
       pushToast('error', (err as Error).message);
     } finally {
       markBusy(target, false);
     }
-  }, [confirmDelete, removeM, mine, refresh, pushToast, markBusy]);
+  }, [confirmDelete, removeM, refresh, pushToast, markBusy]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -619,7 +633,7 @@ export function FileTree() {
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
-                onClick={() => createNote('')}
+                onClick={() => mine && createNote({ ownerId: mine, path: '' })}
                 title="New note in root"
                 className="flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
               >
@@ -627,7 +641,7 @@ export function FileTree() {
               </button>
               <button
                 type="button"
-                onClick={() => createFolder('')}
+                onClick={() => mine && createFolder({ ownerId: mine, path: '' })}
                 title="New folder in root"
                 className="flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
               >
@@ -637,25 +651,47 @@ export function FileTree() {
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
             <div className="flex-1 overflow-y-auto py-1" onContextMenu={onRootContextMenu}>
-              <NodeRow
-                node={root}
-                depth={-1}
-                expanded={expanded}
-                toggle={toggle}
-                menuFor={menu?.path ?? null}
-                openMenu={openMenu}
-                onDeleteClick={deletePath}
-                onPrefetch={prefetchNote}
-                busy={busy}
-                sharedWith={sharedWith}
-              />
-              {root.children && root.children.length === 0 && (
+              {mine && (
+                <NodeRow
+                  node={root}
+                  ownerId={mine}
+                  canWrite
+                  depth={-1}
+                  expanded={expanded}
+                  toggle={toggle}
+                  menuFor={menu ? nodeId(menu.ref) : null}
+                  openMenu={openMenu}
+                  onDeleteClick={deletePath}
+                  onPrefetch={prefetchNote}
+                  busy={busy}
+                  sharedWith={sharedWith}
+                  mine={mine}
+                />
+              )}
+              {root.children && root.children.length === 0 && sharedRoots.length === 0 && (
                 <div className="px-4 py-6 text-center font-mono text-[11px] text-fg-muted">
                   empty vault — use + above or right-click to add a note or folder
                 </div>
               )}
+              {/* Lo compartido va en la misma lista y con las mismas filas que
+                  lo propio: una sección aparte obligaba a aprender dos árboles,
+                  y el de abajo no dejaba crear ni arrastrar nada. */}
+              {sharedRoots.map((r) => (
+                <SharedBranch
+                  key={`${r.ownerId}:${r.folderPath}`}
+                  root={r}
+                  expanded={expanded}
+                  toggle={toggle}
+                  menuFor={menu ? nodeId(menu.ref) : null}
+                  openMenu={openMenu}
+                  onDeleteClick={deletePath}
+                  onPrefetch={prefetchNote}
+                  busy={busy}
+                  sharedWith={sharedWith}
+                  mine={mine}
+                />
+              ))}
             </div>
-            <SharedWithMeSection items={sharedRoots} />
           </DndContext>
         </>
       )}
@@ -676,57 +712,74 @@ export function FileTree() {
             onClick={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.stopPropagation()}
           >
-            <MenuItem
-              onClick={() => {
-                const p = menu.path;
-                setMenu(null);
-                createNote(p);
-              }}
-            >
-              New note
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                const p = menu.path;
-                setMenu(null);
-                createFolder(p);
-              }}
-            >
-              New folder
-            </MenuItem>
-            {menu.path !== '' && (
+            {menu.canWrite && (
+              <>
+                <MenuItem
+                  onClick={() => {
+                    // Crear "en" una nota significa crear junto a ella.
+                    const target = menu.isFolder
+                      ? menu.ref
+                      : { ownerId: menu.ref.ownerId, path: parentOf(menu.ref.path) };
+                    setMenu(null);
+                    createNote(target);
+                  }}
+                >
+                  New note
+                </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    const target = menu.isFolder
+                      ? menu.ref
+                      : { ownerId: menu.ref.ownerId, path: parentOf(menu.ref.path) };
+                    setMenu(null);
+                    createFolder(target);
+                  }}
+                >
+                  New folder
+                </MenuItem>
+              </>
+            )}
+            {menu.canWrite && menu.ref.path !== '' && (
               <MenuItem
                 onClick={() => {
-                  const p = menu.path;
+                  const r = menu.ref;
                   setMenu(null);
-                  renamePath(p);
+                  renamePath(r);
                 }}
               >
                 Rename
               </MenuItem>
             )}
-            {sharingEnabled && menu.path !== '' && !/\.[a-z0-9]+$/i.test(menu.path) && (
-              <MenuItem
-                onClick={() => {
-                  const p = menu.path;
-                  setMenu(null);
-                  setShareFolderPath(p);
-                }}
-              >
-                Share…
-              </MenuItem>
-            )}
-            {menu.path !== '' && (
+            {/* Re-compartir lo que te compartieron no existe, así que la opción
+                sólo aparece sobre carpetas propias. */}
+            {sharingEnabled &&
+              menu.ref.ownerId === mine &&
+              menu.ref.path !== '' &&
+              menu.isFolder && (
+                <MenuItem
+                  onClick={() => {
+                    const p = menu.ref.path;
+                    setMenu(null);
+                    setShareFolderPath(p);
+                  }}
+                >
+                  Share…
+                </MenuItem>
+              )}
+            {menu.canWrite && menu.ref.path !== '' && (
               <MenuItem
                 danger
                 onClick={() => {
-                  const p = menu.path;
+                  const r = menu.ref;
                   setMenu(null);
-                  deletePath(p);
+                  deletePath(r);
                 }}
               >
                 Delete
               </MenuItem>
+            )}
+            {!menu.canWrite && (
+              <div className="px-3 py-2 font-mono text-[11px] text-fg-muted">sólo lectura</div>
             )}
           </div>
         </>
@@ -800,12 +853,91 @@ function MenuItem({
   );
 }
 
-function findNode(tree: TreeNode, path: string): TreeNode | null {
-  if (tree.path === path) return tree;
-  if (!tree.children) return null;
-  for (const child of tree.children) {
-    const hit = findNode(child, path);
-    if (hit) return hit;
+/**
+ * A folder somebody shared, drawn as a branch of the same tree.
+ *
+ * Its own query, because each shared root lives in a different vault and hooks
+ * cannot be spun up per item in the parent. Everything below it is a plain
+ * NodeRow, so the context menu, the drag and the permission all behave exactly
+ * as they do over your own notes — which is the point: there is one tree.
+ */
+function SharedBranch({
+  root,
+  expanded,
+  toggle,
+  menuFor,
+  openMenu,
+  onDeleteClick,
+  onPrefetch,
+  busy,
+  sharedWith,
+  mine,
+}: {
+  root: {
+    ownerId: string;
+    folderPath: string;
+    ownerDisplayName: string | null;
+    ownerEmail: string;
+    permission: 'read' | 'write';
+  };
+  expanded: Set<string>;
+  toggle(id: string): void;
+  menuFor: string | null;
+  openMenu(ref: NodeRef, canWrite: boolean, isFolder: boolean, x: number, y: number): void;
+  onDeleteClick(ref: NodeRef): void;
+  onPrefetch(ref: NodeRef): void;
+  busy: Set<string>;
+  sharedWith: Map<string, string[]>;
+  mine: string | undefined;
+}) {
+  const q = trpc.notes.treeForOwner.useQuery(
+    { ownerId: root.ownerId, path: root.folderPath, depth: MAX_TREE_DEPTH },
+    { enabled: !!root.ownerId },
+  );
+
+  const owner = root.ownerDisplayName ?? root.ownerEmail.split('@')[0];
+
+  if (q.error) {
+    return (
+      <div className="px-4 py-1 font-mono text-[11px] text-red-300" title={q.error.message}>
+        {root.folderPath} — sin acceso
+      </div>
+    );
   }
-  return null;
+  if (!q.data) {
+    return (
+      <div className="flex items-center gap-1.5 px-4 py-1 font-mono text-[11px] text-fg-muted">
+        <Loader2 size={10} className="animate-spin" />
+        {root.folderPath}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <span
+        title={`Compartida por ${root.ownerEmail} — ${
+          root.permission === 'write' ? 'lectura y escritura' : 'sólo lectura'
+        }`}
+        className="pointer-events-none absolute right-1 top-1 z-10 rounded border border-border-subtle bg-bg-surface px-1 font-mono text-[9px] text-fg-muted"
+      >
+        @{owner}
+      </span>
+      <NodeRow
+        node={q.data}
+        ownerId={root.ownerId}
+        canWrite={root.permission === 'write'}
+        depth={0}
+        expanded={expanded}
+        toggle={toggle}
+        menuFor={menuFor}
+        openMenu={openMenu}
+        onDeleteClick={onDeleteClick}
+        onPrefetch={onPrefetch}
+        busy={busy}
+        sharedWith={sharedWith}
+        mine={mine}
+      />
+    </div>
+  );
 }
