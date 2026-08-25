@@ -30,7 +30,13 @@ export interface InviteServiceOptions {
   db: PgDb;
   email: EmailSender;
   sharing: SharingService;
+  /**
+   * Where this server answers. The accept link is an endpoint on it, not a
+   * page on the web app.
+   */
   publicOrigin: string;
+  /** Prefix the API sits behind, e.g. `/api`. The accept link carries it. */
+  apiBasePath?: string;
   ttlMs?: number;
   now?: () => number;
 }
@@ -58,6 +64,15 @@ export class InviteService {
 
   private ttl(): number {
     return this.opts.ttlMs ?? SEVEN_DAYS_MS;
+  }
+
+  /**
+   * Where `GET /invite/accept/:token` actually answers: this server's origin,
+   * plus the prefix the API sits behind. Pointed at the web app's origin
+   * instead, the link lands on the frontend's 404 — the route only exists here.
+   */
+  private endpointBase(): string {
+    return `${this.opts.publicOrigin.replace(/\/+$/, '')}${this.opts.apiBasePath ?? ''}`;
   }
 
   async create(params: {
@@ -95,7 +110,7 @@ export class InviteService {
       createdAt: now,
     });
 
-    const acceptUrl = `${this.opts.publicOrigin.replace(/\/+$/, '')}/invite/accept/${token}`;
+    const acceptUrl = `${this.endpointBase()}/invite/accept/${token}`;
     if (params.mode === 'email' && params.inviteeEmail) {
       await this.opts.email.send({
         to: params.inviteeEmail,

@@ -139,7 +139,11 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   app.use('/invite/*', optionalAuth);
   app.route(
     '/invite',
-    createInviteRouter({ invites: opts.invites, appHome: opts.appHome }),
+    createInviteRouter({
+      invites: opts.invites,
+      appHome: opts.appHome,
+      ...(opts.basePath ? { apiBasePath: opts.basePath } : {}),
+    }),
   );
   app.route(
     '/auth',

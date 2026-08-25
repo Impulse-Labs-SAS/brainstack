@@ -236,3 +236,32 @@ describe('revocar el acceso cierra la puerta de atrás', () => {
     expect(await sharing.canRead('alice', 'owner', 'proyectos/nota.md')).toBe(false);
   });
 });
+
+/*
+ * El link es lo único que el invitado ve, y apuntaba al origin del frontend sin
+ * el prefijo de la API: `/invite/accept/:token` no es una página, así que cada
+ * invitación terminaba en el 404 de Next.
+ */
+describe('InviteService — acceptUrl', () => {
+  it('apunta al endpoint del server, detrás del prefijo de la API', async () => {
+    const conPrefijo = new InviteService({
+      db: database.db,
+      email,
+      sharing,
+      publicOrigin: 'https://app.test',
+      apiBasePath: '/api',
+      now: () => ++now,
+    });
+    const inv = await conPrefijo.create({
+      ownerId: 'owner',
+      folderPath: 'proyectos',
+      mode: 'link',
+    });
+    expect(inv.acceptUrl).toBe(`https://app.test/api/invite/accept/${inv.token}`);
+  });
+
+  it('sin prefijo configurado queda en la raíz del origin', async () => {
+    const inv = await svc.create({ ownerId: 'owner', folderPath: 'proyectos', mode: 'link' });
+    expect(inv.acceptUrl).toBe(`https://app.test/invite/accept/${inv.token}`);
+  });
+});

@@ -1,7 +1,7 @@
 // Endpoint REST para aceptar invitaciones desde un link plano.
 //   GET /invite/accept/:token
 // Maneja tres casos:
-//   1. No logueado          → redirige a /login?next=...
+//   1. No logueado          → redirige a /login?redirect_to=...
 //   2. Logueado + acepta OK → redirige a /notes/<folderPath>
 //   3. Logueado + error     → redirige a /invite/error?reason=...
 //
@@ -18,6 +18,11 @@ export interface InviteRouterOptions {
   invites: InviteService;
   /** Origin del frontend para construir los redirects. */
   appHome: string;
+  /**
+   * Prefijo bajo el que vive este router, ej. `/api`. El login vuelve acá
+   * después de autenticar: sin el prefijo la vuelta cae en el 404 del front.
+   */
+  apiBasePath?: string;
 }
 
 export function createInviteRouter(opts: InviteRouterOptions): Hono<AuthBindings> {
@@ -26,11 +31,11 @@ export function createInviteRouter(opts: InviteRouterOptions): Hono<AuthBindings
   router.get('/accept/:token', async (c) => {
     const token = c.req.param('token');
     const principal = c.get('principal');
-    const next = `/invite/accept/${encodeURIComponent(token)}`;
+    const next = `${opts.apiBasePath ?? ''}/invite/accept/${encodeURIComponent(token)}`;
 
     if (!principal) {
       return c.redirect(
-        `${opts.appHome}/login?next=${encodeURIComponent(next)}`,
+        `${opts.appHome}/login?redirect_to=${encodeURIComponent(next)}`,
         302,
       );
     }

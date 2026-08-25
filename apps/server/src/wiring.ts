@@ -86,8 +86,11 @@ export function buildServices(opts: BuildServicesOptions): Services {
     db: opts.db,
     email: emailSender,
     sharing,
-    // Invite links land on a page too.
-    publicOrigin: opts.appOrigin ?? opts.publicOrigin,
+    // The accept link is an endpoint on this server, not a page on the web
+    // app: same origin and same prefix as the verification and reset links.
+    // Handing out the app's origin instead is what made every invite 404.
+    publicOrigin: opts.publicOrigin,
+    ...(opts.apiBasePath ? { apiBasePath: opts.apiBasePath } : {}),
   });
 
   const crossOwner = new CrossOwnerReader({ db: opts.db, sharing, vaultCfg: cfg });
