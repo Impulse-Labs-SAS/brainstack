@@ -33,7 +33,7 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
-import { SharedWithMeSection } from './shared-with-me';
+import { SharedWithMeSection, sharedDropId } from './shared-with-me';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 import { useSharingEnabled } from '@/lib/use-deployment';
 
@@ -275,6 +275,10 @@ export function FileTree() {
   // with and the procedure returns an empty list there anyway.
   const sharingEnabled = useSharingEnabled();
   const mySharesQ = trpc.sharing.listMyShares.useQuery(undefined, { enabled: sharingEnabled });
+  const sharedRootsQ = trpc.sharing.listSharedWithMe.useQuery(undefined, {
+    enabled: sharingEnabled,
+  });
+  const sharedRoots = useMemo(() => sharedRootsQ.data ?? [], [sharedRootsQ.data]);
   const sharedWith = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const m of mySharesQ.data ?? []) {
@@ -288,6 +292,7 @@ export function FileTree() {
   const utils = trpc.useUtils();
 
   const moveM = trpc.notes.move.useMutation();
+  const moveToOwnerM = trpc.notes.moveToOwner.useMutation();
   const createM = trpc.notes.create.useMutation();
   const createFolderM = trpc.notes.createFolder.useMutation();
   const removeM = trpc.notes.remove.useMutation();
@@ -380,6 +385,38 @@ export function FileTree() {
       const from = String(e.active.id);
       const overId = e.over?.id != null ? String(e.over.id) : null;
       if (!overId) return;
+
+      // Dropped on a folder somebody shared: that is a different operation —
+      // the note leaves this vault for theirs, and links crossing the new
+      // boundary cannot be rewritten. `moveToOwner` reports what it cost.
+      const sharedIndex = sharedRoots.findIndex((_, i) => sharedDropId(i) === overId);
+      if (sharedIndex !== -1) {
+        const target = sharedRoots[sharedIndex];
+        if (!target) return;
+        const name = from.split('/').pop() ?? from;
+        markBusy(from, true);
+        try {
+          const result = await moveToOwnerM.mutateAsync({
+            from,
+            to: `${target.folderPath}/${name}`,
+            toOwnerId: target.ownerId,
+          });
+          await refresh();
+          const owner = target.ownerDisplayName ?? target.ownerEmail;
+          const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
+          pushToast(
+            'info',
+            `moved to ${owner}'s ${result.path}` +
+              (dangling > 0 ? ` — ${dangling} wikilink(s) no longer resolve` : ''),
+          );
+        } catch (err) {
+          pushToast('error', (err as Error).message);
+        } finally {
+          markBusy(from, false);
+        }
+        return;
+      }
+
       const destFolder = overId === ROOT_DROP_ID ? '' : overId;
 
       if (from === destFolder) return;
@@ -406,7 +443,7 @@ export function FileTree() {
         markBusy(from, false);
       }
     },
-    [moveM, pushToast, refresh, markBusy],
+    [moveM, moveToOwnerM, sharedRoots, pushToast, refresh, markBusy],
   );
 
   const folderForPath = useCallback((path: string, tree: TreeNode | undefined): string => {
@@ -591,8 +628,8 @@ export function FileTree() {
                 </div>
               )}
             </div>
+            <SharedWithMeSection items={sharedRoots} />
           </DndContext>
-          <SharedWithMeSection />
         </>
       )}
 

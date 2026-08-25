@@ -480,3 +480,89 @@ describe('writing into a folder shared with write permission', () => {
     expect(error).toContain(OWNER.id);
   });
 });
+
+// El caso que motivó todo esto, de punta a punta: Pablo cargó Brutus en su
+// bóveda personal porque no podía escribir en la compartida, y ahora hay que
+// migrarlo sin perder nada.
+describe('migrar una carpeta de la bóveda personal a la compartida', () => {
+  beforeEach(async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', {
+      path: 'Impulse Labs',
+      email: PABLO.email,
+      permission: 'write',
+    });
+  });
+
+  it('mueve Brutus a la carpeta compartida y lo deja a nombre del dueño', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'Brutus/arquitectura.md', content: 'todo' });
+    await call(pablo, 'create_note', { path: 'Brutus/sub/api.md', content: 'endpoints' });
+
+    const { value, error } = await call(pablo, 'move_to_owner', {
+      from: 'Brutus',
+      to: 'Impulse Labs/Brutus',
+      toOwnerId: OWNER.id,
+    });
+    expect(error).toBeUndefined();
+    expect(value).toMatchObject({ path: 'Impulse Labs/Brutus', movedNotes: 2 });
+
+    // La bóveda de Pablo quedó limpia.
+    const { value: his } = await call(pablo, 'list_notes', {});
+    expect(his).toEqual([]);
+
+    // Y el dueño las ve como propias, que es lo que mantiene el share cubriéndolas.
+    const owner = await clientFor(OWNER.id);
+    const { value: hers } = await call(owner, 'list_notes', {});
+    expect(hers).toMatchObject([
+      { path: expect.stringContaining('Impulse Labs/Brutus/') },
+      { path: expect.stringContaining('Impulse Labs/Brutus/') },
+    ]);
+  });
+
+  it('avisa qué wikilinks dejaron de resolver por el cruce', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'Brutus/nota.md', content: 'ver [[personal/idea]]' });
+    await call(pablo, 'create_note', { path: 'personal/idea.md', content: 'mía' });
+
+    const { value } = await call(pablo, 'move_to_owner', {
+      from: 'Brutus',
+      to: 'Impulse Labs/Brutus',
+      toOwnerId: OWNER.id,
+    });
+    expect(value).toMatchObject({
+      linksLeftDangling: [{ note: 'Impulse Labs/Brutus/nota.md' }],
+    });
+  });
+
+  it('no deja migrar a una carpeta donde no podés escribir', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'Brutus/x.md', content: 'x' });
+
+    const { error } = await call(pablo, 'move_to_owner', {
+      from: 'Brutus',
+      to: 'Privado/Brutus',
+      toOwnerId: OWNER.id,
+    });
+    expect(error).toContain('FORBIDDEN');
+  });
+
+  it('no deja sacar algo de la bóveda de otro sin permiso de escritura', async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', {
+      path: 'Solo Lectura',
+      email: PABLO.email,
+      permission: 'read',
+    });
+    await call(owner, 'create_note', { path: 'Solo Lectura/ajena.md', content: 'no tocar' });
+
+    const pablo = await clientFor(PABLO.id);
+    const { error } = await call(pablo, 'move_to_owner', {
+      from: 'Solo Lectura/ajena.md',
+      fromOwnerId: OWNER.id,
+      to: 'mio.md',
+      toOwnerId: PABLO.id,
+    });
+    expect(error).toContain('FORBIDDEN');
+  });
+});

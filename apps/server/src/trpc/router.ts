@@ -179,6 +179,36 @@ export const appRouter = t.router({
           return ctx.notes.move(owner, input.from, input.to);
         }),
       ),
+    /**
+     * Move a note or folder into another person's vault.
+     *
+     * Separate from `move` because the permission question is different: you
+     * must be allowed to take it from where it is *and* to put it where it is
+     * going, and those are two different grants.
+     */
+    moveToOwner: protectedProcedure
+      .input(
+        z.object({
+          from: z.string().min(1),
+          fromOwnerId: OwnerInput,
+          to: z.string().min(1),
+          toOwnerId: z.string().min(1),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          const fromOwner = ownerOf(ctx, input.fromOwnerId);
+          // Taking something out is a write on the source, not a read.
+          await assertWritable(ctx, fromOwner, input.from);
+          await assertWritable(ctx, input.toOwnerId, input.to);
+          return ctx.notes.moveAcrossVaults({
+            fromOwnerId: fromOwner,
+            fromPath: input.from,
+            toOwnerId: input.toOwnerId,
+            toPath: input.to,
+          });
+        }),
+      ),
     createFolder: protectedProcedure
       .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
       .mutation(async ({ ctx, input }) =>

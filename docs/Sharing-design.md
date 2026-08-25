@@ -1,6 +1,6 @@
 # Sharing de carpetas — diseño
 
-> **Estado**: V1 implementado. V2 (escritura) implementado — ver §17.
+> **Estado**: V1 implementado. V2 (escritura) implementado — ver §17. Migración entre bóvedas — ver §18.
 > **Scope**: hosted deployment de Impulse Labs únicamente. Self-host queda single-user.
 > **Licencia**: todo el código vive en este repo bajo BSL 1.1.
 
@@ -388,9 +388,10 @@ existente en lugar de duplicarla.
   permiso de escritura no desambigua: `impulse-labs/nota.md` puede ser
   perfectamente una carpeta propia. El servidor rechaza la llamada y dice qué
   `ownerId` pasar. Es la única forma honesta de responder una pregunta ambigua.
-- **Mover entre vaults.** `move` resuelve sus dos extremos contra un solo dueño,
-  así que es estructuralmente imposible. Mover entre vaults sería copiar y
-  borrar, y dejaría colgado todo wikilink que apuntara al path viejo.
+- **Mover entre vaults con `move`.** Resuelve sus dos extremos contra un solo
+  dueño, así que ahí sigue siendo imposible — y está bien que lo sea: es lo que
+  vuelve segura una mudanza común. El cruce es otra operación, con un costo que
+  `move` no tiene, y vive aparte en `moveAcrossVaults` (§18).
 - **Sharing transitivo.** Sigue sin poder re-compartirse lo recibido.
 
 ### Lo que queda pendiente
@@ -400,3 +401,41 @@ existente en lugar de duplicarla.
 - **Attachments cross-owner.** `upload_attachment` y `getAttachment` no toman
   `ownerId` todavía.
 - **Limpieza de las copias creadas por el bug.** Ver `scripts/find-shadow-copies.mjs`.
+
+---
+
+## 18. Migrar entre bóvedas
+
+Compartir con escritura destapó el pedido siguiente: alguien ya cargó material
+en su bóveda personal justamente porque no podía escribir en la compartida, y
+eso hay que poder mudarlo.
+
+`moveAcrossVaults` es la segunda operación que abarca dos bóvedas (la otra es
+`graph`). Mueve una nota o una carpeta entera de la bóveda de A a la de B, y
+las notas quedan a nombre de B — si quedaran a nombre de quien las escribió,
+desaparecerían de la carpeta compartida para todos los demás.
+
+**Permiso en los dos extremos.** Sacar algo de una bóveda es una escritura sobre
+esa bóveda, no una lectura. Así que hace falta `write` en el origen y `write`
+en el destino, y son dos grants distintos.
+
+**El costo son los links, y se informa.** Un wikilink dice `[[Brutus/nota]]`; no
+tiene forma de decir de quién es ese Brutus. Entonces un link que antes cruzaba
+lo que ahora es un borde entre bóvedas no se puede reescribir a algo correcto
+— solo se puede reportar. El resultado trae las dos direcciones:
+
+- `linksLeftDangling`: lo que se mudó, apuntando a lo que quedó.
+- `linksNowBroken`: lo que quedó, apuntando a lo que se mudó.
+
+Los links que ya estaban rotos antes del cruce no se cuentan: el reporte le
+atribuye a la mudanza su propio daño y nada más.
+
+**Nada a medias.** Las colisiones en el destino se detectan antes de mover el
+primer archivo. El store no tiene transacción que revertir, así que fallar en la
+novena nota dejaría ocho mudadas y la carpeta partida en dos lugares.
+
+### En la interfaz
+
+Arrastrar y soltar sobre una carpeta de "shared with me" hace la migración. Las
+carpetas de solo lectura no se ofrecen como destino: no habilitar el drop es la
+forma amable de decir lo que el servidor diría con un 403.

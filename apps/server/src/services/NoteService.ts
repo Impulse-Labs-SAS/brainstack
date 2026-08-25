@@ -49,6 +49,22 @@ export interface MutationResult {
   affectedMocs: string[];
 }
 
+/**
+ * What a move between two vaults did, and what it cost.
+ *
+ * A wikilink has no way to name another person's vault, so a link that crossed
+ * the boundary cannot be rewritten — only reported. Both lists are the honest
+ * accounting of that, in the logical terms of the vault each note now sits in.
+ */
+export interface CrossVaultMoveResult {
+  path: string;
+  movedNotes: number;
+  /** Links inside what moved, now pointing at notes that stayed behind. */
+  linksLeftDangling: Array<{ note: string; target: string }>;
+  /** Notes that stayed behind, now pointing at what moved away. */
+  linksNowBroken: Array<{ note: string; target: string }>;
+}
+
 export interface ListFilter {
   folder?: string;
   tag?: string;
@@ -432,6 +448,165 @@ export class NoteService {
     }
 
     return { path: logicalTo, affectedMocs: await this.mocsFor(ownerId, logicalTo) };
+  }
+
+  /**
+   * Move a note or folder into somebody else's vault.
+   *
+   * The second method here that spans vaults, and it says so for the same
+   * reason `graph` does: everything else on NoteService acts on exactly one.
+   * Authorisation still belongs to the caller — this moves what it is told to.
+   *
+   * `move` cannot do this and should not: it resolves both ends against one
+   * owner, which is what makes an ordinary move safe. Crossing is a different
+   * operation with a cost `move` does not have, and the cost is links. A
+   * wikilink says `[[Brutus/nota]]`; it has no way to say whose Brutus. So a
+   * link that used to cross what is now a vault boundary cannot be rewritten
+   * into something correct — it can only be reported. Both directions are:
+   * links inside what moved that pointed at notes left behind, and notes left
+   * behind that pointed at what moved.
+   *
+   * Nothing is silently repaired, and nothing is silently broken.
+   */
+  async moveAcrossVaults(params: {
+    fromOwnerId: string;
+    fromPath: string;
+    toOwnerId: string;
+    toPath: string;
+  }): Promise<CrossVaultMoveResult> {
+    const { fromOwnerId, toOwnerId } = params;
+    if (!this.hosted) {
+      throw new AppError('no hay otra bóveda en self-host', 'INVALID_INPUT', 400);
+    }
+    if (fromOwnerId === toOwnerId) {
+      throw new AppError('mismo dueño: usá move', 'INVALID_INPUT', 400);
+    }
+
+    const from = this.toPhysical(fromOwnerId, params.fromPath);
+    const to = this.toPhysical(toOwnerId, params.toPath);
+
+    // A note, or everything under a folder.
+    const [asNote] = await this.opts.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(eq(notes.path, from))
+      .limit(1);
+
+    const sources = asNote
+      ? [from]
+      : (
+          await this.opts.db
+            .select({ path: notes.path })
+            .from(notes)
+            .where(and(this.ownedBy(fromOwnerId), like(notes.path, `${from}/%`)))
+        ).map((r) => r.path);
+
+    const folderRows = asNote
+      ? []
+      : await this.opts.db
+          .select({ path: folders.path })
+          .from(folders)
+          .where(
+            and(
+              this.foldersOwnedBy(fromOwnerId),
+              or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+            ),
+          );
+
+    if (sources.length === 0 && folderRows.length === 0) {
+      throw new AppError(`not found: ${this.toLogical(fromOwnerId, from)}`, 'NOT_FOUND', 404);
+    }
+
+    const destinationOf = (source: string): string =>
+      asNote ? to : `${to}${source.slice(from.length)}`;
+
+    const taken = sources.length
+      ? await this.opts.db
+          .select({ path: notes.path })
+          .from(notes)
+          .where(inArray(notes.path, sources.map(destinationOf)))
+      : [];
+    if (taken.length > 0) {
+      const names = taken.map((r) => this.toLogical(toOwnerId, r.path)).join(', ');
+      throw new AppError(`ya existe en el destino: ${names}`, 'ALREADY_EXISTS', 409);
+    }
+
+    // Measured before the move, because afterwards the rows are gone: who was
+    // pointing *into* what is about to leave.
+    const movedSet = new Set(sources);
+    const inbound = sources.length
+      ? await this.opts.db
+          .select({ sourcePath: links.sourcePath, targetPath: links.targetPath })
+          .from(links)
+          .where(inArray(links.targetPath, sources))
+      : [];
+    const linksNowBroken = inbound
+      .filter((l) => !movedSet.has(l.sourcePath))
+      .map((l) => ({
+        note: this.toLogical(fromOwnerId, l.sourcePath),
+        target: this.toLogical(fromOwnerId, l.targetPath),
+      }));
+
+    // Also before: links inside what moves that were already unresolved, so
+    // the report blames the crossing for its own damage and nothing else.
+    const alreadyDangling = new Set(
+      sources.length
+        ? (
+            await this.opts.db
+              .select({ sourcePath: links.sourcePath, targetPath: links.targetPath })
+              .from(links)
+              .where(and(inArray(links.sourcePath, sources), eq(links.targetType, 'unresolved')))
+          ).map((l) => `${destinationOf(l.sourcePath)}\u0000${l.targetPath}`)
+        : [],
+    );
+
+    // The crossing itself: written under the new owner, then dropped from the
+    // old vault. Upsert rebuilds the link graph against the destination's
+    // notes, which is what turns a link to something left behind into an
+    // unresolved one.
+    for (const source of sources) {
+      const existing = await this.store.get(source);
+      await this.store.upsert(destinationOf(source), toMarkdown(existing), toOwnerId);
+      await this.store.remove(source);
+    }
+
+    const logicalTo = this.toLogical(toOwnerId, to);
+    if (!asNote) {
+      await this.ensureFolders(toOwnerId, logicalTo);
+      for (const row of folderRows) {
+        const moved = `${to}${row.path.slice(from.length)}`;
+        await this.ensureFolders(toOwnerId, this.toLogical(toOwnerId, moved));
+      }
+      await this.opts.db
+        .delete(folders)
+        .where(
+          and(
+            this.foldersOwnedBy(fromOwnerId),
+            or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+          ),
+        );
+    }
+
+    const destinations = sources.map(destinationOf);
+    const outbound = destinations.length
+      ? await this.opts.db
+          .select({ sourcePath: links.sourcePath, targetPath: links.targetPath })
+          .from(links)
+          .where(and(inArray(links.sourcePath, destinations), eq(links.targetType, 'unresolved')))
+      : [];
+    const linksLeftDangling = outbound
+      .filter((l) => !alreadyDangling.has(`${l.sourcePath}\u0000${l.targetPath}`))
+      .map((l) => ({
+        note: this.toLogical(toOwnerId, l.sourcePath),
+        target: l.targetPath,
+      }));
+
+    return {
+      path: logicalTo,
+      movedNotes: sources.length,
+      linksLeftDangling,
+      linksNowBroken,
+    };
   }
 
   /**

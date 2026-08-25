@@ -92,6 +92,20 @@ pass the id; do not rename the note to get around it.
 When the user says "put this in <shared folder>", check `list_shared_with_me`
 for the owner before writing, not after.
 
+### Moving something into a shared folder
+
+`move` stays inside one vault. To take a note or folder from the user's own
+notes into a folder somebody shared — the usual case being something written
+in the wrong place before there was write access — use **`move_to_owner`**,
+with `toOwnerId` set to the folder's owner. It needs write access at both ends.
+
+Crossing costs links, and the tool says so rather than hiding it: a wikilink
+cannot name a vault, so `[[personal/idea]]` inside a note that just left the
+user's vault has nothing to point at any more. The answer lists
+`linksLeftDangling` (what moved, now pointing at what stayed) and
+`linksNowBroken` (what stayed, now pointing at what moved). Report those to the
+user — they are the part of the move that needs a human decision.
+
 ## Saving to the brain (write) — ask first
 
 You never write to the brain without explicit user consent. **Every** write/structure tool requires approval: `create_note`, `update_note`, `create_folder`, `move`, `delete`, `upload_attachment`.

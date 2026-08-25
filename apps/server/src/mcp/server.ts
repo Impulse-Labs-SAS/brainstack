@@ -332,6 +332,40 @@ export function buildMcpServer({
   );
 
   server.registerTool(
+    'move_to_owner',
+    {
+      title: 'Move a note or folder into another vault',
+      description:
+        'Move a note or folder from one person\u2019s vault into another\u2019s — for example, out of your own notes and into a folder somebody shared with you. Requires write access at both ends. Wikilinks crossing the new boundary cannot be rewritten (a wikilink cannot name a vault), so the answer lists what was left dangling in each direction rather than repairing it silently. Use `move` for anything staying inside one vault.',
+      inputSchema: {
+        from: z.string().min(1),
+        fromOwnerId: OWNER_ARG,
+        to: z.string().min(1),
+        toOwnerId: z
+          .string()
+          .min(1)
+          .describe('Owner of the destination vault. Required, and must differ from the source.'),
+      },
+    },
+    async ({ from, fromOwnerId, to, toOwnerId }) => {
+      try {
+        // Taking something out of a vault is a write on that vault.
+        await assertWrite(from, fromOwnerId);
+        await assertWrite(to, toOwnerId);
+        const result = await notes.moveAcrossVaults({
+          fromOwnerId: ownerOf(fromOwnerId),
+          fromPath: from,
+          toOwnerId,
+          toPath: to,
+        });
+        return JSON_TEXT(result);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
     'delete',
     {
       title: 'Delete a note, attachment, or folder',
