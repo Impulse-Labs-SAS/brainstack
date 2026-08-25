@@ -60,10 +60,17 @@ Thumbs.db
 coverage/
 .nyc_output/
 
-# Throwaway screenshots dropped at repo root during chat sessions
-/image.png
-/image-*.png
+# Throwaway screenshots dropped at repo root during chat sessions.
+# Globbed, not enumerated: `image2.png` slipped past `/image.png` and
+# `/image-*.png`, and this repo is going open source — a screenshot that
+# lands in history is not something a later commit can take back.
+/image*.png
+/image*.jpg
+/image*.jpeg
 /screenshot*.png
+/screenshot*.jpg
+/Captura*.png
+/*.pasted.png
 
 # Netlify build output
 apps/web/.netlify/
