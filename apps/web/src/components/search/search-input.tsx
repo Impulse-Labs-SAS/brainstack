@@ -20,8 +20,14 @@ interface SearchInputProps {
   className?: string;
 }
 
-function notePathToRoute(path: string, ownerId: string | null | undefined, mineId: string): string {
-  if (ownerId && ownerId !== mineId) {
+function notePathToRoute(
+  path: string,
+  ownerId: string | null | undefined,
+  mineId: string | null,
+): string {
+  // An unknown viewer is treated as the owner: sending them to the shared view
+  // of their own note is the worse of the two guesses.
+  if (mineId !== null && ownerId && ownerId !== mineId) {
     return `/notes/shared/${encodeURIComponent(ownerId)}/${path.replace(/\.md$/i, '')}`;
   }
   return `/notes/${path.replace(/\.md$/i, '')}`;
@@ -59,7 +65,10 @@ export function SearchInput({
   }, [query, onActiveChange]);
 
   const me = trpc.auth.me.useQuery();
-  const myId = me.data?.user?.id ?? '';
+  // Null, not '', while the query is in flight. An empty string compares
+  // unequal to every owner id, which marked every hit — including your own
+  // notes — as shared, and routed clicks into the read-only shared view.
+  const myId = me.data?.user?.id ?? null;
 
   const search = trpc.search.query.useQuery(
     { query: debounced, limit: 25, scope: sharingEnabled ? scope : 'mine' },
@@ -74,6 +83,11 @@ export function SearchInput({
 
   const hits = search.data ?? [];
   const active = debounced.trim().length > 0;
+  // The scope selector filters results and nothing else. Parked above the tree
+  // with an empty box it read as a filter on the tree, which it never was:
+  // all three tabs showed the same vault. It belongs to the results, so it
+  // appears with them — on the raw query, matching when the tree steps aside.
+  const searching = query.trim().length > 0;
 
   return (
     <div className={cn('flex flex-col', active && 'h-full min-h-0', className)}>
@@ -87,7 +101,7 @@ export function SearchInput({
           }}
           placeholder={placeholder}
         />
-        {sharingEnabled && (
+        {sharingEnabled && searching && (
           <div className="flex shrink-0 rounded border border-border bg-bg-elevated p-0.5 font-mono text-[10px]">
             {(['mine', 'shared', 'all'] as const).map((s) => (
               <button
@@ -110,7 +124,7 @@ export function SearchInput({
       {active && (
         <div className="flex-1 overflow-y-auto">
           {hits.map((hit) => {
-            const isShared = hit.ownerId && hit.ownerId !== myId;
+            const isShared = myId !== null && Boolean(hit.ownerId) && hit.ownerId !== myId;
             return (
               <button
                 key={`${hit.ownerId ?? ''}:${hit.path}`}
