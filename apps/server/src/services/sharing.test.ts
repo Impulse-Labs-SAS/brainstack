@@ -59,12 +59,14 @@ describe('SharingService — self-host', () => {
 
   it('grant tira FORBIDDEN en self-host', async () => {
     const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
-    await expect(selfHost.grant({
+    await expect(
+      selfHost.grant({
         ownerId: 'owner',
         sharedWithUserId: 'alice',
         folderPath: 'x',
         grantedBy: 'owner',
-      })).rejects.toThrow(AppError);
+      }),
+    ).rejects.toThrow(AppError);
   });
 });
 
@@ -99,6 +101,67 @@ describe('SharingService — hosted: canRead/canWrite', () => {
   });
 });
 
+describe("SharingService — writes that name somebody else's shared folder", () => {
+  beforeEach(async () => {
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'impulse-labs',
+      grantedBy: 'owner',
+    });
+  });
+
+  it('findShadowedShare reconoce la carpeta y quién la comparte', async () => {
+    const hit = await svc.findShadowedShare('alice', 'impulse-labs/nota.md');
+    expect(hit?.folderPath).toBe('impulse-labs');
+    expect(hit?.ownerId).toBe('owner');
+    expect(hit?.ownerEmail).toBe('o@x.com');
+  });
+
+  it('cubre la carpeta misma y todo lo que cuelga', async () => {
+    expect(await svc.findShadowedShare('alice', 'impulse-labs')).not.toBeNull();
+    expect(await svc.findShadowedShare('alice', 'impulse-labs/sub/hondo.md')).not.toBeNull();
+  });
+
+  it('no se pasa a un nombre que solo empieza igual', async () => {
+    expect(await svc.findShadowedShare('alice', 'impulse-labs-viejo/x.md')).toBeNull();
+    expect(await svc.findShadowedShare('alice', 'otra/x.md')).toBeNull();
+  });
+
+  it('assertNotShadowingShare frena la escritura y dice de quién es', async () => {
+    await expect(svc.assertNotShadowingShare('alice', 'impulse-labs/nota.md')).rejects.toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN' }),
+    );
+    await expect(svc.assertNotShadowingShare('alice', 'impulse-labs/nota.md')).rejects.toThrow(
+      /o@x\.com/,
+    );
+  });
+
+  it('deja pasar los paths propios, que son el caso normal', async () => {
+    await expect(svc.assertNotShadowingShare('alice', 'mis-cosas/x.md')).resolves.toBeUndefined();
+  });
+
+  it('al dueño no lo frena su propia carpeta', async () => {
+    // `owner` la comparte, no la recibe: para él el nombre no es ambiguo.
+    expect(await svc.findShadowedShare('owner', 'impulse-labs/nota.md')).toBeNull();
+    await expect(
+      svc.assertNotShadowingShare('owner', 'impulse-labs/nota.md'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('a un tercero sin grant tampoco, porque para él la carpeta no existe', async () => {
+    expect(await svc.findShadowedShare('bob', 'impulse-labs/nota.md')).toBeNull();
+  });
+
+  it('en self-host no aplica: no hay con quién confundirse', async () => {
+    const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
+    expect(await selfHost.findShadowedShare('alice', 'impulse-labs/nota.md')).toBeNull();
+    await expect(
+      selfHost.assertNotShadowingShare('alice', 'impulse-labs/nota.md'),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('SharingService — grant / revoke', () => {
   it('grant es idempotente: dos llamadas misma fila', async () => {
     const id1 = await svc.grant({
@@ -117,18 +180,22 @@ describe('SharingService — grant / revoke', () => {
   });
 
   it('grant rechaza root y self-share', async () => {
-    await expect(svc.grant({
+    await expect(
+      svc.grant({
         ownerId: 'owner',
         sharedWithUserId: 'alice',
         folderPath: '/',
         grantedBy: 'owner',
-      })).rejects.toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
-    await expect(svc.grant({
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
+    await expect(
+      svc.grant({
         ownerId: 'owner',
         sharedWithUserId: 'owner',
         folderPath: 'x',
         grantedBy: 'owner',
-      })).rejects.toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
   });
 
   it('revoke quita el grant', async () => {

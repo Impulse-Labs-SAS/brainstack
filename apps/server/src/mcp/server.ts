@@ -41,8 +41,9 @@ export interface BuildMcpServerOptions {
 
 const TEXT = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 
-const JSON_TEXT = (value: unknown) =>
-  ({ content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] });
+const JSON_TEXT = (value: unknown) => ({
+  content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
+});
 
 function toMcpError(err: unknown): { content: { type: 'text'; text: string }[]; isError: true } {
   const message =
@@ -82,8 +83,18 @@ export function buildMcpServer({
   };
   const assertRead = (path: string): Promise<void> =>
     sharing.assertCanRead(requireUserId(), requireUserId(), path);
-  const assertWrite = (path: string): void =>
-    sharing.assertCanWrite(requireUserId(), requireUserId(), path);
+
+  /**
+   * A write always targets the caller's own vault, because no tool takes an
+   * owner. That makes a path naming somebody else's shared folder ambiguous,
+   * and `assertNotShadowingShare` turns it into an error instead of a silent
+   * copy. See SharingService for why.
+   */
+  const assertWrite = async (path: string): Promise<void> => {
+    const userId = requireUserId();
+    sharing.assertCanWrite(userId, userId, path);
+    await sharing.assertNotShadowingShare(userId, path);
+  };
 
   server.registerTool(
     'search_brain',
@@ -174,7 +185,7 @@ export function buildMcpServer({
     },
     async ({ path, content, frontmatter }) => {
       try {
-        assertWrite(path);
+        await assertWrite(path);
         const result = await notes.create(requireUserId(), path, content, frontmatter);
         return JSON_TEXT(result);
       } catch (err) {
@@ -192,7 +203,7 @@ export function buildMcpServer({
     },
     async ({ path, content }) => {
       try {
-        assertWrite(path);
+        await assertWrite(path);
         const final = await notes.update(requireUserId(), path, content);
         return TEXT(`Updated ${final}`);
       } catch (err) {
@@ -255,7 +266,7 @@ export function buildMcpServer({
     },
     async ({ path }) => {
       try {
-        assertWrite(path);
+        await assertWrite(path);
         const final = await notes.createFolder(requireUserId(), path);
         return TEXT(`Created folder ${final}`);
       } catch (err) {
@@ -274,8 +285,8 @@ export function buildMcpServer({
     },
     async ({ from, to }) => {
       try {
-        assertWrite(from);
-        assertWrite(to);
+        await assertWrite(from);
+        await assertWrite(to);
         const result = await notes.move(requireUserId(), from, to);
         return JSON_TEXT(result);
       } catch (err) {
@@ -297,7 +308,7 @@ export function buildMcpServer({
     },
     async ({ path, recursive }) => {
       try {
-        assertWrite(path);
+        await assertWrite(path);
         const result = await notes.remove(requireUserId(), path, { recursive });
         return JSON_TEXT(result);
       } catch (err) {
@@ -448,7 +459,8 @@ export function buildMcpServer({
     'get_brainstack_guide',
     {
       title: 'BrainStack guide for AI assistants',
-      description: 'Return the canonical BrainStack instructions for AI assistants (Skill content).',
+      description:
+        'Return the canonical BrainStack instructions for AI assistants (Skill content).',
       inputSchema: {},
     },
     async () => {

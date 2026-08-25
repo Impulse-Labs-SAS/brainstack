@@ -90,6 +90,57 @@ export class SharingService {
     }
   }
 
+  /**
+   * The folder somebody shared with me that this path was probably meant for.
+   *
+   * A write names a path and nothing else, so "impulse-labs/nota.md" is read
+   * against the caller's own vault — even when the only `impulse-labs` they
+   * have ever seen belongs to somebody else. The write then succeeds against a
+   * folder of the same name that it quietly creates, and the note lands in a
+   * private copy nobody else can see. Silence is the whole problem: the person
+   * writing believes they contributed to the shared folder.
+   *
+   * So before a write to one's own vault goes through, the path is compared
+   * against the shared roots. A match means the request is ambiguous, and
+   * ambiguity here has to be answered with a question rather than a guess.
+   *
+   * Null when the path collides with nothing, which is the common case.
+   */
+  async findShadowedShare(userId: string, relPath: string): Promise<SharedRoot | null> {
+    if (!this.enabled) return null;
+    for (const root of await this.listSharedRoots(userId)) {
+      if (pathFallsUnder(relPath, root.folderPath)) return root;
+    }
+    return null;
+  }
+
+  /**
+   * Refuse a write whose path names a shared folder without saying whose.
+   *
+   * `sharedRoots` is threadable so a caller already holding the list — the tRPC
+   * context memoises it per request — does not fetch it again.
+   */
+  async assertNotShadowingShare(
+    userId: string,
+    relPath: string,
+    sharedRoots?: SharedRoot[],
+  ): Promise<void> {
+    if (!this.enabled) return;
+
+    const roots = sharedRoots ?? (await this.listSharedRoots(userId));
+    const hit = roots.find((r) => pathFallsUnder(relPath, r.folderPath));
+    if (!hit) return;
+
+    const owner = hit.ownerDisplayName ?? hit.ownerEmail;
+    throw new AppError(
+      `"${hit.folderPath}" es una carpeta que te compartió ${owner}, y todavía no se puede ` +
+        `escribir en lo compartido. Escribir este path crearía una copia en tu propio vault ` +
+        `que ${owner} no vería. Si querías tu propia carpeta, usá otro nombre.`,
+      'FORBIDDEN',
+      403,
+    );
+  }
+
   /** Folders other people shared with me. */
   async listSharedRoots(userId: string): Promise<SharedRoot[]> {
     if (!this.enabled) return [];
@@ -271,9 +322,7 @@ export class SharingService {
     const rows = await this.opts.db
       .select({ folderPath: folderShares.folderPath })
       .from(folderShares)
-      .where(
-        and(eq(folderShares.sharedWithUserId, userId), eq(folderShares.ownerId, ownerId)),
-      );
+      .where(and(eq(folderShares.sharedWithUserId, userId), eq(folderShares.ownerId, ownerId)));
 
     for (const r of rows) {
       if (pathFallsUnder(relPath, r.folderPath)) return { folderPath: r.folderPath };

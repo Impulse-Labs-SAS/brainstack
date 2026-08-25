@@ -260,6 +260,75 @@ describe('unshare', () => {
   });
 });
 
+// The bug this guard exists for, driven end to end.
+//
+// Pablo had read access to "Impulse Labs" and asked his assistant to write in
+// it. No note tool takes an owner, so the path resolved against Pablo's own
+// vault: the write succeeded, created a folder of the same name under him, and
+// told him it had worked. He believed he had contributed to the shared folder.
+// Nobody else ever saw the note.
+describe('writing to a path that names somebody else’s shared folder', () => {
+  beforeEach(async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', { path: 'Impulse Labs', email: PABLO.email });
+  });
+
+  it('refuses create_folder instead of making a private copy', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { error } = await call(pablo, 'create_folder', { path: 'Impulse Labs' });
+
+    expect(error).toBeDefined();
+    expect(error).toContain('FORBIDDEN');
+    // The message has to name the owner, or the error is just as confusing as
+    // the silence it replaced.
+    expect(error).toContain(OWNER.email);
+  });
+
+  it('refuses create_note anywhere under it, however deep', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { error } = await call(pablo, 'create_note', {
+      path: 'Impulse Labs/reuniones/2026-08-25.md',
+      content: '# Reunión',
+    });
+    expect(error).toContain('FORBIDDEN');
+  });
+
+  it('leaves nothing behind when it refuses', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'Impulse Labs/nota.md', content: 'x' });
+
+    const { value } = await call(pablo, 'list_notes', {});
+    expect(value).toEqual([]);
+  });
+
+  it('still lets Pablo write his own folders', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { value } = await call(pablo, 'create_note', {
+      path: 'mis-cosas/idea.md',
+      content: 'mía',
+    });
+    expect(value).toMatchObject({ path: 'mis-cosas/idea.md' });
+  });
+
+  it('does not stop a name that merely starts the same', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { value } = await call(pablo, 'create_note', {
+      path: 'Impulse Labs Personal/idea.md',
+      content: 'otra cosa',
+    });
+    expect(value).toMatchObject({ path: 'Impulse Labs Personal/idea.md' });
+  });
+
+  it('does not stop the owner writing in her own folder', async () => {
+    const owner = await clientFor(OWNER.id);
+    const { value } = await call(owner, 'create_note', {
+      path: 'Impulse Labs/agenda.md',
+      content: 'mía',
+    });
+    expect(value).toMatchObject({ path: 'Impulse Labs/agenda.md' });
+  });
+});
+
 // `list_shared_with_me` was fixed for returning an unawaited promise, which
 // serialises to `{}` — a tool that answers "nothing" no matter what is true.
 // Three listing tools still had it, so an assistant asking what was in a folder

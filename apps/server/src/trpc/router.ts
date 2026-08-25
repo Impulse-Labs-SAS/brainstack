@@ -17,8 +17,7 @@ const t = initTRPC.context<TrpcContext>().create({
     ...shape,
     data: {
       ...shape.data,
-      appCode:
-        error.cause instanceof AppError ? error.cause.code : (shape.data.code as string),
+      appCode: error.cause instanceof AppError ? error.cause.code : (shape.data.code as string),
     },
   }),
 });
@@ -58,6 +57,25 @@ const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
 
 const FrontmatterInput = z.record(z.string(), z.unknown()).optional();
 
+/** A logged-in context: `protectedProcedure` has already rejected the alternative. */
+type AuthedContext = TrpcContext & { user: NonNullable<TrpcContext['user']> };
+
+/**
+ * The write guard, shared by every mutation that takes a path.
+ *
+ * Two questions, not one: may this user write here, and does the path they
+ * wrote actually mean somebody else's shared folder? The second is what stops
+ * a note meant for a shared folder from landing in a private copy of it — see
+ * `SharingService.assertNotShadowingShare`.
+ *
+ * `ctx.sharedRoots()` is memoised per request, so a move checking both of its
+ * ends still costs a single query.
+ */
+const assertWritable = async (ctx: AuthedContext, path: string): Promise<void> => {
+  ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, path);
+  await ctx.sharing.assertNotShadowingShare(ctx.user.id, path, await ctx.sharedRoots());
+};
+
 export const appRouter = t.router({
   auth: t.router({
     me: t.procedure.query(({ ctx }) => ({ user: ctx.user })),
@@ -96,16 +114,16 @@ export const appRouter = t.router({
         z.object({ path: z.string().min(1), content: z.string(), frontmatter: FrontmatterInput }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+        wrap(async () => {
+          await assertWritable(ctx, input.path);
           return ctx.notes.create(ctx.user.id, input.path, input.content, input.frontmatter);
         }),
       ),
     update: protectedProcedure
       .input(z.object({ path: z.string().min(1), content: z.string() }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+        wrap(async () => {
+          await assertWritable(ctx, input.path);
           return ctx.notes.update(ctx.user.id, input.path, input.content);
         }),
       ),
@@ -117,25 +135,25 @@ export const appRouter = t.router({
         }),
       )
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+        wrap(async () => {
+          await assertWritable(ctx, input.path);
           return ctx.notes.remove(ctx.user.id, input.path, { recursive: input.recursive });
         }),
       ),
     move: protectedProcedure
       .input(z.object({ from: z.string().min(1), to: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.from);
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.to);
+        wrap(async () => {
+          await assertWritable(ctx, input.from);
+          await assertWritable(ctx, input.to);
           return ctx.notes.move(ctx.user.id, input.from, input.to);
         }),
       ),
     createFolder: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
-        wrap(() => {
-          ctx.sharing.assertCanWrite(ctx.user.id, ctx.user.id, input.path);
+        wrap(async () => {
+          await assertWritable(ctx, input.path);
           return ctx.notes.createFolder(ctx.user.id, input.path);
         }),
       ),
@@ -168,11 +186,7 @@ export const appRouter = t.router({
         return ctx.notes.listLinks(ctx.user.id, input.path);
       }),
     graph: protectedProcedure
-      .input(
-        z
-          .object({ scope: z.enum(['mine', 'shared', 'all']).optional() })
-          .optional(),
-      )
+      .input(z.object({ scope: z.enum(['mine', 'shared', 'all']).optional() }).optional())
       .query(async ({ ctx, input }) => {
         const scope = input?.scope ?? 'mine';
         const sharedScopes =
@@ -198,9 +212,7 @@ export const appRouter = t.router({
         }),
       )
       .query(async ({ ctx, input }) =>
-        wrap(() =>
-          ctx.crossOwner.listTree(ctx.user.id, input.ownerId, input.path, input.depth),
-        ),
+        wrap(() => ctx.crossOwner.listTree(ctx.user.id, input.ownerId, input.path, input.depth)),
       ),
     linksForOwner: protectedProcedure
       .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
@@ -315,9 +327,7 @@ export const appRouter = t.router({
               };
         }),
       ),
-    listPendingInvites: protectedProcedure.query(({ ctx }) =>
-      ctx.invites.listPending(ctx.user.id),
-    ),
+    listPendingInvites: protectedProcedure.query(({ ctx }) => ctx.invites.listPending(ctx.user.id)),
     revokeInvite: protectedProcedure
       .input(z.object({ inviteId: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
