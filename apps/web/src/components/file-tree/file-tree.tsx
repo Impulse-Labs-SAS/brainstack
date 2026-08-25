@@ -33,7 +33,8 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
-import { SharedWithMeSection, sharedDropId } from './shared-with-me';
+import { SharedWithMeSection } from './shared-with-me';
+import { fallsUnderRoot, parseSharedDropId } from '@/lib/shared-drop-id';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 import { useSharingEnabled } from '@/lib/use-deployment';
 
@@ -322,7 +323,13 @@ export function FileTree() {
   }, []);
 
   const refresh = useCallback(async () => {
-    await Promise.all([utils.notes.tree.invalidate(), utils.notes.list.invalidate()]);
+    await Promise.all([
+      utils.notes.tree.invalidate(),
+      utils.notes.list.invalidate(),
+      // A migration into a shared folder changes the other side of the sidebar
+      // too, and that tree is a different query.
+      utils.notes.treeForOwner.invalidate(),
+    ]);
   }, [utils]);
 
   // Warm the cache so clicking a note shows content immediately.
@@ -389,16 +396,24 @@ export function FileTree() {
       // Dropped on a folder somebody shared: that is a different operation —
       // the note leaves this vault for theirs, and links crossing the new
       // boundary cannot be rewritten. `moveToOwner` reports what it cost.
-      const sharedIndex = sharedRoots.findIndex((_, i) => sharedDropId(i) === overId);
-      if (sharedIndex !== -1) {
-        const target = sharedRoots[sharedIndex];
-        if (!target) return;
+      const sharedDrop = parseSharedDropId(overId);
+      const sharedRoot = sharedDrop ? sharedRoots[sharedDrop.index] : undefined;
+      // The id has to resolve to a real share *and* name a path inside it.
+      // Own-tree droppables are raw paths, so a folder literally called
+      // "shared:0:x" would otherwise parse as one of these.
+      const sharedTarget =
+        sharedDrop && sharedRoot && fallsUnderRoot(sharedDrop.folderPath, sharedRoot.folderPath)
+          ? { root: sharedRoot, folderPath: sharedDrop.folderPath }
+          : null;
+
+      if (sharedTarget) {
+        const target = sharedTarget.root;
         const name = from.split('/').pop() ?? from;
         markBusy(from, true);
         try {
           const result = await moveToOwnerM.mutateAsync({
             from,
-            to: `${target.folderPath}/${name}`,
+            to: `${sharedTarget.folderPath}/${name}`,
             toOwnerId: target.ownerId,
           });
           await refresh();

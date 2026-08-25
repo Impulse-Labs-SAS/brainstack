@@ -2,13 +2,11 @@
 
 // Sección "Compartido conmigo" del sidebar. Sólo se renderea cuando el
 // deployment está en hosted. Lista las carpetas que otros users me
-// compartieron, con badge del dueño.
+// compartieron, con badge del dueño, y cada una se expande en su árbol.
 //
-// Las carpetas con permiso de escritura son destino de drop: arrastrar algo
-// del árbol propio hasta acá lo migra a la bóveda del dueño. El id del
-// droppable es el índice dentro de `items`, que el padre resuelve — armar un
-// id compuesto con el ownerId y el path se rompería con cualquier separador
-// que un nombre de carpeta pueda contener.
+// Las carpetas con permiso de escritura son destino de drop: arrastrar algo del
+// árbol propio hasta acá lo migra a la bóveda del dueño. Vale para la raíz del
+// share y para cualquier subcarpeta adentro.
 
 import { useDroppable } from '@dnd-kit/core';
 import { ChevronDown, ChevronRight, Users } from 'lucide-react';
@@ -18,6 +16,10 @@ import { useState } from 'react';
 import { useSharingEnabled } from '@/lib/use-deployment';
 import { cn } from '@/lib/utils';
 
+import { sharedDropId } from '@/lib/shared-drop-id';
+
+import { SharedTree } from './shared-tree';
+
 export interface SharedRootItem {
   folderPath: string;
   ownerId: string;
@@ -25,9 +27,6 @@ export interface SharedRootItem {
   ownerEmail: string;
   permission: 'read' | 'write';
 }
-
-/** Droppable id for the nth shared root. Resolved by the tree that owns the list. */
-export const sharedDropId = (index: number): string => `shared-root-${index}`;
 
 export function SharedWithMeSection({ items }: { items: SharedRootItem[] }) {
   const enabled = useSharingEnabled();
@@ -62,28 +61,47 @@ export function SharedWithMeSection({ items }: { items: SharedRootItem[] }) {
 }
 
 function SharedRootRow({ item: s, index }: { item: SharedRootItem; index: number }) {
+  // Collapsed by default: the tree costs a cross-owner query per share, and the
+  // section exists to show *what* is shared before it shows what is inside.
+  const [expanded, setExpanded] = useState(false);
+  const writable = s.permission === 'write';
+
+  // The root of the share is a drop target in its own right; the tree below
+  // adds the folders inside it, and skips drawing this row again.
   const droppable = useDroppable({
-    id: sharedDropId(index),
-    // Dropping into a folder you may only read would fail at the server; not
-    // offering the target is the kinder way to say the same thing.
-    disabled: s.permission !== 'write',
+    id: sharedDropId(index, s.folderPath),
+    disabled: !writable,
   });
 
   return (
-    <li ref={droppable.setNodeRef}>
-      <div className={cn(droppable.isOver && 'rounded bg-accent/10 ring-1 ring-accent')}>
+    <li>
+      <div
+        ref={droppable.setNodeRef}
+        className={cn(
+          'flex items-center',
+          droppable.isOver && writable && 'rounded bg-accent/10 ring-1 ring-accent',
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          title={expanded ? 'Colapsar' : 'Ver contenido'}
+          className="flex h-6 w-5 shrink-0 items-center justify-center text-fg-muted hover:text-fg-primary"
+        >
+          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        </button>
         <Link
           href={`/notes/shared/${encodeURIComponent(s.ownerId)}/${s.folderPath}`}
           className={cn(
-            'flex items-center gap-2 px-3 py-1 font-mono text-[12px]',
+            'flex min-w-0 flex-1 items-center gap-2 py-1 pr-3 font-mono text-[12px]',
             'text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary',
           )}
           title={`${s.folderPath} — ${s.ownerEmail} — ${
-            s.permission === 'write' ? 'lectura y escritura' : 'sólo lectura'
+            writable ? 'lectura y escritura' : 'sólo lectura'
           }`}
         >
           <span className="truncate">{s.folderPath}</span>
-          {s.permission === 'write' && (
+          {writable && (
             <span
               title="Podés crear y editar notas acá"
               className="shrink-0 rounded border border-border-subtle px-1 text-[9px] uppercase text-fg-muted"
@@ -96,6 +114,18 @@ function SharedRootRow({ item: s, index }: { item: SharedRootItem; index: number
           </span>
         </Link>
       </div>
+      {expanded && (
+        <div className="pl-2">
+          <SharedTree
+            ownerId={s.ownerId}
+            rootPath={s.folderPath}
+            hideRoot
+            // Dropping into a folder you may only read would fail at the
+            // server; not offering the target says the same thing sooner.
+            droppableIdFor={writable ? (folderPath) => sharedDropId(index, folderPath) : undefined}
+          />
+        </div>
+      )}
     </li>
   );
 }
