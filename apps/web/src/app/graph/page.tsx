@@ -29,7 +29,9 @@ export default function GraphPage() {
                 onChange={(e) => setIncludeShared(e.target.checked)}
                 className="h-3 w-3 accent-accent"
               />
-              <span className={cn(includeShared && 'text-fg-primary')}>incluir compartidos</span>
+              <span className={cn(includeShared && 'text-fg-primary')}>
+                incluir compartidos
+              </span>
             </label>
           </div>
         )}
@@ -44,7 +46,11 @@ export default function GraphPage() {
           </div>
         )}
         {data && (
-          <GraphView nodes={data.nodes} edges={data.edges} viewerId={me.data?.user?.id ?? null} />
+          <GraphView
+            nodes={data.nodes}
+            edges={data.edges}
+            viewerId={me.data?.user?.id ?? null}
+          />
         )}
       </div>
     </AppShell>

@@ -12,11 +12,7 @@ import { useEffect, useRef } from 'react';
 const brainHighlight = HighlightStyle.define([
   { tag: t.heading1, color: 'var(--fg-primary)', fontWeight: '600' },
   { tag: t.heading2, color: 'var(--fg-primary)', fontWeight: '600' },
-  {
-    tag: [t.heading3, t.heading4, t.heading5, t.heading6],
-    color: 'var(--fg-primary)',
-    fontWeight: '600',
-  },
+  { tag: [t.heading3, t.heading4, t.heading5, t.heading6], color: 'var(--fg-primary)', fontWeight: '600' },
   { tag: t.strong, color: 'var(--fg-primary)', fontWeight: '600' },
   { tag: t.emphasis, color: 'var(--fg-primary)', fontStyle: 'italic' },
   { tag: t.link, color: 'var(--accent)' },
@@ -76,19 +72,15 @@ export function NoteEditor({ value, onChange, readOnly = false }: NoteEditorProp
             '.cm-scroller': { fontFamily: 'var(--font-mono)' },
             '.cm-content': { padding: '16px', caretColor: 'var(--accent)' },
             '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
-            '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-              backgroundColor: 'rgba(124, 92, 255, 0.25)',
-            },
+            '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection':
+              { backgroundColor: 'rgba(124, 92, 255, 0.25)' },
             '.cm-gutters': {
               backgroundColor: 'transparent',
               borderRight: '1px solid var(--border-subtle)',
               color: 'var(--fg-muted)',
             },
             '.cm-activeLine': { backgroundColor: 'rgba(255, 255, 255, 0.02)' },
-            '.cm-activeLineGutter': {
-              backgroundColor: 'transparent',
-              color: 'var(--fg-secondary)',
-            },
+            '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--fg-secondary)' },
             '.cm-lineNumbers .cm-gutterElement': { color: 'var(--fg-disabled)' },
           },
           { dark: true },

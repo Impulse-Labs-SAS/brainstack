@@ -65,12 +65,7 @@ function ResetInner() {
               />
             </div>
             {error && <div className="text-xs text-danger">{error}</div>}
-            <Button
-              intent="primary"
-              type="submit"
-              isDisabled={pending || !password}
-              className="w-full"
-            >
+            <Button intent="primary" type="submit" isDisabled={pending || !password} className="w-full">
               {pending ? 'Updating…' : 'Update password'}
             </Button>
           </form>
@@ -82,11 +77,7 @@ function ResetInner() {
 
 export default function ResetPasswordPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>
-      }
-    >
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>}>
       <ResetInner />
     </Suspense>
   );

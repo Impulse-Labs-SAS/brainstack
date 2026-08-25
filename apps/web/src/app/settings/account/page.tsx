@@ -54,11 +54,7 @@ export default function AccountSettingsPage() {
 
           <ChangePasswordCard hasPassword={Boolean(user?.hasPassword)} />
 
-          <TwoFactorCard
-            status={totpStatus}
-            userEmail={user?.email ?? ''}
-            onChanged={refreshTotp}
-          />
+          <TwoFactorCard status={totpStatus} userEmail={user?.email ?? ''} onChanged={refreshTotp} />
 
           <GoogleCard hasGoogle={Boolean(user?.hasGoogle)} onChanged={() => me.refetch()} />
 
@@ -132,7 +128,10 @@ function ProfileCard({
           <div className="font-mono text-fg-primary">{email ?? '—'}</div>
         </div>
         <div>
-          <label htmlFor="display-name" className="mb-1 block font-mono text-[11px] text-fg-muted">
+          <label
+            htmlFor="display-name"
+            className="mb-1 block font-mono text-[11px] text-fg-muted"
+          >
             NAME
           </label>
           <Input
@@ -216,12 +215,7 @@ function ChangePasswordCard({ hasPassword }: { hasPassword: boolean }) {
       >
         <div>
           <label className="mb-1 block font-mono text-[11px] text-fg-muted">CURRENT</label>
-          <Input
-            type="password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-            required
-          />
+          <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
         </div>
         <div>
           <label className="mb-1 block font-mono text-[11px] text-fg-muted">NEW</label>
@@ -229,12 +223,7 @@ function ChangePasswordCard({ hasPassword }: { hasPassword: boolean }) {
         </div>
         <div>
           <label className="mb-1 block font-mono text-[11px] text-fg-muted">CONFIRM</label>
-          <Input
-            type="password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            required
-          />
+          <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
         </div>
         {status?.error && <div className="text-xs text-danger">{status.error}</div>}
         {status?.ok && <div className="text-xs text-success">Password updated.</div>}
@@ -246,15 +235,20 @@ function ChangePasswordCard({ hasPassword }: { hasPassword: boolean }) {
   );
 }
 
-function GoogleCard({ hasGoogle, onChanged }: { hasGoogle: boolean; onChanged: () => void }) {
+function GoogleCard({
+  hasGoogle,
+  onChanged,
+}: {
+  hasGoogle: boolean;
+  onChanged: () => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   if (!hasGoogle) {
     return (
       <section>
         <h2 className="mb-2 text-base font-medium text-fg-primary">Google</h2>
         <div className="rounded border border-border bg-bg-surface p-4 text-sm text-fg-secondary">
-          Google sign-in is not linked. Sign out and use &ldquo;Continue with Google&rdquo; once to
-          link.
+          Google sign-in is not linked. Sign out and use &ldquo;Continue with Google&rdquo; once to link.
         </div>
       </section>
     );
@@ -319,9 +313,7 @@ function TwoFactorCard({
             2FA is enabled. {status.remainingBackupCodes} backup code(s) remaining.
           </p>
           <div>
-            <label className="mb-1 block font-mono text-[11px] text-fg-muted">
-              CODE (TOTP or backup)
-            </label>
+            <label className="mb-1 block font-mono text-[11px] text-fg-muted">CODE (TOTP or backup)</label>
             <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
           </div>
           {error && <div className="text-xs text-danger">{error}</div>}

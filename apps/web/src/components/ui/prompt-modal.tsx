@@ -64,7 +64,9 @@ export function PromptModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 text-sm font-medium text-fg-primary">{title}</div>
-        {label && <div className="mb-1.5 font-mono text-[11px] text-fg-muted">{label}</div>}
+        {label && (
+          <div className="mb-1.5 font-mono text-[11px] text-fg-muted">{label}</div>
+        )}
         <Input
           ref={inputRef}
           autoFocus
@@ -91,7 +93,9 @@ export function PromptModal({
             disabled={!value.trim()}
             className={cn(
               'rounded px-3 py-1.5 text-xs font-medium text-white transition-colors disabled:opacity-40',
-              danger ? 'bg-red-600 hover:bg-red-500' : 'bg-accent hover:bg-accent/90',
+              danger
+                ? 'bg-red-600 hover:bg-red-500'
+                : 'bg-accent hover:bg-accent/90',
             )}
           >
             {okLabel}
@@ -144,7 +148,9 @@ export function ConfirmModal({
       >
         <div className="mb-2 text-sm font-medium text-fg-primary">{title}</div>
         {message && (
-          <div className="mb-1 break-words font-mono text-[12px] text-fg-secondary">{message}</div>
+          <div className="mb-1 break-words font-mono text-[12px] text-fg-secondary">
+            {message}
+          </div>
         )}
         <div className="mt-4 flex justify-end gap-2">
           <button
@@ -159,7 +165,9 @@ export function ConfirmModal({
             onClick={onConfirm}
             className={cn(
               'rounded px-3 py-1.5 text-xs font-medium text-white transition-colors',
-              danger ? 'bg-red-600 hover:bg-red-500' : 'bg-accent hover:bg-accent/90',
+              danger
+                ? 'bg-red-600 hover:bg-red-500'
+                : 'bg-accent hover:bg-accent/90',
             )}
           >
             {okLabel}

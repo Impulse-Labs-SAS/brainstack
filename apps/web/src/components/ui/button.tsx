@@ -29,7 +29,10 @@ const button = tv({
         'bg-transparent border-transparent text-fg-secondary',
         'hover:bg-bg-elevated hover:text-fg-primary',
       ),
-      danger: cn('bg-bg-elevated border-border text-danger', 'hover:bg-bg-hover'),
+      danger: cn(
+        'bg-bg-elevated border-border text-danger',
+        'hover:bg-bg-hover',
+      ),
     },
     size: {
       sm: 'h-7 px-2 text-xs',
@@ -41,10 +44,14 @@ const button = tv({
   defaultVariants: { intent: 'secondary', size: 'md' },
 });
 
-export interface ButtonProps extends AriaButtonProps, VariantProps<typeof button> {
+export interface ButtonProps
+  extends AriaButtonProps,
+    VariantProps<typeof button> {
   className?: string;
 }
 
 export function Button({ className, intent, size, ...props }: ButtonProps) {
-  return <AriaButton {...props} className={button({ intent, size, className })} />;
+  return (
+    <AriaButton {...props} className={button({ intent, size, className })} />
+  );
 }

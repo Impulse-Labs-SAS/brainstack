@@ -171,7 +171,10 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
 
     ctx.lineCap = 'round';
     for (const e of simEdges) {
-      const dim = matchedPaths && !matchedPaths.has(e.source.id) && !matchedPaths.has(e.target.id);
+      const dim =
+        matchedPaths &&
+        !matchedPaths.has(e.source.id) &&
+        !matchedPaths.has(e.target.id);
       ctx.strokeStyle = dim ? 'rgba(120,120,140,0.08)' : 'rgba(140,140,160,0.35)';
       ctx.lineWidth = Math.min(4, 1 + Math.log2(e.weight + 1) * 0.8);
       ctx.beginPath();
@@ -265,11 +268,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     [screenToWorld, simNodes],
   );
 
-  const dragState = useRef<
-    | { kind: 'pan'; sx: number; sy: number; ox: number; oy: number }
-    | { kind: 'node'; node: SimNode }
-    | null
-  >(null);
+  const dragState = useRef<{ kind: 'pan'; sx: number; sy: number; ox: number; oy: number } | { kind: 'node'; node: SimNode } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const node = findNodeAt(e.clientX, e.clientY);
@@ -298,11 +297,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       return;
     }
     if (state.kind === 'pan') {
-      setTransform((t) => ({
-        ...t,
-        x: state.ox + (e.clientX - state.sx),
-        y: state.oy + (e.clientY - state.sy),
-      }));
+      setTransform((t) => ({ ...t, x: state.ox + (e.clientX - state.sx), y: state.oy + (e.clientY - state.sy) }));
     } else {
       const { x, y } = screenToWorld(e.clientX, e.clientY);
       state.node.x = x;
@@ -341,9 +336,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
   return (
     <div className="relative flex h-full w-full flex-col">
       <div className="flex items-center gap-3 border-b border-border-subtle bg-bg-surface px-4 py-2 font-mono text-[11px] text-fg-muted">
-        <span>
-          {simNodes.length} notes · {simEdges.length} links
-        </span>
+        <span>{simNodes.length} notes · {simEdges.length} links</span>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -382,5 +375,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
 function noteHref(node: SimNode, viewerId: string | null): string {
   const path = node.path.replace(/\.md$/i, '');
   const foreign = node.ownerId && viewerId && node.ownerId !== viewerId;
-  return foreign ? `/notes/shared/${node.ownerId}/${node.path}` : `/notes/${path}`;
+  return foreign
+    ? `/notes/shared/${node.ownerId}/${node.path}`
+    : `/notes/${path}`;
 }
