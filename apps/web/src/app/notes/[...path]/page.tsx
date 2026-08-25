@@ -1,12 +1,6 @@
 'use client';
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { keepPreviousData } from '@tanstack/react-query';
 
@@ -212,11 +206,7 @@ export default function NotePage() {
               <div className="font-mono text-[11px] text-fg-muted">{path}</div>
             </div>
             <div className="flex items-center gap-3">
-              <ViewModeToggle
-                value={effectiveMode}
-                onChange={setViewMode}
-                splitDisabled={narrow}
-              />
+              <ViewModeToggle value={effectiveMode} onChange={setViewMode} splitDisabled={narrow} />
               <div className="font-mono text-[11px] text-fg-muted">
                 {update.isPending
                   ? 'saving…'
@@ -227,11 +217,7 @@ export default function NotePage() {
             </div>
           </div>
 
-          <div
-            className={cn(
-              'relative flex-1 overflow-hidden transition-colors',
-            )}
-          >
+          <div className={cn('relative flex-1 overflow-hidden transition-colors')}>
             {draft !== null && effectiveMode === 'edit' && (
               <NoteEditor value={draft} onChange={setDraft} />
             )}
@@ -258,9 +244,8 @@ export default function NotePage() {
                 </div>
               </div>
             )}
-                      </div>
-
-                  </div>
+          </div>
+        </div>
 
         <ResizablePanel
           side="right"
@@ -355,4 +340,3 @@ function reconstructBody(note: NoteData): string {
     .join('\n');
   return `---\n${fmYaml}\n---\n${note.body}`;
 }
-

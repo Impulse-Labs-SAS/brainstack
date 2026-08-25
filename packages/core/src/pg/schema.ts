@@ -342,6 +342,11 @@ export const folderShareInvites = pgTable(
     mode: text('mode').notNull().$type<'email' | 'link'>(),
     /** Null when the invite is a link anyone holding it can accept. */
     inviteeEmail: text('invitee_email'),
+    /**
+     * What accepting will grant. Carried on the invite because the owner
+     * chooses it when inviting, and acceptance can be days later.
+     */
+    permission: text('permission').notNull().default('read').$type<'read' | 'write'>(),
     /** sha256 of the token. The plaintext only ever exists in the invite URL. */
     tokenHash: text('token_hash').notNull().unique('folder_share_invites_token_hash_key'),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
@@ -355,6 +360,10 @@ export const folderShareInvites = pgTable(
   },
   (t) => ({
     modeValues: check('folder_share_invites_mode_check', sql`mode IN ('email', 'link')`),
+    permissionValues: check(
+      'folder_share_invites_permission_check',
+      sql`permission IN ('read', 'write')`,
+    ),
     ownerIdx: index('idx_share_invites_owner').on(t.ownerId, t.folderPath),
     emailIdx: index('idx_share_invites_email').on(t.inviteeEmail),
   }),

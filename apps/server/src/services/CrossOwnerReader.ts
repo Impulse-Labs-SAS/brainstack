@@ -54,11 +54,7 @@ export class CrossOwnerReader {
     await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
 
     const physical = toPhysical(ownerId, path, this.opts.vaultCfg);
-    const [row] = await this.opts.db
-      .select()
-      .from(notes)
-      .where(eq(notes.path, physical))
-      .limit(1);
+    const [row] = await this.opts.db.select().from(notes).where(eq(notes.path, physical)).limit(1);
 
     if (!row) throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
 
@@ -109,11 +105,7 @@ export class CrossOwnerReader {
    * That masking is the point: the link is real, but naming what it points at
    * would leak a path out of a folder nobody shared.
    */
-  async linksForOwner(
-    viewerId: string,
-    ownerId: string,
-    path: string,
-  ): Promise<CrossOwnerLink[]> {
+  async linksForOwner(viewerId: string, ownerId: string, path: string): Promise<CrossOwnerLink[]> {
     this.requireEnabled();
     await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
 

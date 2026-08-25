@@ -143,9 +143,6 @@ describe('resolveLink — allowedOwners (cross-border masking)', () => {
       attachmentIndex: hostedAttachmentIndex,
     });
     expect(result.ambiguous).toBe(true);
-    expect(result.candidates.sort()).toEqual([
-      'alice/proyectos/foo.md',
-      'bob/proyectos/foo.md',
-    ]);
+    expect(result.candidates.sort()).toEqual(['alice/proyectos/foo.md', 'bob/proyectos/foo.md']);
   });
 });

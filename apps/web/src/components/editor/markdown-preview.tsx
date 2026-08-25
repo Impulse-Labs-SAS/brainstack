@@ -24,10 +24,7 @@ export interface MarkdownPreviewProps {
   body: string;
   frontmatter?: Record<string, unknown>;
   resolveLink(target: string): { href: string; resolved: boolean };
-  resolveEmbed(target: string):
-    | ResolvedAttachment
-    | { kind: 'note'; path: string }
-    | null;
+  resolveEmbed(target: string): ResolvedAttachment | { kind: 'note'; path: string } | null;
   className?: string;
 }
 
@@ -112,9 +109,7 @@ export function MarkdownPreview({
               );
             }
             if (resolved.kind === 'audio') {
-              return (
-                <audio src={resolved.src} controls className="my-2 w-full" />
-              );
+              return <audio src={resolved.src} controls className="my-2 w-full" />;
             }
             if (resolved.kind === 'pdf') {
               return (
@@ -168,9 +163,7 @@ export function MarkdownPreview({
       h4: ({ children }) => (
         <h4 className="mt-3 mb-2 text-base font-semibold text-fg-primary">{children}</h4>
       ),
-      p: ({ children }) => (
-        <p className="my-2 leading-6 text-fg-primary">{children}</p>
-      ),
+      p: ({ children }) => <p className="my-2 leading-6 text-fg-primary">{children}</p>,
       ul: ({ children }) => (
         <ul className="my-2 ml-5 list-disc space-y-1 text-fg-primary">{children}</ul>
       ),
@@ -198,12 +191,11 @@ export function MarkdownPreview({
         <td className="border border-border-subtle px-2 py-1 text-fg-secondary">{children}</td>
       ),
       code({ className: cls, children, ...rest }) {
-        const isBlock = (rest as { node?: { position?: { start: { line: number }; end: { line: number } } } })
-          .node?.position && (cls ?? '').includes('language-');
+        const isBlock =
+          (rest as { node?: { position?: { start: { line: number }; end: { line: number } } } })
+            .node?.position && (cls ?? '').includes('language-');
         if (isBlock) {
-          return (
-            <code className={cn(cls, 'font-mono text-[12.5px]')}>{children}</code>
-          );
+          return <code className={cn(cls, 'font-mono text-[12.5px]')}>{children}</code>;
         }
         return (
           <code className="rounded bg-bg-elevated px-1 py-0.5 font-mono text-[12.5px] text-fg-primary">

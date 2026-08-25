@@ -368,6 +368,31 @@ const sharePermission: PgMigration = {
   ],
 };
 
+/**
+ * The same permission, on the invite that will become the share.
+ *
+ * Separate from 0007 rather than folded into it: a migration that has already
+ * run is recorded by name and never runs again, so adding statements to one is
+ * a way of shipping SQL that silently never executes.
+ */
+const invitePermission: PgMigration = {
+  name: '0008_pg_invite_permission',
+  statements: [
+    `ALTER TABLE folder_share_invites
+       ADD COLUMN IF NOT EXISTS permission TEXT NOT NULL DEFAULT 'read'`,
+    `DO $$
+     BEGIN
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_constraint WHERE conname = 'folder_share_invites_permission_check'
+       ) THEN
+         ALTER TABLE folder_share_invites
+           ADD CONSTRAINT folder_share_invites_permission_check
+           CHECK (permission IN ('read', 'write'));
+       END IF;
+     END $$`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -376,4 +401,5 @@ export const pgMigrations: readonly PgMigration[] = [
   folders,
   oauthProvider,
   sharePermission,
+  invitePermission,
 ];

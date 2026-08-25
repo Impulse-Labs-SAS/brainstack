@@ -278,7 +278,7 @@ export function FileTree() {
   const sharedWith = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const m of mySharesQ.data ?? []) {
-      const who = m.displayName ?? m.email;
+      const who = `${m.displayName ?? m.email} (${m.permission === 'write' ? 'escritura' : 'lectura'})`;
       const at = map.get(m.folderPath);
       if (at) at.push(who);
       else map.set(m.folderPath, [who]);

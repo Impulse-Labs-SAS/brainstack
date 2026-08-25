@@ -130,6 +130,10 @@ export class SharingService {
   /**
    * Refuse a write whose path names a shared folder without saying whose.
    *
+   * Only for writes aimed at the caller's own vault. Once a request names an
+   * `ownerId` there is nothing to disambiguate, and whether it is allowed is
+   * `canWrite`'s question, not this one's.
+   *
    * `sharedRoots` is threadable so a caller already holding the list — the tRPC
    * context memoises it per request — does not fetch it again.
    */
@@ -146,9 +150,10 @@ export class SharingService {
 
     const owner = hit.ownerDisplayName ?? hit.ownerEmail;
     throw new AppError(
-      `"${hit.folderPath}" es una carpeta que te compartió ${owner}, y todavía no se puede ` +
-        `escribir en lo compartido. Escribir este path crearía una copia en tu propio vault ` +
-        `que ${owner} no vería. Si querías tu propia carpeta, usá otro nombre.`,
+      `"${hit.folderPath}" es una carpeta que te compartió ${owner}, así que este path es ` +
+        `ambiguo. Para escribir en la carpeta compartida pasá ownerId="${hit.ownerId}". ` +
+        `Sin eso escribirías una copia en tu propio vault que ${owner} no vería; si era eso ` +
+        `lo que querías, usá otro nombre.`,
       'FORBIDDEN',
       403,
     );

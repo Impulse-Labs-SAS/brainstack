@@ -76,7 +76,13 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
   };
   const text = res.content[0]?.text ?? '';
   if (res.isError) return { error: text };
-  return { value: JSON.parse(text) as unknown };
+  // Most tools answer with JSON; a few (update_note, create_folder) answer with
+  // a sentence. Hand back whichever it was rather than making callers know.
+  try {
+    return { value: JSON.parse(text) as unknown };
+  } catch {
+    return { value: text };
+  }
 }
 
 beforeAll(async () => {
@@ -366,5 +372,111 @@ describe('the listing tools answer with their rows, not with a pending promise',
     const { value } = await call(pablo, 'list_links', { path: 'destino.md' });
     expect(Array.isArray(value)).toBe(true);
     expect(value).toMatchObject([{ sourcePath: 'origen.md' }]);
+  });
+});
+
+// What the whole change is for: contributing to somebody else's folder, and
+// having the note land in *their* vault so the share keeps covering it.
+describe('writing into a folder shared with write permission', () => {
+  beforeEach(async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', {
+      path: 'Impulse Labs',
+      email: PABLO.email,
+      permission: 'write',
+    });
+  });
+
+  it('creates the note in the owner’s vault, not a copy in Pablo’s', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { value, error } = await call(pablo, 'create_note', {
+      ownerId: OWNER.id,
+      path: 'Impulse Labs/reunion.md',
+      content: 'lo que hablamos',
+    });
+    expect(error).toBeUndefined();
+    expect(value).toMatchObject({ path: 'Impulse Labs/reunion.md' });
+
+    // The owner sees it as her own, which is the point.
+    const owner = await clientFor(OWNER.id);
+    const { value: mine } = await call(owner, 'list_notes', {});
+    expect(mine).toMatchObject([{ path: 'Impulse Labs/reunion.md' }]);
+
+    // And Pablo's own vault stayed empty: no private copy was made.
+    const { value: his } = await call(pablo, 'list_notes', {});
+    expect(his).toEqual([]);
+  });
+
+  it('lets Pablo read and edit what is in there', async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'create_note', { path: 'Impulse Labs/agenda.md', content: 'v1' });
+
+    const pablo = await clientFor(PABLO.id);
+    const { value: read } = await call(pablo, 'get_note', {
+      ownerId: OWNER.id,
+      path: 'Impulse Labs/agenda.md',
+    });
+    expect(read).toMatchObject({ body: expect.stringContaining('v1') });
+
+    const { error } = await call(pablo, 'update_note', {
+      ownerId: OWNER.id,
+      path: 'Impulse Labs/agenda.md',
+      content: 'v2',
+    });
+    expect(error).toBeUndefined();
+
+    const { value: after } = await call(owner, 'get_note', { path: 'Impulse Labs/agenda.md' });
+    expect(after).toMatchObject({ body: expect.stringContaining('v2') });
+  });
+
+  it('list_tree scoped to the owner shows their folder', async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'create_note', { path: 'Impulse Labs/agenda.md', content: 'x' });
+
+    const pablo = await clientFor(PABLO.id);
+    const { value } = await call(pablo, 'list_tree', {
+      ownerId: OWNER.id,
+      path: 'Impulse Labs',
+    });
+    expect(JSON.stringify(value)).toContain('agenda.md');
+  });
+
+  it('write permission does not reach outside the shared folder', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { error } = await call(pablo, 'create_note', {
+      ownerId: OWNER.id,
+      path: 'Privado/secreto.md',
+      content: 'no',
+    });
+    expect(error).toContain('FORBIDDEN');
+  });
+
+  it('a read-only share still refuses the same call', async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', {
+      path: 'Solo Lectura',
+      email: PABLO.email,
+      permission: 'read',
+    });
+
+    const pablo = await clientFor(PABLO.id);
+    const { error } = await call(pablo, 'create_note', {
+      ownerId: OWNER.id,
+      path: 'Solo Lectura/x.md',
+      content: 'no',
+    });
+    expect(error).toContain('FORBIDDEN');
+  });
+
+  it('naming no owner is still ambiguous, and still refused', async () => {
+    // Write permission does not make "Impulse Labs/x.md" mean the shared
+    // folder: Pablo may well have one of his own.
+    const pablo = await clientFor(PABLO.id);
+    const { error } = await call(pablo, 'create_note', {
+      path: 'Impulse Labs/x.md',
+      content: 'x',
+    });
+    expect(error).toContain('FORBIDDEN');
+    expect(error).toContain(OWNER.id);
   });
 });

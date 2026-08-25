@@ -48,9 +48,19 @@ export function SharedWithMeSection() {
                   'flex items-center gap-2 px-3 py-1 font-mono text-[12px]',
                   'text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary',
                 )}
-                title={`${s.folderPath} — ${s.ownerEmail}`}
+                title={`${s.folderPath} — ${s.ownerEmail} — ${
+                  s.permission === 'write' ? 'lectura y escritura' : 'sólo lectura'
+                }`}
               >
                 <span className="truncate">{s.folderPath}</span>
+                {s.permission === 'write' && (
+                  <span
+                    title="Podés crear y editar notas acá"
+                    className="shrink-0 rounded border border-border-subtle px-1 text-[9px] uppercase text-fg-muted"
+                  >
+                    rw
+                  </span>
+                )}
                 <span className="ml-auto truncate text-[10px] text-fg-muted">
                   @{s.ownerDisplayName ?? s.ownerEmail.split('@')[0]}
                 </span>

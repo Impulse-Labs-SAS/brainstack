@@ -44,8 +44,7 @@ export default function SignupPage() {
           <div className="mb-1 font-mono text-xs text-fg-muted">brainstack</div>
           <h1 className="mb-3 text-xl font-medium text-fg-primary">Check your email</h1>
           <p className="text-sm text-fg-secondary">
-            We sent a verification link to <b>{email}</b>. Click it to finish creating your
-            account.
+            We sent a verification link to <b>{email}</b>. Click it to finish creating your account.
           </p>
           {done.devUrl && (
             <div className="mt-4 rounded-md border border-warning bg-bg-elevated p-3 text-xs">
@@ -58,7 +57,10 @@ export default function SignupPage() {
               </a>
             </div>
           )}
-          <Link href="/login" className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary">
+          <Link
+            href="/login"
+            className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary"
+          >
             ← Back to sign in
           </Link>
         </div>

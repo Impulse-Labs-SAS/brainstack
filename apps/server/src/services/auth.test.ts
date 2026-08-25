@@ -191,7 +191,7 @@ describe('AuthService Google OAuth linking', () => {
     const linked = await auth.upsertGoogleUser({
       googleId: 'g-1',
       email: 'user@brain.test',
-    googleEmailVerified: true,
+      googleEmailVerified: true,
     });
     expect(linked.hasGoogle).toBe(true);
     expect(linked.hasPassword).toBe(true);

@@ -55,15 +55,12 @@ describe('rewriteBody — wikilink forms', () => {
   });
 
   it('rewrites attachment embeds (full path with extension)', () => {
-    const { body, changed } = rewriteBody(
-      '![[Attachments/2026/05/img.png]]',
-      [
-        {
-          from: 'Attachments/2026/05/img.png',
-          to: 'Attachments/2026/06/img.png',
-        },
-      ],
-    );
+    const { body, changed } = rewriteBody('![[Attachments/2026/05/img.png]]', [
+      {
+        from: 'Attachments/2026/05/img.png',
+        to: 'Attachments/2026/06/img.png',
+      },
+    ]);
     expect(changed).toBe(true);
     expect(body).toBe('![[Attachments/2026/06/img.png]]');
   });
@@ -104,9 +101,7 @@ describe('rewriteBody — code mask', () => {
       { from: 'Zuno/Pricing.md', to: 'Zuno/decisiones/Pricing.md' },
     ]);
     expect(changed).toBe(true);
-    expect(out).toBe(
-      '```\n[[Zuno/Pricing]]\n```\nand outside [[Zuno/decisiones/Pricing]].',
-    );
+    expect(out).toBe('```\n[[Zuno/Pricing]]\n```\nand outside [[Zuno/decisiones/Pricing]].');
   });
 
   it('does not rewrite wikilinks inside inline code spans', () => {
@@ -115,9 +110,7 @@ describe('rewriteBody — code mask', () => {
       { from: 'Zuno/Pricing.md', to: 'Zuno/decisiones/Pricing.md' },
     ]);
     expect(changed).toBe(true);
-    expect(out).toBe(
-      'literal: `[[Zuno/Pricing]]` and real [[Zuno/decisiones/Pricing]].',
-    );
+    expect(out).toBe('literal: `[[Zuno/Pricing]]` and real [[Zuno/decisiones/Pricing]].');
   });
 
   it('does not rewrite attachment embeds inside fences', () => {
@@ -155,9 +148,7 @@ describe('rewriteBody — code mask', () => {
         to: 'Archivo/Folder With Spaces/Nota.md',
       },
     ]);
-    expect(alias.body).toBe(
-      'Link [[Archivo/Folder With Spaces/Nota|el resumen]].',
-    );
+    expect(alias.body).toBe('Link [[Archivo/Folder With Spaces/Nota|el resumen]].');
 
     // attachment with parentheses and accents in the filename
     const att = rewriteBody('![[Attachments/2026/05/Resumen (Mayo) – Pablo.pdf]]', [
@@ -166,9 +157,7 @@ describe('rewriteBody — code mask', () => {
         to: 'Attachments/2026/06/Resumen (Mayo) – Pablo.pdf',
       },
     ]);
-    expect(att.body).toBe(
-      '![[Attachments/2026/06/Resumen (Mayo) – Pablo.pdf]]',
-    );
+    expect(att.body).toBe('![[Attachments/2026/06/Resumen (Mayo) – Pablo.pdf]]');
   });
 
   it('leaves non-matching links alone', () => {

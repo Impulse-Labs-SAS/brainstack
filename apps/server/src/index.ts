@@ -31,11 +31,7 @@ export { buildApp, type BuildAppOptions } from './http/app.js';
 export { SESSION_COOKIE, type AuthBindings, type Principal } from './http/middleware/auth.js';
 
 // --- MCP ---------------------------------------------------------------------
-export {
-  buildMcpServer,
-  type BuildMcpServerOptions,
-  type McpPrincipal,
-} from './mcp/server.js';
+export { buildMcpServer, type BuildMcpServerOptions, type McpPrincipal } from './mcp/server.js';
 
 // --- tRPC --------------------------------------------------------------------
 export { appRouter, type AppRouter } from './trpc/router.js';

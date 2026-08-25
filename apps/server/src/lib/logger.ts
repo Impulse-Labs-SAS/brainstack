@@ -10,11 +10,14 @@ let cached: Logger | null = null;
 export function getLogger(): Logger {
   if (cached) return cached;
   const cfg = loadConfig();
-  cached = pino({
-    level: cfg.LOG_LEVEL,
-    base: { service: 'brainstack' },
-    // Send to stderr if stdio MCP is on — stdout is reserved for JSON-RPC.
-    ...(cfg.MCP_STDIO ? { transport: undefined } : {}),
-  }, pino.destination(cfg.MCP_STDIO ? 2 : 1));
+  cached = pino(
+    {
+      level: cfg.LOG_LEVEL,
+      base: { service: 'brainstack' },
+      // Send to stderr if stdio MCP is on — stdout is reserved for JSON-RPC.
+      ...(cfg.MCP_STDIO ? { transport: undefined } : {}),
+    },
+    pino.destination(cfg.MCP_STDIO ? 2 : 1),
+  );
   return cached;
 }
