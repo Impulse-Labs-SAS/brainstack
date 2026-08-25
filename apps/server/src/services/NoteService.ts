@@ -309,16 +309,129 @@ export class NoteService {
     }
   }
 
+  /**
+   * Move or rename a note, or a whole folder.
+   *
+   * The store moves one note — it reads, writes at the new key and deletes the
+   * old — so a folder was reaching it as a path that does not end in `.md` and
+   * failing on that, even though both the MCP tool and the drag-and-drop tree
+   * offered folder moves. A folder here is expanded into the notes under it and
+   * moved one by one.
+   *
+   * Every wikilink pointing at anything that moved is rewritten in a single
+   * pass, with one mapping per note, rather than a pass per note.
+   */
   async move(ownerId: string, fromPath: string, toPath: string): Promise<MutationResult> {
     const from = this.toPhysical(ownerId, fromPath);
     const to = this.toPhysical(ownerId, toPath);
-    const saved = await this.asCaller(ownerId, () => this.store.move(from, to));
+    if (from === to) {
+      return { path: this.toLogical(ownerId, to), affectedMocs: [] };
+    }
+    // A folder cannot be moved inside itself: the destination would be carried
+    // along by the very move that is creating it.
+    if (to.startsWith(`${from}/`)) {
+      throw new AppError('no se puede mover una carpeta dentro de sí misma', 'INVALID_INPUT', 400);
+    }
 
-    // Keep every wikilink that pointed at the old path pointing at the new one.
-    await rewriteLinkTargets(this.bodySource(ownerId), [{ from, to }]);
+    const [asNote] = await this.opts.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(eq(notes.path, from))
+      .limit(1);
 
-    const logical = this.toLogical(ownerId, saved.path);
-    return { path: logical, affectedMocs: await this.mocsFor(ownerId, logical) };
+    if (asNote) {
+      const saved = await this.asCaller(ownerId, () => this.store.move(from, to));
+      // Logical, not physical: a wikilink says `[[Brutus/nota]]`, never
+      // `[[u_42/Brutus/nota]]`. Passing the stored path meant only a changed
+      // basename ever matched, and moving a note between folders left every
+      // full-path link pointing at where it used to be.
+      await rewriteLinkTargets(this.bodySource(ownerId), [
+        { from: this.toLogical(ownerId, from), to: this.toLogical(ownerId, to) },
+      ]);
+      const logical = this.toLogical(ownerId, saved.path);
+      return { path: logical, affectedMocs: await this.mocsFor(ownerId, logical) };
+    }
+
+    return this.moveFolder(ownerId, from, to);
+  }
+
+  /** The folder half of `move`. Assumes `from` is not a note. */
+  private async moveFolder(ownerId: string, from: string, to: string): Promise<MutationResult> {
+    const contents = await this.opts.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(and(this.ownedBy(ownerId), like(notes.path, `${from}/%`)));
+
+    const folderRows = await this.opts.db
+      .select({ path: folders.path })
+      .from(folders)
+      .where(
+        and(
+          this.foldersOwnedBy(ownerId),
+          or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+        ),
+      );
+
+    if (contents.length === 0 && folderRows.length === 0) {
+      throw new AppError(`not found: ${this.toLogical(ownerId, from)}`, 'NOT_FOUND', 404);
+    }
+
+    const mappings = contents.map((row) => ({
+      from: row.path,
+      to: `${to}${row.path.slice(from.length)}`,
+    }));
+
+    // Refuse before moving anything rather than halfway through: the store has
+    // no transaction to roll back, so a collision found on note nine would
+    // leave eight notes moved and the folder split across two places.
+    const taken = mappings.length
+      ? await this.opts.db
+          .select({ path: notes.path })
+          .from(notes)
+          .where(
+            inArray(
+              notes.path,
+              mappings.map((m) => m.to),
+            ),
+          )
+      : [];
+    if (taken.length > 0) {
+      const names = taken.map((r) => this.toLogical(ownerId, r.path)).join(', ');
+      throw new AppError(`ya existe en el destino: ${names}`, 'ALREADY_EXISTS', 409);
+    }
+
+    for (const mapping of mappings) {
+      await this.asCaller(ownerId, () => this.store.move(mapping.from, mapping.to));
+    }
+
+    // The folder rows follow their notes. Registered first so an empty folder
+    // survives the move — it has no notes to imply it back into existence.
+    const logicalTo = this.toLogical(ownerId, to);
+    await this.ensureFolders(ownerId, logicalTo);
+    for (const row of folderRows) {
+      const moved = `${to}${row.path.slice(from.length)}`;
+      await this.ensureFolders(ownerId, this.toLogical(ownerId, moved));
+    }
+    await this.opts.db
+      .delete(folders)
+      .where(
+        and(
+          this.foldersOwnedBy(ownerId),
+          or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+        ),
+      );
+
+    if (mappings.length > 0) {
+      await rewriteLinkTargets(
+        this.bodySource(ownerId),
+        mappings.map((m) => ({
+          from: this.toLogical(ownerId, m.from),
+          to: this.toLogical(ownerId, m.to),
+        })),
+      );
+    }
+
+    return { path: logicalTo, affectedMocs: await this.mocsFor(ownerId, logicalTo) };
   }
 
   /**
