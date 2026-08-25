@@ -9,6 +9,8 @@
 // con autosave que la vista propia, escribiendo contra el vault del dueño.
 
 import { keepPreviousData } from '@tanstack/react-query';
+import Link from 'next/link';
+import { ChevronLeft } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -92,39 +94,43 @@ export default function SharedNotePage() {
 
   const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:shared-tree-width', 320);
 
+  // Mismo criterio que la vista propia: en teléfono se ve el árbol o la nota,
+  // y con una nota abierta gana la nota.
   const tree = (
-    <ResizablePanel
-      side="left"
-      width={treeWidth}
-      onWidthChange={setTreeWidth}
-      min={200}
-      max={560}
-      className="border-r border-border-subtle"
-    >
-      <div className="flex h-full flex-col">
-        <div className="border-b border-border-subtle px-3 py-2 font-mono text-[11px] text-fg-muted">
-          {shareRoot ? (
-            <>
-              <span className="text-fg-secondary">{shareRoot.folderPath}</span>
-              <span className="ml-2 opacity-60">
-                @{shareRoot.ownerDisplayName ?? shareRoot.ownerEmail.split('@')[0]}
-              </span>
-            </>
-          ) : (
-            'cargando…'
-          )}
+    <div className="hidden md:contents">
+      <ResizablePanel
+        side="left"
+        width={treeWidth}
+        onWidthChange={setTreeWidth}
+        min={200}
+        max={560}
+        className="border-r border-border-subtle"
+      >
+        <div className="flex h-full flex-col">
+          <div className="border-b border-border-subtle px-3 py-2 font-mono text-[11px] text-fg-muted">
+            {shareRoot ? (
+              <>
+                <span className="text-fg-secondary">{shareRoot.folderPath}</span>
+                <span className="ml-2 opacity-60">
+                  @{shareRoot.ownerDisplayName ?? shareRoot.ownerEmail.split('@')[0]}
+                </span>
+              </>
+            ) : (
+              'cargando…'
+            )}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {shareRoot && (
+              <SharedTree
+                ownerId={ownerId}
+                rootPath={shareRoot.folderPath}
+                activePath={isNote ? path : undefined}
+              />
+            )}
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {shareRoot && (
-            <SharedTree
-              ownerId={ownerId}
-              rootPath={shareRoot.folderPath}
-              activePath={isNote ? path : undefined}
-            />
-          )}
-        </div>
-      </div>
-    </ResizablePanel>
+      </ResizablePanel>
+    </div>
   );
 
   // Acceso denegado / share no encontrado.
@@ -183,10 +189,21 @@ export default function SharedNotePage() {
       <div className="flex h-full overflow-hidden">
         {tree}
         <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex h-12 items-center justify-between border-b border-border-subtle px-4">
-            <div>
-              <div className="text-sm font-medium text-fg-primary">{note.data.title}</div>
-              <div className="font-mono text-[11px] text-fg-muted">{path}</div>
+          <div className="flex h-12 items-center justify-between gap-2 border-b border-border-subtle px-3 pl-10 md:px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <Link
+                href="/notes"
+                title="Volver al árbol"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden"
+              >
+                <ChevronLeft size={16} />
+              </Link>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-fg-primary">
+                  {note.data.title}
+                </div>
+                <div className="truncate font-mono text-[11px] text-fg-muted">{path}</div>
+              </div>
             </div>
             <div className="rounded border border-border-subtle px-2 py-0.5 font-mono text-[10px] uppercase text-fg-muted">
               {!canWrite

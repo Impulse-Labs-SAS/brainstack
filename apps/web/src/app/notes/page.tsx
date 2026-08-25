@@ -20,7 +20,9 @@ export default function NotesPage() {
         >
           <FileTree />
         </ResizablePanel>
-        <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
+        {/* Sin nota elegida, el teléfono muestra el árbol y nada más: el
+            cartel ocuparía la pantalla entera para no decir nada. */}
+        <div className="hidden flex-1 items-center justify-center font-mono text-[12px] text-fg-muted md:flex">
           select a note on the left, or right-click to create one
         </div>
       </div>

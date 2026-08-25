@@ -91,7 +91,8 @@ export function SearchInput({
 
   return (
     <div className={cn('flex flex-col', active && 'h-full min-h-0', className)}>
-      <div className="flex items-center gap-2 p-2">
+      {/* pl-10 en teléfono: ahí el botón de menú flota sobre esta fila. */}
+      <div className="flex items-center gap-2 p-2 pl-10 md:pl-2">
         <Input
           autoFocus={autoFocus}
           value={query}

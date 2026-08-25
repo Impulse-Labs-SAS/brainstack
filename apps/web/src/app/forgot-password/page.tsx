@@ -54,7 +54,10 @@ export default function ForgotPasswordPage() {
               </a>
             </div>
           )}
-          <Link href="/login" className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary">
+          <Link
+            href="/login"
+            className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary"
+          >
             ← Back to sign in
           </Link>
         </div>
@@ -83,7 +86,10 @@ export default function ForgotPasswordPage() {
             {pending ? 'Sending…' : 'Send reset link'}
           </Button>
         </form>
-        <Link href="/login" className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary">
+        <Link
+          href="/login"
+          className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary"
+        >
           ← Back to sign in
         </Link>
       </div>

@@ -1,13 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { keepPreviousData } from '@tanstack/react-query';
 
 const MAX_TREE_DEPTH = 20;
 const SPLIT_MIN_WIDTH = 900;
 
-import { Columns, Eye, Pencil } from 'lucide-react';
+import { ChevronLeft, Columns, Eye, Pencil } from 'lucide-react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
@@ -162,17 +163,24 @@ export default function NotePage() {
     return () => clearTimeout(handle);
   }, [draft, draftPath, path, mine]);
 
+  /*
+   * El árbol y la nota no entran juntos en un teléfono. Cuál se ve lo decide
+   * la ruta, que ya lo sabe: en `/notes` no hay nota y se ve el árbol; acá hay
+   * una nota abierta y se ve ella, con una vuelta al árbol en la cabecera.
+   */
   const treePanel = (
-    <ResizablePanel
-      side="left"
-      width={treeWidth}
-      onWidthChange={setTreeWidth}
-      min={200}
-      max={560}
-      className="border-r border-border-subtle"
-    >
-      <FileTree />
-    </ResizablePanel>
+    <div className="hidden md:contents">
+      <ResizablePanel
+        side="left"
+        width={treeWidth}
+        onWidthChange={setTreeWidth}
+        min={200}
+        max={560}
+        className="border-r border-border-subtle"
+      >
+        <FileTree />
+      </ResizablePanel>
+    </div>
   );
 
   if (!note.data && note.isLoading) {
@@ -205,10 +213,21 @@ export default function NotePage() {
         {treePanel}
 
         <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex h-12 items-center justify-between border-b border-border-subtle px-4">
-            <div>
-              <div className="text-sm font-medium text-fg-primary">{note.data.title}</div>
-              <div className="font-mono text-[11px] text-fg-muted">{path}</div>
+          <div className="flex h-12 items-center justify-between gap-2 border-b border-border-subtle px-3 pl-10 md:px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <Link
+                href="/notes"
+                title="Volver al árbol"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden"
+              >
+                <ChevronLeft size={16} />
+              </Link>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-fg-primary">
+                  {note.data.title}
+                </div>
+                <div className="truncate font-mono text-[11px] text-fg-muted">{path}</div>
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <ViewModeToggle value={effectiveMode} onChange={setViewMode} splitDisabled={narrow} />
@@ -252,36 +271,40 @@ export default function NotePage() {
           </div>
         </div>
 
-        <ResizablePanel
-          side="right"
-          width={backlinksWidth}
-          onWidthChange={setBacklinksWidth}
-          min={200}
-          max={480}
-          className="border-l border-border-subtle"
-        >
-          <aside className="h-full overflow-y-auto p-4">
-            <div className="mb-2 flex items-center gap-2 font-mono text-[11px] text-fg-muted">
-              <Kbd>backlinks</Kbd>
-            </div>
-            <ul className="space-y-1">
-              {(backlinks.data ?? []).map((link) => (
-                <li key={`${link.sourcePath}-${link.linkKind}`}>
-                  <a
-                    href={`/notes/${link.sourcePath.replace(/\.md$/i, '')}`}
-                    className="block rounded px-2 py-1 text-xs text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary"
-                  >
-                    <span className="font-mono">{link.sourcePath}</span>
-                    <span className="ml-2 text-fg-muted">{link.linkKind}</span>
-                  </a>
-                </li>
-              ))}
-              {backlinks.data && backlinks.data.length === 0 && (
-                <li className="text-xs text-fg-muted">No backlinks yet.</li>
-              )}
-            </ul>
-          </aside>
-        </ResizablePanel>
+        {/* Un tercer panel no entra en un teléfono, y los backlinks son lo
+            menos urgente de los tres: la nota es a lo que se vino. */}
+        <div className="hidden md:contents">
+          <ResizablePanel
+            side="right"
+            width={backlinksWidth}
+            onWidthChange={setBacklinksWidth}
+            min={200}
+            max={480}
+            className="border-l border-border-subtle"
+          >
+            <aside className="h-full overflow-y-auto p-4">
+              <div className="mb-2 flex items-center gap-2 font-mono text-[11px] text-fg-muted">
+                <Kbd>backlinks</Kbd>
+              </div>
+              <ul className="space-y-1">
+                {(backlinks.data ?? []).map((link) => (
+                  <li key={`${link.sourcePath}-${link.linkKind}`}>
+                    <a
+                      href={`/notes/${link.sourcePath.replace(/\.md$/i, '')}`}
+                      className="block rounded px-2 py-1 text-xs text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary"
+                    >
+                      <span className="font-mono">{link.sourcePath}</span>
+                      <span className="ml-2 text-fg-muted">{link.linkKind}</span>
+                    </a>
+                  </li>
+                ))}
+                {backlinks.data && backlinks.data.length === 0 && (
+                  <li className="text-xs text-fg-muted">No backlinks yet.</li>
+                )}
+              </ul>
+            </aside>
+          </ResizablePanel>
+        </div>
       </div>
     </AppShell>
   );

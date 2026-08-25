@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -59,15 +66,24 @@ export function ResizablePanel({
   }, [dragging, min, max, side, onWidthChange]);
 
   return (
+    /*
+     * The dragged width is handed over as a custom property rather than as an
+     * inline `width`, because an inline style wins against every class and
+     * there is no breakpoint at which it stops applying. On a phone that meant
+     * a 320px panel on a 390px screen, with the note squeezed into what was
+     * left. As a variable the width is only read from `md` up.
+     */
     <div
-      className={cn('relative shrink-0', className)}
-      style={{ width }}
+      className={cn('relative w-full shrink-0 md:w-[var(--panel-w)]', className)}
+      style={{ '--panel-w': `${width}px` } as CSSProperties}
     >
       {children}
       <div
         onMouseDown={onMouseDown}
         className={cn(
-          'absolute top-0 z-10 h-full w-1 cursor-col-resize select-none',
+          // Dragging needs a pointer and room to drag; below md there is
+          // neither, and the handle only sits on top of the content.
+          'absolute top-0 z-10 hidden h-full w-1 cursor-col-resize select-none md:block',
           'hover:bg-accent/40',
           dragging && 'bg-accent/60',
           side === 'left' ? '-right-0.5' : '-left-0.5',
@@ -77,7 +93,10 @@ export function ResizablePanel({
   );
 }
 
-export function usePersistedWidth(key: string, defaultWidth: number): [number, (n: number) => void] {
+export function usePersistedWidth(
+  key: string,
+  defaultWidth: number,
+): [number, (n: number) => void] {
   const [width, setWidth] = useState(defaultWidth);
 
   useEffect(() => {

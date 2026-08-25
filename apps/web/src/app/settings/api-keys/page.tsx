@@ -77,9 +77,7 @@ export default function ApiKeysPage() {
                     {new Date(key.createdAt).toISOString().slice(0, 10)}
                   </td>
                   <td className="py-2 text-fg-secondary">
-                    {key.lastUsedAt
-                      ? new Date(key.lastUsedAt).toISOString().slice(0, 10)
-                      : '—'}
+                    {key.lastUsedAt ? new Date(key.lastUsedAt).toISOString().slice(0, 10) : '—'}
                   </td>
                   <td className="py-2 text-right">
                     <Button

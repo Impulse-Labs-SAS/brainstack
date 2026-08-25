@@ -5,6 +5,7 @@ import {
   FileText,
   KeyRound,
   LogOut,
+  Menu,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -31,6 +32,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /**
+   * Only on phones. The nav is 224px of a 390px screen, so there it slides in
+   * over the content instead of taking a share of it — and closes on the way
+   * out, because a link that leaves the drawer open covers what it navigated to.
+   */
+  const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -66,10 +73,22 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen w-full">
+      {navOpen && (
+        <div
+          onClick={() => setNavOpen(false)}
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          aria-hidden
+        />
+      )}
       <aside
         className={cn(
-          'flex flex-col border-r border-border-subtle bg-bg-surface transition-[width] duration-150',
-          collapsed ? 'w-12' : 'w-56',
+          'flex flex-col border-r border-border-subtle bg-bg-surface',
+          'transition-transform duration-150 md:transition-[width]',
+          // Phone: an overlay, off-screen until asked for. md+: in the flow,
+          // exactly as before.
+          'fixed inset-y-0 left-0 z-40 w-56 md:static md:z-auto md:translate-x-0',
+          navOpen ? 'translate-x-0' : '-translate-x-full',
+          collapsed ? 'md:w-12' : 'md:w-56',
         )}
       >
         <div
@@ -95,6 +114,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             return (
               <Link
                 key={link.href}
+                onClick={() => setNavOpen(false)}
                 href={link.href}
                 title={collapsed ? link.label : undefined}
                 className={cn(
@@ -106,14 +126,28 @@ export function AppShell({ children }: { children: ReactNode }) {
                 )}
               >
                 <Icon size={14} strokeWidth={1.75} />
-                {!collapsed && <span>{link.label}</span>}
+                {(!collapsed || navOpen) && <span>{link.label}</span>}
               </Link>
             );
           })}
         </nav>
         <UserFooter collapsed={collapsed} />
       </aside>
-      <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setNavOpen(true)}
+          title="Menú"
+          className={cn(
+            'absolute left-2 top-3 z-20 flex h-6 w-6 items-center justify-center rounded',
+            'text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden',
+            navOpen && 'hidden',
+          )}
+        >
+          <Menu size={16} />
+        </button>
+        {children}
+      </main>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
