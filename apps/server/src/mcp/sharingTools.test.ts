@@ -634,3 +634,82 @@ describe('una carpeta creada dentro de lo compartido se ve', () => {
     expect(JSON.stringify(value)).toContain('prueba3');
   });
 });
+
+// Mover entre bóvedas transfiere la propiedad, y por MCP eso ocurría sin que
+// nada se lo dijera al modelo: la respuesta traía un path y un conteo de links,
+// así que un asistente podía informar "listo, movido" mientras la otra persona
+// acababa de dejar de ser dueña de sus notas — o de verlas.
+describe('move_to_owner avisa lo que la transferencia le costó al dueño anterior', () => {
+  const setup = async (): Promise<Client> => {
+    const owner = await clientFor(OWNER.id);
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'Brutus/arquitectura.md', content: 'a' });
+    await sharing.grant({
+      ownerId: PABLO.id,
+      sharedWithUserId: OWNER.id,
+      folderPath: 'Brutus',
+      grantedBy: PABLO.id,
+      permission: 'write',
+    });
+    return owner;
+  };
+
+  const move = async (client: Client) =>
+    call(client, 'move_to_owner', {
+      from: 'Brutus',
+      fromOwnerId: PABLO.id,
+      to: 'mio/Brutus',
+      toOwnerId: OWNER.id,
+    });
+
+  it('dice que el dueño anterior se quedó sin ver nada cuando el destino no vuelve', async () => {
+    const owner = await setup();
+
+    const { value } = (await move(owner)) as { value: { ownership: Record<string, string> } };
+
+    expect(value.ownership.previousOwnerId).toBe(PABLO.id);
+    expect(value.ownership.newOwnerId).toBe(OWNER.id);
+    expect(value.ownership.previousOwnerAccess).toBe('none');
+    expect(value.ownership.tellTheUser).toMatch(/no longer see them at all/);
+  });
+
+  it('distingue quedarse sólo con lectura de conservar la escritura', async () => {
+    const owner = await setup();
+    await sharing.grant({
+      ownerId: OWNER.id,
+      sharedWithUserId: PABLO.id,
+      folderPath: 'mio',
+      grantedBy: OWNER.id,
+      permission: 'read',
+    });
+
+    const { value } = (await move(owner)) as { value: { ownership: Record<string, string> } };
+
+    expect(value.ownership.previousOwnerAccess).toBe('read');
+    expect(value.ownership.tellTheUser).toMatch(/only read/);
+  });
+
+  it('reconoce cuando conserva la escritura por el destino compartido', async () => {
+    const owner = await setup();
+    await sharing.grant({
+      ownerId: OWNER.id,
+      sharedWithUserId: PABLO.id,
+      folderPath: 'mio',
+      grantedBy: OWNER.id,
+      permission: 'write',
+    });
+
+    const { value } = (await move(owner)) as { value: { ownership: Record<string, string> } };
+
+    expect(value.ownership.previousOwnerAccess).toBe('write');
+  });
+
+  it('la descripción de la herramienta avisa antes de que se llame', async () => {
+    const client = await clientFor(OWNER.id);
+    const tool = (await client.listTools()).tools.find((t) => t.name === 'move_to_owner');
+
+    // Lo que lee el modelo cuando decide si llamarla.
+    expect(tool?.description).toMatch(/TRANSFERS OWNERSHIP/);
+    expect(tool?.description).toMatch(/ALWAYS tell the user/);
+  });
+});

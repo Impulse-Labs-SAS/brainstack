@@ -343,6 +343,12 @@ export function FileTree() {
   const [searchActive, setSearchActive] = useState(false);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<NodeRef | null>(null);
+  /** Un move entre bóvedas, esperando que lo confirmen. */
+  const [confirmCrossVault, setConfirmCrossVault] = useState<{
+    src: NodeRef;
+    dst: NodeRef;
+    toPath: string;
+  } | null>(null);
   const [shareFolderPath, setShareFolderPath] = useState<string | null>(null);
   /** The node a prompt is about, so create/rename know whose vault to write to. */
   const [promptRef, setPromptRef] = useState<NodeRef | null>(null);
@@ -447,43 +453,73 @@ export function FileTree() {
       const toPath = dst.path === '' ? name : `${dst.path}/${name}`;
       if (sameNode(src, { ownerId: dst.ownerId, path: toPath })) return;
 
+      // Cruzar de bóveda no es mover: transfiere la propiedad. Las notas se van
+      // del vault de origen, y quien era dueño puede quedarse sin ellas o con
+      // menos permiso del que tenía. Un drag es demasiado barato para algo que
+      // le cambia el acceso a otra persona, así que acá se pregunta.
+      if (src.ownerId !== dst.ownerId) {
+        setConfirmCrossVault({ src, dst, toPath });
+        return;
+      }
+
       markBusy(src, true);
       try {
-        if (src.ownerId === dst.ownerId) {
-          const result = await moveM.mutateAsync({
-            from: src.path,
-            to: toPath,
-            ownerId: src.ownerId,
-          });
-          await refresh();
-          const mocs = result.affectedMocs.length
-            ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
-            : '';
-          pushToast('info', `moved to ${result.path}${mocs}`);
-        } else {
-          // Cruzar de bóveda es otra operación: los wikilinks que cruzan el
-          // borde nuevo no se pueden reescribir, y `moveToOwner` informa cuáles.
-          const result = await moveToOwnerM.mutateAsync({
-            from: src.path,
-            fromOwnerId: src.ownerId,
-            to: toPath,
-            toOwnerId: dst.ownerId,
-          });
-          await refresh();
-          const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
-          pushToast(
-            'info',
-            `moved to ${result.path}` +
-              (dangling > 0 ? ` — ${dangling} wikilink(s) no longer resolve` : ''),
-          );
-        }
+        const result = await moveM.mutateAsync({
+          from: src.path,
+          to: toPath,
+          ownerId: src.ownerId,
+        });
+        await refresh();
+        const mocs = result.affectedMocs.length
+          ? ` (review MOCs: ${result.affectedMocs.join(', ')})`
+          : '';
+        pushToast('info', `moved to ${result.path}${mocs}`);
       } catch (err) {
         pushToast('error', (err as Error).message);
       } finally {
         markBusy(src, false);
       }
     },
-    [moveM, moveToOwnerM, pushToast, refresh, markBusy],
+    [moveM, pushToast, refresh, markBusy],
+  );
+
+  /** El nombre con el que esta persona aparece en el árbol. */
+  const ownerLabel = useCallback(
+    (ownerId: string): string => {
+      if (ownerId === mine) return 'vos';
+      const root = sharedRoots.find((r) => r.ownerId === ownerId);
+      if (!root) return 'la otra persona';
+      return root.ownerDisplayName ?? root.ownerEmail.split('@')[0] ?? root.ownerEmail;
+    },
+    [mine, sharedRoots],
+  );
+
+  const runCrossVaultMove = useCallback(
+    async (src: NodeRef, dst: NodeRef, toPath: string) => {
+      markBusy(src, true);
+      try {
+        // Los wikilinks que cruzan el borde nuevo no se pueden reescribir, y
+        // `moveToOwner` informa cuáles.
+        const result = await moveToOwnerM.mutateAsync({
+          from: src.path,
+          fromOwnerId: src.ownerId,
+          to: toPath,
+          toOwnerId: dst.ownerId,
+        });
+        await refresh();
+        const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
+        pushToast(
+          'info',
+          `moved to ${result.path} — ahora es de ${ownerLabel(dst.ownerId)}` +
+            (dangling > 0 ? `; ${dangling} wikilink(s) no longer resolve` : ''),
+        );
+      } catch (err) {
+        pushToast('error', (err as Error).message);
+      } finally {
+        markBusy(src, false);
+      }
+    },
+    [moveToOwnerM, pushToast, refresh, markBusy, ownerLabel],
   );
 
   const createNote = useCallback((ref: NodeRef) => {
@@ -807,6 +843,30 @@ export function FileTree() {
         folderPath={shareFolderPath ?? ''}
         open={shareFolderPath !== null}
         onClose={() => setShareFolderPath(null)}
+      />
+
+      <ConfirmModal
+        open={confirmCrossVault !== null}
+        title="¿Cambiar de dueño?"
+        message={
+          confirmCrossVault
+            ? `«${confirmCrossVault.src.path.split('/').pop()}» pasa de ` +
+              `${ownerLabel(confirmCrossVault.src.ownerId)} a ` +
+              `${ownerLabel(confirmCrossVault.dst.ownerId)}.
+
+` +
+              'No es una copia: las notas se van de la bóveda de origen. Quien deja de ser ' +
+              'dueño sólo la seguirá viendo si el destino está compartido con esa persona, y ' +
+              'con el permiso que tenga ahí.'
+            : undefined
+        }
+        okLabel="Mover y cambiar dueño"
+        onCancel={() => setConfirmCrossVault(null)}
+        onConfirm={() => {
+          const pending = confirmCrossVault;
+          setConfirmCrossVault(null);
+          if (pending) void runCrossVaultMove(pending.src, pending.dst, pending.toPath);
+        }}
       />
 
       <ConfirmModal

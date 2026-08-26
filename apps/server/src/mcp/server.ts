@@ -341,7 +341,7 @@ export function buildMcpServer({
     {
       title: 'Move a note or folder into another vault',
       description:
-        'Move a note or folder from one person\u2019s vault into another\u2019s — for example, out of your own notes and into a folder somebody shared with you. Requires write access at both ends. Wikilinks crossing the new boundary cannot be rewritten (a wikilink cannot name a vault), so the answer lists what was left dangling in each direction rather than repairing it silently. Use `move` for anything staying inside one vault.',
+        'TRANSFERS OWNERSHIP. Move a note or folder from one person’s vault into another’s — for example, out of a folder somebody shared with you and into your own notes. This is not a copy and not a reorganisation: the notes leave the source vault and belong to the destination owner afterwards. Whoever owned them stops owning them, and keeps access only if the destination is shared with them — possibly at a narrower permission than they had, or not at all. ALWAYS tell the user this before calling, name who stops being the owner, and get their agreement; a request to tidy up or to move something into another folder does not by itself mean they intend to take ownership of somebody else’s notes. Requires write access at both ends. Wikilinks crossing the new boundary cannot be rewritten (a wikilink cannot name a vault), so the answer lists what was left dangling in each direction rather than repairing it silently. Use `move` for anything staying inside one vault, which changes no ownership.',
       inputSchema: {
         from: z.string().min(1),
         fromOwnerId: OWNER_ARG,
@@ -357,13 +357,40 @@ export function buildMcpServer({
         // Taking something out of a vault is a write on that vault.
         await assertWrite(from, fromOwnerId);
         await assertWrite(to, toOwnerId);
+        const previousOwner = ownerOf(fromOwnerId);
         const result = await notes.moveAcrossVaults({
-          fromOwnerId: ownerOf(fromOwnerId),
+          fromOwnerId: previousOwner,
           fromPath: from,
           toOwnerId,
           toPath: to,
         });
-        return JSON_TEXT(result);
+
+        // What the transfer actually cost the previous owner, looked up rather
+        // than guessed: whether the destination is shared back with them, and
+        // at what permission. A model that only sees a path and a link count
+        // has no way to tell the user that somebody just stopped owning their
+        // own notes.
+        const stillWritable = await sharing.canWrite(previousOwner, toOwnerId, to);
+        const stillReadable =
+          stillWritable || (await sharing.canRead(previousOwner, toOwnerId, to));
+
+        return JSON_TEXT({
+          ...result,
+          ownership: {
+            previousOwnerId: previousOwner,
+            newOwnerId: toOwnerId,
+            previousOwnerAccess: stillWritable ? 'write' : stillReadable ? 'read' : 'none',
+            tellTheUser: `These notes now belong to ${toOwnerId}; ${previousOwner} no longer owns them and ${
+              stillWritable
+                ? 'can still read and write them through the shared destination.'
+                : stillReadable
+                  ? 'can now only read them through the shared destination, where owning them ' +
+                    'allowed writing.'
+                  : 'can no longer see them at all, because the destination is not shared back ' +
+                    'with them. Say this plainly rather than reporting the move as a success.'
+            }`,
+          },
+        });
       } catch (err) {
         return toMcpError(err);
       }
