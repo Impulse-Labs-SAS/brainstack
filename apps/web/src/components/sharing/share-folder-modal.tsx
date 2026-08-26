@@ -36,6 +36,13 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
       void utils.sharing.listMyShares.invalidate();
     },
   });
+  // Re-granting to somebody who already has access updates the permission
+  // rather than adding a second row, which is what makes this an edit.
+  const setPermissionM = trpc.sharing.shareWithUser.useMutation({
+    onSuccess: () => {
+      void utils.sharing.listMyShares.invalidate();
+    },
+  });
   const revokeInvite = trpc.sharing.revokeInvite.useMutation({
     onSuccess: () => {
       void utils.sharing.listPendingInvites.invalidate();
@@ -125,7 +132,9 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
 
         {/* Permiso: gobierna tanto la invitación por email como el link */}
         <div className="mb-3">
-          <div className="mb-1.5 font-mono text-[11px] text-fg-muted">permiso</div>
+          <div className="mb-1.5 font-mono text-[11px] text-fg-muted">
+            permiso para quien invites
+          </div>
           <div className="flex gap-1 rounded border border-border bg-bg-elevated p-0.5">
             {(
               [
@@ -230,16 +239,45 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
                       <div className="truncate font-mono text-[10px] text-fg-muted">{m.email}</div>
                     )}
                   </div>
-                  <span
-                    title={
-                      m.permission === 'write'
-                        ? 'Puede crear y editar notas en esta carpeta'
-                        : 'Sólo puede leer'
-                    }
-                    className="ml-2 shrink-0 rounded border border-border-subtle px-1.5 py-0.5 font-mono text-[9px] uppercase text-fg-muted"
-                  >
-                    {m.permission === 'write' ? 'escritura' : 'lectura'}
-                  </span>
+                  {/*
+                    Editable, not a label. The selector at the top of this modal
+                    only ever applied to a *new* invite, so somebody already on
+                    the list could not be moved from read to write: the toggle
+                    looked like it belonged to the folder, changing it did
+                    nothing, and nothing said so. Re-granting is what changes a
+                    permission, and this is where it belongs.
+                  */}
+                  <div className="ml-2 flex shrink-0 gap-0.5 rounded border border-border bg-bg-elevated p-0.5">
+                    {(
+                      [
+                        ['read', 'lectura', 'Sólo puede leer'],
+                        ['write', 'escritura', 'Puede crear y editar notas en esta carpeta'],
+                      ] as const
+                    ).map(([value, label, hint]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        title={hint}
+                        disabled={setPermissionM.isPending}
+                        onClick={() => {
+                          if (m.permission === value) return;
+                          setError(null);
+                          setPermissionM.mutate(
+                            { folderPath, email: m.email, permission: value },
+                            { onError: (e) => setError(e.message) },
+                          );
+                        }}
+                        className={cn(
+                          'rounded px-1.5 py-0.5 font-mono text-[9px] uppercase transition-colors',
+                          m.permission === value
+                            ? 'bg-accent/20 text-fg-primary'
+                            : 'text-fg-muted hover:text-fg-secondary',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <button
                     type="button"
                     onClick={() =>
