@@ -18,14 +18,28 @@ name: Deploy
 # the other four traps. One copy of that knowledge, exercised both ways.
 #
 # Required secret:
-#   NETLIFY_AUTH_TOKEN   Netlify → User settings → Applications → New access token
+#   NETLIFY_AUTH_TOKEN   A personal access token belonging to the account that
+#                        owns the-site — the owning team, which has one
+#                        member. Netlify → User settings → Applications.
 #
-# The site id is deliberately left to the script's own default rather than read
-# from the NETLIFY_SITE_ID secret: that secret predates this site and there is
-# no way to check from here which of the two it holds, and pointing a deploy at
-# the wrong site is not a failure that announces itself. Set BRAINSTACK_SITE_ID
-# to override. Everything else — DATABASE_URL, SESSION_SECRET, the OAuth
-# credentials — lives on the Netlify site and is pulled in at build time.
+# There is history here worth writing down, because the repository is the only
+# place it survives. The site started under admin@example.com; that
+# account ran out of deploy quota, so the live site was rebuilt as
+# the-site under the personal account and stayed there. The two secrets
+# still in this repository are from before that move, which is why a deploy
+# that looks correctly configured fails with "the CLI cannot see the site": the
+# token is valid, for a different account.
+#
+# It stays on the personal account deliberately. Moving it back would change
+# the origin, and every MCP connector already pointing at the-site would
+# have to be reconnected — a bigger cost than the one it saves.
+#
+# So the site id is the script's own default rather than the NETLIFY_SITE_ID
+# secret, which almost certainly still holds the id of the-old-site — now
+# answering 502. A deploy pointed at the wrong site does not announce itself.
+# Set BRAINSTACK_SITE_ID to override. Everything else — DATABASE_URL,
+# SESSION_SECRET, the OAuth credentials — lives on the site and is pulled in at
+# build time.
 
 on:
   push:
