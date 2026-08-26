@@ -66,14 +66,18 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # The gate. Nothing below runs if these fail.
+      # The root scripts, not `pnpm -r <task>`: `typecheck` builds
+      # @brainstack/core first, and without its .d.ts half the server does not
+      # compile — which is how the first run of this workflow failed. It also
+      # covers netlify/tsconfig.json, which a recursive run never reaches.
       - name: Lint
-        run: pnpm -r lint
+        run: pnpm lint
 
       - name: Typecheck
-        run: pnpm -r typecheck
+        run: pnpm typecheck
 
       - name: Test
-        run: pnpm -r test
+        run: pnpm test
 
       - name: Deploy to Netlify
         run: |
