@@ -64,10 +64,19 @@ export function buildServices(opts: BuildServicesOptions): Services {
       ? new ResendEmailSender(opts.resendApiKey, opts.emailFrom)
       : new ConsoleEmailSender(opts.logger);
 
-  const notes = new NoteService({ db: opts.db, cfg, store: new PgNoteStore(opts.db) });
+  // Before NoteService, which needs it to clean up after a folder it removes.
+  const sharing = new SharingService({ db: opts.db, deployment: cfg.deployment });
+
+  const notes = new NoteService({
+    db: opts.db,
+    cfg,
+    store: new PgNoteStore(opts.db),
+    onFolderGone: async (ownerId, folderPath) => {
+      await sharing.revokeUnder({ ownerId, folderPath });
+    },
+  });
   const search = new SearchService({ db: opts.db, cfg, search: new PgSearchService(opts.db) });
 
-  const sharing = new SharingService({ db: opts.db, deployment: cfg.deployment });
   const totp = new TotpService({ db: opts.db, issuer: 'BrainStack' });
   const oauthProvider = new OAuthProviderService({ db: opts.db });
 

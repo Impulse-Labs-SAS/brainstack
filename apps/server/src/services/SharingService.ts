@@ -6,7 +6,7 @@
 // Grants are per folder, not per note, so a share keeps covering notes created
 // after it was handed out.
 
-import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
@@ -334,6 +334,63 @@ export class SharingService {
           ),
         ),
       );
+  }
+
+  /**
+   * Drop every grant on a folder that no longer exists, and on everything that
+   * was nested inside it.
+   *
+   * Called when a folder is deleted or moved into another vault — the two ways
+   * a path can stop being a place in this owner's brain. Nothing else cleaned
+   * up after those, so the grant outlived the folder: the recipient kept a root
+   * in their tree that could never have contents, and the owner kept a member
+   * listed on a folder they no longer had. A move across vaults is where this
+   * showed, because it empties the source and leaves the row pointing at it.
+   *
+   * Live invites for those paths die too, for the reason `revoke` explains: an
+   * invite is a way back in, and a link invite is reusable. Keeping one alive
+   * would mean a grant could be handed out again on a path that is gone, and
+   * then quietly cover a *new* folder if the owner ever reused the name.
+   *
+   * Not a permission decision — whoever made the folder disappear was already
+   * allowed to. This only stops the grant from outliving what it was about.
+   */
+  async revokeUnder(params: { ownerId: string; folderPath: string }): Promise<number> {
+    if (!this.enabled) return 0;
+    const folderPath = normalizeFolderPath(params.folderPath);
+    if (folderPath === '') return 0;
+
+    // Matched in memory, like `findGrantForPath` and for the same reason: a
+    // folder name may contain LIKE's pattern characters, and revoking too
+    // widely would silently cut access to a folder that is still there.
+    const rows = await this.opts.db
+      .select({ id: folderShares.id, folderPath: folderShares.folderPath })
+      .from(folderShares)
+      .where(eq(folderShares.ownerId, params.ownerId));
+
+    const doomed = rows.filter((r) => pathFallsUnder(r.folderPath, folderPath)).map((r) => r.id);
+    if (doomed.length > 0) {
+      await this.opts.db.delete(folderShares).where(inArray(folderShares.id, doomed));
+    }
+
+    const invites = await this.opts.db
+      .select({ id: folderShareInvites.id, folderPath: folderShareInvites.folderPath })
+      .from(folderShareInvites)
+      .where(
+        and(eq(folderShareInvites.ownerId, params.ownerId), isNull(folderShareInvites.revokedAt)),
+      );
+
+    const doomedInvites = invites
+      .filter((r) => pathFallsUnder(r.folderPath, folderPath))
+      .map((r) => r.id);
+    if (doomedInvites.length > 0) {
+      await this.opts.db
+        .update(folderShareInvites)
+        .set({ revokedAt: this.now() })
+        .where(inArray(folderShareInvites.id, doomedInvites));
+    }
+
+    return doomed.length;
   }
 
   // --- Internals -------------------------------------------------------------

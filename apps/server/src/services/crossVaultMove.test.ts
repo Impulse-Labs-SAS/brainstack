@@ -9,6 +9,7 @@ import { pgSchema } from '@brainstack/core/pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { NoteService } from './NoteService.js';
+import { SharingService } from './SharingService.js';
 import { createTestDatabase, type TestDatabase } from './testDb.js';
 
 const { users } = pgSchema;
@@ -169,5 +170,102 @@ describe('NoteService.moveAcrossVaults', () => {
         toPath: 'x',
       }),
     ).rejects.toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+  });
+});
+
+// El caso de Fede: Pablo le compartió Brutus con escritura, Fede lo movió a
+// `impulse-labs` — que es suya y que Pablo ya ve — y en el árbol de Fede quedó
+// un `Brutus` de Pablo, vacío, que nada podía volver a llenar. La carpeta se
+// había ido de la bóveda de Pablo; el grant que la nombraba, no.
+describe('moveAcrossVaults y los shares que quedaban atrás', () => {
+  let sharing: SharingService;
+
+  beforeEach(() => {
+    sharing = new SharingService({ db: database.db, deployment: 'hosted' });
+    notes = new NoteService({
+      db: database.db,
+      cfg: { deployment: 'hosted' },
+      onFolderGone: async (ownerId, folderPath) => {
+        await sharing.revokeUnder({ ownerId, folderPath });
+      },
+    });
+  });
+
+  it('la carpeta compartida deja de aparecer en el árbol de quien la movió', async () => {
+    await notes.create('pablo', 'Brutus/arquitectura.md', 'a');
+    await sharing.grant({
+      ownerId: 'pablo',
+      sharedWithUserId: 'fede',
+      folderPath: 'Brutus',
+      grantedBy: 'pablo',
+      permission: 'write',
+    });
+
+    await notes.moveAcrossVaults({
+      fromOwnerId: 'pablo',
+      fromPath: 'Brutus',
+      toOwnerId: 'fede',
+      toPath: 'impulse-labs/Brutus',
+    });
+
+    expect(await sharing.listSharedRoots('fede')).toEqual([]);
+    expect(await sharing.listMyShares('pablo')).toEqual([]);
+  });
+
+  it('también caen los grants sobre subcarpetas de lo que se movió', async () => {
+    await notes.create('pablo', 'Brutus/App/x.md', 'a');
+    await sharing.grant({
+      ownerId: 'pablo',
+      sharedWithUserId: 'fede',
+      folderPath: 'Brutus/App',
+      grantedBy: 'pablo',
+      permission: 'write',
+    });
+
+    await notes.moveAcrossVaults({
+      fromOwnerId: 'pablo',
+      fromPath: 'Brutus',
+      toOwnerId: 'fede',
+      toPath: 'impulse-labs/Brutus',
+    });
+
+    expect(await sharing.listSharedRoots('fede')).toEqual([]);
+  });
+
+  it('mover una nota sola no revoca nada', async () => {
+    await notes.create('pablo', 'Brutus/x.md', 'a');
+    await notes.create('pablo', 'Brutus/y.md', 'b');
+    await sharing.grant({
+      ownerId: 'pablo',
+      sharedWithUserId: 'fede',
+      folderPath: 'Brutus',
+      grantedBy: 'pablo',
+      permission: 'write',
+    });
+
+    await notes.moveAcrossVaults({
+      fromOwnerId: 'pablo',
+      fromPath: 'Brutus/x.md',
+      toOwnerId: 'fede',
+      toPath: 'impulse-labs/x.md',
+    });
+
+    // La carpeta sigue en la bóveda de Pablo, con `y.md` adentro.
+    expect(await sharing.listSharedRoots('fede')).toHaveLength(1);
+  });
+
+  it('borrar la carpeta compartida también se lleva el grant', async () => {
+    await notes.create('pablo', 'Brutus/x.md', 'a');
+    await sharing.grant({
+      ownerId: 'pablo',
+      sharedWithUserId: 'fede',
+      folderPath: 'Brutus',
+      grantedBy: 'pablo',
+      permission: 'write',
+    });
+
+    await notes.remove('pablo', 'Brutus', { recursive: true });
+
+    expect(await sharing.listSharedRoots('fede')).toEqual([]);
   });
 });

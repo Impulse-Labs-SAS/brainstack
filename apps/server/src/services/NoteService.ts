@@ -86,6 +86,15 @@ export interface NoteServiceOptions {
   db: PgDb;
   cfg: VaultConfig;
   store?: PgNoteStore;
+  /**
+   * Called with a folder that has just stopped existing in `ownerId`'s vault,
+   * deleted or moved into somebody else's.
+   *
+   * A callback rather than a `SharingService`, so this service keeps knowing
+   * nothing about permission: it reports what happened to the vault, and the
+   * wiring decides that what happens next is revoking the grants on it.
+   */
+  onFolderGone?: (ownerId: string, folderPath: string) => Promise<void>;
 }
 
 const DEFAULT_TREE_DEPTH = 4;
@@ -322,6 +331,12 @@ export class NoteService {
     } else if (under.length === 0 && removedFolders.length === 0) {
       // Neither a note nor a folder with anything in it.
       throw new AppError(`not found: ${path}`, 'NOT_FOUND', 404);
+    }
+
+    // A folder was here and is not any more, so nothing should still be shared
+    // on it. Skipped when only a note went: a note is not a grant's subject.
+    if (removedFolders.length > 0) {
+      await this.opts.onFolderGone?.(ownerId, this.toLogical(ownerId, physical));
     }
   }
 
@@ -585,6 +600,12 @@ export class NoteService {
             or(eq(folders.path, from), like(folders.path, `${from}/%`)),
           ),
         );
+
+      // The folder is gone from the source vault, so the grants that pointed at
+      // it go too. Without this the person it was shared with kept an empty
+      // root in their tree that nothing could ever fill — which is exactly how
+      // a share whose folder had been moved away looked.
+      await this.opts.onFolderGone?.(fromOwnerId, this.toLogical(fromOwnerId, from));
     }
 
     const destinations = sources.map(destinationOf);

@@ -340,3 +340,74 @@ describe('SharingService — listing', () => {
     expect(out.map((m) => m.email).sort()).toEqual(['a@x.com', 'b@x.com']);
   });
 });
+
+describe('SharingService.revokeUnder', () => {
+  it('borra el grant sobre la carpeta y los de adentro', async () => {
+    for (const folderPath of ['Brutus', 'Brutus/App']) {
+      await svc.grant({
+        ownerId: 'owner',
+        sharedWithUserId: 'alice',
+        folderPath,
+        grantedBy: 'owner',
+      });
+    }
+
+    expect(await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' })).toBe(2);
+    expect(await svc.listSharedRoots('alice')).toEqual([]);
+  });
+
+  it('no toca una carpeta que apenas comparte el prefijo del nombre', async () => {
+    for (const folderPath of ['Brutus', 'Brutus2', 'Brutus-viejo']) {
+      await svc.grant({
+        ownerId: 'owner',
+        sharedWithUserId: 'alice',
+        folderPath,
+        grantedBy: 'owner',
+      });
+    }
+
+    await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' });
+
+    expect((await svc.listSharedRoots('alice')).map((r) => r.folderPath).sort()).toEqual([
+      'Brutus-viejo',
+      'Brutus2',
+    ]);
+  });
+
+  it('no toca los grants de otro dueño sobre una carpeta del mismo nombre', async () => {
+    await seedUser('otro', 'otro@x.com');
+    await svc.grant({
+      ownerId: 'otro',
+      sharedWithUserId: 'alice',
+      folderPath: 'Brutus',
+      grantedBy: 'otro',
+    });
+
+    expect(await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' })).toBe(0);
+    expect(await svc.listSharedRoots('alice')).toHaveLength(1);
+  });
+
+  it('deja sin efecto la invitación viva que devolvería el acceso', async () => {
+    const { folderShareInvites } = pgSchema;
+    await database.db.insert(folderShareInvites).values({
+      id: 'inv1',
+      folderPath: 'Brutus/App',
+      ownerId: 'owner',
+      mode: 'link',
+      permission: 'write',
+      tokenHash: 'hash-1',
+      expiresAt: Date.now() + 100_000,
+      createdAt: Date.now(),
+    });
+
+    await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' });
+
+    const [invite] = await database.db.select().from(folderShareInvites);
+    expect(invite?.revokedAt).not.toBeNull();
+  });
+
+  it('en self-host no hace nada', async () => {
+    const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
+    expect(await selfHost.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' })).toBe(0);
+  });
+});
