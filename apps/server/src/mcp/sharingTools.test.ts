@@ -503,6 +503,7 @@ describe('migrar una carpeta de la bóveda personal a la compartida', () => {
       from: 'Brutus',
       to: 'Impulse Labs/Brutus',
       toOwnerId: OWNER.id,
+      userConfirmedOwnershipTransfer: true,
     });
     expect(error).toBeUndefined();
     expect(value).toMatchObject({ path: 'Impulse Labs/Brutus', movedNotes: 2 });
@@ -529,6 +530,7 @@ describe('migrar una carpeta de la bóveda personal a la compartida', () => {
       from: 'Brutus',
       to: 'Impulse Labs/Brutus',
       toOwnerId: OWNER.id,
+      userConfirmedOwnershipTransfer: true,
     });
     expect(value).toMatchObject({
       linksLeftDangling: [{ note: 'Impulse Labs/Brutus/nota.md' }],
@@ -654,13 +656,38 @@ describe('move_to_owner avisa lo que la transferencia le costó al dueño anteri
     return owner;
   };
 
-  const move = async (client: Client) =>
+  const move = async (client: Client, confirmed = true) =>
     call(client, 'move_to_owner', {
       from: 'Brutus',
       fromOwnerId: PABLO.id,
       to: 'mio/Brutus',
       toOwnerId: OWNER.id,
+      ...(confirmed ? { userConfirmedOwnershipTransfer: true } : {}),
     });
+
+  it('sin la confirmación no mueve nada, y dice qué habría costado', async () => {
+    const owner = await setup();
+
+    const { value } = (await move(owner, false)) as {
+      value: { moved: boolean; wouldTransfer: Record<string, unknown>; askTheUser: string };
+    };
+
+    expect(value.moved).toBe(false);
+    expect(value.wouldTransfer).toMatchObject({
+      notes: 1,
+      fromOwnerId: PABLO.id,
+      toOwnerId: OWNER.id,
+      previousOwnerAccessAfterwards: 'none',
+    });
+    expect(value.askTheUser).toMatch(/no access at all/);
+
+    // Y lo importante: la nota sigue siendo de Pablo.
+    const pablo = await clientFor(PABLO.id);
+    const { value: mias } = (await call(pablo, 'list_notes', {})) as {
+      value: Array<{ path: string }>;
+    };
+    expect(mias.map((n) => n.path)).toEqual(['Brutus/arquitectura.md']);
+  });
 
   it('dice que el dueño anterior se quedó sin ver nada cuando el destino no vuelve', async () => {
     const owner = await setup();
@@ -711,5 +738,6 @@ describe('move_to_owner avisa lo que la transferencia le costó al dueño anteri
     // Lo que lee el modelo cuando decide si llamarla.
     expect(tool?.description).toMatch(/TRANSFERS OWNERSHIP/);
     expect(tool?.description).toMatch(/ALWAYS tell the user/);
+    expect(tool?.description).toMatch(/moves nothing/);
   });
 });
