@@ -74,6 +74,9 @@ export function buildServices(opts: BuildServicesOptions): Services {
     onFolderGone: async (ownerId, folderPath) => {
       await sharing.revokeUnder({ ownerId, folderPath });
     },
+    onFolderMoved: async (ownerId, from, to) => {
+      await sharing.reparentUnder({ ownerId, from, to });
+    },
   });
   const search = new SearchService({ db: opts.db, cfg, search: new PgSearchService(opts.db) });
 

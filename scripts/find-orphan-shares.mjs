@@ -20,8 +20,15 @@
 // at a path that is gone would quietly cover a *new* folder if the owner ever
 // reused the name.
 //
-// The code path that created these is fixed (SharingService.revokeUnder, wired
-// through NoteService.onFolderGone). This is only for the rows left behind.
+// The code paths that created these are fixed: a folder that leaves the vault
+// takes its grants with it (SharingService.revokeUnder), and one that is merely
+// renamed carries them along (reparentUnder). This is only for the rows left
+// behind before that.
+//
+// Read the dry run before passing --fix. A grant orphaned by a *rename* names a
+// folder that still exists somewhere under another name, and there is no way
+// from here to know which — deleting it is right, but whoever owned it will
+// want to share the new path again.
 
 import { neon } from '@neondatabase/serverless';
 

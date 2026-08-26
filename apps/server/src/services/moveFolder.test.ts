@@ -10,6 +10,7 @@ import { pgSchema } from '@brainstack/core/pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { NoteService } from './NoteService.js';
+import { SharingService } from './SharingService.js';
 import { createTestDatabase, type TestDatabase } from './testDb.js';
 
 const { users } = pgSchema;
@@ -116,5 +117,122 @@ describe('NoteService.move — carpetas', () => {
     const result = await notes.move('u1', 'a.md', 'b.md');
     expect(result.path).toBe('b.md');
     expect(await paths()).toEqual(['b.md']);
+  });
+});
+
+// Renombrar una carpeta compartida le cortaba el acceso al invitado sin avisar
+// y le dejaba el nombre viejo en el árbol: el grant nombra un path, y nadie lo
+// movía junto con la carpeta. Es la misma carpeta, del mismo dueño, así que lo
+// compartido tiene que seguirla.
+describe('NoteService.move — los shares siguen a la carpeta', () => {
+  let sharing: SharingService;
+
+  beforeEach(async () => {
+    sharing = new SharingService({ db: database.db, deployment: 'hosted' });
+    notes = new NoteService({
+      db: database.db,
+      cfg: { deployment: 'hosted' },
+      onFolderMoved: async (ownerId, from, to) => {
+        await sharing.reparentUnder({ ownerId, from, to });
+      },
+    });
+    await database.db
+      .insert(users)
+      .values({ id: 'invitado', email: 'inv@x.com', createdAt: Date.now(), updatedAt: 0 });
+  });
+
+  const grant = async (
+    folderPath: string,
+    permission: 'read' | 'write' = 'write',
+  ): Promise<void> => {
+    await sharing.grant({
+      ownerId: 'u1',
+      sharedWithUserId: 'invitado',
+      folderPath,
+      grantedBy: 'u1',
+      permission,
+    });
+  };
+
+  it('el invitado conserva el acceso y ve el nombre nuevo', async () => {
+    await notes.create('u1', 'Brutus/nota.md', 'a');
+    await grant('Brutus');
+
+    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+
+    expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath)).toEqual([
+      'Archivo/Brutus',
+    ]);
+    expect(await sharing.canWrite('invitado', 'u1', 'Archivo/Brutus/nota.md')).toBe(true);
+    expect(await sharing.canRead('invitado', 'u1', 'Brutus/nota.md')).toBe(false);
+  });
+
+  it('un grant sobre una subcarpeta conserva su profundidad', async () => {
+    await notes.create('u1', 'Brutus/App/x.md', 'a');
+    await grant('Brutus/App');
+
+    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+
+    expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath)).toEqual([
+      'Archivo/Brutus/App',
+    ]);
+  });
+
+  it('no arrastra la carpeta que apenas comparte el prefijo del nombre', async () => {
+    await notes.create('u1', 'Brutus/x.md', 'a');
+    await notes.create('u1', 'Brutus2/y.md', 'b');
+    await grant('Brutus');
+    await grant('Brutus2');
+
+    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+
+    expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath).sort()).toEqual([
+      'Archivo/Brutus',
+      'Brutus2',
+    ]);
+  });
+
+  it('si el destino ya estaba compartido con la misma persona, queda un grant con el permiso más amplio', async () => {
+    await notes.create('u1', 'Brutus/x.md', 'a');
+    await notes.create('u1', 'Archivo/Brutus/y.md', 'b');
+    await grant('Brutus', 'write');
+    await grant('Archivo/Brutus', 'read');
+
+    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+
+    const roots = await sharing.listSharedRoots('invitado');
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toMatchObject({ folderPath: 'Archivo/Brutus', permission: 'write' });
+  });
+
+  it('mover una nota sola no toca ningún grant', async () => {
+    await notes.create('u1', 'Brutus/x.md', 'a');
+    await grant('Brutus');
+
+    await notes.move('u1', 'Brutus/x.md', 'Brutus/y.md');
+
+    expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath)).toEqual([
+      'Brutus',
+    ]);
+  });
+
+  it('la invitación pendiente apunta a donde la carpeta terminó', async () => {
+    const { folderShareInvites } = pgSchema;
+    await notes.create('u1', 'Brutus/x.md', 'a');
+    await database.db.insert(folderShareInvites).values({
+      id: 'inv1',
+      folderPath: 'Brutus',
+      ownerId: 'u1',
+      mode: 'link',
+      permission: 'write',
+      tokenHash: 'hash-1',
+      expiresAt: Date.now() + 100_000,
+      createdAt: Date.now(),
+    });
+
+    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+
+    const [invite] = await database.db.select().from(folderShareInvites);
+    expect(invite?.folderPath).toBe('Archivo/Brutus');
   });
 });

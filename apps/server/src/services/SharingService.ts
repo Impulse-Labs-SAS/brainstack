@@ -337,6 +337,100 @@ export class SharingService {
   }
 
   /**
+   * Follow a folder that was renamed or moved within its owner's vault.
+   *
+   * The counterpart to `revokeUnder`, and deliberately the opposite outcome. A
+   * folder moved into another vault stops being the owner's, so the grant on it
+   * dies; a folder renamed is the same folder in the same brain, so the grant
+   * moves with it. Doing nothing was the worst of both: the recipient lost the
+   * access silently and kept an empty root in their tree pointing at the old
+   * name.
+   *
+   * Grants nested inside come along, keeping their depth — a share on
+   * `Brutus/App` becomes one on `Archivo/Brutus/App`.
+   *
+   * Nobody gains access here. Every grant keeps its owner, its recipient and
+   * its permission, and only the path it names changes.
+   */
+  async reparentUnder(params: { ownerId: string; from: string; to: string }): Promise<number> {
+    if (!this.enabled) return 0;
+    const from = normalizeFolderPath(params.from);
+    const to = normalizeFolderPath(params.to);
+    if (from === '' || to === '' || from === to) return 0;
+
+    const rows = await this.opts.db
+      .select({
+        id: folderShares.id,
+        folderPath: folderShares.folderPath,
+        sharedWithUserId: folderShares.sharedWithUserId,
+        permission: folderShares.permission,
+      })
+      .from(folderShares)
+      .where(eq(folderShares.ownerId, params.ownerId));
+
+    // In memory, like everywhere else here: a folder name may contain LIKE's
+    // pattern characters, and moving a grant that should have stayed is access
+    // pointed at the wrong folder.
+    // No early return when this is empty: a folder can have an invite out and
+    // no grant yet, and that invite has to follow the folder too.
+    const moving = rows.filter((r) => pathFallsUnder(r.folderPath, from));
+
+    const rename = (folderPath: string): string =>
+      folderPath === from ? to : `${to}${folderPath.slice(from.length)}`;
+
+    for (const row of moving) {
+      const folderPath = rename(row.folderPath);
+
+      // A move can merge into a folder that already exists, so the destination
+      // may already be shared with this same person. Two rows cannot name it —
+      // the unique index says so — and the widest permission is the one that
+      // was already in force, which is how `findGrantForPath` reads a stack of
+      // grants anyway.
+      const clash = rows.find(
+        (r) =>
+          r.id !== row.id &&
+          r.folderPath === folderPath &&
+          r.sharedWithUserId === row.sharedWithUserId,
+      );
+
+      if (clash) {
+        if (clash.permission !== 'write' && row.permission === 'write') {
+          await this.opts.db
+            .update(folderShares)
+            .set({ permission: 'write' })
+            .where(eq(folderShares.id, clash.id));
+        }
+        await this.opts.db.delete(folderShares).where(eq(folderShares.id, row.id));
+        continue;
+      }
+
+      await this.opts.db
+        .update(folderShares)
+        .set({ folderPath })
+        .where(eq(folderShares.id, row.id));
+    }
+
+    // Pending invites follow too. One names the folder the owner picked when
+    // inviting, and accepting it after a rename should land where the folder
+    // went rather than grant a path that is no longer there.
+    const invites = await this.opts.db
+      .select({ id: folderShareInvites.id, folderPath: folderShareInvites.folderPath })
+      .from(folderShareInvites)
+      .where(
+        and(eq(folderShareInvites.ownerId, params.ownerId), isNull(folderShareInvites.revokedAt)),
+      );
+
+    for (const invite of invites.filter((i) => pathFallsUnder(i.folderPath, from))) {
+      await this.opts.db
+        .update(folderShareInvites)
+        .set({ folderPath: rename(invite.folderPath) })
+        .where(eq(folderShareInvites.id, invite.id));
+    }
+
+    return moving.length;
+  }
+
+  /**
    * Drop every grant on a folder that no longer exists, and on everything that
    * was nested inside it.
    *

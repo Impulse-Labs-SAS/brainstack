@@ -95,6 +95,12 @@ export interface NoteServiceOptions {
    * wiring decides that what happens next is revoking the grants on it.
    */
   onFolderGone?: (ownerId: string, folderPath: string) => Promise<void>;
+  /**
+   * Called with a folder that has just been renamed or moved somewhere else in
+   * `ownerId`'s own vault. Same reasoning as `onFolderGone`, opposite outcome:
+   * the folder is still theirs, so what is shared on it should follow it.
+   */
+  onFolderMoved?: (ownerId: string, fromPath: string, toPath: string) => Promise<void>;
 }
 
 const DEFAULT_TREE_DEPTH = 4;
@@ -461,6 +467,15 @@ export class NoteService {
         })),
       );
     }
+
+    // The folder is still this owner's, just somewhere else, so a grant on it
+    // moves rather than dies. Without this a rename cut the recipient's access
+    // without telling anybody and left the old name in their tree.
+    await this.opts.onFolderMoved?.(
+      ownerId,
+      this.toLogical(ownerId, from),
+      this.toLogical(ownerId, to),
+    );
 
     return { path: logicalTo, affectedMocs: await this.mocsFor(ownerId, logicalTo) };
   }
