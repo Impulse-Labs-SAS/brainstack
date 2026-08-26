@@ -1,10 +1,13 @@
 name: CI
 
+# Runs on every branch, not just the ones headed for main. A branch that only
+# turns green once it is proposed for merge has been red for however long it
+# took to get there.
+
 on:
   push:
-    branches: [main, master]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,6 +16,12 @@ concurrency:
 jobs:
   build:
     name: lint · typecheck · test · build
+    # A pull request from inside the repository has already been checked by the
+    # push event on its own branch; running it twice buys nothing. Forks have no
+    # push event here, so for those the pull_request run is the only one.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

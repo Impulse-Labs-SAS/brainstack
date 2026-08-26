@@ -1,0 +1,112 @@
+name: Deploy
+
+# Publishes to Netlify when something lands on main, after the checks pass.
+#
+# This is the primary deploy path, not a fallback. Netlify's Git integration
+# cannot connect a repository that is both private and organization-owned
+# without a Pro plan — and this one is. Deploying through the CLI sidesteps
+# that: Netlify receives a build and never asks who owns the source. It also
+# buys what the Git integration does not — a failing test stops the deploy
+# instead of shipping past it.
+#
+# The deploy itself is `scripts/deploy.sh`, the same script used by hand, rather
+# than a second recipe maintained in YAML. That matters here more than usual:
+# the obvious `netlify deploy --build --prod --filter @brainstack/web` is what
+# an earlier version of this workflow ran, and it is precisely what breaks the
+# site — with a packagePath stamped on the deploy, the Next catch-all shadows
+# the API function and every /api route answers 404. The script's header lists
+# the other four traps. One copy of that knowledge, exercised both ways.
+#
+# Required secret:
+#   NETLIFY_AUTH_TOKEN   Netlify → User settings → Applications → New access token
+#
+# The site id is deliberately left to the script's own default rather than read
+# from the NETLIFY_SITE_ID secret: that secret predates this site and there is
+# no way to check from here which of the two it holds, and pointing a deploy at
+# the wrong site is not a failure that announces itself. Set BRAINSTACK_SITE_ID
+# to override. Everything else — DATABASE_URL, SESSION_SECRET, the OAuth
+# credentials — lives on the Netlify site and is pulled in at build time.
+
+on:
+  push:
+    branches: [main]
+  # Re-deploy the current main without needing a new commit.
+  workflow_dispatch:
+
+concurrency:
+  # Never let two deploys overlap. Not cancel-in-progress: a half-finished
+  # upload that gets killed is worse than a queued one.
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: verify · deploy
+    runs-on: ubuntu-latest
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      # The script defaults to $HOME/brainstack, which is the WSL clone.
+      BRAINSTACK_CLONE: ${{ github.workspace }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The gate. Nothing below runs if these fail.
+      - name: Lint
+        run: pnpm -r lint
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Test
+        run: pnpm -r test
+
+      - name: Deploy to Netlify
+        run: |
+          if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "::error::Set NETLIFY_AUTH_TOKEN as a repository secret"
+            exit 1
+          fi
+          # The script builds, checks the function bundles, uploads a draft,
+          # verifies the draft answers, and only then promotes it.
+          bash scripts/deploy.sh publish
+
+      # The script already checks that the live site answers on /api/config and
+      # /login. This adds the one it does not: that an unauthenticated MCP call
+      # is refused *by BrainStack*. The path is /api/mcp, not /mcp — bare /mcp
+      # is a Next route here and redirects to the login page, which is what the
+      # workflow this replaces would have checked. And the body is read, not
+      # just the status: the platform can answer 401 on its own.
+      - name: Smoke test the MCP endpoint
+        env:
+          SITE_URL: https://brain.example.com
+        run: |
+          set -uo pipefail
+          mcp=$(curl -sS -o /tmp/mcp.txt -w '%{http_code}' -X POST "$SITE_URL/api/mcp" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' --max-time 30 || echo 000)
+          echo "POST /api/mcp (no auth) -> $mcp"
+          cat /tmp/mcp.txt; echo
+          if [ "$mcp" != "401" ]; then
+            echo "::error::/api/mcp returned $mcp for an unauthenticated call, expected 401"
+            exit 1
+          fi
+          if ! grep -q 'unauthorized' /tmp/mcp.txt; then
+            echo "::error::/api/mcp answered 401 but not from BrainStack — the request never reached the function."
+            exit 1
+          fi
