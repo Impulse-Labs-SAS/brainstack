@@ -81,7 +81,9 @@ async function main() {
     }
 
     // Un import que quedó afuera muere en runtime, no al empaquetar.
-    const externos = [...code.matchAll(/^\s*(?:import|export)[^;]*?from\s*["']([^"'.][^"']*)["']/gm)]
+    const externos = [
+      ...code.matchAll(/^\s*(?:import|export)[^;]*?from\s*["']([^"'.][^"']*)["']/gm),
+    ]
       .map((m) => m[1])
       .filter((mod) => !mod.startsWith('node:') && !BUILTINS.has(mod.split('/')[0]));
     const unicos = [...new Set(externos)];
@@ -114,10 +116,25 @@ async function main() {
   await rm(OUT, { recursive: true, force: true });
 }
 
+/**
+ * Unpacks the bundle so its contents can be inspected.
+ *
+ * `unzip` is not everywhere: a fresh WSL has neither the binary nor a way to
+ * install one without a sudo password, which is enough to block a deploy over
+ * a check that only needs to read a zip. Python ships with the distro and
+ * unpacks the same file, so it stands in when the binary is missing.
+ */
 function unzip(zipPath, dest) {
+  return run('unzip', ['-q', '-o', zipPath, '-d', dest]).catch((e) => {
+    if (e.code !== 'ENOENT') throw e;
+    return run('python3', ['-m', 'zipfile', '-e', zipPath, dest]);
+  });
+}
+
+function run(cmd, args) {
   return new Promise((ok, err) => {
-    const p = spawn('unzip', ['-q', '-o', zipPath, '-d', dest], { stdio: 'inherit' });
-    p.on('close', (code) => (code === 0 ? ok() : err(new Error(`unzip salió con ${code}`))));
+    const p = spawn(cmd, args, { stdio: 'inherit' });
+    p.on('close', (code) => (code === 0 ? ok() : err(new Error(`${cmd} salió con ${code}`))));
     p.on('error', err);
   });
 }
