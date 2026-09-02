@@ -741,3 +741,86 @@ describe('move_to_owner avisa lo que la transferencia le costó al dueño anteri
     expect(tool?.description).toMatch(/moves nothing/);
   });
 });
+
+/*
+ * Lo que Pablo vivió: la nota existía, la carpeta estaba compartida con él, y
+ * cada herramienta le contestó que no existía. Sin `ownerId` el path se resolvía
+ * contra su propia bóveda y ahí no estaba — el server sabía que caía bajo una
+ * carpeta compartida y se lo callaba.
+ */
+describe('leer un path que cae bajo una carpeta compartida, sin decir de quién', () => {
+  beforeEach(async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'share_folder', {
+      path: 'impulse-labs',
+      email: PABLO.email,
+      permission: 'write',
+    });
+    await call(owner, 'create_note', {
+      path: 'impulse-labs/zuno/comercial/planes-y-pricing.md',
+      content: 'los tres planes',
+    });
+  });
+
+  it('get_note encuentra la nota en la bóveda de quien la compartió', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { value, error } = await call(pablo, 'get_note', {
+      path: 'impulse-labs/zuno/comercial/planes-y-pricing.md',
+    });
+    expect(error).toBeUndefined();
+    expect(value).toMatchObject({ body: expect.stringContaining('los tres planes') });
+  });
+
+  it('list_notes y list_tree miran la misma carpeta', async () => {
+    const pablo = await clientFor(PABLO.id);
+
+    const { value: rows } = await call(pablo, 'list_notes', { folder: 'impulse-labs' });
+    expect(rows).toMatchObject([{ path: 'impulse-labs/zuno/comercial/planes-y-pricing.md' }]);
+
+    const { value: tree } = await call(pablo, 'list_tree', { path: 'impulse-labs' });
+    expect(JSON.stringify(tree)).toContain('planes-y-pricing.md');
+  });
+
+  it('la bóveda propia gana cuando ahí hay algo', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      ownerId: PABLO.id,
+      path: 'impulse-labs/mis-notas.md',
+      content: 'lo mío',
+    });
+
+    const { value } = await call(pablo, 'get_note', { path: 'impulse-labs/mis-notas.md' });
+    expect(value).toMatchObject({ body: expect.stringContaining('lo mío') });
+
+    // Y la carpeta compartida sigue estando para lo que no tiene: cuál de las
+    // dos bóvedas responde se decide por path, no de una vez por la carpeta.
+    const { error } = await call(pablo, 'get_note', {
+      path: 'impulse-labs/zuno/comercial/planes-y-pricing.md',
+    });
+    expect(error).toBeUndefined();
+  });
+
+  it('no abre nada que no esté compartido', async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'create_note', { path: 'privado/sueldos.md', content: 'la planilla' });
+
+    const pablo = await clientFor(PABLO.id);
+    const { value, error } = await call(pablo, 'get_note', { path: 'privado/sueldos.md' });
+    expect(error ?? JSON.stringify(value)).not.toContain('la planilla');
+    expect(error).toBeDefined();
+  });
+
+  it('search_brain sin scope encuentra lo compartido', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { value } = await call(pablo, 'search_brain', { query: 'planes' });
+    expect(value).toMatchObject([
+      { path: 'impulse-labs/zuno/comercial/planes-y-pricing.md', ownerId: OWNER.id },
+    ]);
+  });
+
+  it('scope "mine" sigue siendo la manera de mirar sólo lo propio', async () => {
+    const pablo = await clientFor(PABLO.id);
+    const { value } = await call(pablo, 'search_brain', { query: 'planes', scope: 'mine' });
+    expect(value).toEqual([]);
+  });
+});
