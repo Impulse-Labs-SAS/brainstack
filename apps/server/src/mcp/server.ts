@@ -91,8 +91,33 @@ export function buildMcpServer({
    */
   const ownerOf = (ownerId?: string): string => ownerId || requireUserId();
 
-  const assertRead = (path: string, ownerId?: string): Promise<void> =>
-    sharing.assertCanRead(requireUserId(), ownerOf(ownerId), path);
+  /**
+   * Whose vault a read is about, and may the caller read there.
+   *
+   * `ownerOf` alone answers the first half with "yours" whenever no owner was
+   * named, which is right for nearly every call and wrong for the one that
+   * matters: a path like "impulse-labs/zuno/nota.md" names a folder somebody
+   * shared just as well as it names one of yours. Read against your own vault
+   * in silence, a note that plainly exists comes back as "no existe" — the
+   * server knew the path fell under a share and kept it to itself.
+   *
+   * So a path the caller does not have goes to the share that covers it. Your
+   * own vault still wins whenever it has something there, and the ambiguity is
+   * only ever resolved, never refused: a read cannot create the private copy
+   * that makes the same ambiguity a hard error on writes.
+   */
+  const readOwner = async (path: string | undefined, ownerId?: string): Promise<string> => {
+    const userId = requireUserId();
+    const owner = await (async () => {
+      if (ownerId !== undefined) return ownerId;
+      if (!sharing.enabled || !path) return userId;
+      const share = await sharing.findShadowedShare(userId, path);
+      if (!share) return userId;
+      return (await notes.exists(userId, path)) ? userId : share.ownerId;
+    })();
+    await sharing.assertCanRead(userId, owner, path ?? '');
+    return owner;
+  };
 
   /**
    * May this write happen, and does the caller mean the folder they named?
@@ -131,7 +156,7 @@ export function buildMcpServer({
     {
       title: 'Search the brain',
       description:
-        'Full-text search over notes in BrainStack. `scope` controla qué notas se incluyen: `mine` (default) solo las propias, `shared` solo las compartidas conmigo, `all` ambas. Retorna hits rankeados con snippets.',
+        'Full-text search over notes in BrainStack. `scope` controla qué notas se incluyen: `all` (default) las propias y las compartidas conmigo, `mine` solo las propias, `shared` solo las compartidas. Retorna hits rankeados con snippets; cada hit trae el `ownerId` del vault donde vive.',
       inputSchema: {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(50).optional(),
@@ -141,7 +166,12 @@ export function buildMcpServer({
     async ({ query, limit, scope }) => {
       try {
         const userId = requireUserId();
-        const effectiveScope = scope ?? 'mine';
+        // Everything the caller may read, unless they narrow it. Defaulting to
+        // `mine` meant a client that never passed a scope could not see a
+        // shared folder at all, and answered "no existe" for notes sitting in
+        // one — the failure looked like missing data rather than a narrow
+        // search.
+        const effectiveScope = scope ?? 'all';
         const includeMine = effectiveScope !== 'shared';
         const sharedScopes =
           effectiveScope !== 'mine' && sharing.enabled
@@ -169,8 +199,7 @@ export function buildMcpServer({
     },
     async ({ path, ownerId }) => {
       try {
-        await assertRead(path, ownerId);
-        const note = await notes.get(ownerOf(ownerId), path);
+        const note = await notes.get(await readOwner(path, ownerId), path);
         return JSON_TEXT(note);
       } catch (err) {
         return toMcpError(err);
@@ -194,8 +223,7 @@ export function buildMcpServer({
     },
     async ({ ownerId, ...args }) => {
       try {
-        const owner = ownerOf(ownerId);
-        if (owner !== requireUserId()) await assertRead(args.folder ?? '', ownerId);
+        const owner = await readOwner(args.folder, ownerId);
         const rows = await notes.list(owner, args);
         return JSON_TEXT(rows);
       } catch (err) {
@@ -261,8 +289,7 @@ export function buildMcpServer({
     },
     async ({ path, depth, ownerId }) => {
       try {
-        const owner = ownerOf(ownerId);
-        if (owner !== requireUserId()) await assertRead(path ?? '', ownerId);
+        const owner = await readOwner(path, ownerId);
         const tree = await notes.listTree(owner, path, depth);
         return JSON_TEXT(tree);
       } catch (err) {
@@ -286,8 +313,7 @@ export function buildMcpServer({
     },
     async ({ ownerId, ...args }) => {
       try {
-        const owner = ownerOf(ownerId);
-        if (owner !== requireUserId()) await assertRead(args.folder ?? '', ownerId);
+        const owner = await readOwner(args.folder, ownerId);
         const rows = await notes.listDecisions(owner, args);
         return JSON_TEXT(rows);
       } catch (err) {
@@ -473,8 +499,7 @@ export function buildMcpServer({
     },
     async ({ path, ownerId }) => {
       try {
-        await assertRead(path, ownerId);
-        const rows = await notes.listLinks(ownerOf(ownerId), path);
+        const rows = await notes.listLinks(await readOwner(path, ownerId), path);
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);

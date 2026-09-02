@@ -211,6 +211,32 @@ export class NoteService {
 
   // -- Reads -----------------------------------------------------------------
 
+  /**
+   * Is there anything at this path in this vault — a note, or a folder?
+   *
+   * Asked before a read whose caller named no owner: a path that is not here
+   * may well be one somebody shared, and the answer decides which vault the
+   * read means. Matched in memory rather than with `LIKE`, for the same reason
+   * share paths are: a folder name may contain `%` or `_`.
+   */
+  async exists(ownerId: string, path: string): Promise<boolean> {
+    const target = this.normalizeLogical(path);
+    if (!target) return true; // the root of your own vault is always yours
+
+    const [noteRows, folderRows] = await Promise.all([
+      this.opts.db.select({ path: notes.path }).from(notes).where(this.ownedBy(ownerId)),
+      this.opts.db.select({ path: folders.path }).from(folders).where(this.foldersOwnedBy(ownerId)),
+    ]);
+
+    return (
+      [...noteRows, ...folderRows]
+        .map((r) => this.toLogical(ownerId, r.path))
+        // A folder holding notes has no row of its own; the notes under it imply
+        // it, exactly as they do for the tree.
+        .some((p) => p === target || p.startsWith(`${target}/`))
+    );
+  }
+
   async get(ownerId: string, path: string): Promise<NoteRowDto> {
     const row = await this.asCaller(ownerId, () => this.store.get(this.toPhysical(ownerId, path)));
     return this.toDto(ownerId, row);

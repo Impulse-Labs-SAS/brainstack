@@ -45,8 +45,12 @@ Don't use BrainStack for generic knowledge questions or for things the user didn
 
 Always verify with the brain before claiming a fact about the user's domain. Never invent content.
 
-- `search_brain(query)` — primary tool. Full-text search with snippets and a path for every hit.
+- `search_brain(query)` — primary tool. Full-text search with snippets and a path for every hit. It
+  covers the user's own notes **and** the folders shared with them; narrow it with
+  `scope="mine"` only when the user asked for their own notes specifically.
 - `get_note(path)` — when you already know the path (from a wikilink, a previous search, or a list).
+  A path the user does not have in their own vault but that falls under a folder shared with them
+  resolves to that folder, so a shared note reads back without an `ownerId`.
 - `list_notes(folder=..., tag=..., status=...)` — structured navigation, faster than search when scoped.
 - `list_tree(path?)` — when you need to understand the vault's shape (where things live, what top-levels exist). **Always start here when deciding where to save something.**
 - `list_links(path)` — backlinks to a note or attachment. Useful for "what referenced this PDF?" or "what links back here?".
@@ -74,9 +78,14 @@ reaches it by naming that owner.
   `list_tree(ownerId=..., path=...)`, `create_note(ownerId=..., ...)`.
 - Paths inside a shared folder are relative to **the owner's** root, exactly as
   `list_shared_with_me` prints them. Never prefix them with anything.
-- `search_brain(scope="shared" | "all")` searches them. A hit whose `ownerId`
-  differs from the user's is in somebody else's vault: open it by passing that
-  same `ownerId` to `get_note`.
+- `search_brain` searches them by default (`scope="all"`). A hit whose `ownerId`
+  differs from the user's is in somebody else's vault: pass that same `ownerId`
+  to `get_note` — or just the path, which resolves there too.
+- **Reads resolve, writes ask.** A path the user does not have that falls under a
+  shared folder is read from that folder. The same path on a _write_ is refused
+  until you name the owner, because a write that guessed wrong would leave a
+  private copy nobody else can see. So never conclude a note is missing from one
+  read: if a path came from the user, it is likely theirs to see.
 
 Permission is per grant: `read` lets you read, `write` also lets you create and
 edit inside that folder. A note you create there belongs to the folder's owner,
@@ -130,7 +139,7 @@ The only exception: if the user already said "save this to `<path>`" with a dest
 
 There is no inbox or quick-capture bucket. Every saved note gets classified at save time. The flow is **always**:
 
-1. **Call `list_tree`** (no arguments or scoped to a likely top-level) to see what exists right now. Do not assume folder structure from memory or from earlier in the conversation — the vault may have changed.
+1. **Call `list_tree`** (no arguments or scoped to a likely top-level) **and `list_shared_with_me`** to see what exists right now. Do not assume folder structure from memory or from earlier in the conversation — the vault may have changed. `list_tree` with no arguments shows the user's own vault only: a shared folder is not in it, and reporting "the vault has one note" after looking at nothing else is how a note that exists gets declared missing.
 
 2. **Does the note clearly belong inside an existing top-level folder?**
    - **Yes** → propose `<top-level>/<subfolder-by-type>/<filename>.md`. Type subfolders are typically `decisiones/`, `ideas/`, `reuniones/`, `referencias/`. If the right type subfolder already exists, use it. If it doesn't but at least 3 sibling notes would fit, propose creating it. Otherwise put the note at the root of the top-level.
