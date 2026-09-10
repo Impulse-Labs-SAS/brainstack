@@ -2,7 +2,7 @@
 
 > Shared second brain for humans and AI assistants. Self-hostable. MCP-native.
 
-BrainStack stores your notes on disk as plain Markdown and exposes them to any MCP-compatible AI assistant (Claude Code, Claude Chat, Claude Desktop, Cursor, Codex, Gemini CLI, Antigravity, Continue, Cline, …). Humans edit through a web app that replaces Obsidian; AIs read and write through the MCP server, all backed by the same files.
+BrainStack stores your notes on disk as plain Markdown and exposes them to any MCP-compatible AI assistant (Claude Code, Claude Chat, Claude Desktop, Cursor, Codex, Gemini CLI, Antigravity, Continue, Cline, …). Humans edit through a web app that replaces Obsidian — including importing `.md` files you already have, one or many, by picking them from the tree or dropping them onto a folder; AIs read and write through the MCP server, all backed by the same notes.
 
 **Status:** pre-alpha. Built by [Impulse Labs](https://impulselabs.dev). Internal use only until M2.
 
