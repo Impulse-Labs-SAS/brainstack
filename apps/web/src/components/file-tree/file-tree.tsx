@@ -2,7 +2,7 @@
 
 // Hierarchical vault browser. Drag a node onto a folder to move it
 // (server rewrites wikilinks). Right-click for context actions. Drop OS
-// files onto the tree to upload them as attachments — uploads run
+// `.md` files onto a folder to import them as notes — imports run
 // one-by-one so a single failure doesn't take down the rest of the batch.
 
 import {
@@ -19,6 +19,7 @@ import {
   ChevronRight,
   FilePlus,
   FileText,
+  FileUp,
   Folder,
   FolderPlus,
   Image as ImageIcon,
@@ -34,6 +35,7 @@ import { trpc } from '@/lib/trpc';
 import { SearchInput } from '@/components/search/search-input';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
 import { isInside, nodeId, parseNodeId, sameNode, type NodeRef } from '@/lib/tree-node-id';
+import { importMarkdownFiles, isMarkdownFile, summarizeImport } from '@/lib/import-md';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 import { useSharingEnabled } from '@/lib/use-deployment';
 
@@ -121,6 +123,8 @@ interface NodeRowProps {
   openMenu(ref: NodeRef, canWrite: boolean, isFolder: boolean, x: number, y: number): void;
   onDeleteClick(ref: NodeRef): void;
   onPrefetch(ref: NodeRef): void;
+  /** Archivos .md soltados del escritorio sobre esta carpeta. */
+  onFilesDrop(ref: NodeRef, files: FileList): void;
   busy: Set<string>;
   /**
    * Who each folder is shared with, keyed by folder path.
@@ -145,6 +149,7 @@ function NodeRow({
   openMenu,
   onDeleteClick,
   onPrefetch,
+  onFilesDrop,
   busy,
   sharedWith,
   mine,
@@ -166,6 +171,31 @@ function NodeRow({
     e.preventDefault();
     e.stopPropagation();
     openMenu(ref, canWrite, isFolder, e.clientX, e.clientY);
+  };
+
+  // Soltar archivos del escritorio va por el canal `DataTransfer` del
+  // navegador, no por dnd-kit, que arrastra con pointer events. Conviven en la
+  // misma fila sin pisarse: uno mueve nodos del árbol, el otro trae archivos
+  // de fuera.
+  const [filesOver, setFilesOver] = useState(false);
+  const acceptsFiles = isFolder && canWrite;
+  const carriesFiles = (e: React.DragEvent) => e.dataTransfer.types.includes('Files');
+
+  const onFileDragOver = (e: React.DragEvent) => {
+    if (!acceptsFiles || !carriesFiles(e)) return;
+    // Sin `preventDefault` el navegador se queda el drop y abre el archivo.
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setFilesOver(true);
+  };
+
+  const onFileDrop = (e: React.DragEvent) => {
+    if (!acceptsFiles || !carriesFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setFilesOver(false);
+    onFilesDrop(ref, e.dataTransfer.files);
   };
 
   const onClick = () => {
@@ -194,11 +224,14 @@ function NodeRow({
             if (node.type === 'note') onPrefetch(ref);
           }}
           onContextMenu={onContext}
+          onDragOver={onFileDragOver}
+          onDragLeave={() => setFilesOver(false)}
+          onDrop={onFileDrop}
           style={{ paddingLeft: 8 + depth * 14 }}
           className={cn(
             'group flex h-7 cursor-default select-none items-center gap-1.5 rounded pr-1 text-sm transition-colors',
             'hover:bg-bg-elevated',
-            droppable.isOver && isFolder ? 'bg-accent/10 ring-1 ring-accent' : '',
+            (droppable.isOver && isFolder) || filesOver ? 'bg-accent/10 ring-1 ring-accent' : '',
             menuFor === id ? 'bg-bg-elevated' : '',
             draggable.isDragging ? 'opacity-40' : '',
           )}
@@ -262,6 +295,7 @@ function NodeRow({
               openMenu={openMenu}
               onDeleteClick={onDeleteClick}
               onPrefetch={onPrefetch}
+              onFilesDrop={onFilesDrop}
               busy={busy}
               sharedWith={sharedWith}
               mine={mine}
@@ -341,6 +375,8 @@ export function FileTree() {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [searchActive, setSearchActive] = useState(false);
+  /** Archivos del escritorio sobrevolando el hueco del árbol (= la raíz). */
+  const [rootFilesOver, setRootFilesOver] = useState(false);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<NodeRef | null>(null);
   /** Un move entre bóvedas, esperando que lo confirmen. */
@@ -532,6 +568,60 @@ export function FileTree() {
     });
   }, []);
 
+  /**
+   * Importa archivos .md como notas de verdad, por el mismo camino que "New
+   * note": una llamada a `notes.create` por archivo, con el contenido literal.
+   *
+   * El dueño es el de la carpeta destino, no quien importa: soltar en una
+   * carpeta compartida escribe en la bóveda de su dueño, que es lo que
+   * mantiene el share cubriendo lo que acaba de entrar.
+   */
+  const runImport = useCallback(
+    async (ref: NodeRef, fileList: FileList) => {
+      const files = Array.from(fileList).filter(isMarkdownFile);
+      const ignored = fileList.length - files.length;
+      if (files.length === 0) {
+        pushToast('error', 'nothing to import — only .md files');
+        return;
+      }
+
+      markBusy(ref, true);
+      try {
+        const summary = await importMarkdownFiles(files, ref.path, ({ path, content }) =>
+          createM.mutateAsync({ path, ownerId: ref.ownerId, content }),
+        );
+        setExpanded((prev) => new Set(prev).add(nodeId(ref)));
+        await refresh();
+        const { kind, text } = summarizeImport(summary);
+        pushToast(kind, ignored > 0 ? `${text} — ${ignored} ignored (not .md)` : text);
+      } finally {
+        markBusy(ref, false);
+      }
+    },
+    [createM, refresh, pushToast, markBusy],
+  );
+
+  /** El destino elegido, esperando a que el diálogo de archivos devuelva algo. */
+  const importRef = useRef<NodeRef | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const importNotes = useCallback((ref: NodeRef) => {
+    importRef.current = ref;
+    fileInputRef.current?.click();
+  }, []);
+
+  const onFilePicked = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const ref = importRef.current;
+      const files = e.target.files;
+      // Reiniciar el input: sin esto, volver a elegir los mismos archivos no
+      // dispara `change` y el segundo intento parece no hacer nada.
+      if (ref && files && files.length > 0) void runImport(ref, files);
+      e.target.value = '';
+    },
+    [runImport],
+  );
+
   const createFolder = useCallback((ref: NodeRef) => {
     setPromptRef(ref);
     setPrompt({
@@ -691,10 +781,40 @@ export function FileTree() {
               >
                 <FolderPlus size={12} strokeWidth={1.75} />
               </button>
+              <button
+                type="button"
+                onClick={() => mine && importNotes({ ownerId: mine, path: '' })}
+                title="Import .md files into root"
+                className="flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
+              >
+                <FileUp size={12} strokeWidth={1.75} />
+              </button>
             </div>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div className="flex-1 overflow-y-auto py-1" onContextMenu={onRootContextMenu}>
+            {/* La raíz de tu bóveda no dibuja fila propia, así que soltar
+                archivos en el hueco del árbol importa a la raíz. Las filas
+                paran la propagación, de modo que esto sólo salta en el vacío. */}
+            <div
+              className={cn(
+                'flex-1 overflow-y-auto py-1',
+                rootFilesOver ? 'bg-accent/5 ring-1 ring-inset ring-accent' : '',
+              )}
+              onContextMenu={onRootContextMenu}
+              onDragOver={(e) => {
+                if (!mine || !e.dataTransfer.types.includes('Files')) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                setRootFilesOver(true);
+              }}
+              onDragLeave={() => setRootFilesOver(false)}
+              onDrop={(e) => {
+                if (!mine || !e.dataTransfer.types.includes('Files')) return;
+                e.preventDefault();
+                setRootFilesOver(false);
+                void runImport({ ownerId: mine, path: '' }, e.dataTransfer.files);
+              }}
+            >
               {mine && (
                 <NodeRow
                   node={root}
@@ -707,6 +827,7 @@ export function FileTree() {
                   openMenu={openMenu}
                   onDeleteClick={deletePath}
                   onPrefetch={prefetchNote}
+                  onFilesDrop={(ref, files) => void runImport(ref, files)}
                   busy={busy}
                   sharedWith={sharedWith}
                   mine={mine}
@@ -730,6 +851,7 @@ export function FileTree() {
                   openMenu={openMenu}
                   onDeleteClick={deletePath}
                   onPrefetch={prefetchNote}
+                  onFilesDrop={(ref, files) => void runImport(ref, files)}
                   busy={busy}
                   sharedWith={sharedWith}
                   mine={mine}
@@ -781,6 +903,17 @@ export function FileTree() {
                 >
                   New folder
                 </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    const target = menu.isFolder
+                      ? menu.ref
+                      : { ownerId: menu.ref.ownerId, path: parentOf(menu.ref.path) };
+                    setMenu(null);
+                    importNotes(target);
+                  }}
+                >
+                  Import .md…
+                </MenuItem>
               </>
             )}
             {menu.canWrite && menu.ref.path !== '' && (
@@ -828,6 +961,15 @@ export function FileTree() {
           </div>
         </>
       )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".md,.markdown,text/markdown"
+        className="hidden"
+        onChange={onFilePicked}
+      />
 
       <PromptModal
         open={prompt !== null}
@@ -937,6 +1079,7 @@ function SharedBranch({
   openMenu,
   onDeleteClick,
   onPrefetch,
+  onFilesDrop,
   busy,
   sharedWith,
   mine,
@@ -954,6 +1097,7 @@ function SharedBranch({
   openMenu(ref: NodeRef, canWrite: boolean, isFolder: boolean, x: number, y: number): void;
   onDeleteClick(ref: NodeRef): void;
   onPrefetch(ref: NodeRef): void;
+  onFilesDrop(ref: NodeRef, files: FileList): void;
   busy: Set<string>;
   sharedWith: Map<string, string[]>;
   mine: string | undefined;
@@ -1002,6 +1146,7 @@ function SharedBranch({
         openMenu={openMenu}
         onDeleteClick={onDeleteClick}
         onPrefetch={onPrefetch}
+        onFilesDrop={onFilesDrop}
         busy={busy}
         sharedWith={sharedWith}
         mine={mine}
