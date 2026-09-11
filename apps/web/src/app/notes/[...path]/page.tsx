@@ -287,6 +287,7 @@ export default function NotePage() {
 
           <div className="max-h-[40vh] shrink-0 overflow-y-auto">
             <EcosystemSection
+              centerLabel={note.data.title}
               tags={frontmatterTags(note.data.frontmatter)}
               facets={facetsForNote.data ?? []}
               backlinks={backlinks.data ?? []}

@@ -223,7 +223,7 @@ export default function SharedNotePage() {
               <NoteEditor value={reconstructBody(note.data)} readOnly />
             )}
           </div>
-          <EcosystemSection outboundLinks={linksQ.data ?? []} />
+          <EcosystemSection centerLabel={note.data.title} outboundLinks={linksQ.data ?? []} />
         </div>
       </div>
     </AppShell>

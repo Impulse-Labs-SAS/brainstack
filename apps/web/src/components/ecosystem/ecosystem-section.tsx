@@ -11,7 +11,9 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { attachmentPathToRoute, notePathToRoute } from '@/lib/wikilinks-client';
 import { groupFacetsByKey, linkLabel, type FacetRow } from '@/lib/ecosystem';
+import type { EgoNeighbor } from '@/lib/ego-graph-layout';
 
+import { EgoGraph } from './ego-graph';
 import { TagFacetChips, type Chip } from './tag-facet-chips';
 
 export interface EcosystemLink {
@@ -31,14 +33,14 @@ export interface RelatedNote {
 }
 
 export interface EcosystemSectionProps {
+  /** The open note's own display label, for the ego-graph's center node. Omit to skip the graph. */
+  centerLabel?: string;
   /** Frontmatter `tags`, shown as chips linking to /notes/tag/<tag>. */
   tags?: readonly string[];
   facets?: readonly FacetRow[];
   backlinks?: readonly EcosystemLink[];
   outboundLinks?: readonly EcosystemLink[];
   related?: readonly RelatedNote[];
-  /** Slot for the mini ego-graph (Phase 7) — kept optional so earlier phases render without it. */
-  egoGraph?: ReactNode;
   className?: string;
 }
 
@@ -100,12 +102,12 @@ function LinkList({ links, direction }: { links: readonly EcosystemLink[]; direc
 }
 
 export function EcosystemSection({
+  centerLabel,
   tags = [],
   facets = [],
   backlinks = [],
   outboundLinks = [],
   related = [],
-  egoGraph,
   className,
 }: EcosystemSectionProps) {
   const facetGroups = groupFacetsByKey(facets);
@@ -116,9 +118,19 @@ export function EcosystemSection({
     outboundLinks.length > 0 ||
     related.length > 0;
 
-  if (!hasAnything && !egoGraph) return null;
+  if (!hasAnything) return null;
 
   const tagChips: Chip[] = tags.map((t) => ({ label: t, href: tagRoute(t) }));
+
+  const egoNeighbors: EgoNeighbor[] = [
+    ...backlinks
+      .filter((l): l is EcosystemLink & { sourcePath: string } => !!l.sourcePath)
+      .map((l) => ({ path: l.sourcePath, label: linkLabel(l, 'in'), relation: 'backlink' as const })),
+    ...outboundLinks
+      .filter((l) => l.targetType === 'note')
+      .map((l) => ({ path: l.targetPath, label: linkLabel(l, 'out'), relation: 'outbound' as const })),
+    ...related.map((r) => ({ path: r.path, label: r.title, relation: 'related' as const })),
+  ];
 
   return (
     <div className={cn('border-t border-border-subtle bg-bg-surface/60 px-4 py-3', className)}>
@@ -168,7 +180,11 @@ export function EcosystemSection({
           )}
         </Section>
       </div>
-      {egoGraph && <div className="mt-3 border-t border-border-subtle pt-3">{egoGraph}</div>}
+      {centerLabel && egoNeighbors.length > 0 && (
+        <div className="mt-3 border-t border-border-subtle pt-3">
+          <EgoGraph centerLabel={centerLabel} neighbors={egoNeighbors} />
+        </div>
+      )}
     </div>
   );
 }
