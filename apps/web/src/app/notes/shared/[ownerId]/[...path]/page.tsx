@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { NoteEditor } from '@/components/editor/note-editor';
+import { EcosystemSection } from '@/components/ecosystem/ecosystem-section';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { SharedTree } from '@/components/file-tree/shared-tree';
 import { trpc } from '@/lib/trpc';
@@ -222,43 +223,10 @@ export default function SharedNotePage() {
               <NoteEditor value={reconstructBody(note.data)} readOnly />
             )}
           </div>
-          <OutgoingLinks links={linksQ.data ?? []} />
+          <EcosystemSection outboundLinks={linksQ.data ?? []} />
         </div>
       </div>
     </AppShell>
-  );
-}
-
-function OutgoingLinks({
-  links,
-}: {
-  links: Array<{
-    targetPath: string;
-    targetType: 'note' | 'attachment' | 'unresolved';
-    alias: string | null;
-  }>;
-}) {
-  if (links.length === 0) return null;
-  const resolved = links.filter((l) => l.targetType !== 'unresolved');
-  const broken = links.filter((l) => l.targetType === 'unresolved');
-  return (
-    <div className="border-t border-border-subtle px-4 py-2 font-mono text-[11px]">
-      <div className="mb-1 text-fg-muted">outgoing links · {links.length}</div>
-      <ul className="space-y-0.5">
-        {resolved.map((l, i) => (
-          <li key={`r-${i}`} className="text-fg-secondary">
-            <span className="mr-1.5 text-green-400/80">✓</span>
-            <span className="truncate">{l.alias ?? l.targetPath}</span>
-          </li>
-        ))}
-        {broken.map((l, i) => (
-          <li key={`b-${i}`} className="text-fg-muted line-through">
-            <span className="mr-1.5 text-red-400/60 no-underline">✕</span>
-            <span title="enmascarado: sin acceso al target">{l.alias ?? l.targetPath}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 

@@ -14,7 +14,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
 import { NoteEditor } from '@/components/editor/note-editor';
 import { MarkdownPreview } from '@/components/editor/markdown-preview';
-import { Kbd } from '@/components/ui/kbd';
+import { EcosystemSection } from '@/components/ecosystem/ecosystem-section';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
@@ -49,6 +49,18 @@ export default function NotePage() {
     { enabled: !!urlPath, placeholderData: keepPreviousData },
   );
   const backlinks = trpc.notes.backlinks.useQuery(
+    { path },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
+  );
+  const outboundLinks = trpc.notes.outboundLinks.useQuery(
+    { path },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
+  );
+  const related = trpc.notes.related.useQuery(
+    { path },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
+  );
+  const facetsForNote = trpc.notes.facetsForNote.useQuery(
     { path },
     { enabled: !!urlPath, placeholderData: keepPreviousData },
   );
@@ -100,10 +112,6 @@ export default function NotePage() {
   );
 
   const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 320);
-  const [backlinksWidth, setBacklinksWidth] = usePersistedWidth(
-    'brainstack:notes-backlinks-width',
-    280,
-  );
 
   const meQ = trpc.auth.me.useQuery();
   const mine = meQ.data?.user?.id;
@@ -243,7 +251,7 @@ export default function NotePage() {
             </div>
           </div>
 
-          <div className={cn('relative flex-1 overflow-hidden transition-colors')}>
+          <div className={cn('relative flex-1 overflow-hidden transition-colors', 'min-h-0')}>
             {draft !== null && effectiveMode === 'edit' && (
               <NoteEditor value={draft} onChange={setDraft} />
             )}
@@ -271,45 +279,27 @@ export default function NotePage() {
               </div>
             )}
           </div>
-        </div>
 
-        {/* Un tercer panel no entra en un teléfono, y los backlinks son lo
-            menos urgente de los tres: la nota es a lo que se vino. */}
-        <div className="hidden md:contents">
-          <ResizablePanel
-            side="right"
-            width={backlinksWidth}
-            onWidthChange={setBacklinksWidth}
-            min={200}
-            max={480}
-            className="border-l border-border-subtle"
-          >
-            <aside className="h-full overflow-y-auto p-4">
-              <div className="mb-2 flex items-center gap-2 font-mono text-[11px] text-fg-muted">
-                <Kbd>backlinks</Kbd>
-              </div>
-              <ul className="space-y-1">
-                {(backlinks.data ?? []).map((link) => (
-                  <li key={`${link.sourcePath}-${link.linkKind}`}>
-                    <a
-                      href={`/notes/${link.sourcePath.replace(/\.md$/i, '')}`}
-                      className="block rounded px-2 py-1 text-xs text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary"
-                    >
-                      <span className="font-mono">{link.sourcePath}</span>
-                      <span className="ml-2 text-fg-muted">{link.linkKind}</span>
-                    </a>
-                  </li>
-                ))}
-                {backlinks.data && backlinks.data.length === 0 && (
-                  <li className="text-xs text-fg-muted">No backlinks yet.</li>
-                )}
-              </ul>
-            </aside>
-          </ResizablePanel>
+          <div className="max-h-[40vh] shrink-0 overflow-y-auto">
+            <EcosystemSection
+              tags={frontmatterTags(note.data.frontmatter)}
+              facets={facetsForNote.data ?? []}
+              backlinks={backlinks.data ?? []}
+              outboundLinks={outboundLinks.data ?? []}
+              related={related.data ?? []}
+            />
+          </div>
         </div>
       </div>
     </AppShell>
   );
+}
+
+function frontmatterTags(frontmatter: Record<string, unknown>): string[] {
+  const raw = frontmatter.tags;
+  if (Array.isArray(raw)) return raw.filter((t): t is string => typeof t === 'string');
+  if (typeof raw === 'string') return [raw];
+  return [];
 }
 
 function ViewModeToggle({
