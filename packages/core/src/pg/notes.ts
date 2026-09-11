@@ -241,7 +241,19 @@ export class PgNoteStore {
 
   async remove(path: string): Promise<void> {
     const key = normalizeNoteKey(path);
-    // links/tags cascade on the foreign key.
+    // links/tags cascade on the foreign key — that clears this note's own
+    // outgoing rows. It says nothing about everybody else's: `target_path` is
+    // plain text, not a foreign key (a target may not exist yet), so a note
+    // that pointed at this one keeps a `links` row claiming `targetType:
+    // 'note'` until it is next resaved. Flip those first, while the row we are
+    // about to delete can still tell us which links pointed at it — a broken
+    // link should show as broken the moment the note it named is gone, not
+    // whenever its author happens to rewrite something else.
+    await this.db
+      .update(links)
+      .set({ targetType: 'unresolved' })
+      .where(and(eq(links.targetPath, key), sql`${links.targetType} != 'unresolved'`));
+
     const deleted = await this.db
       .delete(notes)
       .where(eq(notes.path, key))

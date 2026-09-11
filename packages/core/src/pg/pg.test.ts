@@ -192,6 +192,23 @@ describe('links and tags', () => {
     expect(await notes.listBacklinks('Grafo/uno.md')).toHaveLength(0);
   });
 
+  it('flips backlinks pointing at a deleted note to unresolved instead of leaving them stale', async () => {
+    await notes.upsert('Grafo/desaparece.md', '# Desaparece');
+    await notes.upsert('Grafo/apunta.md', 'Ve a [[desaparece]].');
+    expect(await notes.listBacklinks('Grafo/desaparece.md')).toContainEqual(
+      expect.objectContaining({ sourcePath: 'Grafo/apunta.md', targetType: 'note' }),
+    );
+
+    await notes.remove('Grafo/desaparece.md');
+
+    // The row survives the delete (there is no FK on target_path), but it must
+    // no longer claim the note it named still exists.
+    const backlinks = await notes.listBacklinks('Grafo/desaparece.md');
+    expect(backlinks).toContainEqual(
+      expect.objectContaining({ sourcePath: 'Grafo/apunta.md', targetType: 'unresolved' }),
+    );
+  });
+
   it('collects tags from both frontmatter and the body', async () => {
     await notes.upsert(
       'Grafo/etiquetada.md',
