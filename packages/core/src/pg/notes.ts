@@ -15,9 +15,9 @@ import matter from 'gray-matter';
 import { parseNote } from '../parser/index.js';
 import { normalizeNoteKey, normalizeRelativePath } from '../paths.js';
 import { resolveLinks } from '../resolver/wikilinks.js';
-import type { Frontmatter, ParsedLink, ResolvedLink } from '../types.js';
+import type { Frontmatter, ParsedFacet, ParsedLink, ResolvedLink } from '../types.js';
 
-import { links, notes, tags } from './schema.js';
+import { facets, links, notes, tags } from './schema.js';
 import type { PgDb } from './client.js';
 
 export class NoteNotFoundError extends Error {
@@ -67,6 +67,12 @@ export interface Backlink {
   linkKind: string;
   alias: string | null;
   section: string | null;
+}
+
+export interface Facet {
+  key: string;
+  value: string;
+  data: Record<string, unknown> | null;
 }
 
 /** Reserialise a stored note into the markdown a client expects to read. */
@@ -171,7 +177,7 @@ export class PgNoteStore {
        */
       .returning({ ...NOTE_COLUMNS, inserted: sql<boolean>`(xmax = 0)` });
 
-    await this.rebuildGraph(key, parsed.links, parsed.tags, ownerId);
+    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId);
     if (row?.inserted) await this.resolvePendingLinksTo(key);
 
     const { inserted: _inserted, ...stored } = row!;
@@ -235,7 +241,13 @@ export class PgNoteStore {
       const parsed = parseNote(toMarkdown(source as Pick<StoredNote, 'frontmatter' | 'body'>), {
         path: sourcePath,
       });
-      await this.rebuildGraph(sourcePath, parsed.links, parsed.tags, target.ownerId ?? undefined);
+      await this.rebuildGraph(
+        sourcePath,
+        parsed.links,
+        parsed.tags,
+        parsed.facets,
+        target.ownerId ?? undefined,
+      );
     }
   }
 
@@ -355,6 +367,7 @@ export class PgNoteStore {
     path: string,
     parsedLinks: readonly ParsedLink[],
     noteTags: readonly string[],
+    noteFacets: readonly ParsedFacet[],
     ownerId?: string,
   ): Promise<void> {
     // A wikilink is written the way its author sees the path, which in a
@@ -402,6 +415,22 @@ export class PgNoteStore {
       await this.db
         .insert(tags)
         .values(noteTags.map((tag) => ({ notePath: path, tag })))
+        .onConflictDoNothing();
+    }
+
+    await this.db.delete(facets).where(eq(facets.notePath, path));
+    if (noteFacets.length > 0) {
+      await this.db
+        .insert(facets)
+        .values(
+          noteFacets.map((f) => ({
+            notePath: path,
+            key: f.key,
+            value: f.value,
+            data: f.data,
+            position: f.position,
+          })),
+        )
         .onConflictDoNothing();
     }
   }

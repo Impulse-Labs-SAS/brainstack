@@ -130,6 +130,31 @@ export const tags = pgTable(
   }),
 );
 
+/**
+ * Generic `(key, value)` pairs lifted from frontmatter fields other than
+ * `tags` — `technologies: [nextjs, drizzle]` yields two rows keyed
+ * `technologies`. Nothing here is specific to any field name: whatever a
+ * vault happens to use becomes browsable and, combined with `tags`, feeds
+ * "related by shared tag or technology" without a schema to register first.
+ */
+export const facets = pgTable(
+  'facets',
+  {
+    notePath: text('note_path')
+      .notNull()
+      .references(() => notes.path, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    value: text('value').notNull(),
+    /** The raw entry when it was an object (`{url, label}`), else null. */
+    data: jsonb('data').$type<Record<string, unknown> | null>(),
+    position: integer('position').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'facets_pkey', columns: [t.notePath, t.key, t.position] }),
+    keyValueIdx: index('idx_facets_key_value').on(t.key, t.value),
+  }),
+);
+
 export const users = pgTable(
   'users',
   {

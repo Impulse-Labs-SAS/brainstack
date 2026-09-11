@@ -6,7 +6,7 @@
 // instead, but the SQL is identical.
 
 import { PGlite } from '@electric-sql/pglite';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -15,6 +15,7 @@ import { PathTraversalError } from '../paths.js';
 import { ensurePgSchema, runPgMigrations, type PgDb } from './client.js';
 import { pgMigrations } from './migrations.js';
 import { PgNoteStore, NoteAlreadyExistsError, NoteNotFoundError, toMarkdown } from './notes.js';
+import { facets as facetsTable } from './schema.js';
 import { normalizeNoteKey } from '../paths.js';
 import { PgSearchService, tokenize, toTsQuery } from './search.js';
 
@@ -222,6 +223,67 @@ describe('links and tags', () => {
 
     const all = await notes.listTags();
     expect(all.map((t) => t.tag)).toEqual(expect.arrayContaining(['desde-frontmatter']));
+  });
+});
+
+describe('facets', () => {
+  it('indexes array, object-array and scalar frontmatter fields, skipping tags', async () => {
+    await notes.upsert(
+      'Facetas/nota.md',
+      [
+        '---',
+        'tags: [ignorame]',
+        'technologies: [nextjs, drizzle]',
+        'resources:',
+        '  - {value: paper-1, url: "https://x"}',
+        'status: decidido',
+        '---',
+        '',
+        '# Nota',
+      ].join('\n'),
+    );
+
+    const rows = await db
+      .select({ key: facetsTable.key, value: facetsTable.value, data: facetsTable.data })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/nota.md'));
+
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { key: 'technologies', value: 'nextjs', data: null },
+        { key: 'technologies', value: 'drizzle', data: null },
+        { key: 'resources', value: 'paper-1', data: { value: 'paper-1', url: 'https://x' } },
+        { key: 'status', value: 'decidido', data: null },
+      ]),
+    );
+    expect(rows.some((r) => r.key === 'tags')).toBe(false);
+  });
+
+  it('rebuilds facets on every write instead of accumulating stale rows', async () => {
+    await notes.upsert('Facetas/movil.md', '---\nstatus: idea\n---\n\n# Movil');
+    let rows = await db
+      .select({ value: facetsTable.value })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/movil.md'));
+    expect(rows).toEqual([{ value: 'idea' }]);
+
+    await notes.upsert('Facetas/movil.md', '---\nstatus: decidido\n---\n\n# Movil');
+    rows = await db
+      .select({ value: facetsTable.value })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/movil.md'));
+    expect(rows).toEqual([{ value: 'decidido' }]);
+  });
+
+  it('cascades facets away when the note is deleted', async () => {
+    await notes.upsert('Facetas/borrame.md', '---\nstatus: idea\n---\n\n# Borrame');
+    await notes.remove('Facetas/borrame.md');
+
+    const rows = await db
+      .select({ value: facetsTable.value })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/borrame.md'));
+    expect(rows).toEqual([]);
   });
 });
 

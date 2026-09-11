@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import type { ParsedNote } from '../types.js';
 
 import { buildCodeMask } from './code-mask.js';
+import { extractFacets } from './facets.js';
 import { extractFrontmatter } from './frontmatter.js';
 import { extractTags } from './tags.js';
 import { extractLinks } from './wikilinks.js';
@@ -49,6 +50,7 @@ export function parseNote(raw: string, options: ParseNoteOptions = {}): ParsedNo
   const bodyTags = extractTags(body, codeMask);
 
   const tags = uniqueOrdered([...fmTags, ...bodyTags]);
+  const facets = extractFacets(frontmatter);
   const title = deriveTitle(path, frontmatter.title, body);
   const checksum = checksumOf(body);
 
@@ -60,6 +62,7 @@ export function parseNote(raw: string, options: ParseNoteOptions = {}): ParsedNo
     checksum,
     links,
     tags,
+    facets,
   };
 }
 
@@ -78,4 +81,5 @@ function uniqueOrdered<T>(items: readonly T[]): T[] {
 export { extractFrontmatter } from './frontmatter.js';
 export { extractLinks } from './wikilinks.js';
 export { extractTags } from './tags.js';
+export { extractFacets, FACET_SKIP_KEYS } from './facets.js';
 export { buildCodeMask } from './code-mask.js';
