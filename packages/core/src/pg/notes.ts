@@ -55,6 +55,8 @@ export interface ListFilter {
   folder?: string;
   /** Restrict to notes carrying this tag. */
   tag?: string;
+  /** Restrict to notes carrying this exact (key, value) facet. */
+  facet?: { key: string; value: string };
   /** Restrict by `frontmatter.status`. */
   status?: string;
   limit?: number;
@@ -303,6 +305,13 @@ export class PgNoteStore {
                     AND ${tags.tag} = ${filter.tag})`,
       );
     }
+    if (filter.facet) {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM ${facets} WHERE ${facets.notePath} = ${notes.path}
+                    AND ${facets.key} = ${filter.facet.key}
+                    AND ${facets.value} = ${filter.facet.value})`,
+      );
+    }
 
     return this.db
       .select({ path: notes.path, title: notes.title, updatedAt: notes.updatedAt })
@@ -329,6 +338,23 @@ export class PgNoteStore {
       .orderBy(links.sourcePath, links.position);
   }
 
+  /** Every link `path` points at — the mirror of `listBacklinks`. */
+  async listOutboundLinks(path: string): Promise<Backlink[]> {
+    const key = normalizeRelativePath(path);
+    return this.db
+      .select({
+        sourcePath: links.sourcePath,
+        targetPath: links.targetPath,
+        targetType: links.targetType,
+        linkKind: links.linkKind,
+        alias: links.alias,
+        section: links.section,
+      })
+      .from(links)
+      .where(eq(links.sourcePath, key))
+      .orderBy(links.position);
+  }
+
   /** Distinct tags in use, for autocomplete and "what tags exist?" questions. */
   async listTags(): Promise<{ tag: string; count: number }[]> {
     const rows = await this.db
@@ -337,6 +363,31 @@ export class PgNoteStore {
       .groupBy(tags.tag)
       .orderBy(desc(sql`count(*)`));
     return rows.map((r) => ({ tag: r.tag, count: Number(r.count) }));
+  }
+
+  /** Facets on one note, in the order they appeared. */
+  async listFacetsForNote(path: string): Promise<Facet[]> {
+    const key = normalizeRelativePath(path);
+    return this.db
+      .select({ key: facets.key, value: facets.value, data: facets.data })
+      .from(facets)
+      .where(eq(facets.notePath, key))
+      .orderBy(facets.key, facets.position);
+  }
+
+  /**
+   * Distinct `(key, value)` pairs in use, for faceted browsing and
+   * autocomplete — the mirror of `listTags`. Narrow to one `key` to browse
+   * just that facet's values (e.g. every `technologies` in use).
+   */
+  async listFacets(key?: string): Promise<{ key: string; value: string; count: number }[]> {
+    const rows = await this.db
+      .select({ key: facets.key, value: facets.value, count: sql<number>`count(*)::int` })
+      .from(facets)
+      .where(key ? eq(facets.key, key) : undefined)
+      .groupBy(facets.key, facets.value)
+      .orderBy(desc(sql`count(*)`));
+    return rows.map((r) => ({ key: r.key, value: r.value, count: Number(r.count) }));
   }
 
   /** Delete several notes at once. Used by the importer when pruning. */

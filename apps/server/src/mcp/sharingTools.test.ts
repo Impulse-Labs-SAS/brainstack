@@ -352,19 +352,30 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(value).toMatchObject([{ path: 'mis-cosas/idea.md' }]);
   });
 
-  it('list_decisions returns the notes flagged as decisions', async () => {
+  it('list_decisions matches the decision tag', async () => {
     const pablo = await clientFor(PABLO.id);
     await call(pablo, 'create_note', {
       path: 'decisiones/usar-pg.md',
       content: 'vamos con Postgres',
-      // By tag: `listDecisions` matches on the tag alone, despite the tool
-      // description also promising `status: decidido`.
       frontmatter: { tags: ['decisión'] },
     });
 
     const { value } = await call(pablo, 'list_decisions', {});
     expect(Array.isArray(value)).toBe(true);
     expect(value).toMatchObject([{ path: 'decisiones/usar-pg.md' }]);
+  });
+
+  it('list_decisions also matches a status: decidido facet, with no tag at all', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      path: 'decisiones/usar-drizzle.md',
+      content: 'vamos con Drizzle',
+      frontmatter: { status: 'decidido' },
+    });
+
+    const { value } = await call(pablo, 'list_decisions', {});
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ path: 'decisiones/usar-drizzle.md' }]);
   });
 
   it('list_links returns the backlinks of a note', async () => {

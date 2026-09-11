@@ -224,6 +224,32 @@ describe('links and tags', () => {
     const all = await notes.listTags();
     expect(all.map((t) => t.tag)).toEqual(expect.arrayContaining(['desde-frontmatter']));
   });
+
+  it('lists outbound links, the mirror of listBacklinks', async () => {
+    await notes.upsert('Grafo/salida-destino.md', '# Destino');
+    await notes.upsert(
+      'Grafo/salida-origen.md',
+      '# Origen\n\nVa a [[salida-destino]] y a https://afuera.com no cuenta.',
+    );
+
+    const outbound = await notes.listOutboundLinks('Grafo/salida-origen.md');
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]).toMatchObject({
+      sourcePath: 'Grafo/salida-origen.md',
+      targetPath: 'Grafo/salida-destino.md',
+    });
+    // Nothing at the destination's own path — that's listBacklinks's job.
+    expect(await notes.listOutboundLinks('Grafo/salida-destino.md')).toHaveLength(0);
+  });
+
+  it('lists by facet, the mirror of listing by tag', async () => {
+    await notes.upsert('Facetas/uno-tec.md', '---\ntechnologies: [nextjs]\n---\n\n# Uno');
+    await notes.upsert('Facetas/otro-tec.md', '---\ntechnologies: [vue]\n---\n\n# Otro');
+
+    const byFacet = await notes.list({ facet: { key: 'technologies', value: 'nextjs' } });
+    expect(byFacet.map((n) => n.path)).toContain('Facetas/uno-tec.md');
+    expect(byFacet.map((n) => n.path)).not.toContain('Facetas/otro-tec.md');
+  });
 });
 
 describe('facets', () => {
@@ -284,6 +310,37 @@ describe('facets', () => {
       .from(facetsTable)
       .where(eq(facetsTable.notePath, 'Facetas/borrame.md'));
     expect(rows).toEqual([]);
+  });
+
+  it('listFacetsForNote returns one note’s facets', async () => {
+    await notes.upsert(
+      'Facetas/lectura.md',
+      '---\ntechnologies: [nextjs, drizzle]\nstatus: idea\n---\n\n# Lectura',
+    );
+
+    const rows = await notes.listFacetsForNote('Facetas/lectura.md');
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { key: 'technologies', value: 'nextjs', data: null },
+        { key: 'technologies', value: 'drizzle', data: null },
+        { key: 'status', value: 'idea', data: null },
+      ]),
+    );
+  });
+
+  it('listFacets counts distinct (key, value) pairs, optionally narrowed to one key', async () => {
+    // A value not used by any other test in this shared database, so the
+    // count asserted below is exact rather than an accumulation across tests.
+    await notes.upsert('Facetas/browse-a.md', '---\ntechnologies: [sveltekit]\n---\n\n# A');
+    await notes.upsert('Facetas/browse-b.md', '---\ntechnologies: [sveltekit]\n---\n\n# B');
+    await notes.upsert('Facetas/browse-c.md', '---\nstatus: browse-test\n---\n\n# C');
+
+    const byKey = await notes.listFacets('technologies');
+    expect(byKey).toContainEqual({ key: 'technologies', value: 'sveltekit', count: 2 });
+    expect(byKey.some((f) => f.key === 'status')).toBe(false);
+
+    const all = await notes.listFacets();
+    expect(all.map((f) => f.key)).toEqual(expect.arrayContaining(['technologies', 'status']));
   });
 });
 

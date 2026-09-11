@@ -16,6 +16,7 @@ import {
   pgSchema,
   toMarkdown,
   type Backlink,
+  type Facet,
   type NoteSummary,
   type PgDb,
   type StoredNote,
@@ -27,7 +28,9 @@ import matter from 'gray-matter';
 import { AppError } from '../lib/errors.js';
 import { toLogical, toPhysical, type VaultConfig } from '../lib/vault.js';
 
-const { folders, links, notes, tags } = pgSchema;
+import { facetSignal, rankRelated, tagSignal, type RankedNote } from './relatedNotes.js';
+
+const { facets, folders, links, notes, tags } = pgSchema;
 
 export interface NoteRowDto {
   path: string;
@@ -68,6 +71,7 @@ export interface CrossVaultMoveResult {
 export interface ListFilter {
   folder?: string;
   tag?: string;
+  facet?: { key: string; value: string };
   status?: string;
   limit?: number;
 }
@@ -255,6 +259,7 @@ export class NoteService {
     const rows = await this.store.list({
       ...(folder ? { folder } : {}),
       ...(filter.tag ? { tag: filter.tag } : {}),
+      ...(filter.facet ? { facet: filter.facet } : {}),
       ...(filter.status ? { status: filter.status } : {}),
       ...(filter.limit ? { limit: filter.limit } : {}),
     });
@@ -281,6 +286,162 @@ export class NoteService {
       .groupBy(tags.tag)
       .orderBy(sql`count(*) desc`);
     return rows.map((r) => ({ tag: r.tag, count: Number(r.count) }));
+  }
+
+  /** Every link `path` points at — the mirror of `listLinks`. */
+  async listOutboundLinks(ownerId: string, path: string): Promise<Backlink[]> {
+    const rows = await this.store.listOutboundLinks(this.toPhysical(ownerId, path));
+    return rows.map((r) => ({
+      ...r,
+      sourcePath: this.toLogical(ownerId, r.sourcePath),
+      targetPath: this.toLogicalIfMine(ownerId, r.targetPath),
+    }));
+  }
+
+  async listFacetsForNote(ownerId: string, path: string): Promise<Facet[]> {
+    return this.store.listFacetsForNote(this.toPhysical(ownerId, path));
+  }
+
+  async listFacets(
+    ownerId: string,
+    key?: string,
+  ): Promise<{ key: string; value: string; count: number }[]> {
+    const rows = await this.opts.db
+      .select({ key: facets.key, value: facets.value, count: sql<number>`count(*)::int` })
+      .from(facets)
+      .innerJoin(notes, eq(notes.path, facets.notePath))
+      .where(and(this.ownedBy(ownerId), key ? eq(facets.key, key) : undefined))
+      .groupBy(facets.key, facets.value)
+      .orderBy(sql`count(*) desc`);
+    return rows.map((r) => ({ key: r.key, value: r.value, count: Number(r.count) }));
+  }
+
+  /**
+   * Other notes sharing a tag or facet with `path`, ranked by how rare the
+   * shared signal is — two notes sharing a tag only they use outrank two that
+   * merely share a technology half the vault happens to use.
+   *
+   * Scoped like `graph()`: the caller's own notes plus whatever folders were
+   * shared with them, since "related" only means something over notes the
+   * viewer can actually open.
+   */
+  async listRelated(
+    ownerId: string,
+    path: string,
+    opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }>; limit?: number } = {},
+  ): Promise<Array<{ path: string; title: string; ownerId: string | null; score: number }>> {
+    const physical = this.toPhysical(ownerId, path);
+    const limit = opts.limit ?? 10;
+
+    const [targetTags, targetFacets] = await Promise.all([
+      this.opts.db.select({ tag: tags.tag }).from(tags).where(eq(tags.notePath, physical)),
+      this.opts.db
+        .select({ key: facets.key, value: facets.value })
+        .from(facets)
+        .where(eq(facets.notePath, physical)),
+    ]);
+    const tagSignals = targetTags.map((t) => tagSignal(t.tag));
+    const facetSignals = targetFacets.map((f) => facetSignal(f.key, f.value));
+    if (tagSignals.length === 0 && facetSignals.length === 0) return [];
+
+    const scopes = [this.ownedBy(ownerId)];
+    for (const s of opts.sharedScopes ?? []) {
+      scopes.push(like(notes.path, `${s.ownerId}/${s.folderPath}/%`));
+    }
+    const scopeWhere = scopes.length === 1 ? scopes[0] : or(...scopes);
+
+    // Vault-wide rarity, independent of the viewer's scope: a signal's weight
+    // is what it costs to share it with anyone, not just with what this
+    // viewer happens to be allowed to see.
+    const [tagCounts, facetCounts] = await Promise.all([
+      tagSignals.length
+        ? this.opts.db
+            .select({ tag: tags.tag, count: sql<number>`count(*)::int` })
+            .from(tags)
+            .where(inArray(tags.tag, targetTags.map((t) => t.tag)))
+            .groupBy(tags.tag)
+        : [],
+      facetSignals.length
+        ? this.opts.db
+            .select({ key: facets.key, value: facets.value, count: sql<number>`count(*)::int` })
+            .from(facets)
+            .where(
+              or(
+                ...targetFacets.map((f) => and(eq(facets.key, f.key), eq(facets.value, f.value))),
+              ),
+            )
+            .groupBy(facets.key, facets.value)
+        : [],
+    ]);
+    const counts = [
+      ...tagCounts.map((c) => ({ signal: tagSignal(c.tag), count: Number(c.count) })),
+      ...facetCounts.map((c) => ({
+        signal: facetSignal(c.key, c.value),
+        count: Number(c.count),
+      })),
+    ];
+
+    const [tagHitRows, facetHitRows] = await Promise.all([
+      tagSignals.length
+        ? this.opts.db
+            .select({ path: notes.path, tag: tags.tag })
+            .from(tags)
+            .innerJoin(notes, eq(notes.path, tags.notePath))
+            .where(
+              and(
+                scopeWhere,
+                inArray(tags.tag, targetTags.map((t) => t.tag)),
+                sql`${notes.path} != ${physical}`,
+              ),
+            )
+        : [],
+      facetSignals.length
+        ? this.opts.db
+            .select({ path: notes.path, key: facets.key, value: facets.value })
+            .from(facets)
+            .innerJoin(notes, eq(notes.path, facets.notePath))
+            .where(
+              and(
+                scopeWhere,
+                or(
+                  ...targetFacets.map((f) => and(eq(facets.key, f.key), eq(facets.value, f.value))),
+                ),
+                sql`${notes.path} != ${physical}`,
+              ),
+            )
+        : [],
+    ]);
+    const hits = [
+      ...tagHitRows.map((r) => ({ path: r.path, signal: tagSignal(r.tag) })),
+      ...facetHitRows.map((r) => ({ path: r.path, signal: facetSignal(r.key, r.value) })),
+    ];
+
+    const ranked: RankedNote[] = rankRelated(hits, counts, limit);
+    if (ranked.length === 0) return [];
+
+    const winners = await this.opts.db
+      .select({ path: notes.path, title: notes.title, ownerId: notes.ownerId })
+      .from(notes)
+      .where(
+        inArray(
+          notes.path,
+          ranked.map((r) => r.path),
+        ),
+      );
+    const byPath = new Map(winners.map((w) => [w.path, w]));
+
+    return ranked
+      .map((r) => {
+        const note = byPath.get(r.path);
+        if (!note) return null;
+        return {
+          path: this.stripOwner(note.path, note.ownerId),
+          title: note.title,
+          ownerId: note.ownerId ?? null,
+          score: r.score,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
   }
 
   // -- Writes ----------------------------------------------------------------
@@ -801,7 +962,14 @@ export class NoteService {
 
   // -- Decisions -------------------------------------------------------------
 
-  /** Notes tagged as decisions, newest first. Feeds the decisions view. */
+  /**
+   * Notes flagged as decisions, newest first. Feeds the decisions view.
+   *
+   * Matches either signal a note can carry: the `decisión`/`decision` tag, or
+   * a `status: decidido` frontmatter facet — the tool description has always
+   * promised both, but until facets existed only the tag was actually
+   * checked.
+   */
   async listDecisions(
     ownerId: string,
     filter: { folder?: string; limit?: number } = {},
@@ -816,11 +984,15 @@ export class NoteService {
         mtime: notes.updatedAt,
       })
       .from(notes)
-      .innerJoin(tags, eq(tags.notePath, notes.path))
+      .leftJoin(tags, eq(tags.notePath, notes.path))
+      .leftJoin(
+        facets,
+        and(eq(facets.notePath, notes.path), eq(facets.key, 'status'), eq(facets.value, 'decidido')),
+      )
       .where(
         and(
           this.ownedBy(ownerId),
-          inArray(tags.tag, ['decisión', 'decision']),
+          or(inArray(tags.tag, ['decisión', 'decision']), sql`${facets.value} IS NOT NULL`),
           ...(scope ? [like(notes.path, `${scope}/%`)] : []),
         ),
       )
