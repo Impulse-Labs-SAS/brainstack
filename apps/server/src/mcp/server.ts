@@ -217,19 +217,22 @@ export function buildMcpServer({
     {
       title: 'List notes',
       description:
-        'List notes in BrainStack. Filter by folder prefix, tag, or frontmatter status. Sorted by mtime desc.',
+        'List notes in BrainStack. Filter by folder prefix, tag, a frontmatter facet (facetKey + facetValue — see list_facets), or frontmatter status. Sorted by mtime desc.',
       inputSchema: {
         folder: z.string().optional(),
         tag: z.string().optional(),
+        facetKey: z.string().optional(),
+        facetValue: z.string().optional(),
         status: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
         ownerId: OWNER_ARG,
       },
     },
-    async ({ ownerId, ...args }) => {
+    async ({ ownerId, facetKey, facetValue, ...args }) => {
       try {
         const owner = await readOwner(args.folder, ownerId);
-        const rows = await notes.list(owner, args);
+        const facet = facetKey && facetValue ? { key: facetKey, value: facetValue } : undefined;
+        const rows = await notes.list(owner, { ...args, ...(facet ? { facet } : {}) });
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);
@@ -513,6 +516,76 @@ export function buildMcpServer({
           crossOwner,
         });
         return JSON_TEXT(rows);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_outbound_links',
+    {
+      title: 'List outbound links',
+      description:
+        'List every note or attachment the given path links to or embeds — the mirror of list_links.',
+      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
+    },
+    async ({ path, ownerId }) => {
+      try {
+        const owner = await readOwner(path, ownerId);
+        const userId = requireUserId();
+        // Same masking `linksForOwner` already applies to a shared note: an
+        // unreadable target comes back unresolved rather than naming a path
+        // outside the grant.
+        const rows =
+          userId === owner
+            ? await notes.listOutboundLinks(owner, path)
+            : await crossOwner.linksForOwner(userId, owner, path);
+        return JSON_TEXT(rows);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_related',
+    {
+      title: 'List related notes',
+      description:
+        'Notes related to the given path by a shared tag or frontmatter facet (e.g. both using `technologies: nextjs`), ranked by how rare the shared signal is — sharing an uncommon tag outranks sharing a technology half the vault uses. Own vault only; does not take `ownerId`.',
+      inputSchema: { path: z.string().min(1), limit: z.number().int().min(1).max(50).optional() },
+    },
+    async ({ path, limit }) => {
+      try {
+        const userId = requireUserId();
+        const rows = await notes.listRelated(userId, path, { limit });
+        return JSON_TEXT(rows);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_facets',
+    {
+      title: 'List facets',
+      description:
+        'Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note\'s facets; omit it (optionally with `key`) to browse every (key, value) pair in use, with counts.',
+      inputSchema: {
+        path: z.string().optional(),
+        key: z.string().optional(),
+        ownerId: OWNER_ARG,
+      },
+    },
+    async ({ path, key, ownerId }) => {
+      try {
+        if (path) {
+          const owner = await readOwner(path, ownerId);
+          return JSON_TEXT(await notes.listFacetsForNote(owner, path));
+        }
+        return JSON_TEXT(await notes.listFacets(ownerOf(ownerId), key));
       } catch (err) {
         return toMcpError(err);
       }

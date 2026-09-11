@@ -388,6 +388,49 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(value).toMatchObject([{ sourcePath: 'origen.md' }]);
   });
 
+  it('list_outbound_links returns what a note links to', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'destino.md', content: 'acá se llega' });
+    await call(pablo, 'create_note', { path: 'origen.md', content: 'ver [[destino]]' });
+
+    const { value } = await call(pablo, 'list_outbound_links', { path: 'origen.md' });
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ targetPath: 'destino.md' }]);
+  });
+
+  it('list_related finds notes sharing a tag', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      path: 'a.md',
+      content: 'A',
+      frontmatter: { tags: ['zuno'] },
+    });
+    await call(pablo, 'create_note', {
+      path: 'b.md',
+      content: 'B',
+      frontmatter: { tags: ['zuno'] },
+    });
+
+    const { value } = await call(pablo, 'list_related', { path: 'a.md' });
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ path: 'b.md' }]);
+  });
+
+  it('list_facets returns one note’s facets, or browses every value when path is omitted', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      path: 'stack.md',
+      content: 'S',
+      frontmatter: { technologies: ['nextjs'] },
+    });
+
+    const forNote = await call(pablo, 'list_facets', { path: 'stack.md' });
+    expect(forNote.value).toMatchObject([{ key: 'technologies', value: 'nextjs' }]);
+
+    const browse = await call(pablo, 'list_facets', { key: 'technologies' });
+    expect(browse.value).toMatchObject([{ key: 'technologies', value: 'nextjs', count: 1 }]);
+  });
+
   it('list_links omits a backlink source pablo has no grant to see', async () => {
     const owner = await clientFor(OWNER.id);
     const pablo = await clientFor(PABLO.id);
