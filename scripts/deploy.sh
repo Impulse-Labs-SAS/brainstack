@@ -105,6 +105,18 @@ for path in /api/config /login /.well-known/oauth-protected-resource; do
   [ "$status" = "200" ] || { echo "✗ $path devolvió $status; no publiques esto"; exit 1; }
 done
 
+# El endpoint que hablan los clientes MCP, afirmado en vez de inferido. No pide
+# 200: /mcp esta detras de requireAuth y sin token responde 401, que es prueba
+# suficiente de que la request llego a la funcion. Un 404 es la firma exacta
+# del trap de packagePath — el catch-all de Next contestando en lugar de ella.
+echo "== el endpoint MCP llega a la función =="
+status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 "$DRAFT_URL/api/mcp")
+echo "   /api/mcp -> $status"
+case "$status" in
+  404|5??) echo "✗ /api/mcp devolvió $status; la función no lo está recibiendo, no publiques esto"; exit 1 ;;
+  *) echo "   llega (sin token, 401 es lo esperado)" ;;
+esac
+
 if [ "${1:-}" = "publish" ]; then
   [ -n "$DEPLOY_ID" ] || { echo "no encontré el deploy id; publicá a mano"; exit 1; }
   echo "== publicando $DEPLOY_ID como producción =="
