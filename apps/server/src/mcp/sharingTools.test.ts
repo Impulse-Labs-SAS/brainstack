@@ -11,6 +11,7 @@ import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AuthService } from '../services/AuthService.js';
+import { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import { CapturingEmailSender } from '../services/EmailSender.js';
 import { InviteService } from '../services/InviteService.js';
 import { NoteService } from '../services/NoteService.js';
@@ -51,11 +52,13 @@ async function clientFor(userId: string): Promise<Client> {
     sharing,
     publicOrigin: 'http://test',
   });
+  const crossOwner = new CrossOwnerReader({ sharing, vaultCfg, db: database.db });
 
   const server = buildMcpServer({
     notes,
     search,
     sharing,
+    crossOwner,
     auth,
     invites,
     logger,
@@ -349,19 +352,30 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(value).toMatchObject([{ path: 'mis-cosas/idea.md' }]);
   });
 
-  it('list_decisions returns the notes flagged as decisions', async () => {
+  it('list_decisions matches the decision tag', async () => {
     const pablo = await clientFor(PABLO.id);
     await call(pablo, 'create_note', {
       path: 'decisiones/usar-pg.md',
       content: 'vamos con Postgres',
-      // By tag: `listDecisions` matches on the tag alone, despite the tool
-      // description also promising `status: decidido`.
       frontmatter: { tags: ['decisión'] },
     });
 
     const { value } = await call(pablo, 'list_decisions', {});
     expect(Array.isArray(value)).toBe(true);
     expect(value).toMatchObject([{ path: 'decisiones/usar-pg.md' }]);
+  });
+
+  it('list_decisions also matches a status: decidido facet, with no tag at all', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      path: 'decisiones/usar-drizzle.md',
+      content: 'vamos con Drizzle',
+      frontmatter: { status: 'decidido' },
+    });
+
+    const { value } = await call(pablo, 'list_decisions', {});
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ path: 'decisiones/usar-drizzle.md' }]);
   });
 
   it('list_links returns the backlinks of a note', async () => {
@@ -372,6 +386,70 @@ describe('the listing tools answer with their rows, not with a pending promise',
     const { value } = await call(pablo, 'list_links', { path: 'destino.md' });
     expect(Array.isArray(value)).toBe(true);
     expect(value).toMatchObject([{ sourcePath: 'origen.md' }]);
+  });
+
+  it('list_outbound_links returns what a note links to', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'destino.md', content: 'acá se llega' });
+    await call(pablo, 'create_note', { path: 'origen.md', content: 'ver [[destino]]' });
+
+    const { value } = await call(pablo, 'list_outbound_links', { path: 'origen.md' });
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ targetPath: 'destino.md' }]);
+  });
+
+  it('list_related finds notes sharing a tag', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      path: 'a.md',
+      content: 'A',
+      frontmatter: { tags: ['zuno'] },
+    });
+    await call(pablo, 'create_note', {
+      path: 'b.md',
+      content: 'B',
+      frontmatter: { tags: ['zuno'] },
+    });
+
+    const { value } = await call(pablo, 'list_related', { path: 'a.md' });
+    expect(Array.isArray(value)).toBe(true);
+    expect(value).toMatchObject([{ path: 'b.md' }]);
+  });
+
+  it('list_facets returns one note’s facets, or browses every value when path is omitted', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', {
+      path: 'stack.md',
+      content: 'S',
+      frontmatter: { technologies: ['nextjs'] },
+    });
+
+    const forNote = await call(pablo, 'list_facets', { path: 'stack.md' });
+    expect(forNote.value).toMatchObject([{ key: 'technologies', value: 'nextjs' }]);
+
+    const browse = await call(pablo, 'list_facets', { key: 'technologies' });
+    expect(browse.value).toMatchObject([{ key: 'technologies', value: 'nextjs', count: 1 }]);
+  });
+
+  it('list_links omits a backlink source pablo has no grant to see', async () => {
+    const owner = await clientFor(OWNER.id);
+    const pablo = await clientFor(PABLO.id);
+
+    await call(owner, 'create_note', { path: 'Proyectos/zuno.md', content: 'destino compartido' });
+    // Privado/ is never shared, but it links into the folder that is.
+    await call(owner, 'create_note', {
+      path: 'Privado/diario.md',
+      content: 'ver [[Proyectos/zuno]]',
+    });
+    await call(owner, 'share_folder', { path: 'Proyectos', email: PABLO.email });
+
+    const { value } = await call(pablo, 'list_links', {
+      path: 'Proyectos/zuno.md',
+      ownerId: OWNER.id,
+    });
+    expect(Array.isArray(value)).toBe(true);
+    expect(JSON.stringify(value)).not.toContain('diario');
+    expect(JSON.stringify(value)).not.toContain('Privado');
   });
 });
 

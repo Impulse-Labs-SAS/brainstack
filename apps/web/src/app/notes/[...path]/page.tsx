@@ -14,7 +14,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
 import { NoteEditor } from '@/components/editor/note-editor';
 import { MarkdownPreview } from '@/components/editor/markdown-preview';
-import { Kbd } from '@/components/ui/kbd';
+import { EcosystemSection } from '@/components/ecosystem/ecosystem-section';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
@@ -22,11 +22,13 @@ import { usePersistedViewMode, type ViewMode } from '@/lib/use-view-mode';
 import {
   attachmentPathToRoute,
   buildIndex,
+  collectNoteCandidates,
   resolveAttachmentTarget,
   resolveEmbed as resolveEmbedClient,
   resolveNoteTarget,
   encodePath,
 } from '@/lib/wikilinks-client';
+import { splitWikilinkTarget } from '@/lib/wikilink-target';
 
 export default function NotePage() {
   const params = useParams<{ path: string[] }>();
@@ -51,10 +53,27 @@ export default function NotePage() {
     { path },
     { enabled: !!urlPath, placeholderData: keepPreviousData },
   );
+  const outboundLinks = trpc.notes.outboundLinks.useQuery(
+    { path },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
+  );
+  const related = trpc.notes.related.useQuery(
+    { path },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
+  );
+  const facetsForNote = trpc.notes.facetsForNote.useQuery(
+    { path },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
+  );
   const update = trpc.notes.update.useMutation();
   const tree = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
+  const utils = trpc.useUtils();
 
   const treeIndex = useMemo(() => buildIndex(tree.data ?? null), [tree.data]);
+  const wikilinkCandidates = useMemo(() => collectNoteCandidates(tree.data ?? null), [tree.data]);
+  const wikilinkCandidatesRef = useRef(wikilinkCandidates);
+  wikilinkCandidatesRef.current = wikilinkCandidates;
+  const getWikilinkCandidates = useCallback(() => wikilinkCandidatesRef.current, []);
 
   const [viewMode, setViewMode] = usePersistedViewMode('edit');
   const [narrow, setNarrow] = useState(false);
@@ -73,19 +92,20 @@ export default function NotePage() {
       // Extensión no-.md → tratamos el wikilink como referencia a attachment
       // y ruteamos a /files/<path>. Si no se encuentra, devolvemos /files/
       // con el target tal cual como link roto.
-      const dot = target.lastIndexOf('.');
-      const ext = dot > 0 ? target.slice(dot + 1).toLowerCase() : '';
+      const bare = splitWikilinkTarget(target).target;
+      const dot = bare.lastIndexOf('.');
+      const ext = dot > 0 ? bare.slice(dot + 1).toLowerCase() : '';
       if (ext && ext !== 'md') {
         const attPath = resolveAttachmentTarget(target, treeIndex);
         if (attPath) return { href: attachmentPathToRoute(attPath), resolved: true };
-        return { href: `/files/${encodePath(target)}`, resolved: false };
+        return { href: `/files/${encodePath(bare)}`, resolved: false };
       }
       const notePath = resolveNoteTarget(target, path, treeIndex);
       if (notePath) {
         return { href: `/notes/${encodePath(notePath.replace(/\.md$/i, ''))}`, resolved: true };
       }
       return {
-        href: `/notes/${encodePath(target.replace(/\.md$/i, ''))}`,
+        href: `/notes/${encodePath(bare.replace(/\.md$/i, ''))}`,
         resolved: false,
       };
     },
@@ -98,10 +118,6 @@ export default function NotePage() {
   );
 
   const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 320);
-  const [backlinksWidth, setBacklinksWidth] = usePersistedWidth(
-    'brainstack:notes-backlinks-width',
-    280,
-  );
 
   const meQ = trpc.auth.me.useQuery();
   const mine = meQ.data?.user?.id;
@@ -156,12 +172,20 @@ export default function NotePage() {
           onSuccess: () => {
             savedContentRef.current = pending;
             setSavedAt(Date.now());
+            // Links may have changed (wikilinks added/removed): the full
+            // Graph view and this note's own ecosystem panels would
+            // otherwise keep serving a stale, pre-edit snapshot.
+            void utils.notes.graph.invalidate();
+            void utils.notes.backlinks.invalidate();
+            void utils.notes.outboundLinks.invalidate();
+            void utils.notes.related.invalidate();
+            void utils.notes.facetsForNote.invalidate();
           },
         },
       );
     }, 600);
     return () => clearTimeout(handle);
-  }, [draft, draftPath, path, mine]);
+  }, [draft, draftPath, path, mine, utils]);
 
   /*
    * El árbol y la nota no entran juntos en un teléfono. Cuál se ve lo decide
@@ -241,9 +265,9 @@ export default function NotePage() {
             </div>
           </div>
 
-          <div className={cn('relative flex-1 overflow-hidden transition-colors')}>
+          <div className={cn('relative flex-1 overflow-hidden transition-colors', 'min-h-0')}>
             {draft !== null && effectiveMode === 'edit' && (
-              <NoteEditor value={draft} onChange={setDraft} />
+              <NoteEditor value={draft} onChange={setDraft} wikilinkCandidates={getWikilinkCandidates} />
             )}
             {draft !== null && effectiveMode === 'preview' && (
               <MarkdownPreview
@@ -256,7 +280,7 @@ export default function NotePage() {
             {draft !== null && effectiveMode === 'split' && (
               <div className="grid h-full grid-cols-2 divide-x divide-border-subtle">
                 <div className="h-full overflow-hidden">
-                  <NoteEditor value={draft} onChange={setDraft} />
+                  <NoteEditor value={draft} onChange={setDraft} wikilinkCandidates={getWikilinkCandidates} />
                 </div>
                 <div className="h-full overflow-hidden">
                   <MarkdownPreview
@@ -269,45 +293,27 @@ export default function NotePage() {
               </div>
             )}
           </div>
-        </div>
 
-        {/* Un tercer panel no entra en un teléfono, y los backlinks son lo
-            menos urgente de los tres: la nota es a lo que se vino. */}
-        <div className="hidden md:contents">
-          <ResizablePanel
-            side="right"
-            width={backlinksWidth}
-            onWidthChange={setBacklinksWidth}
-            min={200}
-            max={480}
-            className="border-l border-border-subtle"
-          >
-            <aside className="h-full overflow-y-auto p-4">
-              <div className="mb-2 flex items-center gap-2 font-mono text-[11px] text-fg-muted">
-                <Kbd>backlinks</Kbd>
-              </div>
-              <ul className="space-y-1">
-                {(backlinks.data ?? []).map((link) => (
-                  <li key={`${link.sourcePath}-${link.linkKind}`}>
-                    <a
-                      href={`/notes/${link.sourcePath.replace(/\.md$/i, '')}`}
-                      className="block rounded px-2 py-1 text-xs text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary"
-                    >
-                      <span className="font-mono">{link.sourcePath}</span>
-                      <span className="ml-2 text-fg-muted">{link.linkKind}</span>
-                    </a>
-                  </li>
-                ))}
-                {backlinks.data && backlinks.data.length === 0 && (
-                  <li className="text-xs text-fg-muted">No backlinks yet.</li>
-                )}
-              </ul>
-            </aside>
-          </ResizablePanel>
+          <div className="max-h-[40vh] shrink-0 overflow-y-auto">
+            <EcosystemSection
+              tags={frontmatterTags(note.data.frontmatter)}
+              facets={facetsForNote.data ?? []}
+              backlinks={backlinks.data ?? []}
+              outboundLinks={outboundLinks.data ?? []}
+              related={related.data ?? []}
+            />
+          </div>
         </div>
       </div>
     </AppShell>
   );
+}
+
+function frontmatterTags(frontmatter: Record<string, unknown>): string[] {
+  const raw = frontmatter.tags;
+  if (Array.isArray(raw)) return raw.filter((t): t is string => typeof t === 'string');
+  if (typeof raw === 'string') return [raw];
+  return [];
 }
 
 function ViewModeToggle({

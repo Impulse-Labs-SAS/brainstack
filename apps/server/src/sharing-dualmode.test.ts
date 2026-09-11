@@ -54,7 +54,7 @@ function buildHarness(
 
   const app = buildApp({
     buildMcpServer: (principal) =>
-      buildMcpServer({ notes, search, sharing, auth, invites, logger, principal }),
+      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, logger, principal }),
     logger,
     auth,
     apiKeys,

@@ -6,6 +6,8 @@
 
 import { visit, SKIP } from 'unist-util-visit';
 
+import { splitWikilinkTarget } from './wikilink-target';
+
 interface MdNode {
   type: string;
   value?: string;
@@ -25,6 +27,7 @@ interface WikilinkPiece {
   value: string;
   target?: string;
   alias?: string;
+  section?: string;
 }
 
 function splitWikilinks(value: string): WikilinkPiece[] {
@@ -42,14 +45,13 @@ function splitWikilinks(value: string): WikilinkPiece[] {
       last = idx + match[0].length;
       continue;
     }
-    const pipe = inner.indexOf('|');
-    const target = pipe === -1 ? inner : inner.slice(0, pipe).trim();
-    const alias = pipe === -1 ? undefined : inner.slice(pipe + 1).trim();
+    const { target, alias, section } = splitWikilinkTarget(inner);
     pieces.push({
       type: isEmbed ? 'image' : 'link',
       value: match[0],
       target,
-      alias,
+      alias: alias ?? undefined,
+      section: section ?? undefined,
     });
     last = idx + match[0].length;
   }
@@ -79,16 +81,22 @@ export function remarkWikilinks() {
 
 function pieceToNode(p: WikilinkPiece): TextNode | LinkNode | ImageNode {
   if (p.type === 'text') return { type: 'text', value: p.value };
+  // The section, when present, rides along as a URL fragment on the resolved
+  // target — not appended to `target` itself, which is what the `a`/`img`
+  // component override resolves against the tree index. Keeping it separate
+  // is what makes `[[Note#Section]]` resolve exactly like `[[Note]]` today;
+  // a future anchor-scroll can read the fragment back off `href`.
+  const suffix = p.section ? `#${p.section}` : '';
   if (p.type === 'image') {
     return {
       type: 'image',
-      url: `embed://${p.target}`,
+      url: `embed://${p.target}${suffix}`,
       alt: p.alias ?? p.target ?? '',
     };
   }
   return {
     type: 'link',
-    url: `wikilink://${p.target}`,
+    url: `wikilink://${p.target}${suffix}`,
     children: [{ type: 'text', value: p.alias ?? p.target ?? '' }],
   };
 }

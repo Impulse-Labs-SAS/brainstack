@@ -103,7 +103,7 @@ beforeEach(async () => {
     publicConfig: { deployment: 'hosted', features: { sharing: true } },
     vaultCfg: hosted,
     buildMcpServer: (principal) =>
-      buildMcpServer({ notes, search, sharing, auth, invites, logger, principal }),
+      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, logger, principal }),
   });
 
   const session = await auth.createSession('fede');

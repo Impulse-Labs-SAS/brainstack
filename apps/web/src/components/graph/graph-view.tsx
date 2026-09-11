@@ -20,6 +20,8 @@
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { FALLBACK_PALETTE, readPalette, type Palette } from '@/lib/graph-palette';
+
 interface InputNode {
   /** Stored path: unique across owners, used to join nodes to edges. */
   id: string;
@@ -84,44 +86,6 @@ const MAX_ZOOM = 6;
 const LABEL_FONT = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
 const LABEL_MAX_CHARS = 32;
 const CLICK_SLOP = 4; // px of pointer travel still counted as a click
-
-interface Palette {
-  bg: string;
-  accent: string;
-  accentSoft: string;
-  node: string;
-  foreign: string;
-  link: string;
-  label: string;
-  labelStrong: string;
-}
-
-const FALLBACK_PALETTE: Palette = {
-  bg: '#0a0a0a',
-  accent: '#7c5cff',
-  accentSoft: '#9579ff',
-  node: '#a0a0a0',
-  foreign: '#3b82f6',
-  link: '#6b6b6b',
-  label: '#a0a0a0',
-  labelStrong: '#ededed',
-};
-
-function readPalette(): Palette {
-  if (typeof window === 'undefined') return FALLBACK_PALETTE;
-  const cs = getComputedStyle(document.documentElement);
-  const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
-  return {
-    bg: v('--bg-base', FALLBACK_PALETTE.bg),
-    accent: v('--accent', FALLBACK_PALETTE.accent),
-    accentSoft: v('--accent-hover', FALLBACK_PALETTE.accentSoft),
-    node: v('--fg-secondary', FALLBACK_PALETTE.node),
-    foreign: v('--info', FALLBACK_PALETTE.foreign),
-    link: v('--fg-muted', FALLBACK_PALETTE.link),
-    label: v('--fg-secondary', FALLBACK_PALETTE.label),
-    labelStrong: v('--fg-primary', FALLBACK_PALETTE.labelStrong),
-  };
-}
 
 function worldRadius(node: SimNode): number {
   return NODE_BASE_RADIUS + Math.sqrt(node.degree) * NODE_DEGREE_SCALE;

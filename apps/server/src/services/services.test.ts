@@ -92,6 +92,85 @@ describe('NoteService', () => {
   });
 });
 
+describe('NoteService — outbound links, facets and related notes', () => {
+  it('lists outbound links, the mirror of listLinks', async () => {
+    await notes.create(USER, 'Proyectos/destino.md', '# Destino');
+    await notes.create(USER, 'Inbox/origen.md', '# Origen\n\nver [[Proyectos/destino]]');
+
+    const outbound = await notes.listOutboundLinks(USER, 'Inbox/origen.md');
+    expect(outbound.map((l) => l.targetPath)).toEqual(['Proyectos/destino.md']);
+  });
+
+  it('filters the list by facet, the mirror of filtering by tag', async () => {
+    await notes.create(USER, 'Proyectos/a.md', '# A', { technologies: ['nextjs'] });
+    await notes.create(USER, 'Proyectos/b.md', '# B', { technologies: ['vue'] });
+
+    const byFacet = await notes.list(USER, { facet: { key: 'technologies', value: 'nextjs' } });
+    expect(byFacet.map((n) => n.path)).toEqual(['Proyectos/a.md']);
+  });
+
+  it('listFacetsForNote and listFacets read what was written', async () => {
+    await notes.create(USER, 'Proyectos/a.md', '# A', { technologies: ['nextjs', 'drizzle'] });
+
+    const forNote = await notes.listFacetsForNote(USER, 'Proyectos/a.md');
+    expect(forNote.map((f) => f.value).sort()).toEqual(['drizzle', 'nextjs']);
+
+    const vaultWide = await notes.listFacets(USER, 'technologies');
+    expect(vaultWide).toContainEqual({ key: 'technologies', value: 'nextjs', count: 1 });
+  });
+
+  it('listRelated ranks a note sharing a rare tag above ones sharing only a common one', async () => {
+    await notes.create(USER, 'A.md', '# A', { tags: ['raro', 'comun'] });
+    await notes.create(USER, 'B.md', '# B', { tags: ['raro'] });
+    await notes.create(USER, 'C.md', '# C', { tags: ['comun'] });
+    await notes.create(USER, 'D.md', '# D', { tags: ['comun'] });
+
+    const related = await notes.listRelated(USER, 'A.md');
+    const paths = related.map((r) => r.path);
+    expect(paths[0]).toBe('B.md');
+    expect(paths).toEqual(expect.arrayContaining(['B.md', 'C.md', 'D.md']));
+  });
+
+  it('listRelated combines shared tags and shared facets', async () => {
+    await notes.create(USER, 'A.md', '# A', { tags: ['zuno'], technologies: ['nextjs'] });
+    await notes.create(USER, 'B.md', '# B', { tags: ['zuno'], technologies: ['nextjs'] });
+    await notes.create(USER, 'C.md', '# C', { tags: ['zuno'] });
+
+    const related = await notes.listRelated(USER, 'A.md');
+    const b = related.find((r) => r.path === 'B.md')!;
+    const c = related.find((r) => r.path === 'C.md')!;
+    expect(b.score).toBeGreaterThan(c.score);
+  });
+
+  it('listRelated returns nothing for a note with no tags or facets', async () => {
+    await notes.create(USER, 'Solo.md', '# Solo');
+    expect(await notes.listRelated(USER, 'Solo.md')).toEqual([]);
+  });
+});
+
+describe('NoteService.listDecisions', () => {
+  it('matches the decision tag', async () => {
+    await notes.create(USER, 'Decisiones/tag.md', '# T', { tags: ['decisión'] });
+    const rows = await notes.listDecisions(USER);
+    expect(rows.map((r) => r.path)).toContain('Decisiones/tag.md');
+  });
+
+  it('also matches a status: decidido facet, with no tag at all', async () => {
+    await notes.create(USER, 'Decisiones/status.md', '# S', { status: 'decidido' });
+    const rows = await notes.listDecisions(USER);
+    expect(rows.map((r) => r.path)).toContain('Decisiones/status.md');
+  });
+
+  it('does not double-count a note that carries both signals', async () => {
+    await notes.create(USER, 'Decisiones/ambas.md', '# Ambas', {
+      tags: ['decisión'],
+      status: 'decidido',
+    });
+    const rows = await notes.listDecisions(USER);
+    expect(rows.filter((r) => r.path === 'Decisiones/ambas.md')).toHaveLength(1);
+  });
+});
+
 describe('NoteService.move', () => {
   it('renames a note and rewrites the wikilinks pointing at it', async () => {
     await notes.create(USER, 'Zuno/Pricing.md', '# Pricing');

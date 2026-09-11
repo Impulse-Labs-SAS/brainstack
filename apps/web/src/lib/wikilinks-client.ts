@@ -4,6 +4,7 @@
 // trpc.notes.tree.
 
 import { attachmentUrl } from './server-url';
+import { splitWikilinkTarget } from './wikilink-target';
 
 export type AttachmentKind = 'image' | 'video' | 'audio' | 'pdf' | 'other';
 
@@ -60,6 +61,27 @@ export interface TreeNodeLike {
   children?: TreeNodeLike[];
 }
 
+/**
+ * Every note in the tree as a `{path, title}` pair, for `[[` autocomplete.
+ * `title` is the basename (no folder, no `.md`) — the tree carries no
+ * frontmatter title, and resolution itself already works by basename, so
+ * this stays consistent with what a wikilink actually matches against.
+ */
+export function collectNoteCandidates(
+  root: TreeNodeLike | null | undefined,
+): Array<{ path: string; title: string }> {
+  const out: Array<{ path: string; title: string }> = [];
+  if (!root) return out;
+  const walk = (node: TreeNodeLike): void => {
+    if (node.type === 'note' && node.path) {
+      out.push({ path: node.path, title: basename(node.path).replace(/\.md$/i, '') });
+    }
+    if (node.children) for (const c of node.children) walk(c);
+  };
+  walk(root);
+  return out;
+}
+
 export function buildIndex(root: TreeNodeLike | null | undefined): TreeIndex {
   const notes = new Set<string>();
   const attachments = new Set<string>();
@@ -79,7 +101,11 @@ export function resolveNoteTarget(
   sourcePath: string,
   idx: TreeIndex,
 ): string | null {
-  const raw = target.replace(/\\/g, '/');
+  // `target` may still carry a `#Section` (the preview's `a`/`img` overrides
+  // pass the decoded href straight through) — strip it the same way the
+  // server's parser does, or `[[Note#Section]]` resolves nothing even though
+  // it indexed fine.
+  const raw = splitWikilinkTarget(target).target.replace(/\\/g, '/');
   if (raw.includes('/')) {
     const t = withMd(raw);
     return idx.notes.has(t) ? t : null;
@@ -104,7 +130,7 @@ export function resolveAttachmentTarget(
   target: string,
   idx: TreeIndex,
 ): string | null {
-  const raw = target.replace(/\\/g, '/');
+  const raw = splitWikilinkTarget(target).target.replace(/\\/g, '/');
   if (idx.attachments.has(raw)) return raw;
   const name = basename(raw);
   const matches: string[] = [];
@@ -119,7 +145,7 @@ export function resolveEmbed(
   sourcePath: string,
   idx: TreeIndex,
 ): ResolvedAttachment | { kind: 'note'; path: string } | null {
-  const ext = extOf(target);
+  const ext = extOf(splitWikilinkTarget(target).target);
   if (ext && ext !== 'md') {
     const attPath = resolveAttachmentTarget(target, idx);
     if (!attPath) return null;

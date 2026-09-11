@@ -13,9 +13,12 @@ You interact with BrainStack via these MCP tools:
 
 - `search_brain(query, limit?)`
 - `get_note(path)`
-- `list_notes(folder?, tag?, status?, limit?)`
+- `list_notes(folder?, tag?, facetKey?, facetValue?, status?, limit?)`
 - `list_tree(path?, depth?)` — hierarchical view of the vault, folders first
 - `list_links(path)` — backlinks for a path
+- `list_outbound_links(path)` — what a path links to or embeds; the mirror of `list_links`
+- `list_related(path, limit?)` — notes related by a shared tag or facet, ranked by rarity; own vault only
+- `list_facets(path?, key?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
 - `list_decisions(folder?, limit?)` — notes tagged `decisión`/`decision` or with `status: decidido`
 - `get_attachment(path)` — read a binary under `Attachments/`
 - `get_brainstack_guide()` — returns this document at runtime
@@ -54,6 +57,9 @@ Always verify with the brain before claiming a fact about the user's domain. Nev
 - `list_notes(folder=..., tag=..., status=...)` — structured navigation, faster than search when scoped.
 - `list_tree(path?)` — when you need to understand the vault's shape (where things live, what top-levels exist). **Always start here when deciding where to save something.**
 - `list_links(path)` — backlinks to a note or attachment. Useful for "what referenced this PDF?" or "what links back here?".
+- `list_outbound_links(path)` — what a note itself links to or embeds.
+- `list_related(path)` — other notes sharing a tag or facet, when the user wants "what else touches this" beyond explicit links.
+- `list_facets(path?, key?)` — a note's own facets, or (omit `path`) every value in use for browsing/autocomplete.
 - `list_decisions(folder?)` — decisions only, sorted by recency. Useful when the user asks "what have we decided about X".
 - `list_shared_with_me()` — folders other people shared with the user. See
   **Shared folders** below: these live in someone else's vault and every tool
@@ -227,6 +233,24 @@ Rules:
 - Hierarchical when useful: `proyecto/zuno`, `tipo/decisión`, `persona/pablo`.
 - Reuse existing tags before inventing new ones. `list_notes(tag="…")` and `search_brain` can show what's in use.
 - ~5 tags max per note. More is noise.
+
+## Facets — structured frontmatter beyond tags
+
+Any frontmatter field other than `tags` becomes a queryable **facet**, automatically — there is nothing to register first. An array gives one facet value per element; a scalar gives one. Use this for structured, typed metadata that a plain tag would flatten:
+
+```yaml
+---
+tags: [proyecto/zuno]
+technologies: [nextjs, drizzle]
+resources:
+  - { value: 'RFC 9111', url: 'https://...' }
+status: decidido
+---
+```
+
+- Reuse existing facet keys and values before inventing new ones — `list_facets(key="technologies")` shows what's in use, same idea as checking existing tags.
+- Prefer a facet over a tag when the metadata has a name *and* a value that's naturally worth filtering on separately (`technologies: nextjs` rather than a tag `tech/nextjs`) — both work, but a facet keeps `nextjs` queryable as a value under the `technologies` key rather than a string to parse.
+- `list_related(path)` uses both tags and facets to find related notes — a note doesn't need explicit wikilinks to show up there, just a shared tag or facet value.
 
 ## Markdown syntax (Obsidian-flavored)
 

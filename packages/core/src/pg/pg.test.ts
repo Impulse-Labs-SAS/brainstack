@@ -6,7 +6,7 @@
 // instead, but the SQL is identical.
 
 import { PGlite } from '@electric-sql/pglite';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -15,6 +15,7 @@ import { PathTraversalError } from '../paths.js';
 import { ensurePgSchema, runPgMigrations, type PgDb } from './client.js';
 import { pgMigrations } from './migrations.js';
 import { PgNoteStore, NoteAlreadyExistsError, NoteNotFoundError, toMarkdown } from './notes.js';
+import { facets as facetsTable } from './schema.js';
 import { normalizeNoteKey } from '../paths.js';
 import { PgSearchService, tokenize, toTsQuery } from './search.js';
 
@@ -192,6 +193,23 @@ describe('links and tags', () => {
     expect(await notes.listBacklinks('Grafo/uno.md')).toHaveLength(0);
   });
 
+  it('flips backlinks pointing at a deleted note to unresolved instead of leaving them stale', async () => {
+    await notes.upsert('Grafo/desaparece.md', '# Desaparece');
+    await notes.upsert('Grafo/apunta.md', 'Ve a [[desaparece]].');
+    expect(await notes.listBacklinks('Grafo/desaparece.md')).toContainEqual(
+      expect.objectContaining({ sourcePath: 'Grafo/apunta.md', targetType: 'note' }),
+    );
+
+    await notes.remove('Grafo/desaparece.md');
+
+    // The row survives the delete (there is no FK on target_path), but it must
+    // no longer claim the note it named still exists.
+    const backlinks = await notes.listBacklinks('Grafo/desaparece.md');
+    expect(backlinks).toContainEqual(
+      expect.objectContaining({ sourcePath: 'Grafo/apunta.md', targetType: 'unresolved' }),
+    );
+  });
+
   it('collects tags from both frontmatter and the body', async () => {
     await notes.upsert(
       'Grafo/etiquetada.md',
@@ -205,6 +223,124 @@ describe('links and tags', () => {
 
     const all = await notes.listTags();
     expect(all.map((t) => t.tag)).toEqual(expect.arrayContaining(['desde-frontmatter']));
+  });
+
+  it('lists outbound links, the mirror of listBacklinks', async () => {
+    await notes.upsert('Grafo/salida-destino.md', '# Destino');
+    await notes.upsert(
+      'Grafo/salida-origen.md',
+      '# Origen\n\nVa a [[salida-destino]] y a https://afuera.com no cuenta.',
+    );
+
+    const outbound = await notes.listOutboundLinks('Grafo/salida-origen.md');
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]).toMatchObject({
+      sourcePath: 'Grafo/salida-origen.md',
+      targetPath: 'Grafo/salida-destino.md',
+    });
+    // Nothing at the destination's own path — that's listBacklinks's job.
+    expect(await notes.listOutboundLinks('Grafo/salida-destino.md')).toHaveLength(0);
+  });
+
+  it('lists by facet, the mirror of listing by tag', async () => {
+    await notes.upsert('Facetas/uno-tec.md', '---\ntechnologies: [nextjs]\n---\n\n# Uno');
+    await notes.upsert('Facetas/otro-tec.md', '---\ntechnologies: [vue]\n---\n\n# Otro');
+
+    const byFacet = await notes.list({ facet: { key: 'technologies', value: 'nextjs' } });
+    expect(byFacet.map((n) => n.path)).toContain('Facetas/uno-tec.md');
+    expect(byFacet.map((n) => n.path)).not.toContain('Facetas/otro-tec.md');
+  });
+});
+
+describe('facets', () => {
+  it('indexes array, object-array and scalar frontmatter fields, skipping tags', async () => {
+    await notes.upsert(
+      'Facetas/nota.md',
+      [
+        '---',
+        'tags: [ignorame]',
+        'technologies: [nextjs, drizzle]',
+        'resources:',
+        '  - {value: paper-1, url: "https://x"}',
+        'status: decidido',
+        '---',
+        '',
+        '# Nota',
+      ].join('\n'),
+    );
+
+    const rows = await db
+      .select({ key: facetsTable.key, value: facetsTable.value, data: facetsTable.data })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/nota.md'));
+
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { key: 'technologies', value: 'nextjs', data: null },
+        { key: 'technologies', value: 'drizzle', data: null },
+        { key: 'resources', value: 'paper-1', data: { value: 'paper-1', url: 'https://x' } },
+        { key: 'status', value: 'decidido', data: null },
+      ]),
+    );
+    expect(rows.some((r) => r.key === 'tags')).toBe(false);
+  });
+
+  it('rebuilds facets on every write instead of accumulating stale rows', async () => {
+    await notes.upsert('Facetas/movil.md', '---\nstatus: idea\n---\n\n# Movil');
+    let rows = await db
+      .select({ value: facetsTable.value })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/movil.md'));
+    expect(rows).toEqual([{ value: 'idea' }]);
+
+    await notes.upsert('Facetas/movil.md', '---\nstatus: decidido\n---\n\n# Movil');
+    rows = await db
+      .select({ value: facetsTable.value })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/movil.md'));
+    expect(rows).toEqual([{ value: 'decidido' }]);
+  });
+
+  it('cascades facets away when the note is deleted', async () => {
+    await notes.upsert('Facetas/borrame.md', '---\nstatus: idea\n---\n\n# Borrame');
+    await notes.remove('Facetas/borrame.md');
+
+    const rows = await db
+      .select({ value: facetsTable.value })
+      .from(facetsTable)
+      .where(eq(facetsTable.notePath, 'Facetas/borrame.md'));
+    expect(rows).toEqual([]);
+  });
+
+  it('listFacetsForNote returns one note’s facets', async () => {
+    await notes.upsert(
+      'Facetas/lectura.md',
+      '---\ntechnologies: [nextjs, drizzle]\nstatus: idea\n---\n\n# Lectura',
+    );
+
+    const rows = await notes.listFacetsForNote('Facetas/lectura.md');
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { key: 'technologies', value: 'nextjs', data: null },
+        { key: 'technologies', value: 'drizzle', data: null },
+        { key: 'status', value: 'idea', data: null },
+      ]),
+    );
+  });
+
+  it('listFacets counts distinct (key, value) pairs, optionally narrowed to one key', async () => {
+    // A value not used by any other test in this shared database, so the
+    // count asserted below is exact rather than an accumulation across tests.
+    await notes.upsert('Facetas/browse-a.md', '---\ntechnologies: [sveltekit]\n---\n\n# A');
+    await notes.upsert('Facetas/browse-b.md', '---\ntechnologies: [sveltekit]\n---\n\n# B');
+    await notes.upsert('Facetas/browse-c.md', '---\nstatus: browse-test\n---\n\n# C');
+
+    const byKey = await notes.listFacets('technologies');
+    expect(byKey).toContainEqual({ key: 'technologies', value: 'sveltekit', count: 2 });
+    expect(byKey.some((f) => f.key === 'status')).toBe(false);
+
+    const all = await notes.listFacets();
+    expect(all.map((f) => f.key)).toEqual(expect.arrayContaining(['technologies', 'status']));
   });
 });
 

@@ -26,6 +26,7 @@ export {
   PgNoteStore,
   toMarkdown,
   type Backlink,
+  type Facet,
   type ListFilter,
   type NoteSummary,
   type StoredNote,

@@ -15,9 +15,9 @@ import matter from 'gray-matter';
 import { parseNote } from '../parser/index.js';
 import { normalizeNoteKey, normalizeRelativePath } from '../paths.js';
 import { resolveLinks } from '../resolver/wikilinks.js';
-import type { Frontmatter, ParsedLink, ResolvedLink } from '../types.js';
+import type { Frontmatter, ParsedFacet, ParsedLink, ResolvedLink } from '../types.js';
 
-import { links, notes, tags } from './schema.js';
+import { facets, links, notes, tags } from './schema.js';
 import type { PgDb } from './client.js';
 
 export class NoteNotFoundError extends Error {
@@ -55,6 +55,8 @@ export interface ListFilter {
   folder?: string;
   /** Restrict to notes carrying this tag. */
   tag?: string;
+  /** Restrict to notes carrying this exact (key, value) facet. */
+  facet?: { key: string; value: string };
   /** Restrict by `frontmatter.status`. */
   status?: string;
   limit?: number;
@@ -67,6 +69,12 @@ export interface Backlink {
   linkKind: string;
   alias: string | null;
   section: string | null;
+}
+
+export interface Facet {
+  key: string;
+  value: string;
+  data: Record<string, unknown> | null;
 }
 
 /** Reserialise a stored note into the markdown a client expects to read. */
@@ -171,7 +179,7 @@ export class PgNoteStore {
        */
       .returning({ ...NOTE_COLUMNS, inserted: sql<boolean>`(xmax = 0)` });
 
-    await this.rebuildGraph(key, parsed.links, parsed.tags, ownerId);
+    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId);
     if (row?.inserted) await this.resolvePendingLinksTo(key);
 
     const { inserted: _inserted, ...stored } = row!;
@@ -235,13 +243,31 @@ export class PgNoteStore {
       const parsed = parseNote(toMarkdown(source as Pick<StoredNote, 'frontmatter' | 'body'>), {
         path: sourcePath,
       });
-      await this.rebuildGraph(sourcePath, parsed.links, parsed.tags, target.ownerId ?? undefined);
+      await this.rebuildGraph(
+        sourcePath,
+        parsed.links,
+        parsed.tags,
+        parsed.facets,
+        target.ownerId ?? undefined,
+      );
     }
   }
 
   async remove(path: string): Promise<void> {
     const key = normalizeNoteKey(path);
-    // links/tags cascade on the foreign key.
+    // links/tags cascade on the foreign key — that clears this note's own
+    // outgoing rows. It says nothing about everybody else's: `target_path` is
+    // plain text, not a foreign key (a target may not exist yet), so a note
+    // that pointed at this one keeps a `links` row claiming `targetType:
+    // 'note'` until it is next resaved. Flip those first, while the row we are
+    // about to delete can still tell us which links pointed at it — a broken
+    // link should show as broken the moment the note it named is gone, not
+    // whenever its author happens to rewrite something else.
+    await this.db
+      .update(links)
+      .set({ targetType: 'unresolved' })
+      .where(and(eq(links.targetPath, key), sql`${links.targetType} != 'unresolved'`));
+
     const deleted = await this.db
       .delete(notes)
       .where(eq(notes.path, key))
@@ -279,6 +305,13 @@ export class PgNoteStore {
                     AND ${tags.tag} = ${filter.tag})`,
       );
     }
+    if (filter.facet) {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM ${facets} WHERE ${facets.notePath} = ${notes.path}
+                    AND ${facets.key} = ${filter.facet.key}
+                    AND ${facets.value} = ${filter.facet.value})`,
+      );
+    }
 
     return this.db
       .select({ path: notes.path, title: notes.title, updatedAt: notes.updatedAt })
@@ -305,6 +338,23 @@ export class PgNoteStore {
       .orderBy(links.sourcePath, links.position);
   }
 
+  /** Every link `path` points at — the mirror of `listBacklinks`. */
+  async listOutboundLinks(path: string): Promise<Backlink[]> {
+    const key = normalizeRelativePath(path);
+    return this.db
+      .select({
+        sourcePath: links.sourcePath,
+        targetPath: links.targetPath,
+        targetType: links.targetType,
+        linkKind: links.linkKind,
+        alias: links.alias,
+        section: links.section,
+      })
+      .from(links)
+      .where(eq(links.sourcePath, key))
+      .orderBy(links.position);
+  }
+
   /** Distinct tags in use, for autocomplete and "what tags exist?" questions. */
   async listTags(): Promise<{ tag: string; count: number }[]> {
     const rows = await this.db
@@ -313,6 +363,31 @@ export class PgNoteStore {
       .groupBy(tags.tag)
       .orderBy(desc(sql`count(*)`));
     return rows.map((r) => ({ tag: r.tag, count: Number(r.count) }));
+  }
+
+  /** Facets on one note, in the order they appeared. */
+  async listFacetsForNote(path: string): Promise<Facet[]> {
+    const key = normalizeRelativePath(path);
+    return this.db
+      .select({ key: facets.key, value: facets.value, data: facets.data })
+      .from(facets)
+      .where(eq(facets.notePath, key))
+      .orderBy(facets.key, facets.position);
+  }
+
+  /**
+   * Distinct `(key, value)` pairs in use, for faceted browsing and
+   * autocomplete — the mirror of `listTags`. Narrow to one `key` to browse
+   * just that facet's values (e.g. every `technologies` in use).
+   */
+  async listFacets(key?: string): Promise<{ key: string; value: string; count: number }[]> {
+    const rows = await this.db
+      .select({ key: facets.key, value: facets.value, count: sql<number>`count(*)::int` })
+      .from(facets)
+      .where(key ? eq(facets.key, key) : undefined)
+      .groupBy(facets.key, facets.value)
+      .orderBy(desc(sql`count(*)`));
+    return rows.map((r) => ({ key: r.key, value: r.value, count: Number(r.count) }));
   }
 
   /** Delete several notes at once. Used by the importer when pruning. */
@@ -343,6 +418,7 @@ export class PgNoteStore {
     path: string,
     parsedLinks: readonly ParsedLink[],
     noteTags: readonly string[],
+    noteFacets: readonly ParsedFacet[],
     ownerId?: string,
   ): Promise<void> {
     // A wikilink is written the way its author sees the path, which in a
@@ -390,6 +466,22 @@ export class PgNoteStore {
       await this.db
         .insert(tags)
         .values(noteTags.map((tag) => ({ notePath: path, tag })))
+        .onConflictDoNothing();
+    }
+
+    await this.db.delete(facets).where(eq(facets.notePath, path));
+    if (noteFacets.length > 0) {
+      await this.db
+        .insert(facets)
+        .values(
+          noteFacets.map((f) => ({
+            notePath: path,
+            key: f.key,
+            value: f.value,
+            data: f.data,
+            position: f.position,
+          })),
+        )
         .onConflictDoNothing();
     }
   }

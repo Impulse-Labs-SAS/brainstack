@@ -393,6 +393,28 @@ const invitePermission: PgMigration = {
   ],
 };
 
+/**
+ * Generic frontmatter facets, alongside `tags`. Kept as its own table rather
+ * than a wider `tags` (namespacing it `technologies/nextjs`, say) so an
+ * object entry (`resources: [{url, label}]`) has somewhere to keep the raw
+ * shape (`data`), and so a facet's `key` stays a first-class thing to filter
+ * and browse by instead of a string prefix to parse back out.
+ */
+const facets: PgMigration = {
+  name: '0009_pg_facets',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS facets (
+       note_path TEXT NOT NULL REFERENCES notes(path) ON DELETE CASCADE,
+       key       TEXT NOT NULL,
+       value     TEXT NOT NULL,
+       data      JSONB,
+       position  INTEGER NOT NULL,
+       PRIMARY KEY (note_path, key, position)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_facets_key_value ON facets (key, value)`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -402,4 +424,5 @@ export const pgMigrations: readonly PgMigration[] = [
   oauthProvider,
   sharePermission,
   invitePermission,
+  facets,
 ];

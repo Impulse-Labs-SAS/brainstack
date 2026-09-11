@@ -13,6 +13,7 @@ export type {
   LinkKind,
   LinkTargetType,
   NoteRow,
+  ParsedFacet,
   ParsedLink,
   ParsedNote,
   ResolvedLink,
@@ -37,9 +38,11 @@ export {
 // --- Parser ------------------------------------------------------------------
 export {
   buildCodeMask,
+  extractFacets,
   extractFrontmatter,
   extractLinks,
   extractTags,
+  FACET_SKIP_KEYS,
   parseNote,
   type ParseNoteOptions,
 } from './parser/index.js';

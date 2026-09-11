@@ -62,6 +62,7 @@ describe('CrossOwnerReader in self-host', () => {
     await expect(selfReader.getNote('viewer', 'owner', 'x.md')).rejects.toThrow();
     await expect(selfReader.listTree('viewer', 'owner', 'p')).rejects.toThrow();
     await expect(selfReader.linksForOwner('viewer', 'owner', 'x.md')).rejects.toThrow();
+    await expect(selfReader.backlinksForOwner('viewer', 'owner', 'x.md')).rejects.toThrow();
   });
 });
 
@@ -126,6 +127,23 @@ describe('CrossOwnerReader in hosted', () => {
     expect(reachable.map((l) => l.targetPath)).toEqual(['proyectos/b.md']);
     // The link to the private note survives as a link, but unnamed.
     expect(JSON.stringify(links)).not.toContain('secreto');
+  });
+
+  it('backlinksForOwner omits sources the viewer cannot reach, rather than masking them', async () => {
+    // proyectos/ is shared with the viewer; privado/ is not. A note inside
+    // privado/ links into the shared folder — its existence must not leak.
+    await seedNote('owner', 'proyectos/b.md', '# B');
+    await seedNote('owner', 'privado/secreto.md', '# S\n\n[[proyectos/b]]');
+    await seedNote('owner', 'proyectos/a.md', '# A\n\n[[proyectos/b]]');
+    await grant('proyectos');
+
+    const backlinks = await reader.backlinksForOwner('viewer', 'owner', 'proyectos/b.md');
+
+    expect(backlinks.map((l) => l.sourcePath)).toEqual(['proyectos/a.md']);
+    // Unlike a masked outbound target, an unreadable backlink source is
+    // dropped entirely — there is no placeholder row naming "a hidden note".
+    expect(JSON.stringify(backlinks)).not.toContain('secreto');
+    expect(JSON.stringify(backlinks)).not.toContain('privado');
   });
 });
 
