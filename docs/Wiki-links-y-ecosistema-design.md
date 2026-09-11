@@ -161,20 +161,27 @@ práctica ya existente.
   resolver por alias/título en vez de path/filename sigue siendo un cambio más profundo
   y riesgoso, deliberadamente diferido (§8).
 
-## 8. Mini-grafo (ego-graph) embebido
+## 8. Mini-grafo (ego-graph) embebido — construido y luego removido
 
-Un layout radial estático, sin física — el motor de fuerzas en canvas de `/graph`
-(`apps/web/src/components/graph/graph-view.tsx`) está pensado para el vault entero;
-re-correrlo para ~10-30 vecinos de un salto sería mucho más trabajo del que el resultado
-necesita.
+Se implementó un layout radial estático ("Mapa de un salto") al pie de la sección
+Ecosistema y se removió después. Dos razones, en orden de peso:
 
-- `apps/web/src/lib/graph-palette.ts` — `readPalette()`/`Palette` extraídos de
-  `graph-view.tsx` para compartir, no duplicar.
-- `apps/web/src/lib/ego-graph-layout.ts` — layout puro, testeado
-  (`layoutEgoGraph(neighbors, {width, height, maxNodes})`).
-- `apps/web/src/components/ecosystem/ego-graph.tsx` — SVG estático, alimentado por los
-  datos que `EcosystemSection` ya tiene (backlinks + outbound + related, deduplicados
-  por path) — sin query nueva.
+1. **Afirmaba conexiones que no existían.** Tomaba sus vecinos de tres fuentes —
+   backlinks, enlaces salientes y `related` — y dibujaba las tres con la misma línea.
+   Pero `related` no es un enlace: son notas que comparten tag o faceta
+   (`NoteService.listRelated`). Tres notas sin ningún `[[wikilink]]` entre sí se veían
+   conectadas ahí mientras `/graph` —que lee sólo la tabla `links`— correctamente no
+   mostraba ninguna arista. La contradicción se leía como un bug del grafo.
+2. **No escalaba.** Un layout radial de un solo anillo se satura con las notas de un
+   vault real; el cap de nodos lo hacía legible ocultando vecinos, que es peor que no
+   mostrar el mapa.
+
+Las cuatro columnas de texto de la sección Ecosistema (tags/facetas, backlinks,
+enlaces salientes, relacionadas) cubren la misma información sin confundir un enlace
+con una afinidad, y `/graph` sigue siendo la vista de estructura.
+
+`apps/web/src/lib/graph-palette.ts` (`readPalette()`/`Palette`, extraído de
+`graph-view.tsx`) sobrevive: hoy lo usa sólo el grafo completo.
 
 ## 9. Fast-follows documentados (no construidos en esta rama)
 
@@ -197,11 +204,11 @@ necesita.
 - `pnpm --filter @brainstack/server test` — `services.test.ts` (incl. fórmula de
   rareza), `crossOwnerReader.test.ts`, `hosted-isolation.test.ts`,
   `mcp/sharingTools.test.ts`.
-- `pnpm --filter web test` — `ecosystem.test.ts`, `ego-graph-layout.test.ts`,
+- `pnpm --filter web test` — `ecosystem.test.ts`,
   `wikilink-autocomplete-match.test.ts`, `wikilink-target.test.ts`,
   `wikilinks-client.test.ts`.
 - Manual: nota con backlinks/facetas/relacionadas reales → confirmar que el panel
-  lateral desapareció y la sección Ecosistema muestra las 5 subsecciones + mini-grafo;
+  lateral desapareció y la sección Ecosistema muestra sus 4 columnas;
   `[[` en el editor autocompleta; `[[Nota#Sección]]` en preview ya no se ve roto; dos
   usuarios de prueba con una carpeta parcialmente compartida confirman que el backlink
   desde la carpeta no compartida no se filtra.

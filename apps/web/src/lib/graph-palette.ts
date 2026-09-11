@@ -1,8 +1,8 @@
 // Reads the app's CSS custom properties into plain color strings, for any
 // canvas/SVG visualization that can't use Tailwind classes directly.
-// Shared by the full-page force graph (components/graph/graph-view.tsx) and
-// the mini ego-graph embedded in the Ecosystem section — both need the exact
-// same palette, so this lives in one place rather than two.
+// Used by the full-page force graph (components/graph/graph-view.tsx); kept
+// separate from it so a second visualization would not have to re-derive the
+// palette from the design tokens.
 
 export interface Palette {
   bg: string;
