@@ -67,6 +67,7 @@ export default function NotePage() {
   );
   const update = trpc.notes.update.useMutation();
   const tree = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
+  const utils = trpc.useUtils();
 
   const treeIndex = useMemo(() => buildIndex(tree.data ?? null), [tree.data]);
   const wikilinkCandidates = useMemo(() => collectNoteCandidates(tree.data ?? null), [tree.data]);
@@ -171,12 +172,20 @@ export default function NotePage() {
           onSuccess: () => {
             savedContentRef.current = pending;
             setSavedAt(Date.now());
+            // Links may have changed (wikilinks added/removed): the full
+            // Graph view and this note's own ecosystem panels would
+            // otherwise keep serving a stale, pre-edit snapshot.
+            void utils.notes.graph.invalidate();
+            void utils.notes.backlinks.invalidate();
+            void utils.notes.outboundLinks.invalidate();
+            void utils.notes.related.invalidate();
+            void utils.notes.facetsForNote.invalidate();
           },
         },
       );
     }, 600);
     return () => clearTimeout(handle);
-  }, [draft, draftPath, path, mine]);
+  }, [draft, draftPath, path, mine, utils]);
 
   /*
    * El árbol y la nota no entran juntos en un teléfono. Cuál se ve lo decide

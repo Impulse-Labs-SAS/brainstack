@@ -407,6 +407,9 @@ export function FileTree() {
       // A migration into a shared folder changes the other side of the sidebar
       // too, and that tree is a different query.
       utils.notes.treeForOwner.invalidate(),
+      // New/renamed/moved/deleted notes change link targets, so the full
+      // Graph view's edge set is stale otherwise.
+      utils.notes.graph.invalidate(),
     ]);
   }, [utils]);
 

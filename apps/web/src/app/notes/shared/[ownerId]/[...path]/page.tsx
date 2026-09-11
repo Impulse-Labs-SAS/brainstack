@@ -56,6 +56,7 @@ export default function SharedNotePage() {
   // the server last accepted rather than against the query data, which is not
   // refetched after a write and would otherwise never match again.
   const update = trpc.notes.update.useMutation();
+  const utils = trpc.useUtils();
   const [draft, setDraft] = useState<string | null>(null);
   const [draftPath, setDraftPath] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -86,12 +87,15 @@ export default function SharedNotePage() {
           onSuccess: () => {
             savedContentRef.current = pending;
             setSavedAt(Date.now());
+            // Same reasoning as the own-note view: links may have changed.
+            void utils.notes.graph.invalidate();
+            void utils.notes.linksForOwner.invalidate();
           },
         },
       );
     }, 600);
     return () => clearTimeout(handle);
-  }, [canWrite, draft, draftPath, path, ownerId]);
+  }, [canWrite, draft, draftPath, path, ownerId, utils]);
 
   const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:shared-tree-width', 320);
 
