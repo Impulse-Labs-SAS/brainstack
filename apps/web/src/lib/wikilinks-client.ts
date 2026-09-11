@@ -4,6 +4,7 @@
 // trpc.notes.tree.
 
 import { attachmentUrl } from './server-url';
+import { splitWikilinkTarget } from './wikilink-target';
 
 export type AttachmentKind = 'image' | 'video' | 'audio' | 'pdf' | 'other';
 
@@ -79,7 +80,11 @@ export function resolveNoteTarget(
   sourcePath: string,
   idx: TreeIndex,
 ): string | null {
-  const raw = target.replace(/\\/g, '/');
+  // `target` may still carry a `#Section` (the preview's `a`/`img` overrides
+  // pass the decoded href straight through) — strip it the same way the
+  // server's parser does, or `[[Note#Section]]` resolves nothing even though
+  // it indexed fine.
+  const raw = splitWikilinkTarget(target).target.replace(/\\/g, '/');
   if (raw.includes('/')) {
     const t = withMd(raw);
     return idx.notes.has(t) ? t : null;
@@ -104,7 +109,7 @@ export function resolveAttachmentTarget(
   target: string,
   idx: TreeIndex,
 ): string | null {
-  const raw = target.replace(/\\/g, '/');
+  const raw = splitWikilinkTarget(target).target.replace(/\\/g, '/');
   if (idx.attachments.has(raw)) return raw;
   const name = basename(raw);
   const matches: string[] = [];
@@ -119,7 +124,7 @@ export function resolveEmbed(
   sourcePath: string,
   idx: TreeIndex,
 ): ResolvedAttachment | { kind: 'note'; path: string } | null {
-  const ext = extOf(target);
+  const ext = extOf(splitWikilinkTarget(target).target);
   if (ext && ext !== 'md') {
     const attPath = resolveAttachmentTarget(target, idx);
     if (!attPath) return null;

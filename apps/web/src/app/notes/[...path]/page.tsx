@@ -27,6 +27,7 @@ import {
   resolveNoteTarget,
   encodePath,
 } from '@/lib/wikilinks-client';
+import { splitWikilinkTarget } from '@/lib/wikilink-target';
 
 export default function NotePage() {
   const params = useParams<{ path: string[] }>();
@@ -73,19 +74,20 @@ export default function NotePage() {
       // Extensión no-.md → tratamos el wikilink como referencia a attachment
       // y ruteamos a /files/<path>. Si no se encuentra, devolvemos /files/
       // con el target tal cual como link roto.
-      const dot = target.lastIndexOf('.');
-      const ext = dot > 0 ? target.slice(dot + 1).toLowerCase() : '';
+      const bare = splitWikilinkTarget(target).target;
+      const dot = bare.lastIndexOf('.');
+      const ext = dot > 0 ? bare.slice(dot + 1).toLowerCase() : '';
       if (ext && ext !== 'md') {
         const attPath = resolveAttachmentTarget(target, treeIndex);
         if (attPath) return { href: attachmentPathToRoute(attPath), resolved: true };
-        return { href: `/files/${encodePath(target)}`, resolved: false };
+        return { href: `/files/${encodePath(bare)}`, resolved: false };
       }
       const notePath = resolveNoteTarget(target, path, treeIndex);
       if (notePath) {
         return { href: `/notes/${encodePath(notePath.replace(/\.md$/i, ''))}`, resolved: true };
       }
       return {
-        href: `/notes/${encodePath(target.replace(/\.md$/i, ''))}`,
+        href: `/notes/${encodePath(bare.replace(/\.md$/i, ''))}`,
         resolved: false,
       };
     },
