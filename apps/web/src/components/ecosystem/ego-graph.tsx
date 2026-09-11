@@ -19,6 +19,29 @@ const RELATION_COLOR: Record<EgoNeighbor['relation'], keyof Palette> = {
   related: 'node',
 };
 
+/*
+ * A `related` neighbor is not a link: it is another note that happens to
+ * share a tag or facet (NoteService.listRelated). Drawing it with the same
+ * solid line as a wikilink made this map assert connections that nobody
+ * wrote — and that the full graph, which reads only the `links` table,
+ * correctly refuses to draw. Dashed keeps the affinity visible while saying
+ * it is a weaker, different thing.
+ */
+const RELATION_DASH: Record<EgoNeighbor['relation'], string | undefined> = {
+  backlink: undefined,
+  outbound: undefined,
+  related: '3 3',
+};
+
+const RELATION_LABEL: Record<EgoNeighbor['relation'], string> = {
+  backlink: 'enlace entrante',
+  outbound: 'enlace saliente',
+  related: 'afín por tag/faceta',
+};
+
+/** The order the legend reads in, so it does not reshuffle per note. */
+const RELATION_ORDER: EgoNeighbor['relation'][] = ['backlink', 'outbound', 'related'];
+
 export interface EgoGraphProps {
   /** The open note's own path — drawn at the center, not clickable. */
   centerLabel: string;
@@ -34,6 +57,14 @@ export function EgoGraph({ centerLabel, neighbors, size = 220 }: EgoGraphProps) 
   const layout = useMemo(
     () => layoutEgoGraph(neighbors, { width: size, height: size }),
     [neighbors, size],
+  );
+
+  // From the laid-out nodes, not from `neighbors`: dedup and the node cap
+  // both happen in the layout, and a legend row for a relation that got
+  // dropped would explain a line nobody can see.
+  const present = useMemo(
+    () => new Set(layout.nodes.map((n) => n.relation)),
+    [layout.nodes],
   );
 
   if (neighbors.length === 0) return null;
@@ -59,7 +90,8 @@ export function EgoGraph({ centerLabel, neighbors, size = 220 }: EgoGraphProps) 
             y2={n.y}
             stroke={palette.link}
             strokeWidth={1}
-            opacity={0.5}
+            strokeDasharray={RELATION_DASH[n.relation]}
+            opacity={n.relation === 'related' ? 0.3 : 0.55}
           />
         ))}
 
@@ -95,6 +127,32 @@ export function EgoGraph({ centerLabel, neighbors, size = 220 }: EgoGraphProps) 
           </g>
         ))}
       </svg>
+
+      {/*
+       * Without this the three relations are three shades of dot, and the
+       * only reading left is "these notes are connected" — which for the
+       * dashed ones is not what the vault actually says.
+       */}
+      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+        {RELATION_ORDER.filter((rel) => present.has(rel)).map((rel) => (
+          <li key={rel} className="flex items-center gap-1 font-mono text-[10px] text-fg-muted">
+            <svg width={16} height={8} aria-hidden="true">
+              <line
+                x1={0}
+                y1={4}
+                x2={16}
+                y2={4}
+                stroke={palette.link}
+                strokeWidth={1}
+                strokeDasharray={RELATION_DASH[rel]}
+                opacity={rel === 'related' ? 0.3 : 0.55}
+              />
+              <circle cx={8} cy={4} r={3} fill={palette[RELATION_COLOR[rel]]} />
+            </svg>
+            {RELATION_LABEL[rel]}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
