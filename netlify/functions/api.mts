@@ -131,6 +131,9 @@ async function boot(): Promise<Hono<never>> {
         notes: services.notes,
         search: services.search,
         sharing: services.sharing,
+        // `list_links` masks backlink sources the caller cannot read, and
+        // needs the same cross-owner reader the app itself gets above.
+        crossOwner: services.crossOwner,
         auth: services.auth,
         invites: services.invites,
         logger,
