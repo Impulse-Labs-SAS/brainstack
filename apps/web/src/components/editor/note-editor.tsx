@@ -6,7 +6,12 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { completionKeymap } from '@codemirror/autocomplete';
 import { useEffect, useRef } from 'react';
+
+import type { WikilinkCandidate } from '@/lib/wikilink-autocomplete-match';
+
+import { wikilinkAutocomplete } from './wikilink-autocomplete';
 
 /** Sober markdown highlight aligned with the app palette (no saturated greens/reds). */
 const brainHighlight = HighlightStyle.define([
@@ -35,15 +40,27 @@ export interface NoteEditorProps {
   value: string;
   onChange?(value: string): void;
   readOnly?: boolean;
+  /**
+   * Notes `[[` can autocomplete to. A function, not a plain array, so the
+   * editor sees a freshly-fetched list on every completion even though it
+   * mounts once — the tree changes as notes are created while it stays open.
+   */
+  wikilinkCandidates?: () => readonly WikilinkCandidate[];
 }
 
-/** Minimal CodeMirror 6 markdown editor. Wikilink/autocomplete extensions
- * land in Fase 4.1. */
-export function NoteEditor({ value, onChange, readOnly = false }: NoteEditorProps) {
+/** Minimal CodeMirror 6 markdown editor, with `[[` wikilink autocomplete. */
+export function NoteEditor({
+  value,
+  onChange,
+  readOnly = false,
+  wikilinkCandidates,
+}: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const candidatesRef = useRef(wikilinkCandidates);
+  candidatesRef.current = wikilinkCandidates;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -54,7 +71,10 @@ export function NoteEditor({ value, onChange, readOnly = false }: NoteEditorProp
         history(),
         markdown(),
         syntaxHighlighting(brainHighlight),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        ...(candidatesRef.current
+          ? [wikilinkAutocomplete(() => candidatesRef.current?.() ?? [])]
+          : []),
+        keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap]),
         EditorView.lineWrapping,
         ...(readOnly ? [EditorView.editable.of(false), EditorState.readOnly.of(true)] : []),
         EditorView.updateListener.of((update) => {
@@ -82,6 +102,18 @@ export function NoteEditor({ value, onChange, readOnly = false }: NoteEditorProp
             '.cm-activeLine': { backgroundColor: 'rgba(255, 255, 255, 0.02)' },
             '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--fg-secondary)' },
             '.cm-lineNumbers .cm-gutterElement': { color: 'var(--fg-disabled)' },
+            '.cm-tooltip.cm-tooltip-autocomplete': {
+              backgroundColor: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '12px',
+            },
+            '.cm-tooltip-autocomplete ul li[aria-selected]': {
+              backgroundColor: 'var(--bg-hover)',
+              color: 'var(--fg-primary)',
+            },
+            '.cm-tooltip-autocomplete ul li': { color: 'var(--fg-secondary)' },
+            '.cm-completionDetail': { color: 'var(--fg-muted)', fontStyle: 'normal' },
           },
           { dark: true },
         ),

@@ -22,6 +22,7 @@ import { usePersistedViewMode, type ViewMode } from '@/lib/use-view-mode';
 import {
   attachmentPathToRoute,
   buildIndex,
+  collectNoteCandidates,
   resolveAttachmentTarget,
   resolveEmbed as resolveEmbedClient,
   resolveNoteTarget,
@@ -68,6 +69,10 @@ export default function NotePage() {
   const tree = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
 
   const treeIndex = useMemo(() => buildIndex(tree.data ?? null), [tree.data]);
+  const wikilinkCandidates = useMemo(() => collectNoteCandidates(tree.data ?? null), [tree.data]);
+  const wikilinkCandidatesRef = useRef(wikilinkCandidates);
+  wikilinkCandidatesRef.current = wikilinkCandidates;
+  const getWikilinkCandidates = useCallback(() => wikilinkCandidatesRef.current, []);
 
   const [viewMode, setViewMode] = usePersistedViewMode('edit');
   const [narrow, setNarrow] = useState(false);
@@ -253,7 +258,7 @@ export default function NotePage() {
 
           <div className={cn('relative flex-1 overflow-hidden transition-colors', 'min-h-0')}>
             {draft !== null && effectiveMode === 'edit' && (
-              <NoteEditor value={draft} onChange={setDraft} />
+              <NoteEditor value={draft} onChange={setDraft} wikilinkCandidates={getWikilinkCandidates} />
             )}
             {draft !== null && effectiveMode === 'preview' && (
               <MarkdownPreview
@@ -266,7 +271,7 @@ export default function NotePage() {
             {draft !== null && effectiveMode === 'split' && (
               <div className="grid h-full grid-cols-2 divide-x divide-border-subtle">
                 <div className="h-full overflow-hidden">
-                  <NoteEditor value={draft} onChange={setDraft} />
+                  <NoteEditor value={draft} onChange={setDraft} wikilinkCandidates={getWikilinkCandidates} />
                 </div>
                 <div className="h-full overflow-hidden">
                   <MarkdownPreview
