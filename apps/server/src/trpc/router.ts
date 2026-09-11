@@ -128,12 +128,18 @@ export const appRouter = t.router({
           .object({
             folder: z.string().optional(),
             tag: z.string().optional(),
+            facetKey: z.string().optional(),
+            facetValue: z.string().optional(),
             status: z.string().optional(),
             limit: z.number().int().min(1).max(500).optional(),
           })
           .optional(),
       )
-      .query(({ ctx, input }) => ctx.notes.list(ctx.user.id, input ?? {})),
+      .query(({ ctx, input }) => {
+        const { facetKey, facetValue, ...rest } = input ?? {};
+        const facet = facetKey && facetValue ? { key: facetKey, value: facetValue } : undefined;
+        return ctx.notes.list(ctx.user.id, { ...rest, ...(facet ? { facet } : {}) });
+      }),
     create: protectedProcedure
       .input(
         z.object({
@@ -273,6 +279,51 @@ export const appRouter = t.router({
             : [];
         return ctx.notes.graph(ctx.user.id, { sharedScopes });
       }),
+    outboundLinks: protectedProcedure
+      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
+      .query(async ({ ctx, input }) => {
+        const owner = ownerOf(ctx, input.ownerId);
+        await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
+        // For your own notes, same as `linksForOwner`'s masking already does
+        // for a shared one — an unreadable target comes back as unresolved
+        // rather than naming a path outside the grant.
+        return ctx.user.id === owner
+          ? ctx.notes.listOutboundLinks(owner, input.path)
+          : ctx.crossOwner.linksForOwner(ctx.user.id, owner, input.path);
+      }),
+    related: protectedProcedure
+      .input(
+        z.object({
+          path: z.string().min(1),
+          ownerId: OwnerInput,
+          scope: z.enum(['mine', 'shared', 'all']).optional(),
+          limit: z.number().int().min(1).max(50).optional(),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        const owner = ownerOf(ctx, input.ownerId);
+        await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
+        const scope = input.scope ?? 'mine';
+        const sharedScopes =
+          scope !== 'mine'
+            ? (await ctx.sharedRoots()).map((r) => ({
+                ownerId: r.ownerId,
+                folderPath: r.folderPath,
+              }))
+            : [];
+        return ctx.notes.listRelated(owner, input.path, { sharedScopes, limit: input.limit });
+      }),
+    facetsForNote: protectedProcedure
+      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
+      .query(async ({ ctx, input }) => {
+        const owner = ownerOf(ctx, input.ownerId);
+        await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
+        return ctx.notes.listFacetsForNote(owner, input.path);
+      }),
+    facets: protectedProcedure
+      .input(z.object({ key: z.string().optional() }).optional())
+      .query(({ ctx, input }) => ctx.notes.listFacets(ctx.user.id, input?.key)),
+    tags: protectedProcedure.query(({ ctx }) => ctx.notes.listTags(ctx.user.id)),
     getForOwner: protectedProcedure
       .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
       .query(async ({ ctx, input }) =>
