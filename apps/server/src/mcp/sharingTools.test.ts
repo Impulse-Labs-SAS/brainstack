@@ -11,6 +11,7 @@ import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AuthService } from '../services/AuthService.js';
+import { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import { CapturingEmailSender } from '../services/EmailSender.js';
 import { InviteService } from '../services/InviteService.js';
 import { NoteService } from '../services/NoteService.js';
@@ -51,11 +52,13 @@ async function clientFor(userId: string): Promise<Client> {
     sharing,
     publicOrigin: 'http://test',
   });
+  const crossOwner = new CrossOwnerReader({ sharing, vaultCfg, db: database.db });
 
   const server = buildMcpServer({
     notes,
     search,
     sharing,
+    crossOwner,
     auth,
     invites,
     logger,
@@ -372,6 +375,27 @@ describe('the listing tools answer with their rows, not with a pending promise',
     const { value } = await call(pablo, 'list_links', { path: 'destino.md' });
     expect(Array.isArray(value)).toBe(true);
     expect(value).toMatchObject([{ sourcePath: 'origen.md' }]);
+  });
+
+  it('list_links omits a backlink source pablo has no grant to see', async () => {
+    const owner = await clientFor(OWNER.id);
+    const pablo = await clientFor(PABLO.id);
+
+    await call(owner, 'create_note', { path: 'Proyectos/zuno.md', content: 'destino compartido' });
+    // Privado/ is never shared, but it links into the folder that is.
+    await call(owner, 'create_note', {
+      path: 'Privado/diario.md',
+      content: 'ver [[Proyectos/zuno]]',
+    });
+    await call(owner, 'share_folder', { path: 'Proyectos', email: PABLO.email });
+
+    const { value } = await call(pablo, 'list_links', {
+      path: 'Proyectos/zuno.md',
+      ownerId: OWNER.id,
+    });
+    expect(Array.isArray(value)).toBe(true);
+    expect(JSON.stringify(value)).not.toContain('diario');
+    expect(JSON.stringify(value)).not.toContain('Privado');
   });
 });
 

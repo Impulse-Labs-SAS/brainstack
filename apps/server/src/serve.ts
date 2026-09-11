@@ -94,6 +94,7 @@ async function main(): Promise<void> {
         notes: services.notes,
         search: services.search,
         sharing: services.sharing,
+        crossOwner: services.crossOwner,
         auth: services.auth,
         invites: services.invites,
         logger,

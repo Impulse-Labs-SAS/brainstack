@@ -9,9 +9,11 @@ import { z } from 'zod';
 
 import type { Logger } from 'pino';
 
+import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError } from '../lib/errors.js';
 
 import type { AuthService } from '../services/AuthService.js';
+import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import type { InviteService } from '../services/InviteService.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
@@ -26,6 +28,8 @@ export interface BuildMcpServerOptions {
   notes: NoteService;
   search: SearchService;
   sharing: SharingService;
+  /** Reads across an ownership boundary, masking what the grant does not cover. */
+  crossOwner: CrossOwnerReader;
   /** Resolves the email a caller shares with into an account. */
   auth: AuthService;
   /** Used when that email has no account yet. */
@@ -62,6 +66,7 @@ export function buildMcpServer({
   notes,
   search,
   sharing,
+  crossOwner,
   auth,
   invites,
   logger,
@@ -499,7 +504,14 @@ export function buildMcpServer({
     },
     async ({ path, ownerId }) => {
       try {
-        const rows = await notes.listLinks(await readOwner(path, ownerId), path);
+        const owner = await readOwner(path, ownerId);
+        // Not `notes.listLinks` directly: that call is owner-scoped, not
+        // permission-aware, and would name a backlink's source even when it
+        // sits in a folder this caller was never granted.
+        const rows = await listBacklinksSafely(requireUserId(), owner, path, {
+          notes,
+          crossOwner,
+        });
         return JSON_TEXT(rows);
       } catch (err) {
         return toMcpError(err);

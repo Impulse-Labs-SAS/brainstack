@@ -164,6 +164,62 @@ export class CrossOwnerReader {
     }
     return out;
   }
+
+  /**
+   * Who links to a shared note, with sources the viewer cannot reach dropped
+   * entirely rather than masked.
+   *
+   * `linksForOwner` masks a target with a placeholder because the link is
+   * real and its author — the note's own owner — already sees it in their
+   * editor; naming what it points at is what would leak. A backlink is the
+   * opposite shape: it is *about* a note the viewer may have no relationship
+   * to at all, so even reporting "a hidden note links here" discloses an
+   * existence they had no reason to know about. Omission is the only masking
+   * that does not leak here.
+   *
+   * Also covers the same-owner case: a folder can be partially shared (this
+   * path's folder granted, a sibling not), so a source inside the ungranted
+   * sibling is checked exactly like a source in somebody else's vault.
+   */
+  async backlinksForOwner(
+    viewerId: string,
+    ownerId: string,
+    path: string,
+  ): Promise<CrossOwnerLink[]> {
+    this.requireEnabled();
+    await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
+
+    const targetPhysical = toPhysical(ownerId, path, this.opts.vaultCfg);
+    const rows = await this.opts.db
+      .select({
+        sourcePath: links.sourcePath,
+        targetPath: links.targetPath,
+        targetType: links.targetType,
+        linkKind: links.linkKind,
+        alias: links.alias,
+        section: links.section,
+      })
+      .from(links)
+      .where(eq(links.targetPath, targetPhysical))
+      .orderBy(asc(links.sourcePath), asc(links.position));
+
+    const out: CrossOwnerLink[] = [];
+    for (const r of rows) {
+      const sourceOwner = r.sourcePath.split('/')[0] ?? '';
+      const sourceLogical = stripOwnerPrefix(r.sourcePath, sourceOwner);
+      if (!(await this.opts.sharing.canRead(viewerId, sourceOwner, sourceLogical))) continue;
+
+      out.push({
+        sourcePath: sourceLogical,
+        targetPath: path,
+        targetType: r.targetType as CrossOwnerLink['targetType'],
+        linkKind: r.linkKind,
+        alias: r.alias,
+        section: r.section,
+      });
+    }
+    return out;
+  }
 }
 
 function stripOwnerPrefix(physicalPath: string, ownerId: string): string {

@@ -6,6 +6,7 @@ import { TRPCError, initTRPC } from '@trpc/server';
 import superjson from 'superjson';
 import { z } from 'zod';
 
+import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError } from '../lib/errors.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
 
@@ -251,7 +252,13 @@ export const appRouter = t.router({
       .query(async ({ ctx, input }) => {
         const owner = ownerOf(ctx, input.ownerId);
         await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
-        return ctx.notes.listLinks(owner, input.path);
+        // Not just `ctx.notes.listLinks`: that call is owner-scoped, not
+        // permission-aware, and would name a backlink's source even when it
+        // sits in a folder this caller was never granted.
+        return listBacklinksSafely(ctx.user.id, owner, input.path, {
+          notes: ctx.notes,
+          crossOwner: ctx.crossOwner,
+        });
       }),
     graph: protectedProcedure
       .input(z.object({ scope: z.enum(['mine', 'shared', 'all']).optional() }).optional())

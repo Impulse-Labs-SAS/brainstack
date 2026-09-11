@@ -8,6 +8,7 @@
 import { pgSchema } from '@brainstack/core/pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { listBacklinksSafely } from './lib/backlinks.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
@@ -145,6 +146,25 @@ describe('hosted multi-user with a shared folder', () => {
     await expect(
       crossOwner.getNote('bob', 'alice', 'Privado/diario.md'),
     ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
+  });
+
+  it('a backlink from an unshared sibling folder does not leak to bob', async () => {
+    // Privado/ is not shared, and this note (distinct from the beforeEach's
+    // diario.md) links into the folder that is.
+    await notes.create('alice', 'Privado/secreto.md', '# Secreto\n\nVer [[Proyectos/zuno]].');
+
+    const asOwner = await listBacklinksSafely('alice', 'alice', 'Proyectos/zuno.md', {
+      notes,
+      crossOwner,
+    });
+    expect(asOwner.map((b) => b.sourcePath)).toContain('Privado/secreto.md');
+
+    const asBob = await listBacklinksSafely('bob', 'alice', 'Proyectos/zuno.md', {
+      notes,
+      crossOwner,
+    });
+    expect(asBob.map((b) => b.sourcePath)).not.toContain('Privado/secreto.md');
+    expect(JSON.stringify(asBob)).not.toContain('secreto');
   });
 
   it('revoking the grant closes the door again', async () => {
