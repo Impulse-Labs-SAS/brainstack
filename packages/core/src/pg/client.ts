@@ -1,31 +1,80 @@
-// Neon Postgres client for BrainStack.
+// Postgres client for BrainStack.
 //
-// Uses the HTTP driver (`@neondatabase/serverless`) rather than a TCP pool:
-// each query is one stateless HTTPS round trip, which is what makes this work
-// inside a serverless function without connection storms on cold start.
+// Any Postgres will do; the connection string decides how to reach it.
+//
+//  - Neon (`*.neon.tech`) goes over its HTTP driver (`@neondatabase/serverless`):
+//    each query is one stateless HTTPS round trip, which is what makes it work
+//    inside a serverless function without connection storms on cold start.
+//  - Everything else — the Postgres in docker-compose, a managed one, a local
+//    install — goes over node-postgres, a TCP pool held for the life of the
+//    process.
+//
+// Both hand back the same Drizzle query API. The rest of the code only ever
+// sees `PgDb`, and the test suite runs every query on a third driver (PGlite),
+// so a query that only works on one of them does not get through.
 
 import { neon } from '@neondatabase/serverless';
 import { sql } from 'drizzle-orm';
-import { drizzle, type NeonHttpDatabase } from 'drizzle-orm/neon-http';
+import { drizzle as drizzleNeonHttp, type NeonHttpDatabase } from 'drizzle-orm/neon-http';
+import { drizzle as drizzleNodePg } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
 
 import { pgMigrations, type PgMigration } from './migrations.js';
 import * as schema from './schema.js';
 
+/**
+ * The store's database handle.
+ *
+ * Typed as the Neon HTTP database because that is the narrowest of the drivers
+ * in use: no interactive transactions, no `batch` outside it. Code written
+ * against it runs unchanged on node-postgres and PGlite, which is what makes
+ * the casts to it below safe.
+ */
 export type PgDb = NeonHttpDatabase<typeof schema>;
 
 export interface BrainStackPgDatabase {
   db: PgDb;
+  /** Release the connection pool, if there is one. Safe to call once, at shutdown. */
+  close(): Promise<void>;
 }
 
 const MIGRATIONS_TABLE = '_brainstack_migrations';
 
-/** Open a Neon-backed Drizzle client. Cheap to call — there is no pool to warm. */
+export type PgDriver = 'neon-http' | 'node-postgres';
+
+/**
+ * Which driver a connection string gets.
+ *
+ * Only Neon's own hostnames go over HTTP: that transport does not exist
+ * anywhere else. A string that does not parse as a URL is left to
+ * node-postgres, which accepts more shapes than `URL` does and will say
+ * precisely what is wrong with it.
+ */
+export function pgDriverFor(connectionString: string): PgDriver {
+  let hostname: string;
+  try {
+    hostname = new URL(connectionString).hostname;
+  } catch {
+    return 'node-postgres';
+  }
+  return hostname.endsWith('.neon.tech') ? 'neon-http' : 'node-postgres';
+}
+
+/** Open a Drizzle client over whichever driver the connection string calls for. */
 export function openPgDatabase(connectionString: string): BrainStackPgDatabase {
   if (!connectionString) {
     throw new Error('DATABASE_URL is required to open the Postgres store');
   }
-  const client = neon(connectionString);
-  return { db: drizzle(client, { schema }) };
+
+  if (pgDriverFor(connectionString) === 'neon-http') {
+    // Nothing to close: there is no pool, every query is its own request.
+    const db = drizzleNeonHttp(neon(connectionString), { schema });
+    return { db, close: async () => {} };
+  }
+
+  const pool = new pg.Pool({ connectionString });
+  const db = drizzleNodePg(pool, { schema }) as unknown as PgDb;
+  return { db, close: () => pool.end() };
 }
 
 /**
