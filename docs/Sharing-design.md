@@ -2,7 +2,7 @@
 
 > **Estado**: V1 implementado. V2 (escritura) implementado — ver §17. Migración entre bóvedas — ver §18.
 > **Scope**: hosted deployment de Impulse Labs únicamente. Self-host queda single-user.
-> **Licencia**: todo el código vive en este repo bajo BSL 1.1.
+> **Licencia**: todo el código vive en este repo bajo AGPL-3.0.
 
 > **Nota de lectura.** Las secciones 1–11 describen V1, que era **read-only por
 > decisión de este documento**. Esa decisión resultó equivocada: la intención del

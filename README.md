@@ -90,7 +90,11 @@ Design vault lives at `01-Impulse-Labs/BrainStack/` (private). Documents to read
 
 ## License
 
-BrainStack is released under the Business Source License 1.1 (BSL 1.1). You can run it freely for your own personal or company use, and the source is fully auditable. Hosting BrainStack as a service for third parties is not permitted while the license is in effect — see `LICENSE` for the exact terms. Each version converts to Apache License, Version 2.0 four years after release.
+BrainStack is free software, released under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). You can use it, modify it and self-host it — for yourself or for your company, commercially or not. If you run a modified version as a service for other people, you must offer them its source code under the same license.
+
+## Contributing
+
+Issues are open to everyone. Code contributions start with an issue, not a pull request — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Built by Impulse Labs
 
