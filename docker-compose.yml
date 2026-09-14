@@ -1,44 +1,71 @@
 # =============================================================================
-# BrainStack — docker-compose
-# Two services in V1:
-#   - brainstack   Node app (Hono + MCP + tRPC) running on port 3000
-#   - caddy        Reverse proxy with automatic TLS via Let's Encrypt
-# Notes live on a named volume so they persist across container restarts.
+# BrainStack — self-host with docker compose
+#
+#   cp .env.example .env     # then fill in the required values
+#   docker compose up -d
+#
+#   postgres  the database, on a named volume
+#   server    API, auth, tRPC and MCP — migrates the schema itself on boot
+#   web       the Next.js app
+#   caddy     the single public origin, with automatic TLS
+#
+# Only Caddy publishes ports. Everything else talks on the compose network.
 # =============================================================================
 
 services:
-  brainstack:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brainstack
+      POSTGRES_DB: brainstack
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brainstack -d brainstack"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: brainstack:dev
-    container_name: brainstack
+      target: server
+    image: brainstack-server
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
     environment:
       NODE_ENV: production
-      NOTES_DIR: /data/brain
-      DATABASE_URL: /data/brainstack.db
-    expose:
-      - "3000"
-    volumes:
-      - brain-notes:/data/brain
-      - brain-db:/data
+      # The bundled Postgres, unless .env points somewhere else.
+      DATABASE_URL: ${DATABASE_URL:-postgres://brainstack:${POSTGRES_PASSWORD}@postgres:5432/brainstack}
+      # Web and API share Caddy's origin, so there is no cross-origin caller.
+      CORS_ORIGINS: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      target: web
+    image: brainstack-web
+    restart: unless-stopped
+    depends_on:
+      - server
 
   caddy:
     image: caddy:2.10-alpine
-    container_name: brainstack-caddy
     restart: unless-stopped
     depends_on:
-      - brainstack
+      - server
+      - web
     ports:
       - "80:80"
       - "443:443"
     environment:
-      # Override DOMAIN in your .env to enable Let's Encrypt for that hostname.
-      # Leave it empty (or set to ":80") for local HTTP-only.
       DOMAIN: ${DOMAIN:-:80}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -46,7 +73,6 @@ services:
       - caddy-config:/config
 
 volumes:
-  brain-notes:
-  brain-db:
+  postgres-data:
   caddy-data:
   caddy-config:

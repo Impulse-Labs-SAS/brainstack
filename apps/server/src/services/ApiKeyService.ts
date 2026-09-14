@@ -112,13 +112,14 @@ export class ApiKeyService {
    * rows that say nothing anyone acts on. The key is gone the moment the row
    * is: `validate` finds nothing to match against.
    *
-   * `userId` is not optional in practice: without it this deletes by id alone,
-   * and one user could retire another's key by guessing one.
+   * `userId` is required. It used to be optional, and the one caller that left
+   * it out — a REST route, since removed — deleted keys by id alone: any
+   * signed-in user could retire anyone else's key, given its id.
    */
-  async revoke(id: string, userId?: string): Promise<void> {
+  async revoke(id: string, userId: string): Promise<void> {
     const revoked = await this.opts.db
       .delete(apiKeys)
-      .where(and(eq(apiKeys.id, id), ...(userId ? [eq(apiKeys.userId, userId)] : [])))
+      .where(and(eq(apiKeys.id, id), eq(apiKeys.userId, userId)))
       .returning({ id: apiKeys.id });
 
     if (revoked.length === 0) {

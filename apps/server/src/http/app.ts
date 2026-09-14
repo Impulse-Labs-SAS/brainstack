@@ -150,7 +150,6 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
     createAuthRouter({
       ...middlewareOpts,
       auth: opts.auth,
-      apiKeys: opts.apiKeys,
       logger: opts.logger,
       secureCookies: opts.secureCookies,
       loginLimiter,

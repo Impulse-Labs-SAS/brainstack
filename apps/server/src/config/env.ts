@@ -11,8 +11,7 @@ const Env = z.object({
   /** Postgres connection string. No default: there is nothing sensible to guess. */
   DATABASE_URL: z
     .string()
-    .min(1, 'DATABASE_URL is required: a Postgres connection string (postgres://...). ' +
-      'Use a Neon development branch, not production.')
+    .min(1, 'DATABASE_URL is required: a Postgres connection string (postgres://...).')
     .refine((v) => v.startsWith('postgres://') || v.startsWith('postgresql://'), {
       message:
         'DATABASE_URL must be a Postgres connection string. A file path is a leftover ' +

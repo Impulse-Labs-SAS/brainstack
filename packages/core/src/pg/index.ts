@@ -1,14 +1,17 @@
 // @brainstack/core/pg — Postgres store.
 //
-// The source of truth for notes, links and tags. Everything here is async: the
-// Neon HTTP driver has no synchronous API, and no interactive transactions.
+// The source of truth for notes, links and tags. Everything here is async, and
+// nothing opens a transaction: the Neon HTTP driver, one of the two it runs on,
+// has neither a synchronous API nor interactive transactions.
 
 export {
   openPgDatabase,
+  pgDriverFor,
   runPgMigrations,
   ensurePgSchema,
   type BrainStackPgDatabase,
   type PgDb,
+  type PgDriver,
 } from './client.js';
 export { pgMigrations, type PgMigration } from './migrations.js';
 

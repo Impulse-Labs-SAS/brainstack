@@ -56,3 +56,22 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  docker:
+    name: docker images
+    # The self-host images are built by nothing else in CI. The last Dockerfile
+    # ran a file that no longer started a server, and nobody found out until
+    # someone tried to self-host.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the server image
+        run: docker build --target server --tag brainstack-server .
+
+      - name: Build the web image
+        run: docker build --target web --tag brainstack-web .

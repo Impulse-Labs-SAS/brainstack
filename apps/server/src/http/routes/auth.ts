@@ -1,6 +1,8 @@
 // /auth/* endpoints. Signup, login, password reset, email verification,
-// logout, /me, and API key management. Google OAuth lives in a sibling
-// router (./oauthGoogle.ts).
+// logout and /me. Google OAuth lives in a sibling router (./oauthGoogle.ts).
+// API keys are managed over tRPC (`apiKeys.*`) only: the REST copies that
+// lived here stopped awaiting the store when it went async, answered `{}`,
+// and deleted keys without checking whose they were. Nothing called them.
 //
 // Discipline: user-facing routes that finish auth (login, reset/confirm,
 // verify) DO NOT return JSON — they set the session cookie and redirect.
@@ -14,7 +16,6 @@ import { z } from 'zod';
 
 import { AppError } from '../../lib/errors.js';
 import type { LoginRateLimiter } from '../../lib/rateLimitLogin.js';
-import type { ApiKeyService } from '../../services/ApiKeyService.js';
 import type { AuthService } from '../../services/AuthService.js';
 
 import {
@@ -26,7 +27,6 @@ import {
 
 export interface AuthRouterOptions extends AuthMiddlewareOptions {
   auth: AuthService;
-  apiKeys: ApiKeyService;
   logger: Logger;
   loginLimiter: LoginRateLimiter;
   /** True in production: sets Secure on cookies. */
@@ -135,7 +135,9 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
 
   router.post('/logout', async (c) => {
     const token = c.req.header('x-session-token') ?? c.req.query('token');
-    if (token) options.auth.revokeSession(token);
+    // Awaited: on a serverless runtime nothing is guaranteed to run once the
+    // response is sent, and a logout that leaves the session valid is not one.
+    if (token) await options.auth.revokeSession(token);
     deleteCookie(c, SESSION_COOKIE, { path: '/' });
     return c.json({ ok: true });
   });
@@ -249,49 +251,17 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
     }
   });
 
-  router.post('/google/unlink', requireAuth, (c) => {
+  router.post('/google/unlink', requireAuth, async (c) => {
     const principal = c.var.principal;
     if (principal.kind !== 'user') return c.json({ error: 'session required' }, 403);
     try {
-      options.auth.unlinkGoogle(principal.user.id);
+      // Awaited, or the refusal to unlink an account's only way in never
+      // reaches the catch: the client hears "ok", and the rejection is left
+      // unhandled — which takes the Node process down with it.
+      await options.auth.unlinkGoogle(principal.user.id);
       return c.json({ ok: true });
     } catch (err) {
       return jsonError(c, err);
-    }
-  });
-
-  // -- API keys ----------------------------------------------------------
-
-  router.get('/api-keys', requireAuth, (c) => {
-    const principal = c.var.principal;
-    if (principal.kind !== 'user') return c.json({ error: 'session required' }, 403);
-    return c.json({ keys: options.apiKeys.list(principal.user.id) });
-  });
-
-  router.post('/api-keys', requireAuth, async (c) => {
-    const principal = c.var.principal;
-    if (principal.kind !== 'user') return c.json({ error: 'session required' }, 403);
-    const parsed = z
-      .object({ name: z.string().min(1).max(80), scopes: z.array(z.string()).optional() })
-      .safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
-    const created = options.apiKeys.create(
-      principal.user.id,
-      parsed.data.name,
-      parsed.data.scopes ?? [],
-    );
-    return c.json({ key: created });
-  });
-
-  router.delete('/api-keys/:id', requireAuth, (c) => {
-    const principal = c.var.principal;
-    if (principal.kind !== 'user') return c.json({ error: 'session required' }, 403);
-    try {
-      options.apiKeys.revoke(c.req.param('id'));
-      return c.json({ ok: true });
-    } catch (err) {
-      const status = err instanceof AppError ? err.status : 500;
-      return c.json({ error: 'revoke failed' }, status as 404 | 500);
     }
   });
 

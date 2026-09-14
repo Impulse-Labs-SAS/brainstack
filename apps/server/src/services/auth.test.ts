@@ -254,7 +254,7 @@ describe('ApiKeyService', () => {
   it('returns null on invalid or revoked tokens', async () => {
     const user = await auth.ensureUser('user@brain.test');
     const created = await apiKeys.create(user.id, 'Test');
-    await apiKeys.revoke(created.id);
+    await apiKeys.revoke(created.id, user.id);
     expect(await apiKeys.validate(created.token)).toBeNull();
     expect(await apiKeys.validate('bs_invalid')).toBeNull();
   });

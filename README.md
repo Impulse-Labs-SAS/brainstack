@@ -25,22 +25,25 @@ Storage: plain `.md` files in `NOTES_DIR` (source of truth) + a regenerable sqli
 
 ## Quick start (self-host)
 
-Requires Node 20+ and Docker.
+Requires Docker. The compose file runs Postgres, the server, the web app and Caddy, which serves them on one origin with automatic TLS.
 
 ```bash
 git clone https://github.com/Impulse-Labs-SAS/brainstack.git
 cd brainstack
 cp .env.example .env
-# edit .env — set AUTHORIZED_EMAILS, RESEND_API_KEY, DOMAIN, BACKUP_REPO
+# edit .env — at least DOMAIN, PUBLIC_ORIGIN, POSTGRES_PASSWORD and AUTHORIZED_EMAILS
 docker compose up -d
 ```
 
-Then visit `https://<your-domain>`, sign up with email + password (or "Continue with Google"), verify your email, and generate API keys from **Settings → API keys** to connect Claude, Cursor, and friends.
+Then visit your `PUBLIC_ORIGIN` and sign up. Without `RESEND_API_KEY` no email is sent: the verification link is in `docker compose logs server`. The schema is created on first start, and updated by every new version on its own.
+
+Already have a Postgres? Set `DATABASE_URL` in `.env` and BrainStack uses it instead of the bundled one.
 
 ## Local development
 
 ```bash
 pnpm install
+cp apps/server/.env.example apps/server/.env   # set DATABASE_URL to any Postgres
 pnpm -r lint
 pnpm -r typecheck
 pnpm -r test
@@ -59,13 +62,13 @@ Generate an API key in the web app (**Settings → API keys**), then:
 
 ```bash
 # Claude Code
-claude mcp add brainstack --transport http https://<your-domain>/mcp \
+claude mcp add brainstack --transport http https://<your-domain>/api/mcp \
   --header "Authorization: Bearer <api-key>"
 ```
 
 ### Claude Chat / Desktop (remote HTTP)
 
-Add `https://<your-domain>/mcp` as a connector in **Settings → Connectors** and paste the API key.
+Add `https://<your-domain>/api/mcp` as a connector in **Settings → Connectors** and paste the API key.
 
 ### Loading the skill
 
