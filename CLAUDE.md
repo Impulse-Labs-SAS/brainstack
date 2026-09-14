@@ -12,7 +12,8 @@ The older design vault is at `<local-checkout>/projects-memory/01-Impulse-Labs/B
 - pnpm workspaces, TypeScript strict, Node 20+.
 - Backend: Hono + `@modelcontextprotocol/sdk` + tRPC + Drizzle.
 - Frontend: Next.js 15 App Router + Tailwind + `react-aria-components` + CodeMirror 6.
-- Storage: **Postgres** (Neon). Tests run on PGlite — real Postgres, in process.
+- Storage: **Postgres** — any provider. `openPgDatabase` picks the driver from the connection string: Neon over its HTTP driver, everything else over node-postgres. Tests run on PGlite — real Postgres, in process.
+- Self-hosting: `docker compose up` runs Postgres, the server, the web app and Caddy on one origin.
 - Logger pino, validation zod, email+password (`@node-rs/argon2`) + Google OAuth (`arctic`) + optional TOTP (`@oslojs/otp`), transactional email via Resend.
 - MCP clients connect through this server's own OAuth 2.1 provider.
 

@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const logger = getLogger();
 
-  const { db } = openPgDatabase(cfg.DATABASE_URL);
+  const { db, close: closeDb } = openPgDatabase(cfg.DATABASE_URL);
   await ensurePgSchema(db);
 
   const services = buildServices({
@@ -102,12 +102,29 @@ async function main(): Promise<void> {
       }),
   });
 
-  serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
+  const server = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
     logger.info(
       { port: info.port, deployment: cfg.BRAINSTACK_DEPLOYMENT },
       'BrainStack server listening',
     );
   });
+
+  /*
+   * `docker stop` sends SIGTERM and waits ten seconds before killing. Node
+   * running as a container's first process ignores the signal unless something
+   * listens for it, so without this every stop is a kill: requests in flight
+   * are cut, and the pool's connections are dropped rather than closed.
+   */
+  const shutdown = (signal: NodeJS.Signals): void => {
+    logger.info({ signal }, 'shutting down');
+    server.close(() => {
+      closeDb()
+        .catch((err: unknown) => logger.error({ err }, 'closing the database failed'))
+        .finally(() => process.exit(0));
+    });
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 }
 
 main().catch((err: unknown) => {

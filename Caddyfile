@@ -1,20 +1,29 @@
-# Caddyfile — sits in front of the brainstack container.
-# Set DOMAIN in .env to your public hostname for automatic TLS via Let's
-# Encrypt; leave it as ":80" for local HTTP-only.
+# Caddyfile — the single origin in front of BrainStack.
+#
+# DOMAIN comes from .env. A hostname gets a TLS certificate from Let's Encrypt
+# automatically; ":80" serves plain HTTP, for trying BrainStack out locally.
+#
+# The browser, the session cookie and every AI client see one site. The server
+# answers the API and the OAuth discovery documents; the web app answers the rest.
 
 {$DOMAIN} {
-    encode zstd gzip
-    @websocket {
-        header Connection *Upgrade*
-        header Upgrade websocket
-    }
+	encode zstd gzip
 
-    reverse_proxy brainstack:3000 {
-        flush_interval -1
-    }
+	@server path /api/* /.well-known/oauth-protected-resource* /.well-known/oauth-authorization-server*
+	handle @server {
+		# MCP streams its responses; buffering them would hold each one back
+		# until it finished.
+		reverse_proxy server:3000 {
+			flush_interval -1
+		}
+	}
 
-    log {
-        output stdout
-        format json
-    }
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
 }
