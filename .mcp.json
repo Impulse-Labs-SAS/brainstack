@@ -2,7 +2,7 @@
   "mcpServers": {
     "brainstack": {
       "type": "http",
-      "url": "http://localhost:3000/mcp",
+      "url": "http://localhost:3000/api/mcp",
       "headers": {
         "Authorization": "Bearer ${BRAINSTACK_API_KEY}"
       }
