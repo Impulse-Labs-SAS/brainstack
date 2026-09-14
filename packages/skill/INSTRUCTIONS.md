@@ -11,26 +11,32 @@ You interact with BrainStack via these MCP tools:
 
 **Read:**
 
-- `search_brain(query, limit?)`
-- `get_note(path)`
-- `list_notes(folder?, tag?, facetKey?, facetValue?, status?, limit?)`
-- `list_tree(path?, depth?)` — hierarchical view of the vault, folders first
-- `list_links(path)` — backlinks for a path
-- `list_outbound_links(path)` — what a path links to or embeds; the mirror of `list_links`
-- `list_related(path, limit?)` — notes related by a shared tag or facet, ranked by rarity; own vault only
-- `list_facets(path?, key?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
-- `list_decisions(folder?, limit?)` — notes tagged `decisión`/`decision` or with `status: decidido`
-- `get_attachment(path)` — read a binary under `Attachments/`
+- `search_brain(query, limit?, scope?)` — `scope`: `all` (default), `mine`, or `shared`
+- `get_note(path, ownerId?)`
+- `list_notes(folder?, tag?, facetKey?, facetValue?, status?, limit?, ownerId?)`
+- `list_tree(path?, depth?, ownerId?)` — hierarchical view of the vault, folders first
+- `list_links(path, ownerId?)` — backlinks for a path
+- `list_outbound_links(path, ownerId?)` — what a path links to or embeds; the mirror of `list_links`
+- `list_related(path, limit?)` — notes related by a shared tag or facet, ranked by rarity; **own vault only** (no `ownerId`)
+- `list_facets(path?, key?, ownerId?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
+- `list_decisions(folder?, limit?, ownerId?)` — notes tagged `decisión`/`decision` or with frontmatter `status: decidido` (via facets)
+- `list_shared_with_me()` — folders other people shared with you (`ownerId`, permission per row)
 - `get_brainstack_guide()` — returns this document at runtime
 
 **Write / structure (require user approval — see below):**
 
-- `create_note(path, content, frontmatter?)` — returns `{ path, affectedMocs }`
-- `update_note(path, content)`
-- `create_folder(path)`
-- `move(from, to)` — wikilinks pointing at the moved path(s) are rewritten automatically across the vault, including aliases, sections, and attachment embeds. Returns `{ path, affectedMocs }`
-- `delete(path, recursive?)` — returns `{ deleted: [...] }` so you can confirm the blast radius
-- `upload_attachment(path, data_base64, mime?)` — writes under `Attachments/`, returns the final path
+- `create_note(path, content, frontmatter?, ownerId?)` — returns `{ path, affectedMocs }`
+- `update_note(path, content, ownerId?)`
+- `create_folder(path, ownerId?)`
+- `move(from, to, ownerId?)` — wikilinks pointing at the moved path(s) are rewritten automatically across the vault, including aliases, sections, and attachment embeds. Returns `{ path, affectedMocs }`
+- `move_to_owner(from, to, toOwnerId, fromOwnerId?, userConfirmedOwnershipTransfer?)` — **transfers ownership** across vaults; without `userConfirmedOwnershipTransfer: true` it moves nothing and returns a cost summary. See **Shared folders**.
+- `delete(path, recursive?, ownerId?)` — returns `{ deleted: [...] }` so you can confirm the blast radius. Does **not** rewrite wikilinks in note bodies.
+
+**Sharing (require user approval — see below; hosted only — not registered in self-host):**
+
+- `share_folder(path, email, permission?)` — grant read or write on a folder and everything under it
+- `unshare(path, email)` — revoke that person's access
+- `list_shares(path?)` — folders you have shared and who can read each one
 
 ## When to use BrainStack
 
@@ -48,17 +54,17 @@ Don't use BrainStack for generic knowledge questions or for things the user didn
 
 Always verify with the brain before claiming a fact about the user's domain. Never invent content.
 
-- `search_brain(query)` — primary tool. Full-text search with snippets and a path for every hit. It
-  covers the user's own notes **and** the folders shared with them; narrow it with
-  `scope="mine"` only when the user asked for their own notes specifically.
+- `search_brain(query, scope?)` — primary tool. Full-text search with snippets and a path for every hit.
+  Default `scope` is **`all`** (own notes and folders shared with the user). Use `scope="mine"` only
+  when the user asked for their own vault specifically, or `scope="shared"` for shared-only.
 - `get_note(path)` — when you already know the path (from a wikilink, a previous search, or a list).
   A path the user does not have in their own vault but that falls under a folder shared with them
   resolves to that folder, so a shared note reads back without an `ownerId`.
-- `list_notes(folder=..., tag=..., status=...)` — structured navigation, faster than search when scoped.
+- `list_notes(folder=..., tag=..., facetKey=..., facetValue=..., status=...)` — structured navigation, faster than search when scoped. Use `facetKey` + `facetValue` together to filter by a frontmatter facet (same pattern as `tag`).
 - `list_tree(path?)` — when you need to understand the vault's shape (where things live, what top-levels exist). **Always start here when deciding where to save something.**
 - `list_links(path)` — backlinks to a note or attachment. Useful for "what referenced this PDF?" or "what links back here?".
 - `list_outbound_links(path)` — what a note itself links to or embeds.
-- `list_related(path)` — other notes sharing a tag or facet, when the user wants "what else touches this" beyond explicit links.
+- `list_related(path)` — other notes sharing a tag or facet ( **affinity**, not a wikilink). Own vault only; does not take `ownerId`.
 - `list_facets(path?, key?)` — a note's own facets, or (omit `path`) every value in use for browsing/autocomplete.
 - `list_decisions(folder?)` — decisions only, sorted by recency. Useful when the user asks "what have we decided about X".
 - `list_shared_with_me()` — folders other people shared with the user. See
@@ -121,9 +127,20 @@ user's vault has nothing to point at any more. The answer lists
 `linksNowBroken` (what stayed, now pointing at what moved). Report those to the
 user — they are the part of the move that needs a human decision.
 
+## Sharing folders
+
+Sharing hands another person access to everything under a folder, including notes created later. It reaches a real person by email, so it is never a routine action. **`share_folder`**, **`unshare`**, and **`list_shares`** are available on hosted BrainStack only — they are not registered when the server runs in self-host mode.
+
+- **Always ask first, and echo the exact folder and email back** before calling `share_folder`. "Share `Zuno/` with pablo@example.com — that covers every note under it, now and in the future. Confirm?"
+- `permission` is `read` (default) or `write`. **`write`** lets them create and edit inside the folder (they pass your `ownerId` on writes). Re-sharing with the same person **updates** their permission rather than adding a second grant.
+- Someone with a BrainStack account gets access immediately. Anyone else receives an email invitation that **expires in 7 days**.
+- `unshare(path, email)` revokes access and kills pending invitations that would hand it straight back. It is a no-op when the person had no access.
+- Use `list_shares()` before proposing a change, so the user sees the current state rather than your assumption of it.
+- Never propose sharing a folder the user has not mentioned, and never widen an existing share to a broader folder on your own initiative.
+
 ## Saving to the brain (write) — ask first
 
-You never write to the brain without explicit user consent. **Every** write/structure tool requires approval: `create_note`, `update_note`, `create_folder`, `move`, `delete`, `upload_attachment`.
+You never write to the brain without explicit user consent. **Every** write/structure/sharing tool requires approval: `create_note`, `update_note`, `create_folder`, `move`, `move_to_owner`, `delete`, `share_folder`, `unshare`.
 
 This holds just as much for a folder somebody shared with write permission — more so, because there the user is not the only one who will see it.
 
@@ -140,6 +157,8 @@ The "ask before save" pattern:
 6. **Confirm where it landed.** "Saved to `Zuno/decisiones/pricing-tiered.md`, tagged `decisión`, links to [[Pablo]]."
 
 The only exception: if the user already said "save this to `<path>`" with a destination, skip the proposal and execute. **Never write without asking** for any move, delete, rename, or anything touching more than one note at a time.
+
+`delete` does **not** rewrite wikilinks — every link in note bodies pointing at a deleted path becomes unresolved, and index rows in `links` that targeted that path flip to `unresolved`. Before proposing a delete, run `list_links(path)` and tell the user what will break. Folders need `recursive: true` unless already empty; name the blast radius in the proposal, not after the fact.
 
 ## Where does this new note go?
 
@@ -178,9 +197,10 @@ Always:
 1. When you create a note, add a wikilink to it in the parent MOC's `## Notas`. The MOC path is in `affectedMocs[0]` if one exists; if `affectedMocs` is empty, the parent has no MOC yet — either skip (early-vault state) or propose creating one.
 2. When you create a subfolder, create its MOC and link it from the parent MOC's `## Subcarpetas`.
 3. When you `move` a note, the wikilink rewrite is handled by the server. The MOCs themselves aren't touched — `affectedMocs` lists the candidates (source-parent MOC and dest-parent MOC). Read each, remove the moved note from the old one's `## Notas`, add it to the new one's. Propose this update as part of the move.
-4. Add a `## Refs` section at the bottom of every new note linking back to its MOC.
+4. When you `delete` a note, remove its wikilink from the parent MOC's `## Notas` in the same operation. Nothing does this for you.
+5. Add a `## Refs` section at the bottom of every new note linking back to its MOC.
 
-The note-create step and its parent-MOC link are part of one save operation — no extra permission required. MOC edits triggered by a move are part of the move plan and need the same approval as the move itself.
+The note-create step and its parent-MOC link are part of one save operation — no extra permission required. MOC edits triggered by a move or a delete are part of that plan and need the same approval as the operation itself.
 
 ## Wikilink discipline
 
@@ -193,18 +213,23 @@ Before you write `[[X]]` in a new note, resolve `X`:
 
 Never silently create wikilinks to notes that don't exist. The user must know there's a dangling reference.
 
-When you `move` a note or folder, the server rewrites every `[[X]]`, `[[X|alias]]`, `![[X]]`, and `![[Attachments/.../file.pdf]]` that pointed at the moved path(s). Wikilinks inside fenced code blocks or inline code are intentionally left untouched. You don't need to rewrite anything yourself.
+Supported forms include `[[Note#Section]]` — the section is indexed and should resolve in the web app; use the full path from search when linking across folders.
+
+When exploring how a note sits in the vault:
+
+- `list_links(path)` — who links **to** this path (backlinks).
+- `list_outbound_links(path)` — what this path links to or embeds (outbound).
+- `list_related(path)` — notes that share a tag or facet (**not** the same as a wikilink). The full graph at `/graph` and explicit link tools only reflect rows in the `links` table.
+
+When you `move` a note or folder, the server rewrites every `[[X]]`, `[[X|alias]]`, `![[X]]`, and `![[Attachments/.../file.pdf]]` that pointed at the moved path(s). Wikilinks inside fenced code blocks or inline code are intentionally left untouched. You don't need to rewrite anything yourself. `delete` gives you none of this — see **Saving to the brain**.
 
 ## Attachments
 
 Binaries (PDFs, images, audio) live under `Attachments/YYYY/MM/` and are referenced from notes with `![[Attachments/2026/05/diagram.png]]`.
 
-To attach a file to a note:
+**Uploading binaries is a web-app action** — drag the file onto the file tree in the web app, then embed the resulting path in the note body. There is no upload tool over MCP.
 
-1. Call `upload_attachment(path, data_base64, mime?)` with a path under `Attachments/YYYY/MM/`. The server returns the final path.
-2. Embed it in the note body with `![[<returned-path>]]`.
-
-To read an attachment, use `get_attachment(path)` — it returns the file bytes base64-encoded plus size and mtime.
+`list_links(path)` works on attachments too, so you can answer "what references this PDF?" without reading the bytes. `move` rewrites attachment embeds that pointed at what moved; `delete` does not rewrite links in note bodies.
 
 ## Frontmatter conventions
 
@@ -231,7 +256,7 @@ Rules:
 
 - Lowercase, hyphen-joined: `pricing-tiered`, not `PricingTiered`.
 - Hierarchical when useful: `proyecto/zuno`, `tipo/decisión`, `persona/pablo`.
-- Reuse existing tags before inventing new ones. `list_notes(tag="…")` and `search_brain` can show what's in use.
+- Reuse existing tags before inventing new ones. `list_notes(tag="…")`, `list_notes(facetKey=…, facetValue=…)`, and `search_brain` can show what's in use.
 - ~5 tags max per note. More is noise.
 
 ## Facets — structured frontmatter beyond tags
@@ -249,7 +274,7 @@ status: decidido
 ```
 
 - Reuse existing facet keys and values before inventing new ones — `list_facets(key="technologies")` shows what's in use, same idea as checking existing tags.
-- Prefer a facet over a tag when the metadata has a name *and* a value that's naturally worth filtering on separately (`technologies: nextjs` rather than a tag `tech/nextjs`) — both work, but a facet keeps `nextjs` queryable as a value under the `technologies` key rather than a string to parse.
+- Prefer a facet over a tag when the metadata has a name _and_ a value that's naturally worth filtering on separately (`technologies: nextjs` rather than a tag `tech/nextjs`) — both work, but a facet keeps `nextjs` queryable as a value under the `technologies` key rather than a string to parse.
 - `list_related(path)` uses both tags and facets to find related notes — a note doesn't need explicit wikilinks to show up there, just a shared tag or facet value.
 
 ## Markdown syntax (Obsidian-flavored)
@@ -276,6 +301,8 @@ Create a new subfolder only when **both** are true: (1) at least three existing 
 - Don't invent paths, notes, or links you haven't verified.
 - Don't write to the brain silently.
 - Don't restructure folders or move multiple notes without explicit permission.
+- Don't delete without showing the backlinks it will break (`list_links`).
+- Don't share a folder without the user naming both the folder and the person.
 - Don't pile up tags or frontmatter "just in case".
 - Don't default to a generic bucket when classification is uncertain — ask.
 - Don't use English vs Spanish inconsistently within the same brain — match the user's language for content; metadata (tags, status) can stay in either as long as you're consistent with what's already in use.
