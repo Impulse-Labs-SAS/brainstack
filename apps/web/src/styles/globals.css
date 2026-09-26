@@ -25,6 +25,14 @@
   --warning: #f59e0b;
   --danger: #ef4444;
   --info: #3b82f6;
+
+  /* Graph folder colours, in slot order. Validated as a set against --bg-base
+     for every pair (a graph puts any two on screen together): CVD dE >= 9.4,
+     normal-vision dE >= 20.9, >= 3:1 contrast. Only three - a fourth cannot
+     clear those floors - so further folders fold into grey. */
+  --graph-group-1: #3987e5;
+  --graph-group-2: #d95926;
+  --graph-group-3: #199e70;
 }
 
 html,
