@@ -217,3 +217,45 @@ con una afinidad, y `/graph` sigue siendo la vista de estructura.
   `[[` en el editor autocompleta; `[[Nota#Sección]]` en preview ya no se ve roto; dos
   usuarios de prueba con una carpeta parcialmente compartida confirman que el backlink
   desde la carpeta no compartida no se filtra.
+
+## 11. `/graph`: estructura, afinidad, temas y proyectos
+
+El grafo sólo leía `links`, así que la mayoría de las aristas eran las de los MOC
+(`_<Carpeta>.md` enlaza a cada nota de su carpeta): mostraba dónde está archivada una
+nota, no de qué trata, y dos proyectos que usan la misma tecnología no se tocaban.
+
+**Estructura vs. contenido.** Una arista hacia o desde un índice es `structure`: tira
+al 30 %, se dibuja tenue, cuenta un cuarto para el tamaño del nodo y se puede ocultar
+(toggle "índices"). Los índices son cuadrados; las notas de otro dueño, anillos huecos.
+
+**Cuatro vistas** (`lib/graph-model.ts`, sin canvas y con tests):
+
+| vista | qué agrega a los enlaces |
+|---|---|
+| enlaces | nada |
+| afinidad (default) | aristas **punteadas** entre notas que comparten un tema raro |
+| temas | un nodo hexagonal por tema, unido a las notas que lo llevan |
+| proyectos | un nodo por proyecto; sólida si hay enlaces entre sus notas, punteada si sólo comparten temas |
+
+La lección del §8 sigue en pie: una afinidad nunca se dibuja como un enlace. Si dos
+notas ya están enlazadas no se agrega la punteada (la tarjeta de hover sigue nombrando
+los temas).
+
+**Qué es un tema** (`services/affinity.ts`, `NoteService.affinity`): tags de contenido y
+facetas. Quedan fuera `tipo/*`, `persona/*`, `decisión`, `status`, `owner` y las claves
+que ya ignora `list_related`: unían todo con todo. Un tema cuenta si lo llevan ≥ 2 notas
+y no más del 25 % de la bóveda (mínimo 3); pesa `1 / notas`, igual que `list_related`.
+Cada nota conserva sus 3 aristas más fuertes. Sólo la bóveda propia, como `list_related`.
+
+**Qué es un proyecto** (`services/projects.ts`, viaja en cada nodo de `notes.graph`):
+el tag `proyecto/*` si la nota tiene exactamente uno; si no, el MOC más cercano hacia
+arriba (y si ese MOC tiene tag de proyecto, ese proyecto); si no, la carpeta de primer
+nivel o la raíz. "Carpeta de primer nivel" sola era incorrecta: `Pablo/` guarda varios
+proyectos.
+
+**Sin color por proyecto.** Se probó colorear las 3 carpetas más grandes (la paleta
+validada no admite más con todos los pares a la vista) y se descartó: con proyectos
+bien definidos aparecen decenas, y 3 colores entre 50 confunden. La identidad la da el
+panel de proyectos: lista con búsqueda y scroll, hover resalta un proyecto, clic lo
+enfoca. Clic en un nodo de la vista proyectos enfoca ese proyecto y sus vecinos y pasa a
+la vista afinidad.
