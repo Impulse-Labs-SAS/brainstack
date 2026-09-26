@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { GraphView } from '@/components/graph/graph-view';
+import type { GraphMode } from '@/lib/graph-model';
 import { useSharingEnabled } from '@/lib/use-deployment';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
@@ -16,6 +17,11 @@ export default function GraphPage() {
   });
   // Which nodes are somebody else's, and so open under the shared route.
   const me = trpc.auth.me.useQuery();
+  // Affinity by default: the graph is for finding connections, and links alone
+  // mostly show where notes are filed.
+  const [mode, setMode] = useState<GraphMode>('affinity');
+  // Only fetched once a view needs it; the links view never pays for it.
+  const affinity = trpc.notes.affinity.useQuery(undefined, { enabled: mode !== 'links' });
 
   return (
     <AppShell>
@@ -49,6 +55,9 @@ export default function GraphPage() {
           <GraphView
             nodes={data.nodes}
             edges={data.edges}
+            affinity={mode === 'links' ? null : (affinity.data ?? null)}
+            mode={mode}
+            onModeChange={setMode}
             viewerId={me.data?.user?.id ?? null}
           />
         )}

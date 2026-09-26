@@ -238,6 +238,20 @@ describe('el id interno no se escapa a las respuestas', () => {
  * salía marcado como no resuelto — no salía en absoluto, porque el destino
  * pendiente se guarda sin prefijo y la búsqueda lo pide con prefijo.
  */
+describe('afinidad en hosted', () => {
+  it('no une notas de dueños distintos aunque compartan un tema', async () => {
+    await notes.create('alice', 'A/uno.md', '# Uno', { technologies: ['gemini-api'] });
+    await notes.create('alice', 'A/dos.md', '# Dos', { technologies: ['gemini-api'] });
+    await notes.create('bob', 'B/tres.md', '# Tres', { technologies: ['gemini-api'] });
+
+    const { topics, edges } = await notes.affinity('alice');
+    expect(topics).toHaveLength(1);
+    expect(topics[0]!.notes).toEqual(['alice/A/dos.md', 'alice/A/uno.md']);
+    expect(edges).toHaveLength(1);
+    expect(JSON.stringify({ topics, edges })).not.toContain('bob');
+  });
+});
+
 describe('mover dentro de una bóveda hosted', () => {
   it('la nota movida conserva su dueño y sus enlaces siguen resueltos', async () => {
     await notes.create('alice', 'Ideas/bot/concepto.md', '# Concepto\n\nver [[prerrequisitos]]');

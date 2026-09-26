@@ -29,6 +29,14 @@ import { AppError } from '../lib/errors.js';
 import { toLogical, toPhysical, type VaultConfig } from '../lib/vault.js';
 
 import {
+  affinityEdges,
+  buildTopics,
+  type AffinityEdge,
+  type Topic,
+  type TopicRow,
+} from './affinity.js';
+import { resolveProjects, type ProjectRef } from './projects.js';
+import {
   facetSignal,
   rankRelated,
   RELATED_IGNORED_FACET_KEYS,
@@ -907,6 +915,38 @@ export class NoteService {
   // -- Graph -----------------------------------------------------------------
 
   /**
+   * Topics shared across the owner's notes, and the note-to-note edges they
+   * imply — what the graph draws when it shows affinity rather than links.
+   *
+   * Own vault only, like `listRelated`: reaching into shared folders needs the
+   * same masking backlinks got, and has not had it. Paths come back stored,
+   * matching the ids `graph` gives its nodes.
+   */
+  async affinity(ownerId: string): Promise<{ topics: Topic[]; edges: AffinityEdge[] }> {
+    const owned = this.ownedBy(ownerId);
+    const [tagRows, facetRows, [total]] = await Promise.all([
+      this.opts.db
+        .select({ path: tags.notePath, value: tags.tag })
+        .from(tags)
+        .innerJoin(notes, eq(notes.path, tags.notePath))
+        .where(owned),
+      this.opts.db
+        .select({ path: facets.notePath, key: facets.key, value: facets.value })
+        .from(facets)
+        .innerJoin(notes, eq(notes.path, facets.notePath))
+        .where(owned),
+      this.opts.db.select({ count: sql<number>`count(*)::int` }).from(notes).where(owned),
+    ]);
+
+    const rows: TopicRow[] = [
+      ...tagRows.map((r) => ({ path: r.path, kind: 'tag' as const, value: r.value })),
+      ...facetRows.map((r) => ({ path: r.path, kind: 'facet' as const, key: r.key, value: r.value })),
+    ];
+    const topics = buildTopics(rows, Number(total?.count ?? 0));
+    return { topics, edges: affinityEdges(topics) };
+  }
+
+  /**
    * Nodes and weighted edges for the graph view. `sharedScopes` widens it to
    * folders other people shared, which is why nodes carry their owner.
    */
@@ -921,7 +961,13 @@ export class NoteService {
     viewerId: string,
     opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }> } = {},
   ): Promise<{
-    nodes: Array<{ id: string; path: string; title: string; ownerId: string | null }>;
+    nodes: Array<{
+      id: string;
+      path: string;
+      title: string;
+      ownerId: string | null;
+      project: ProjectRef;
+    }>;
     edges: Array<{ source: string; target: string; weight: number }>;
   }> {
     const scopes = [this.ownedBy(viewerId)];
@@ -930,10 +976,33 @@ export class NoteService {
     }
     const where = scopes.length === 1 ? scopes[0] : or(...scopes);
 
-    const nodeRows = await this.opts.db
-      .select({ path: notes.path, title: notes.title, ownerId: notes.ownerId })
-      .from(notes)
-      .where(where);
+    const [nodeRows, tagRows] = await Promise.all([
+      this.opts.db
+        .select({ path: notes.path, title: notes.title, ownerId: notes.ownerId })
+        .from(notes)
+        .where(where),
+      // Only what decides a project: the rest of the tags are affinity's job.
+      this.opts.db
+        .select({ path: tags.notePath, tag: tags.tag })
+        .from(tags)
+        .innerJoin(notes, eq(notes.path, tags.notePath))
+        .where(and(where, like(tags.tag, 'proyecto/%'))),
+    ]);
+    const tagsByPath = new Map<string, string[]>();
+    for (const row of tagRows) {
+      const list = tagsByPath.get(row.path) ?? [];
+      list.push(row.tag);
+      tagsByPath.set(row.path, list);
+    }
+    const projects = resolveProjects(
+      nodeRows.map((r) => ({
+        id: r.path,
+        path: this.stripOwner(r.path, r.ownerId),
+        ownerId: r.ownerId ?? null,
+        title: r.title,
+        tags: tagsByPath.get(r.path) ?? [],
+      })),
+    );
 
     const visible = new Set(nodeRows.map((r) => r.path));
     const edgeRows = await this.opts.db
@@ -959,6 +1028,7 @@ export class NoteService {
         path: this.stripOwner(r.path, r.ownerId),
         title: r.title,
         ownerId: r.ownerId ?? null,
+        project: projects.get(r.path)!,
       })),
       // An edge to a note nobody can see would draw a line into nothing.
       edges: edgeRows
