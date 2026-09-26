@@ -13,6 +13,8 @@ export interface Palette {
   link: string;
   label: string;
   labelStrong: string;
+  /** One colour per folder slot, in slot order (see lib/graph-structure.ts). */
+  groups: readonly string[];
 }
 
 export const FALLBACK_PALETTE: Palette = {
@@ -24,6 +26,7 @@ export const FALLBACK_PALETTE: Palette = {
   link: '#6b6b6b',
   label: '#a0a0a0',
   labelStrong: '#ededed',
+  groups: ['#3987e5', '#d95926', '#199e70'],
 };
 
 export function readPalette(): Palette {
@@ -39,5 +42,6 @@ export function readPalette(): Palette {
     link: v('--fg-muted', FALLBACK_PALETTE.link),
     label: v('--fg-secondary', FALLBACK_PALETTE.label),
     labelStrong: v('--fg-primary', FALLBACK_PALETTE.labelStrong),
+    groups: FALLBACK_PALETTE.groups.map((fallback, i) => v(`--graph-group-${i + 1}`, fallback)),
   };
 }

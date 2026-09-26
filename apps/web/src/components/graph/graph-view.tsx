@@ -16,11 +16,23 @@
 // Nodes and labels are drawn in screen space (only the links live inside the
 // canvas transform) so text stays 12px at any zoom, dots never shrink to
 // nothing, and labels that would collide are dropped instead of overlapping.
+//
+// Structure is told apart from content. A MOC index (`_<Folder>.md`) links to
+// every note in its folder, so it used to be the hub of every cluster; its
+// edges now pull less, draw fainter and can be hidden, and nodes wear the
+// colour of their top-level folder so projects read as projects.
 
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { FALLBACK_PALETTE, readPalette, type Palette } from '@/lib/graph-palette';
+import {
+  assignFolderGroups,
+  isIndexNote,
+  isStructureEdge,
+  topFolderOf,
+  type FolderGroup,
+} from '@/lib/graph-structure';
 
 interface InputNode {
   /** Stored path: unique across owners, used to join nodes to edges. */
@@ -44,7 +56,14 @@ interface SimNode {
   y: number;
   vx: number;
   vy: number;
+  /** Edges touching it, structural ones included: what the springs balance on. */
   degree: number;
+  /** What its radius and label priority go by: an index edge counts a quarter. */
+  size: number;
+  /** Folder colour slot, or null for grey. */
+  slot: number | null;
+  foreign: boolean;
+  isIndex: boolean;
   /** Where the user parked it. Set by dragging; the sim never overrides it. */
   fx: number | null;
   fy: number | null;
@@ -58,6 +77,8 @@ interface SimEdge {
   /** How the correction splits between the ends, by relative degree. */
   bias: number;
   distance: number;
+  /** Exists because a note is filed under an index, not because of what it says. */
+  structural: boolean;
 }
 
 interface GraphViewProps {
@@ -75,6 +96,10 @@ const ALPHA_DECAY = 0.017; // ~300 ticks to settle
 const ALPHA_MIN = 0.0015;
 const ALPHA_REHEAT = 0.4;
 const COLLIDE_PADDING = 8;
+// An index edge still holds a folder together, just loosely enough that the
+// links between notes decide the shape.
+const STRUCTURE_STRENGTH = 0.3;
+const STRUCTURE_SIZE_WEIGHT = 0.25;
 
 const NODE_BASE_RADIUS = 4.5;
 const NODE_DEGREE_SCALE = 2.6;
@@ -88,7 +113,7 @@ const LABEL_MAX_CHARS = 32;
 const CLICK_SLOP = 4; // px of pointer travel still counted as a click
 
 function worldRadius(node: SimNode): number {
-  return NODE_BASE_RADIUS + Math.sqrt(node.degree) * NODE_DEGREE_SCALE;
+  return NODE_BASE_RADIUS + Math.sqrt(node.size) * NODE_DEGREE_SCALE;
 }
 
 function screenRadius(node: SimNode, k: number): number {
@@ -118,6 +143,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
   const [query, setQuery] = useState('');
   const [zoom, setZoom] = useState(1);
   const [pinnedCount, setPinnedCount] = useState(0);
+  const [showIndexes, setShowIndexes] = useState(true);
 
   // The viewport lives in a ref: panning at 60fps must not re-render React.
   const transform = useRef({ x: 0, y: 0, k: 1 });
@@ -126,11 +152,28 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
   const userMoved = useRef(false);
   const paletteRef = useRef<Palette>(FALLBACK_PALETTE);
 
-  const { simNodes, simEdges, neighbours, foreignCount } = useMemo(() => {
+  const isForeign = useCallback(
+    (ownerId: string | null) => Boolean(ownerId && viewerId && ownerId !== viewerId),
+    [viewerId],
+  );
+
+  // From every node, before the index toggle: hiding indexes must not repaint
+  // the folders.
+  const groups = useMemo(
+    () => assignFolderGroups(nodes.map((n) => ({ path: n.path, foreign: isForeign(n.ownerId) }))),
+    [nodes, isForeign],
+  );
+
+  const indexCount = useMemo(() => nodes.filter((n) => isIndexNote(n.path)).length, [nodes]);
+
+  const { simNodes, simEdges, neighbours, foreignCount, structureCount } = useMemo(() => {
+    const slotOf = new Map(groups.map((g) => [g.folder, g.slot]));
+    const shown = showIndexes ? nodes : nodes.filter((n) => !isIndexNote(n.path));
     const map = new Map<string, SimNode>();
     // Phyllotaxis, not random: the same vault lays out the same way twice, and
     // no two notes start on top of each other.
-    nodes.forEach((n, i) => {
+    shown.forEach((n, i) => {
+      const foreign = isForeign(n.ownerId);
       const radius = 12 * Math.sqrt(0.5 + i);
       const angle = i * Math.PI * (3 - Math.sqrt(5));
       map.set(n.id, {
@@ -143,33 +186,48 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
         vx: 0,
         vy: 0,
         degree: 0,
+        size: 0,
+        slot: foreign ? null : (slotOf.get(topFolderOf(n.path)) ?? null),
+        foreign,
+        isIndex: isIndexNote(n.path),
         fx: null,
         fy: null,
       });
     });
 
-    const pairs: Array<{ source: SimNode; target: SimNode; weight: number }> = [];
+    const pairs: Array<{
+      source: SimNode;
+      target: SimNode;
+      weight: number;
+      structural: boolean;
+    }> = [];
     const adjacency = new Map<string, Set<string>>();
     for (const e of edges) {
       const s = map.get(e.source);
       const t = map.get(e.target);
       if (!s || !t || s === t) continue;
+      const structural = isStructureEdge(s.path, t.path);
+      const sizeStep = structural ? STRUCTURE_SIZE_WEIGHT : 1;
       s.degree += 1;
       t.degree += 1;
-      pairs.push({ source: s, target: t, weight: e.weight });
+      s.size += sizeStep;
+      t.size += sizeStep;
+      pairs.push({ source: s, target: t, weight: e.weight, structural });
       if (!adjacency.has(s.id)) adjacency.set(s.id, new Set());
       if (!adjacency.has(t.id)) adjacency.set(t.id, new Set());
       adjacency.get(s.id)!.add(t.id);
       adjacency.get(t.id)!.add(s.id);
     }
 
-    const se: SimEdge[] = pairs.map(({ source, target, weight }) => ({
+    const se: SimEdge[] = pairs.map(({ source, target, weight, structural }) => ({
       source,
       target,
       weight,
-      strength: 1 / Math.min(source.degree, target.degree),
+      strength:
+        (1 / Math.min(source.degree, target.degree)) * (structural ? STRUCTURE_STRENGTH : 1),
       bias: source.degree / (source.degree + target.degree),
       distance: LINK_DISTANCE + worldRadius(source) + worldRadius(target),
+      structural,
     }));
 
     const list = Array.from(map.values());
@@ -177,9 +235,10 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       simNodes: list,
       simEdges: se,
       neighbours: adjacency,
-      foreignCount: list.filter((n) => n.ownerId && viewerId && n.ownerId !== viewerId).length,
+      foreignCount: list.filter((n) => n.foreign).length,
+      structureCount: se.filter((e) => e.structural).length,
     };
-  }, [nodes, edges, viewerId]);
+  }, [nodes, edges, groups, showIndexes, isForeign]);
 
   const matched = useMemo(() => {
     if (!query.trim()) return null;
@@ -332,12 +391,13 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     for (const e of simEdges) {
       const touchesHover = hover ? e.source.id === hover.id || e.target.id === hover.id : false;
       const inFilter = !matched || matched.has(e.source.id) || matched.has(e.target.id);
-      let opacity = 0.28;
+      let opacity = e.structural ? 0.1 : 0.28;
       if (!inFilter) opacity = 0.05;
-      else if (hover) opacity = touchesHover ? 0.75 : 0.06;
+      else if (hover) opacity = touchesHover ? (e.structural ? 0.4 : 0.75) : 0.06;
       ctx.globalAlpha = opacity;
       ctx.strokeStyle = touchesHover ? colors.accent : colors.link;
-      ctx.lineWidth = Math.min(3.5, 0.8 + Math.log2(e.weight + 1) * 0.7) / Math.max(k, 0.45);
+      const width = e.structural ? 0.7 : Math.min(3.5, 0.8 + Math.log2(e.weight + 1) * 0.7);
+      ctx.lineWidth = width / Math.max(k, 0.45);
       ctx.beginPath();
       ctx.moveTo(e.source.x, e.source.y);
       ctx.lineTo(e.target.x, e.target.y);
@@ -355,22 +415,40 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       const isHover = hover?.id === node.id;
       const isNeighbour = focus?.has(node.id) ?? false;
       const inFilter = !matched || matched.has(node.id);
-      const foreign = Boolean(node.ownerId && viewerId && node.ownerId !== viewerId);
+      const fill = node.slot !== null ? (colors.groups[node.slot] ?? colors.node) : colors.node;
 
       let opacity = 1;
       if (!inFilter) opacity = 0.15;
       else if (hover && !isHover && !isNeighbour) opacity = 0.25;
       ctx.globalAlpha = opacity;
-      ctx.fillStyle = isHover
-        ? colors.accent
-        : isNeighbour
-          ? colors.accentSoft
-          : foreign
-            ? colors.foreign
-            : colors.node;
+      // Shape carries what colour cannot: a square is an index, a ring is
+      // somebody else's note. Identity never rests on hue alone.
       ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.fill();
+      if (node.isIndex) {
+        const side = r * 1.7;
+        ctx.roundRect(sx - side / 2, sy - side / 2, side, side, Math.min(3, side / 4));
+      } else {
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      }
+      if (node.foreign) {
+        ctx.fillStyle = colors.bg;
+        ctx.fill();
+        ctx.strokeStyle = colors.foreign;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = fill;
+        ctx.fill();
+      }
+      if (isHover) {
+        // A ring, not a repaint: the hovered note keeps its folder colour.
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = colors.accent;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r + 3.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       if (node.fx !== null) {
         // Pinned: a ring, so it is clear the sim is no longer moving it.
         ctx.globalAlpha = Math.min(1, opacity + 0.2);
@@ -392,13 +470,13 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     // zoomed far enough out that even the survivors would be a grey smear.
     const minDegree = k >= 0.5 ? 0 : k >= 0.3 ? 3 : 8;
     const placed: Rect[] = [];
-    const order = [...simNodes].sort((a, b) => b.degree - a.degree);
+    const order = [...simNodes].sort((a, b) => b.size - a.size);
     for (const node of order) {
       const isHover = hover?.id === node.id;
       const isNeighbour = focus?.has(node.id) ?? false;
       const isMatch = matched?.has(node.id) ?? false;
       if (matched && !isMatch && !isHover && !isNeighbour) continue;
-      if (!isHover && !isNeighbour && !isMatch && node.degree < minDegree) continue;
+      if (!isHover && !isNeighbour && !isMatch && node.size < minDegree) continue;
 
       const sx = toScreenX(node.x);
       const sy = toScreenY(node.y);
@@ -422,7 +500,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     }
     ctx.globalAlpha = 1;
     ctx.textAlign = 'start';
-  }, [simNodes, simEdges, neighbours, hover, matched, viewerId]);
+  }, [simNodes, simEdges, neighbours, hover, matched]);
 
   // -- Render loop -----------------------------------------------------------
   //
@@ -678,11 +756,21 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     <div className="relative flex h-full w-full flex-col">
       <div className="flex items-center gap-3 border-b border-border-subtle bg-bg-surface px-4 py-2 font-mono text-[11px] text-fg-muted">
         <span>
-          {simNodes.length} notes · {simEdges.length} links
+          {simNodes.length} notes · {simEdges.length - structureCount} links
+          {structureCount > 0 && <span> · {structureCount} de índices</span>}
           {foreignCount > 0 && (
             <span className="text-info"> · {foreignCount} de otros</span>
           )}
         </span>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            checked={showIndexes}
+            onChange={(e) => setShowIndexes(e.target.checked)}
+            className="h-3 w-3 accent-accent"
+          />
+          <span className={showIndexes ? 'text-fg-primary' : undefined}>índices</span>
+        </label>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -700,6 +788,14 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
         onPointerCancel={onPointerUp}
       >
         <canvas ref={canvasRef} className="block h-full w-full" />
+
+        <GraphLegend
+          groups={groups}
+          indexCount={indexCount}
+          showsIndexes={showIndexes}
+          onToggleIndexes={() => setShowIndexes((v) => !v)}
+          hasForeign={foreignCount > 0}
+        />
 
         {hover && (
           <div className="pointer-events-none absolute bottom-3 left-3 max-w-[60%] rounded border border-border-subtle bg-bg-surface px-2 py-1 font-mono text-[11px] text-fg-primary shadow-sm">
@@ -720,6 +816,89 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * What colour and shape mean. Always shown: with two or more folders on
+ * screen, a colour nobody explains is just decoration.
+ *
+ * It sits on top of the canvas, so it keeps the pointer to itself: a press
+ * that reached the canvas started a pan, and the index toggle could not be
+ * clicked.
+ */
+function GraphLegend({
+  groups,
+  indexCount,
+  showsIndexes,
+  onToggleIndexes,
+  hasForeign,
+}: {
+  groups: FolderGroup[];
+  indexCount: number;
+  showsIndexes: boolean;
+  onToggleIndexes: () => void;
+  hasForeign: boolean;
+}) {
+  const coloured = groups.filter((g) => g.slot !== null);
+  const rest = groups.filter((g) => g.slot === null);
+  const restCount = rest.reduce((sum, g) => sum + g.count, 0);
+  const only = rest.length === 1 ? rest[0]! : null;
+  const restLabel = only ? only.folder || 'raíz' : 'otras';
+  if (coloured.length === 0 && !hasForeign) return null;
+
+  return (
+    <ul
+      className="absolute left-3 top-3 cursor-default space-y-1 rounded border border-border-subtle bg-bg-surface px-2 py-1.5 font-mono text-[11px] text-fg-secondary"
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerMove={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+    >
+      {coloured.map((g) => (
+        <li key={g.folder} className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="inline-block h-2 w-2 rounded-full"
+            style={{ backgroundColor: `var(--graph-group-${g.slot! + 1})` }}
+          />
+          <span className="text-fg-primary">{g.folder}</span>
+          <span className="text-fg-muted">{g.count}</span>
+        </li>
+      ))}
+      {restCount > 0 && (
+        <li className="flex items-center gap-2">
+          <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-fg-secondary" />
+          <span>{restLabel}</span>
+          <span className="text-fg-muted">{restCount}</span>
+        </li>
+      )}
+      {indexCount > 0 && (
+        <li>
+          <button
+            type="button"
+            aria-pressed={showsIndexes}
+            onClick={onToggleIndexes}
+            title={showsIndexes ? 'Ocultar índices' : 'Mostrar índices'}
+            className="flex items-center gap-2 rounded px-0.5 -mx-0.5 transition-colors hover:bg-bg-hover hover:text-fg-primary"
+          >
+            <span
+              aria-hidden
+              className="inline-block h-2 w-2 rounded-[2px] border border-fg-secondary"
+            />
+            <span className={showsIndexes ? undefined : 'text-fg-muted line-through'}>
+              índice (MOC)
+            </span>
+            <span className="text-fg-muted">{indexCount}</span>
+          </button>
+        </li>
+      )}
+      {hasForeign && (
+        <li className="flex items-center gap-2">
+          <span aria-hidden className="inline-block h-2 w-2 rounded-full border-2 border-info" />
+          <span>de otros</span>
+        </li>
+      )}
+    </ul>
   );
 }
 
