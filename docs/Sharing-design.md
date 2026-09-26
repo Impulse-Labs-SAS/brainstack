@@ -280,6 +280,9 @@ Toggle pill `Mine | Shared | All` arriba del input. Pasa `scope` al backend.
 
 Checkbox "Incluir compartidos". Default off.
 
+> Superseded: shared vaults are now a layer of the graph, shown by default and hidden or
+> isolated per vault. See `Graph-design.md`.
+
 ### Aceptación de invitación
 
 - Página nueva `apps/web/src/app/invite/accept/[token]/page.tsx` que llama al endpoint REST y maneja los 3 estados (logueado/no-logueado/email-mismatch).
