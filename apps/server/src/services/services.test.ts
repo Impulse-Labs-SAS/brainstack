@@ -178,6 +178,50 @@ describe('NoteService — outbound links, facets and related notes', () => {
   });
 });
 
+describe('NoteService.graph projects', () => {
+  it('gives each node its project: tag, then nearest MOC, then top-level folder', async () => {
+    await notes.create(USER, 'Pablo/proyectos/sd/_sd.md', '# Seek & Destroy', {
+      tags: ['proyecto/seek-and-destroy'],
+    });
+    await notes.create(USER, 'Pablo/proyectos/sd/suelta.md', '# Suelta');
+    await notes.create(USER, 'Pablo/life/perfil.md', '# Perfil');
+
+    const { nodes } = await notes.graph(USER);
+    const projectOf = (path: string) => nodes.find((n) => n.path === path)!.project.label;
+    expect(projectOf('Pablo/proyectos/sd/suelta.md')).toBe('Seek & Destroy');
+    expect(projectOf('Pablo/proyectos/sd/_sd.md')).toBe('Seek & Destroy');
+    expect(projectOf('Pablo/life/perfil.md')).toBe('Pablo');
+  });
+});
+
+describe('NoteService.affinity', () => {
+  it('joins notes across folders by a shared content topic', async () => {
+    await notes.create(USER, 'Atlas/lector.md', '# Lector', { technologies: ['gemini-api'] });
+    await notes.create(USER, 'Nimbus/clasificador.md', '# Clasificador', {
+      technologies: ['gemini-api'],
+    });
+    await notes.create(USER, 'Nimbus/otra.md', '# Otra', { technologies: ['hono'] });
+
+    const { topics, edges } = await notes.affinity(USER);
+    expect(topics.map((t) => t.label)).toEqual(['gemini-api']);
+    expect(edges).toEqual([
+      {
+        source: 'Atlas/lector.md',
+        target: 'Nimbus/clasificador.md',
+        weight: 0.5,
+        shared: ['gemini-api'],
+      },
+    ]);
+  });
+
+  it('does not treat type or authorship tags as topics', async () => {
+    await notes.create(USER, 'A/_A.md', '# A', { tags: ['tipo/moc', 'persona/pablo'], status: 'idea' });
+    await notes.create(USER, 'B/_B.md', '# B', { tags: ['tipo/moc', 'persona/pablo'], status: 'idea' });
+
+    expect(await notes.affinity(USER)).toEqual({ topics: [], edges: [] });
+  });
+});
+
 describe('NoteService.listDecisions', () => {
   it('matches the decision tag', async () => {
     await notes.create(USER, 'Decisiones/tag.md', '# T', { tags: ['decisión'] });

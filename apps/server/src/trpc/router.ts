@@ -279,6 +279,9 @@ export const appRouter = t.router({
             : [];
         return ctx.notes.graph(ctx.user.id, { sharedScopes });
       }),
+    // Own vault only: affinity across shared folders would name topics and
+    // notes the grant never covered. See NoteService.affinity.
+    affinity: protectedProcedure.query(({ ctx }) => ctx.notes.affinity(ctx.user.id)),
     outboundLinks: protectedProcedure
       .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
       .query(async ({ ctx, input }) => {
