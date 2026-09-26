@@ -19,90 +19,51 @@
 //
 // Structure is told apart from content. A MOC index (`_<Folder>.md`) links to
 // every note in its folder, so it used to be the hub of every cluster; its
-// edges now pull less, draw fainter and can be hidden, and nodes wear the
-// colour of their top-level folder so projects read as projects.
+// edges now pull less, draw fainter and can be hidden.
+//
+// Four views: links only; links plus dashed affinity edges between notes that
+// share a rare topic; links plus a node per topic; or one node per project.
+// Projects are told apart by the panel on the left (hover lights one up, click
+// focuses it), not by colour — a palette runs out long before projects do.
+// What connects to what is decided in lib/graph-model.ts; this file only
+// simulates and draws it.
 
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { FALLBACK_PALETTE, readPalette, type Palette } from '@/lib/graph-palette';
 import {
-  assignFolderGroups,
-  isIndexNote,
-  isStructureEdge,
-  topFolderOf,
-  type FolderGroup,
-} from '@/lib/graph-structure';
-
-interface InputNode {
-  /** Stored path: unique across owners, used to join nodes to edges. */
-  id: string;
-  /** Path as its owner writes it, for display and navigation. */
-  path: string;
-  title: string;
-  ownerId: string | null;
-}
-interface InputEdge {
-  source: string;
-  target: string;
-  weight: number;
-}
-interface SimNode {
-  id: string;
-  path: string;
-  title: string;
-  ownerId: string | null;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  /** Edges touching it, structural ones included: what the springs balance on. */
-  degree: number;
-  /** What its radius and label priority go by: an index edge counts a quarter. */
-  size: number;
-  /** Folder colour slot, or null for grey. */
-  slot: number | null;
-  foreign: boolean;
-  isIndex: boolean;
-  /** Where the user parked it. Set by dragging; the sim never overrides it. */
-  fx: number | null;
-  fy: number | null;
-}
-interface SimEdge {
-  source: SimNode;
-  target: SimNode;
-  weight: number;
-  /** Spring constant: an edge between hubs pulls less, as in d3-force. */
-  strength: number;
-  /** How the correction splits between the ends, by relative degree. */
-  bias: number;
-  distance: number;
-  /** Exists because a note is filed under an index, not because of what it says. */
-  structural: boolean;
-}
+  buildGraphModel,
+  summariseProjects,
+  worldRadius,
+  type AffinityInput,
+  type GraphMode,
+  type InputEdge,
+  type InputNode,
+  type ProjectSummary,
+  type SimEdge,
+  type SimNode,
+} from '@/lib/graph-model';
+import { isIndexNote } from '@/lib/graph-structure';
 
 interface GraphViewProps {
   nodes: InputNode[];
   edges: InputEdge[];
+  /** Shared topics and the edges they imply; null until loaded, or in the links view. */
+  affinity: AffinityInput | null;
+  mode: GraphMode;
+  onModeChange: (mode: GraphMode) => void;
   /** Who is looking: a node owned by anyone else opens as a shared note. */
   viewerId: string | null;
 }
 
 const CHARGE = -420; // many-body repulsion; negative repels
-const LINK_DISTANCE = 78; // plus both radii, so hubs hold their ring wider
 const GRAVITY = 0.035; // the only thing bounding a 1/d repulsion
 const VELOCITY_DECAY = 0.6;
 const ALPHA_DECAY = 0.017; // ~300 ticks to settle
 const ALPHA_MIN = 0.0015;
 const ALPHA_REHEAT = 0.4;
 const COLLIDE_PADDING = 8;
-// An index edge still holds a folder together, just loosely enough that the
-// links between notes decide the shape.
-const STRUCTURE_STRENGTH = 0.3;
-const STRUCTURE_SIZE_WEIGHT = 0.25;
-
-const NODE_BASE_RADIUS = 4.5;
-const NODE_DEGREE_SCALE = 2.6;
 const MIN_SCREEN_RADIUS = 3;
 const MAX_SCREEN_RADIUS = 44;
 
@@ -111,10 +72,6 @@ const MAX_ZOOM = 6;
 const LABEL_FONT = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
 const LABEL_MAX_CHARS = 32;
 const CLICK_SLOP = 4; // px of pointer travel still counted as a click
-
-function worldRadius(node: SimNode): number {
-  return NODE_BASE_RADIUS + Math.sqrt(node.size) * NODE_DEGREE_SCALE;
-}
 
 function screenRadius(node: SimNode, k: number): number {
   return Math.max(MIN_SCREEN_RADIUS, Math.min(MAX_SCREEN_RADIUS, worldRadius(node) * k));
@@ -133,7 +90,21 @@ function overlaps(a: Rect, placed: Rect[]): boolean {
   return false;
 }
 
-export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
+const MODES: Array<{ id: GraphMode; label: string }> = [
+  { id: 'links', label: 'enlaces' },
+  { id: 'affinity', label: 'afinidad' },
+  { id: 'topics', label: 'temas' },
+  { id: 'projects', label: 'proyectos' },
+];
+
+export function GraphView({
+  nodes,
+  edges,
+  affinity,
+  mode,
+  onModeChange,
+  viewerId,
+}: GraphViewProps) {
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -144,6 +115,10 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
   const [zoom, setZoom] = useState(1);
   const [pinnedCount, setPinnedCount] = useState(0);
   const [showIndexes, setShowIndexes] = useState(true);
+  // The project under the pointer in the panel, and the projects a click
+  // focused. Either one dims everything outside it.
+  const [panelProject, setPanelProject] = useState<string | null>(null);
+  const [focus, setFocus] = useState<{ ids: Set<string>; label: string } | null>(null);
 
   // The viewport lives in a ref: panning at 60fps must not re-render React.
   const transform = useRef({ x: 0, y: 0, k: 1 });
@@ -157,98 +132,27 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     [viewerId],
   );
 
-  // From every node, before the index toggle: hiding indexes must not repaint
-  // the folders.
-  const groups = useMemo(
-    () => assignFolderGroups(nodes.map((n) => ({ path: n.path, foreign: isForeign(n.ownerId) }))),
-    [nodes, isForeign],
+  const indexCount = useMemo(() => nodes.filter((n) => isIndexNote(n.path)).length, [nodes]);
+  const projects = useMemo(() => summariseProjects(nodes), [nodes]);
+
+  const { simNodes, simEdges, neighbours, related, counts } = useMemo(
+    () => buildGraphModel({ nodes, edges, affinity, mode, showIndexes, isForeign }),
+    [nodes, edges, affinity, mode, showIndexes, isForeign],
   );
 
-  const indexCount = useMemo(() => nodes.filter((n) => isIndexNote(n.path)).length, [nodes]);
-
-  const { simNodes, simEdges, neighbours, foreignCount, structureCount } = useMemo(() => {
-    const slotOf = new Map(groups.map((g) => [g.folder, g.slot]));
-    const shown = showIndexes ? nodes : nodes.filter((n) => !isIndexNote(n.path));
-    const map = new Map<string, SimNode>();
-    // Phyllotaxis, not random: the same vault lays out the same way twice, and
-    // no two notes start on top of each other.
-    shown.forEach((n, i) => {
-      const foreign = isForeign(n.ownerId);
-      const radius = 12 * Math.sqrt(0.5 + i);
-      const angle = i * Math.PI * (3 - Math.sqrt(5));
-      map.set(n.id, {
-        id: n.id,
-        path: n.path,
-        title: n.title,
-        ownerId: n.ownerId,
-        x: radius * Math.cos(angle),
-        y: radius * Math.sin(angle),
-        vx: 0,
-        vy: 0,
-        degree: 0,
-        size: 0,
-        slot: foreign ? null : (slotOf.get(topFolderOf(n.path)) ?? null),
-        foreign,
-        isIndex: isIndexNote(n.path),
-        fx: null,
-        fy: null,
-      });
-    });
-
-    const pairs: Array<{
-      source: SimNode;
-      target: SimNode;
-      weight: number;
-      structural: boolean;
-    }> = [];
-    const adjacency = new Map<string, Set<string>>();
-    for (const e of edges) {
-      const s = map.get(e.source);
-      const t = map.get(e.target);
-      if (!s || !t || s === t) continue;
-      const structural = isStructureEdge(s.path, t.path);
-      const sizeStep = structural ? STRUCTURE_SIZE_WEIGHT : 1;
-      s.degree += 1;
-      t.degree += 1;
-      s.size += sizeStep;
-      t.size += sizeStep;
-      pairs.push({ source: s, target: t, weight: e.weight, structural });
-      if (!adjacency.has(s.id)) adjacency.set(s.id, new Set());
-      if (!adjacency.has(t.id)) adjacency.set(t.id, new Set());
-      adjacency.get(s.id)!.add(t.id);
-      adjacency.get(t.id)!.add(s.id);
-    }
-
-    const se: SimEdge[] = pairs.map(({ source, target, weight, structural }) => ({
-      source,
-      target,
-      weight,
-      strength:
-        (1 / Math.min(source.degree, target.degree)) * (structural ? STRUCTURE_STRENGTH : 1),
-      bias: source.degree / (source.degree + target.degree),
-      distance: LINK_DISTANCE + worldRadius(source) + worldRadius(target),
-      structural,
-    }));
-
-    const list = Array.from(map.values());
-    return {
-      simNodes: list,
-      simEdges: se,
-      neighbours: adjacency,
-      foreignCount: list.filter((n) => n.foreign).length,
-      structureCount: se.filter((e) => e.structural).length,
-    };
-  }, [nodes, edges, groups, showIndexes, isForeign]);
-
+  // What stays lit: the text filter, narrowed to the hovered or focused
+  // projects. Null means everything.
   const matched = useMemo(() => {
-    if (!query.trim()) return null;
-    const q = query.toLowerCase();
+    const q = query.trim().toLowerCase();
+    const within = panelProject ? new Set([panelProject]) : (focus?.ids ?? null);
+    if (!q && !within) return null;
     return new Set(
       simNodes
-        .filter((n) => n.title.toLowerCase().includes(q) || n.path.toLowerCase().includes(q))
+        .filter((n) => !q || n.title.toLowerCase().includes(q) || n.path.toLowerCase().includes(q))
+        .filter((n) => !within || (n.project !== null && within.has(n.project.id)))
         .map((n) => n.id),
     );
-  }, [query, simNodes]);
+  }, [query, panelProject, focus, simNodes]);
 
   // -- Simulation ------------------------------------------------------------
 
@@ -391,18 +295,25 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     for (const e of simEdges) {
       const touchesHover = hover ? e.source.id === hover.id || e.target.id === hover.id : false;
       const inFilter = !matched || matched.has(e.source.id) || matched.has(e.target.id);
-      let opacity = e.structural ? 0.1 : 0.28;
+      const style = EDGE_STYLE[e.kind];
+      let opacity = style.opacity;
       if (!inFilter) opacity = 0.05;
-      else if (hover) opacity = touchesHover ? (e.structural ? 0.4 : 0.75) : 0.06;
+      else if (hover) opacity = touchesHover ? style.hoverOpacity : 0.06;
       ctx.globalAlpha = opacity;
       ctx.strokeStyle = touchesHover ? colors.accent : colors.link;
-      const width = e.structural ? 0.7 : Math.min(3.5, 0.8 + Math.log2(e.weight + 1) * 0.7);
-      ctx.lineWidth = width / Math.max(k, 0.45);
+      const width =
+        e.kind === 'link' ? Math.min(3.5, 0.8 + Math.log2(e.weight + 1) * 0.7) : style.width;
+      const scale = Math.max(k, 0.45);
+      ctx.lineWidth = width / scale;
+      // Dashed means "nobody linked these": the one thing an affinity edge must
+      // never be mistaken for is a link.
+      ctx.setLineDash(style.dash ? style.dash.map((d) => d / scale) : []);
       ctx.beginPath();
       ctx.moveTo(e.source.x, e.source.y);
       ctx.lineTo(e.target.x, e.target.y);
       ctx.stroke();
     }
+    ctx.setLineDash([]);
     ctx.globalAlpha = 1;
     ctx.restore();
 
@@ -415,7 +326,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       const isHover = hover?.id === node.id;
       const isNeighbour = focus?.has(node.id) ?? false;
       const inFilter = !matched || matched.has(node.id);
-      const fill = node.slot !== null ? (colors.groups[node.slot] ?? colors.node) : colors.node;
+      const fill = colors.node;
 
       let opacity = 1;
       if (!inFilter) opacity = 0.15;
@@ -424,13 +335,22 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       // Shape carries what colour cannot: a square is an index, a ring is
       // somebody else's note. Identity never rests on hue alone.
       ctx.beginPath();
-      if (node.isIndex) {
+      if (node.kind === 'topic') {
+        hexagon(ctx, sx, sy, r * 1.25);
+      } else if (node.isIndex) {
         const side = r * 1.7;
         ctx.roundRect(sx - side / 2, sy - side / 2, side, side, Math.min(3, side / 4));
       } else {
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
       }
-      if (node.foreign) {
+      if (node.kind === 'topic') {
+        // Hollow and grey: a topic is not a note, and has no folder to wear.
+        ctx.fillStyle = colors.bg;
+        ctx.fill();
+        ctx.strokeStyle = colors.label;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else if (node.foreign) {
         ctx.fillStyle = colors.bg;
         ctx.fill();
         ctx.strokeStyle = colors.foreign;
@@ -482,7 +402,7 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       const sy = toScreenY(node.y);
       if (sx < -120 || sx > w + 120 || sy < -40 || sy > h + 40) continue;
 
-      const text = truncate(node.title, LABEL_MAX_CHARS);
+      const text = truncate(node.kind === 'topic' ? node.path : node.title, LABEL_MAX_CHARS);
       const tw = ctx.measureText(text).width;
       const top = sy + screenRadius(node, k) + 4;
       const rect: Rect = { x: sx - tw / 2 - 3, y: top - 2, w: tw + 6, h: 15 };
@@ -495,7 +415,8 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       ctx.strokeStyle = colors.bg;
       ctx.lineWidth = 3;
       ctx.strokeText(text, sx, top);
-      ctx.fillStyle = isHover || isNeighbour ? colors.labelStrong : colors.label;
+      ctx.fillStyle =
+        isHover || isNeighbour ? colors.labelStrong : node.kind === 'topic' ? colors.link : colors.label;
       ctx.fillText(text, sx, top);
     }
     ctx.globalAlpha = 1;
@@ -717,6 +638,22 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       // A click, not a drag: opening the note, so leave nothing pinned.
       state.node.fx = null;
       state.node.fy = null;
+      // A topic is not a note and has nowhere to open; hovering it already
+      // lights up every note that carries it.
+      if (state.node.kind === 'topic') return;
+      // A project opens as its notes: the project and every project it
+      // connects to, so what made the connection is on screen.
+      if (state.node.kind === 'project' && state.node.project) {
+        const ids = new Set([state.node.project.id]);
+        for (const id of neighbours.get(state.node.id) ?? []) {
+          const project = simNodes.find((n) => n.id === id)?.project;
+          if (project) ids.add(project.id);
+        }
+        setFocus({ ids, label: state.node.title });
+        setHover(null);
+        onModeChange('affinity');
+        return;
+      }
       router.push(noteHref(state.node, viewerId));
       return;
     }
@@ -730,6 +667,9 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
     const container = containerRef.current;
     if (!container) return;
     const onWheel = (e: WheelEvent) => {
+      // The panel scrolls its own list; a native listener here fires before
+      // React could stop it, so it has to look where the wheel came from.
+      if (e.target instanceof Element && e.target.closest('[data-graph-panel]')) return;
       e.preventDefault();
       zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
     };
@@ -755,13 +695,39 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
   return (
     <div className="relative flex h-full w-full flex-col">
       <div className="flex items-center gap-3 border-b border-border-subtle bg-bg-surface px-4 py-2 font-mono text-[11px] text-fg-muted">
-        <span>
-          {simNodes.length} notes · {simEdges.length - structureCount} links
-          {structureCount > 0 && <span> · {structureCount} de índices</span>}
-          {foreignCount > 0 && (
-            <span className="text-info"> · {foreignCount} de otros</span>
-          )}
-        </span>
+        {mode === 'projects' ? (
+          <span>
+            {counts.projects} proyectos · {counts.links} con enlaces · {counts.affinity} por temas
+          </span>
+        ) : (
+          <span>
+            {counts.notes} notes · {counts.links} links
+            {counts.structure > 0 && <span> · {counts.structure} de índices</span>}
+            {mode === 'affinity' && <span> · {counts.affinity} afinidades</span>}
+            {mode === 'topics' && <span> · {counts.topics} temas</span>}
+            {counts.foreign > 0 && (
+              <span className="text-info"> · {counts.foreign} de otros</span>
+            )}
+          </span>
+        )}
+        <div role="radiogroup" aria-label="Conexiones" className="flex overflow-hidden rounded border border-border-subtle">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={mode === m.id}
+              onClick={() => onModeChange(m.id)}
+              className={
+                mode === m.id
+                  ? 'bg-bg-elevated px-2 py-0.5 text-fg-primary'
+                  : 'px-2 py-0.5 text-fg-muted transition-colors hover:text-fg-primary'
+              }
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
         <label className="flex cursor-pointer items-center gap-2">
           <input
             type="checkbox"
@@ -771,6 +737,17 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
           />
           <span className={showIndexes ? 'text-fg-primary' : undefined}>índices</span>
         </label>
+        {focus && (
+          <button
+            type="button"
+            onClick={() => setFocus(null)}
+            title="Quitar el enfoque"
+            className="rounded border border-border-strong px-2 py-0.5 text-fg-primary transition-colors hover:bg-bg-hover"
+          >
+            enfoque: {focus.label}
+            {focus.ids.size > 1 && <span className="text-fg-muted"> +{focus.ids.size - 1}</span>} ✕
+          </button>
+        )}
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -789,18 +766,66 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
       >
         <canvas ref={canvasRef} className="block h-full w-full" />
 
-        <GraphLegend
-          groups={groups}
+        <ProjectPanel
+          projects={projects}
+          focused={focus?.ids ?? null}
+          onHoverProject={setPanelProject}
+          onFocusProject={(project) =>
+            setFocus((current) =>
+              current?.ids.size === 1 && current.ids.has(project.id)
+                ? null
+                : { ids: new Set([project.id]), label: project.label },
+            )
+          }
           indexCount={indexCount}
           showsIndexes={showIndexes}
           onToggleIndexes={() => setShowIndexes((v) => !v)}
-          hasForeign={foreignCount > 0}
+          hasForeign={counts.foreign > 0}
+          mode={mode}
         />
 
         {hover && (
           <div className="pointer-events-none absolute bottom-3 left-3 max-w-[60%] rounded border border-border-subtle bg-bg-surface px-2 py-1 font-mono text-[11px] text-fg-primary shadow-sm">
-            <div>{hover.title}</div>
-            <div className="text-fg-muted">{hover.path}</div>
+            {hover.kind === 'topic' ? (
+              <>
+                <div>{hover.path}</div>
+                <div className="text-fg-muted">
+                  tema compartido por {neighbours.get(hover.id)?.size ?? 0} notas
+                </div>
+              </>
+            ) : (
+              <>
+                <div>{hover.title}</div>
+                <div className="text-fg-muted">
+                  {hover.path}
+                  {hover.kind === 'note' && hover.project && mode !== 'links' && (
+                    <span> · {hover.project.label}</span>
+                  )}
+                </div>
+                {(related.get(hover.id)?.length ?? 0) > 0 && (
+                  <ul className="mt-1 space-y-0.5 border-t border-border-subtle pt-1">
+                    {related
+                      .get(hover.id)!
+                      .slice(0, 5)
+                      .map((a) => (
+                        <li key={a.id}>
+                          <span className="text-fg-secondary">
+                            {a.links > 0 ? '—' : '┄'} {a.title}
+                          </span>{' '}
+                          <span className="text-fg-muted">
+                            {[
+                              a.links > 0 ? `${a.links} ${a.links === 1 ? 'enlace' : 'enlaces'}` : null,
+                              a.shared.length > 0 ? a.shared.slice(0, 3).join(', ') : null,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -819,86 +844,177 @@ export function GraphView({ nodes, edges, viewerId }: GraphViewProps) {
   );
 }
 
+/** How each kind of edge is drawn. Only a real link ever gets a solid, weighted line. */
+const EDGE_STYLE: Record<
+  SimEdge['kind'],
+  { opacity: number; hoverOpacity: number; width: number; dash: number[] | null }
+> = {
+  link: { opacity: 0.28, hoverOpacity: 0.75, width: 1, dash: null },
+  structure: { opacity: 0.1, hoverOpacity: 0.4, width: 0.7, dash: null },
+  affinity: { opacity: 0.4, hoverOpacity: 0.85, width: 1, dash: [4, 4] },
+  topic: { opacity: 0.18, hoverOpacity: 0.6, width: 0.7, dash: null },
+};
+
+function hexagon(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    const px = x + r * Math.cos(angle);
+    const py = y + r * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
 /**
- * What colour and shape mean. Always shown: with two or more folders on
- * screen, a colour nobody explains is just decoration.
+ * The projects in view, and what the marks mean.
+ *
+ * Projects are told apart here rather than by colour: hovering one lights its
+ * notes up, clicking focuses it. That works for three projects or fifty, where
+ * a palette runs out at a handful. The list scrolls and filters so fifty still
+ * fits beside the graph.
  *
  * It sits on top of the canvas, so it keeps the pointer to itself: a press
- * that reached the canvas started a pan, and the index toggle could not be
- * clicked.
+ * that reached the canvas started a pan, and nothing here could be clicked.
  */
-function GraphLegend({
-  groups,
+function ProjectPanel({
+  projects,
+  focused,
+  onHoverProject,
+  onFocusProject,
   indexCount,
   showsIndexes,
   onToggleIndexes,
   hasForeign,
+  mode,
 }: {
-  groups: FolderGroup[];
+  projects: ProjectSummary[];
+  focused: Set<string> | null;
+  onHoverProject: (id: string | null) => void;
+  onFocusProject: (project: ProjectSummary) => void;
   indexCount: number;
   showsIndexes: boolean;
   onToggleIndexes: () => void;
   hasForeign: boolean;
+  mode: GraphMode;
 }) {
-  const coloured = groups.filter((g) => g.slot !== null);
-  const rest = groups.filter((g) => g.slot === null);
-  const restCount = rest.reduce((sum, g) => sum + g.count, 0);
-  const only = rest.length === 1 ? rest[0]! : null;
-  const restLabel = only ? only.folder || 'raíz' : 'otras';
-  if (coloured.length === 0 && !hasForeign) return null;
+  const [open, setOpen] = useState(true);
+  const [search, setSearch] = useState('');
+  const q = search.trim().toLowerCase();
+  const shown = q ? projects.filter((p) => p.label.toLowerCase().includes(q)) : projects;
 
   return (
-    <ul
-      className="absolute left-3 top-3 cursor-default space-y-1 rounded border border-border-subtle bg-bg-surface px-2 py-1.5 font-mono text-[11px] text-fg-secondary"
+    <div
+      data-graph-panel
+      className="absolute left-3 top-3 flex max-h-[calc(100%-5rem)] w-56 cursor-default flex-col rounded border border-border-subtle bg-bg-surface font-mono text-[11px] text-fg-secondary"
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}
     >
-      {coloured.map((g) => (
-        <li key={g.folder} className="flex items-center gap-2">
-          <span
-            aria-hidden
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ backgroundColor: `var(--graph-group-${g.slot! + 1})` }}
-          />
-          <span className="text-fg-primary">{g.folder}</span>
-          <span className="text-fg-muted">{g.count}</span>
-        </li>
-      ))}
-      {restCount > 0 && (
-        <li className="flex items-center gap-2">
-          <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-fg-secondary" />
-          <span>{restLabel}</span>
-          <span className="text-fg-muted">{restCount}</span>
-        </li>
-      )}
-      {indexCount > 0 && (
-        <li>
-          <button
-            type="button"
-            aria-pressed={showsIndexes}
-            onClick={onToggleIndexes}
-            title={showsIndexes ? 'Ocultar índices' : 'Mostrar índices'}
-            className="flex items-center gap-2 rounded px-0.5 -mx-0.5 transition-colors hover:bg-bg-hover hover:text-fg-primary"
-          >
-            <span
-              aria-hidden
-              className="inline-block h-2 w-2 rounded-[2px] border border-fg-secondary"
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center justify-between px-2 py-1.5 text-fg-primary transition-colors hover:bg-bg-hover"
+      >
+        <span>
+          proyectos <span className="text-fg-muted">{projects.length}</span>
+        </span>
+        <span aria-hidden className="text-fg-muted">
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
+
+      {open && (
+        <>
+          {projects.length > 6 && (
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="filtrar proyectos…"
+              aria-label="Filtrar proyectos"
+              className="mx-2 mb-1 h-6 rounded border border-border-subtle bg-bg-base px-1.5 text-fg-primary outline-none focus:border-border-strong"
             />
-            <span className={showsIndexes ? undefined : 'text-fg-muted line-through'}>
-              índice (MOC)
-            </span>
-            <span className="text-fg-muted">{indexCount}</span>
-          </button>
-        </li>
+          )}
+          <ul className="min-h-0 flex-1 overflow-y-auto px-1 pb-1" onMouseLeave={() => onHoverProject(null)}>
+            {shown.map((p) => {
+              const isFocused = focused?.has(p.id) ?? false;
+              return (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    aria-pressed={isFocused}
+                    onMouseEnter={() => onHoverProject(p.id)}
+                    onFocus={() => onHoverProject(p.id)}
+                    onBlur={() => onHoverProject(null)}
+                    onClick={() => onFocusProject(p)}
+                    title={isFocused ? 'Quitar el enfoque' : 'Enfocar este proyecto'}
+                    className={
+                      'flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left transition-colors hover:bg-bg-hover hover:text-fg-primary' +
+                      (isFocused ? ' bg-bg-elevated text-fg-primary' : '')
+                    }
+                  >
+                    <span className="truncate">{p.label}</span>
+                    <span className="shrink-0 text-fg-muted">{p.count}</span>
+                  </button>
+                </li>
+              );
+            })}
+            {shown.length === 0 && <li className="px-1 py-0.5 text-fg-muted">sin resultados</li>}
+          </ul>
+
+          <ul className="space-y-1 border-t border-border-subtle px-2 py-1.5">
+            {indexCount > 0 && mode !== 'projects' && (
+              <li>
+                <button
+                  type="button"
+                  aria-pressed={showsIndexes}
+                  onClick={onToggleIndexes}
+                  title={showsIndexes ? 'Ocultar índices' : 'Mostrar índices'}
+                  className="-mx-0.5 flex items-center gap-2 rounded px-0.5 transition-colors hover:bg-bg-hover hover:text-fg-primary"
+                >
+                  <span
+                    aria-hidden
+                    className="inline-block h-2 w-2 rounded-[2px] border border-fg-secondary"
+                  />
+                  <span className={showsIndexes ? undefined : 'text-fg-muted line-through'}>
+                    índice (MOC)
+                  </span>
+                  <span className="text-fg-muted">{indexCount}</span>
+                </button>
+              </li>
+            )}
+            {hasForeign && (
+              <li className="flex items-center gap-2">
+                <span aria-hidden className="inline-block h-2 w-2 rounded-full border-2 border-info" />
+                <span>de otros</span>
+              </li>
+            )}
+            <li className="flex items-center gap-2">
+              <span aria-hidden className="inline-block w-3 border-t border-fg-secondary" />
+              <span>enlace</span>
+            </li>
+            {(mode === 'affinity' || mode === 'projects') && (
+              <li className="flex items-center gap-2">
+                <span
+                  aria-hidden
+                  className="inline-block w-3 border-t border-dashed border-fg-secondary"
+                />
+                <span>afinidad (tema en común)</span>
+              </li>
+            )}
+            {mode === 'topics' && (
+              <li className="flex items-center gap-2">
+                <span aria-hidden className="text-[10px] leading-none text-fg-secondary">
+                  ⬡
+                </span>
+                <span>tema</span>
+              </li>
+            )}
+          </ul>
+        </>
       )}
-      {hasForeign && (
-        <li className="flex items-center gap-2">
-          <span aria-hidden className="inline-block h-2 w-2 rounded-full border-2 border-info" />
-          <span>de otros</span>
-        </li>
-      )}
-    </ul>
+    </div>
   );
 }
 
