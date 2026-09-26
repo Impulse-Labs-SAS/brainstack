@@ -416,6 +416,15 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(value).toMatchObject([{ path: 'b.md' }]);
   });
 
+  it('list_unlinked_mentions reports where a note is named without a link', async () => {
+    const pablo = await clientFor(PABLO.id);
+    await call(pablo, 'create_note', { path: 'Atlas.md', content: '# Atlas' });
+    await call(pablo, 'create_note', { path: 'otra.md', content: '# Otra\n\nusa Atlas' });
+
+    const { value } = await call(pablo, 'list_unlinked_mentions', { path: 'Atlas.md' });
+    expect(value).toMatchObject({ incoming: [{ path: 'otra.md', text: 'Atlas', count: 1 }] });
+  });
+
   it('list_facets returns one note’s facets, or browses every value when path is omitted', async () => {
     const pablo = await clientFor(PABLO.id);
     await call(pablo, 'create_note', {

@@ -14,7 +14,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { FileTree } from '@/components/file-tree/file-tree';
 import { NoteEditor } from '@/components/editor/note-editor';
 import { MarkdownPreview } from '@/components/editor/markdown-preview';
-import { EcosystemSection } from '@/components/ecosystem/ecosystem-section';
+import { EcosystemSection, type MentionDirection } from '@/components/ecosystem/ecosystem-section';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
@@ -65,7 +65,13 @@ export default function NotePage() {
     { path },
     { enabled: !!urlPath, placeholderData: keepPreviousData },
   );
+  const mentions = trpc.notes.unlinkedMentions.useQuery(
+    { path },
+    { enabled: !!urlPath, placeholderData: keepPreviousData },
+  );
   const update = trpc.notes.update.useMutation();
+  const linkMentions = trpc.notes.linkMentions.useMutation();
+  const [linkingMention, setLinkingMention] = useState<string | null>(null);
   const tree = trpc.notes.tree.useQuery({ depth: MAX_TREE_DEPTH });
   const utils = trpc.useUtils();
 
@@ -180,12 +186,55 @@ export default function NotePage() {
             void utils.notes.outboundLinks.invalidate();
             void utils.notes.related.invalidate();
             void utils.notes.facetsForNote.invalidate();
+            void utils.notes.unlinkedMentions.invalidate();
           },
         },
       );
     }, 600);
     return () => clearTimeout(handle);
   }, [draft, draftPath, path, mine, utils]);
+
+  /*
+   * Linking a mention rewrites a note on the server. When that note is the one
+   * open here, the editor's draft is now stale: left alone, the next autosave
+   * would write the old text back over the links. So the rewrite waits for
+   * unsaved edits to land, and afterwards the draft is reloaded from the
+   * server — but only if nothing was typed while the request was out. Typing
+   * wins: the draft is kept, its autosave drops the links, and the mentions
+   * list offers them again. Losing a keystroke silently would be worse.
+   */
+  const dirty = draft !== null && draft !== savedContentRef.current;
+  const onLinkMention = useCallback(
+    (direction: MentionDirection, other: string) => {
+      const sourcePath = direction === 'incoming' ? other : path;
+      const targetPath = direction === 'incoming' ? path : other;
+      setLinkingMention(`${direction}:${other}`);
+      const draftAtDispatch = draftRef.current;
+      linkMentions.mutate(
+        { sourcePath, targetPath },
+        {
+          onSuccess: async () => {
+            if (direction === 'outgoing' && draftRef.current === draftAtDispatch) {
+              await utils.notes.get.invalidate({ path });
+              const fresh = await utils.notes.get.fetch({ path });
+              const body = reconstructBody(fresh);
+              // Checked again: the fetch is a second round trip to type during.
+              if (draftRef.current === draftAtDispatch) {
+                savedContentRef.current = body;
+                setDraft(body);
+              }
+            }
+            void utils.notes.unlinkedMentions.invalidate();
+            void utils.notes.graph.invalidate();
+            void utils.notes.backlinks.invalidate();
+            void utils.notes.outboundLinks.invalidate();
+          },
+          onSettled: () => setLinkingMention(null),
+        },
+      );
+    },
+    [linkMentions, path, utils],
+  );
 
   /*
    * El árbol y la nota no entran juntos en un teléfono. Cuál se ve lo decide
@@ -301,6 +350,10 @@ export default function NotePage() {
               backlinks={backlinks.data ?? []}
               outboundLinks={outboundLinks.data ?? []}
               related={related.data ?? []}
+              mentions={mentions.data}
+              onLinkMention={onLinkMention}
+              linkingMention={linkingMention}
+              outgoingBlockedReason={dirty ? 'Esperando a que se guarden los cambios' : null}
             />
           </div>
         </div>

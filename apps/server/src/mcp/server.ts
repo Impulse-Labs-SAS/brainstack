@@ -568,6 +568,24 @@ export function buildMcpServer({
   );
 
   server.registerTool(
+    'list_unlinked_mentions',
+    {
+      title: 'List unlinked mentions',
+      description:
+        'Where a note is named without a wikilink, both ways: `incoming` lists other notes whose text says this note\'s title or an alias; `outgoing` lists notes whose title this note\'s text says. Each row has the other note\'s path, the text as written, how many times, and a snippet. Read-only: to link them, propose the edit to the user and write it with `update_note` once they approve, replacing the text with `[[path|text as written]]`. Own vault only; does not take `ownerId`.',
+      inputSchema: { path: z.string().min(1) },
+    },
+    async ({ path }) => {
+      try {
+        const userId = requireUserId();
+        return JSON_TEXT(await notes.unlinkedMentions(userId, path));
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
     'list_facets',
     {
       title: 'List facets',

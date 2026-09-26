@@ -34,6 +34,17 @@ export {
   type NoteBodySource,
   type RewriteResult,
 } from './links/rewrite-links.js';
+export {
+  findMentions,
+  foldForMatch,
+  linkMentions,
+  mentionSnippet,
+  mentionTerms,
+  MIN_MENTION_LENGTH,
+  type Mention,
+  type MentionCandidate,
+  type MentionTerm,
+} from './links/mentions.js';
 
 // --- Parser ------------------------------------------------------------------
 export {
