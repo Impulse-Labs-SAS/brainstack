@@ -49,6 +49,25 @@ export function rankRelated(
     .slice(0, limit);
 }
 
+/**
+ * Facet keys that say nothing about what a note is about, and so never count
+ * as a reason two notes are related. They are still indexed — `list_facets`
+ * and faceted browsing see them — only relatedness ignores them.
+ *
+ * `created` is the one that showed: two notes written the same day scored as
+ * closely related as two notes sharing a rare tag. The rest are Obsidian's
+ * presentation fields, which describe how a note is shown, not what it holds.
+ */
+export const RELATED_IGNORED_FACET_KEYS: ReadonlySet<string> = new Set([
+  'created',
+  'updated',
+  'modified',
+  'date',
+  'title',
+  'aliases',
+  'cssclasses',
+]);
+
 /** `tag:<tag>` — the SignalHit/SignalCount key for a shared tag. */
 export function tagSignal(tag: string): string {
   return `tag:${tag}`;

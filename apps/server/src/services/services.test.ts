@@ -58,6 +58,22 @@ describe('NoteService', () => {
     await expect(notes.create(USER, 'Inbox/dup.md', '# B')).rejects.toThrow();
   });
 
+  it('changes the checksum when an update touches only the frontmatter', async () => {
+    await notes.create(USER, 'Inbox/fm-only.md', '---\ntags: [a]\n---\n# T\n');
+    const before = await notes.get(USER, 'Inbox/fm-only.md');
+
+    await notes.update(USER, 'Inbox/fm-only.md', '---\ntags: [a, b]\n---\n# T\n');
+    const after = await notes.get(USER, 'Inbox/fm-only.md');
+
+    expect(after.checksum).not.toBe(before.checksum);
+  });
+
+  it('does not list a new MOC among its own affected MOCs', async () => {
+    await notes.create(USER, 'Pablo/_Pablo.md', '# Pablo');
+    const { affectedMocs } = await notes.create(USER, 'Pablo/ideas/_ideas.md', '# Ideas');
+    expect(affectedMocs).toEqual(['Pablo/_Pablo.md']);
+  });
+
   it('preserves frontmatter across an update that carries none', async () => {
     await notes.create(USER, 'Inbox/fm.md', '# T', { status: 'wip' });
     await notes.update(USER, 'Inbox/fm.md', '# T\n\ncambiado');
@@ -142,6 +158,20 @@ describe('NoteService — outbound links, facets and related notes', () => {
     expect(b.score).toBeGreaterThan(c.score);
   });
 
+  it('listRelated does not count a shared creation date as relatedness', async () => {
+    await notes.create(USER, 'A.md', '# A', { created: '2026-09-12', tags: ['propio-a'] });
+    await notes.create(USER, 'B.md', '# B', { created: '2026-09-12', tags: ['propio-b'] });
+
+    expect(await notes.listRelated(USER, 'A.md')).toEqual([]);
+  });
+
+  it('indexes an unquoted YAML date as the day, not as a quoted timestamp', async () => {
+    await notes.create(USER, 'Fechada.md', '---\ncreated: 2026-09-14\n---\n# Fechada');
+
+    const facets = await notes.listFacetsForNote(USER, 'Fechada.md');
+    expect(facets).toContainEqual({ key: 'created', value: '2026-09-14', data: null });
+  });
+
   it('listRelated returns nothing for a note with no tags or facets', async () => {
     await notes.create(USER, 'Solo.md', '# Solo');
     expect(await notes.listRelated(USER, 'Solo.md')).toEqual([]);
@@ -196,6 +226,24 @@ describe('NoteService.move', () => {
 
     const { affectedMocs } = await notes.move(USER, 'Inbox/idea.md', 'Proyectos/idea.md');
     expect(affectedMocs).toContain('Proyectos/_Proyectos.md');
+  });
+
+  it('keeps bare wikilinks resolved when their whole folder is renamed', async () => {
+    // What production showed after `Ideas/` became `ideas/`: a bare link reads
+    // the same before and after, so the body rewrite never resaved its note,
+    // and the index kept pointing at the old spelling as unresolved.
+    await notes.create(USER, 'Ideas/bot/concepto.md', '# Concepto\n\nver [[prerrequisitos]]');
+    await notes.create(USER, 'Ideas/bot/prerrequisitos.md', '# Pre\n\nver [[concepto]]');
+
+    await notes.move(USER, 'Ideas', 'ideas');
+
+    // Both directions, so the assertion holds whichever note moved first.
+    const fromConcepto = await notes.listOutboundLinks(USER, 'ideas/bot/concepto.md');
+    expect(fromConcepto).toMatchObject([
+      { targetPath: 'ideas/bot/prerrequisitos.md', targetType: 'note' },
+    ]);
+    const fromPre = await notes.listOutboundLinks(USER, 'ideas/bot/prerrequisitos.md');
+    expect(fromPre).toMatchObject([{ targetPath: 'ideas/bot/concepto.md', targetType: 'note' }]);
   });
 
   it('reports no MOC when the parent folder has none', async () => {

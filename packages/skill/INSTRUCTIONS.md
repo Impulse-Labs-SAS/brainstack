@@ -275,7 +275,7 @@ status: decidido
 
 - Reuse existing facet keys and values before inventing new ones — `list_facets(key="technologies")` shows what's in use, same idea as checking existing tags.
 - Prefer a facet over a tag when the metadata has a name _and_ a value that's naturally worth filtering on separately (`technologies: nextjs` rather than a tag `tech/nextjs`) — both work, but a facet keeps `nextjs` queryable as a value under the `technologies` key rather than a string to parse.
-- `list_related(path)` uses both tags and facets to find related notes — a note doesn't need explicit wikilinks to show up there, just a shared tag or facet value.
+- `list_related(path)` uses both tags and facets to find related notes — a note doesn't need explicit wikilinks to show up there, just a shared tag or facet value. Dates and presentation fields (`created`, `updated`, `modified`, `date`, `title`, `aliases`, `cssclasses`) are indexed but never count toward relatedness: two notes written the same day are not related for that.
 
 ## Markdown syntax (Obsidian-flavored)
 

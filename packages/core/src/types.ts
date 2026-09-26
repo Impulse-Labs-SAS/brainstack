@@ -47,7 +47,7 @@ export interface ParsedNote {
   title: string;
   frontmatter: Frontmatter;
   body: string;
-  /** Hashed body for idempotent re-indexing. */
+  /** Hash of frontmatter and body, for idempotent re-indexing. */
   checksum: string;
   links: ParsedLink[];
   tags: string[];

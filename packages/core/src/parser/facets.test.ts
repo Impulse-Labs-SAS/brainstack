@@ -8,6 +8,12 @@ describe('extractFacets', () => {
     expect(extractFacets({ tags: ['proyecto/zuno'] })).toEqual([]);
   });
 
+  it('indexes a Date as the day, not as its quoted JSON', () => {
+    expect(extractFacets({ created: new Date('2026-09-14T00:00:00.000Z') })).toEqual([
+      { key: 'created', value: '2026-09-14', data: null, position: 0 },
+    ]);
+  });
+
   it('gives one facet per element of an array of strings', () => {
     expect(extractFacets({ technologies: ['nextjs', 'drizzle'] })).toEqual([
       { key: 'technologies', value: 'nextjs', data: null, position: 0 },

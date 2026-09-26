@@ -238,6 +238,25 @@ describe('el id interno no se escapa a las respuestas', () => {
  * salía marcado como no resuelto — no salía en absoluto, porque el destino
  * pendiente se guarda sin prefijo y la búsqueda lo pide con prefijo.
  */
+describe('mover dentro de una bóveda hosted', () => {
+  it('la nota movida conserva su dueño y sus enlaces siguen resueltos', async () => {
+    await notes.create('alice', 'Ideas/bot/concepto.md', '# Concepto\n\nver [[prerrequisitos]]');
+    await notes.create('alice', 'Ideas/bot/prerrequisitos.md', '# Pre\n\nver [[concepto]]');
+
+    await notes.move('alice', 'Ideas', 'ideas');
+
+    const { nodes } = await notes.graph('alice');
+    expect(nodes.map((n) => n.ownerId)).toEqual(['alice', 'alice']);
+
+    const fromConcepto = await notes.listOutboundLinks('alice', 'ideas/bot/concepto.md');
+    expect(fromConcepto).toMatchObject([
+      { targetPath: 'ideas/bot/prerrequisitos.md', targetType: 'note' },
+    ]);
+    const fromPre = await notes.listOutboundLinks('alice', 'ideas/bot/prerrequisitos.md');
+    expect(fromPre).toMatchObject([{ targetPath: 'ideas/bot/concepto.md', targetType: 'note' }]);
+  });
+});
+
 describe('enlaces pendientes con varios dueños', () => {
   it('el backlink aparece cuando alice crea el destino después', async () => {
     await notes.createFolder('alice', 'proyectos');

@@ -49,6 +49,11 @@ antes de construir nada nuevo (ver §7):
 Genérica, no atada a "technologies"/"resources": **cualquier campo del frontmatter
 salvo `tags`** se indexa como pares `(key, value)`, sin allowlist.
 
+Indexar no es lo mismo que relacionar: `list_related` ignora las claves de fecha y de
+presentación (`created`, `updated`, `modified`, `date`, `title`, `aliases`, `cssclasses`,
+en `RELATED_IGNORED_FACET_KEYS`). Siguen en la tabla y se pueden navegar; solo no cuentan
+como señal de afinidad — dos notas del mismo día no están relacionadas por eso.
+
 ```ts
 // packages/core/src/pg/schema.ts
 export const facets = pgTable('facets', {

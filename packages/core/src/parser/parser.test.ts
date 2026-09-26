@@ -32,6 +32,20 @@ describe('extractFrontmatter', () => {
     expect(result.malformed).toBe(true);
     expect(result.frontmatter).toEqual({});
   });
+
+  it('gives an unquoted YAML date back as the day its author wrote', () => {
+    const raw = '---\ncreated: 2026-09-14\nseen: [2026-01-02]\nnested: { at: 2026-03-04 }\n---\nbody\n';
+    expect(extractFrontmatter(raw).frontmatter).toEqual({
+      created: '2026-09-14',
+      seen: ['2026-01-02'],
+      nested: { at: '2026-03-04' },
+    });
+  });
+
+  it('keeps the time of a timestamp that has one', () => {
+    const raw = '---\nat: 2026-09-14T10:30:00Z\n---\nbody\n';
+    expect(extractFrontmatter(raw).frontmatter).toEqual({ at: '2026-09-14T10:30:00.000Z' });
+  });
 });
 
 describe('extractLinks', () => {
@@ -135,6 +149,12 @@ describe('parseNote', () => {
     const b = parseNote(raw);
     expect(a.checksum).toBe(b.checksum);
     expect(a.tags).toEqual(['persona/pablo', 'zuno']);
+  });
+
+  it('changes the checksum when only the frontmatter changes', () => {
+    const before = parseNote('---\ntags: [a]\n---\nsame body\n');
+    const after = parseNote('---\ntags: [a, b]\n---\nsame body\n');
+    expect(after.checksum).not.toBe(before.checksum);
   });
 
   it('produces empty links and tags for trivial input', () => {

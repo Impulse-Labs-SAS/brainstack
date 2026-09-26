@@ -42,6 +42,8 @@ export interface StoredNote {
   updatedAt: number;
   createdAt: number;
   checksum: string;
+  /** Whose vault the note is in. NULL in self-host, where there is only one. */
+  ownerId: string | null;
 }
 
 export interface NoteSummary {
@@ -187,6 +189,48 @@ export class PgNoteStore {
   }
 
   /**
+   * Re-derive everything a note's text implies, for every note: normalised
+   * frontmatter, title, checksum, links, tags and facets.
+   *
+   * For repairing rows written by an older parser, not for routine use — it
+   * reads every note and, through `rebuildGraph`, the full path list once per
+   * note. `updated_at` is left alone: nobody edited anything.
+   */
+  async reindexAll(): Promise<number> {
+    const rows = await this.db
+      .select({
+        path: notes.path,
+        frontmatter: notes.frontmatter,
+        body: notes.body,
+        ownerId: notes.ownerId,
+      })
+      .from(notes);
+
+    for (const row of rows) {
+      const parsed = parseNote(toMarkdown(row as Pick<StoredNote, 'frontmatter' | 'body'>), {
+        path: row.path,
+      });
+      await this.db
+        .update(notes)
+        .set({
+          title: parsed.title,
+          frontmatter: parsed.frontmatter,
+          body: parsed.body,
+          checksum: parsed.checksum,
+        })
+        .where(eq(notes.path, row.path));
+      await this.rebuildGraph(
+        row.path,
+        parsed.links,
+        parsed.tags,
+        parsed.facets,
+        row.ownerId ?? undefined,
+      );
+    }
+    return rows.length;
+  }
+
+  /**
    * Reconnect the links that were pointing at this note before it existed.
    *
    * Links are resolved when the note holding them is written, and a target that
@@ -232,8 +276,19 @@ export class PgNoteStore {
         ),
       );
 
-    for (const { sourcePath } of candidates) {
-      if (sourcePath === path) continue;
+    await this.reresolveLinksOf(
+      candidates.map((c) => c.sourcePath).filter((p) => p !== path),
+      target.ownerId ?? undefined,
+    );
+  }
+
+  /**
+   * Rebuild the derived rows of each note, from what is stored for it now.
+   * Runs the same resolution ladder as an ordinary write, without touching
+   * the note itself.
+   */
+  private async reresolveLinksOf(sourcePaths: readonly string[], ownerId?: string): Promise<void> {
+    for (const sourcePath of sourcePaths) {
       const [source] = await this.db
         .select({ body: notes.body, frontmatter: notes.frontmatter })
         .from(notes)
@@ -243,13 +298,7 @@ export class PgNoteStore {
       const parsed = parseNote(toMarkdown(source as Pick<StoredNote, 'frontmatter' | 'body'>), {
         path: sourcePath,
       });
-      await this.rebuildGraph(
-        sourcePath,
-        parsed.links,
-        parsed.tags,
-        parsed.facets,
-        target.ownerId ?? undefined,
-      );
+      await this.rebuildGraph(sourcePath, parsed.links, parsed.tags, parsed.facets, ownerId);
     }
   }
 
@@ -283,8 +332,29 @@ export class PgNoteStore {
     if (await this.exists(to)) throw new NoteAlreadyExistsError(to);
 
     const existing = await this.get(from);
-    const saved = await this.upsert(to, toMarkdown(existing));
+    // The owner travels with the note. Without it the new row was written with
+    // a NULL owner, and its links were resolved against every vault at once
+    // rather than inside its own.
+    const saved = await this.upsert(to, toMarkdown(existing), existing.ownerId ?? undefined);
     await this.remove(from);
+
+    // `remove` flips every link that pointed at `from` to unresolved, still
+    // naming `from`. The move's body rewrite only reaches links that spell the
+    // path out; a bare `[[prerrequisitos]]` reads the same before and after,
+    // so its note is never resaved and the link stays broken although the
+    // target is right there. Found in production after renaming `Ideas/` to
+    // `ideas/`: two of three links in a folder pointed at the old spelling.
+    // Resolving them again settles each one wherever the ladder now lands.
+    // Owner-scoped by the path itself: in hosted `from` is stored with its
+    // owner's prefix, so no other vault can hold a link naming this string.
+    const stranded = await this.db
+      .selectDistinct({ sourcePath: links.sourcePath })
+      .from(links)
+      .where(and(eq(links.targetPath, from), eq(links.targetType, 'unresolved')));
+    await this.reresolveLinksOf(
+      stranded.map((r) => r.sourcePath),
+      existing.ownerId ?? undefined,
+    );
     return saved;
   }
 

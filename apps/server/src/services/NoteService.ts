@@ -28,7 +28,13 @@ import matter from 'gray-matter';
 import { AppError } from '../lib/errors.js';
 import { toLogical, toPhysical, type VaultConfig } from '../lib/vault.js';
 
-import { facetSignal, rankRelated, tagSignal, type RankedNote } from './relatedNotes.js';
+import {
+  facetSignal,
+  rankRelated,
+  RELATED_IGNORED_FACET_KEYS,
+  tagSignal,
+  type RankedNote,
+} from './relatedNotes.js';
 
 const { facets, folders, links, notes, tags } = pgSchema;
 
@@ -333,13 +339,14 @@ export class NoteService {
     const physical = this.toPhysical(ownerId, path);
     const limit = opts.limit ?? 10;
 
-    const [targetTags, targetFacets] = await Promise.all([
+    const [targetTags, allTargetFacets] = await Promise.all([
       this.opts.db.select({ tag: tags.tag }).from(tags).where(eq(tags.notePath, physical)),
       this.opts.db
         .select({ key: facets.key, value: facets.value })
         .from(facets)
         .where(eq(facets.notePath, physical)),
     ]);
+    const targetFacets = allTargetFacets.filter((f) => !RELATED_IGNORED_FACET_KEYS.has(f.key));
     const tagSignals = targetTags.map((t) => tagSignal(t.tag));
     const facetSignals = targetFacets.map((f) => facetSignal(f.key, f.value));
     if (tagSignals.length === 0 && facetSignals.length === 0) return [];
@@ -1041,7 +1048,11 @@ export class NoteService {
       .from(notes)
       .where(inArray(notes.path, candidates));
 
-    return found.map((r) => this.toLogical(ownerId, r.path));
+    // A MOC is not its own index: `_ideas.md` created inside `ideas/` used to
+    // come back listing itself, inviting a link from the note to the note.
+    return found
+      .map((r) => this.toLogical(ownerId, r.path))
+      .filter((moc) => moc !== logicalPath);
   }
 
   /** Feeds `rewriteLinkTargets` from the store, in stored-path terms. */

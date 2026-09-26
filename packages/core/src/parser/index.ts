@@ -5,7 +5,7 @@
 
 import { createHash } from 'node:crypto';
 
-import type { ParsedNote } from '../types.js';
+import type { Frontmatter, ParsedNote } from '../types.js';
 
 import { buildCodeMask } from './code-mask.js';
 import { extractFacets } from './facets.js';
@@ -31,8 +31,18 @@ function deriveTitle(path: string, frontmatterTitle: unknown, body: string): str
   return base.replace(/\.md$/i, '');
 }
 
-function checksumOf(body: string): string {
-  return createHash('sha256').update(body, 'utf8').digest('hex');
+/**
+ * Covers the frontmatter as well as the body. Hashing the body alone made an
+ * edit that only touched `tags` or `technologies` look like no change at all:
+ * the store kept the old `updated_at`, so the note never rose in any
+ * most-recent list and the checksum handed to clients stayed the same.
+ */
+function checksumOf(frontmatter: Frontmatter, body: string): string {
+  return createHash('sha256')
+    .update(JSON.stringify(frontmatter), 'utf8')
+    .update('\n---\n', 'utf8')
+    .update(body, 'utf8')
+    .digest('hex');
 }
 
 /** Parse a raw markdown file. The `path` field defaults to `""` if not given. */
@@ -52,7 +62,7 @@ export function parseNote(raw: string, options: ParseNoteOptions = {}): ParsedNo
   const tags = uniqueOrdered([...fmTags, ...bodyTags]);
   const facets = extractFacets(frontmatter);
   const title = deriveTitle(path, frontmatter.title, body);
-  const checksum = checksumOf(body);
+  const checksum = checksumOf(frontmatter, body);
 
   return {
     path,
