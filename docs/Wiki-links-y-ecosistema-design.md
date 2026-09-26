@@ -259,3 +259,29 @@ bien definidos aparecen decenas, y 3 colores entre 50 confunden. La identidad la
 panel de proyectos: lista con búsqueda y scroll, hover resalta un proyecto, clic lo
 enfoca. Clic en un nodo de la vista proyectos enfoca ese proyecto y sus vecinos y pasa a
 la vista afinidad.
+
+## 12. Menciones sin enlazar
+
+La afinidad (§11) dibuja conexiones implícitas; esto crea conexiones reales. Una
+mención sin enlazar es texto que dice el **título** de otra nota o uno de sus
+**`aliases`** sin un wikilink.
+
+**Qué cuenta** (`packages/core/src/links/mentions.ts`, puro): comparación sobre texto
+plegado (minúsculas, sin acentos: "vision" encuentra "Visión"), palabra completa
+("zuno" no matchea dentro de "zunoteca"), nunca dentro de código, de un link existente
+ni de una URL. Si dos términos se pisan gana el más largo. Se ignoran los títulos de
+menos de 4 letras y los que comparten dos notas: no hay forma de saber a cuál apunta.
+
+**Las dos direcciones** (`NoteService.unlinkedMentions`): `incoming` (otras notas que
+nombran a esta) y `outgoing` (esta nombra a otras). Un par que ya tiene un link queda
+afuera: un link dice que la conexión existe; lo demás es prosa. Sólo bóveda propia,
+como `list_related`.
+
+**Enlazar** (`NoteService.linkMentions`) convierte **todas** las apariciones en
+`[[ruta/completa|texto tal cual]]`: la frase se lee igual y el link resuelve desde
+cualquier carpeta. Si la nota reescrita es la que está abierta, la web espera a que se
+guarden los cambios pendientes y después recarga el borrador — si no, el autoguardado
+volvía a escribir el texto viejo encima de los links.
+
+**MCP:** `list_unlinked_mentions(path)` es de sólo lectura. La IA propone el link y lo
+escribe con `update_note` cuando el usuario aprueba, como cualquier escritura.
