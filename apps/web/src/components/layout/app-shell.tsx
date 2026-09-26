@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import {
+  Bug,
   FileText,
   KeyRound,
   LogOut,
@@ -9,7 +10,10 @@ import {
   Network,
   PanelLeftClose,
   PanelLeftOpen,
+  Plug,
   Settings,
+  Sparkles,
+  type LucideIcon,
 } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -18,6 +22,9 @@ import { authFetch } from '@/lib/authApi';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { CommandPalette } from '@/components/search/command-palette';
+import { BugReportDialog } from '@/components/support/bug-report-dialog';
+import { ConnectMcpDialog } from '@/components/support/connect-mcp-dialog';
+import { SkillDialog } from '@/components/support/skill-dialog';
 
 const links = [
   { href: '/notes', label: 'Notes', icon: FileText },
@@ -131,6 +138,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
+        <HelpActions collapsed={collapsed} expanded={navOpen} />
         <UserFooter collapsed={collapsed} />
       </aside>
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -150,6 +158,53 @@ export function AppShell({ children }: { children: ReactNode }) {
       </main>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
+  );
+}
+
+type HelpDialog = 'connect' | 'skill' | 'bug';
+
+const helpActions: ReadonlyArray<{ id: HelpDialog; label: string; icon: LucideIcon }> = [
+  { id: 'connect', label: 'Connect AI', icon: Plug },
+  { id: 'skill', label: 'Skill', icon: Sparkles },
+  { id: 'bug', label: 'Report a bug', icon: Bug },
+];
+
+/**
+ * Getting an assistant onto the brain, and telling us when something breaks.
+ * They open dialogs rather than pages so nobody loses the note they were on.
+ */
+function HelpActions({ collapsed, expanded }: { collapsed: boolean; expanded: boolean }) {
+  const [openDialog, setOpenDialog] = useState<HelpDialog | null>(null);
+  const close = useCallback(() => setOpenDialog(null), []);
+  const showLabel = !collapsed || expanded;
+
+  return (
+    <>
+      <div className={cn('border-t border-border-subtle', collapsed ? 'p-1.5' : 'p-2')}>
+        {helpActions.map((action) => {
+          const Icon = action.icon;
+          return (
+            <button
+              key={action.id}
+              type="button"
+              onClick={() => setOpenDialog(action.id)}
+              title={collapsed ? action.label : undefined}
+              className={cn(
+                'mb-1 flex h-8 w-full items-center rounded text-sm text-fg-secondary last:mb-0',
+                'transition-colors duration-fast hover:bg-bg-elevated hover:text-fg-primary',
+                collapsed ? 'justify-center px-0' : 'gap-2 px-2',
+              )}
+            >
+              <Icon size={14} strokeWidth={1.75} />
+              {showLabel && <span>{action.label}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <ConnectMcpDialog open={openDialog === 'connect'} onClose={close} />
+      <SkillDialog open={openDialog === 'skill'} onClose={close} />
+      <BugReportDialog open={openDialog === 'bug'} onClose={close} />
+    </>
   );
 }
 
