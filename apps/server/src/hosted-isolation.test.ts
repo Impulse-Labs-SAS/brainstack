@@ -252,6 +252,27 @@ describe('afinidad en hosted', () => {
   });
 });
 
+describe('menciones sin enlazar en hosted', () => {
+  it('no lee ni reescribe la bóveda de otro dueño', async () => {
+    await notes.create('alice', 'Atlas/_Atlas.md', '# Atlas');
+    await notes.create('bob', 'Suyo/nota.md', '# Nota de bob\n\nhabla de Atlas');
+
+    expect((await notes.unlinkedMentions('alice', 'Atlas/_Atlas.md')).incoming).toEqual([]);
+    await expect(notes.linkMentions('alice', 'Suyo/nota.md', 'Atlas/_Atlas.md')).rejects.toThrow();
+    expect((await notes.get('bob', 'Suyo/nota.md')).body).toContain('habla de Atlas');
+  });
+
+  it('el enlace escrito no lleva el id del dueño', async () => {
+    await notes.create('alice', 'Atlas/_Atlas.md', '# Atlas');
+    await notes.create('alice', 'Otra/nota.md', '# Otra\n\nusa Atlas');
+    await notes.linkMentions('alice', 'Otra/nota.md', 'Atlas/_Atlas.md');
+
+    const body = (await notes.get('alice', 'Otra/nota.md')).body;
+    expect(body).toContain('[[Atlas/_Atlas|Atlas]]');
+    expect(body).not.toContain('alice/');
+  });
+});
+
 describe('mover dentro de una bóveda hosted', () => {
   it('la nota movida conserva su dueño y sus enlaces siguen resueltos', async () => {
     await notes.create('alice', 'Ideas/bot/concepto.md', '# Concepto\n\nver [[prerrequisitos]]');

@@ -165,6 +165,16 @@ export const appRouter = t.router({
           return ctx.notes.update(owner, input.path, input.content);
         }),
       ),
+    // Own vault only, like `related`: a mention across a share would read, and
+    // rewrite, bodies the grant never covered.
+    unlinkedMentions: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .query(({ ctx, input }) => wrap(() => ctx.notes.unlinkedMentions(ctx.user.id, input.path))),
+    linkMentions: protectedProcedure
+      .input(z.object({ sourcePath: z.string().min(1), targetPath: z.string().min(1) }))
+      .mutation(({ ctx, input }) =>
+        wrap(() => ctx.notes.linkMentions(ctx.user.id, input.sourcePath, input.targetPath)),
+      ),
     remove: protectedProcedure
       .input(
         z.object({

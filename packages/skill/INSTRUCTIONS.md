@@ -19,6 +19,7 @@ You interact with BrainStack via these MCP tools:
 - `list_outbound_links(path, ownerId?)` — what a path links to or embeds; the mirror of `list_links`
 - `list_related(path, limit?)` — notes related by a shared tag or facet, ranked by rarity; **own vault only** (no `ownerId`)
 - `list_facets(path?, key?, ownerId?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
+- `list_unlinked_mentions(path)` — where a note is named without a wikilink: `incoming` (other notes whose text says its title or an alias) and `outgoing` (titles its own text says); **own vault only** (no `ownerId`)
 - `list_decisions(folder?, limit?, ownerId?)` — notes tagged `decisión`/`decision` or with frontmatter `status: decidido` (via facets)
 - `list_shared_with_me()` — folders other people shared with you (`ownerId`, permission per row)
 - `get_brainstack_guide()` — returns this document at runtime
@@ -212,6 +213,14 @@ Before you write `[[X]]` in a new note, resolve `X`:
 4. If no match exists → either (a) propose creating the target note, or (b) leave the link wishful and tell the user it's currently unresolved.
 
 Never silently create wikilinks to notes that don't exist. The user must know there's a dangling reference.
+
+### Unlinked mentions — offer the link, don't make it
+
+`list_unlinked_mentions(path)` finds text that names another note (its title or an `aliases` entry, whole word, ignoring case and accents, never inside code or an existing link) without linking it. It is how the graph grows real connections: once linked, the mention becomes an edge.
+
+- Use it after saving or editing a note, or when the user asks what a note connects to. Pairs already joined by a link are left out.
+- It is read-only. To link, **propose** it: "`Nimbus/bot.md` says *atlas* twice without linking `Atlas/_Atlas.md` — link both?" On a yes, `update_note` the body, replacing each mention with `[[full/path|text as written]]` so the sentence reads the same.
+- Titles shorter than four letters, or shared by two notes, are never reported — the tool cannot tell which note is meant, and neither should you guess.
 
 Supported forms include `[[Note#Section]]` — the section is indexed and should resolve in the web app; use the full path from search when linking across folders.
 

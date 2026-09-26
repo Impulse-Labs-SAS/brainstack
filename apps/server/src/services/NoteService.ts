@@ -21,7 +21,17 @@ import {
   type PgDb,
   type StoredNote,
 } from '@brainstack/core/pg';
-import { rewriteLinkTargets, type Frontmatter, type NoteBodySource } from '@brainstack/core';
+import {
+  findMentions,
+  linkMentions,
+  mentionSnippet,
+  mentionTerms,
+  rewriteLinkTargets,
+  type Frontmatter,
+  type Mention,
+  type MentionTerm,
+  type NoteBodySource,
+} from '@brainstack/core';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 import matter from 'gray-matter';
 
@@ -98,6 +108,26 @@ export interface TreeNode {
   type: 'folder' | 'note';
   /** Sorted children: folders first, then notes, both alphabetical. */
   children?: TreeNode[];
+}
+
+/** One note on the other side of an unlinked mention. */
+export interface UnlinkedMention {
+  path: string;
+  title: string;
+  /** The first mention, as the text wrote it. */
+  text: string;
+  count: number;
+  /** Context around the first mention. */
+  snippet: string;
+}
+
+function mentionCandidate(row: { path: string; title: string; frontmatter: unknown }) {
+  const fm = (row.frontmatter ?? {}) as Frontmatter;
+  return {
+    target: row.path,
+    title: row.title,
+    aliases: Array.isArray(fm.aliases) ? fm.aliases : [],
+  };
 }
 
 export interface NoteServiceOptions {
@@ -910,6 +940,125 @@ export class NoteService {
     const folderPaths = folderRows.map((r) => this.toLogical(ownerId, r.path)).filter(inScope);
 
     return buildTree(scope, notePaths, maxDepth, folderPaths);
+  }
+
+  // -- Unlinked mentions -------------------------------------------------------
+
+  /**
+   * Where a note is named without being linked, both ways: other notes whose
+   * text says its title or an alias (`incoming`), and titles of other notes
+   * its own text says (`outgoing`). A pair already joined by a link is left
+   * out — one link says the connection exists; the rest is prose.
+   *
+   * Own vault only, like `listRelated`. It reads every body in the vault, the
+   * same "fine at personal-brain scale" trade the link resolver makes.
+   */
+  async unlinkedMentions(
+    ownerId: string,
+    path: string,
+  ): Promise<{ incoming: UnlinkedMention[]; outgoing: UnlinkedMention[] }> {
+    const physical = this.toPhysical(ownerId, path);
+    const rows = await this.vaultForMentions(ownerId);
+    const self = rows.find((r) => r.path === physical);
+    if (!self) throw new PgNoteNotFoundError(this.toLogical(ownerId, physical));
+
+    const linkRows = await this.opts.db
+      .select({ source: links.sourcePath, target: links.targetPath })
+      .from(links)
+      .where(
+        and(
+          eq(links.targetType, 'note'),
+          or(eq(links.sourcePath, physical), eq(links.targetPath, physical)),
+        ),
+      );
+    const linked = new Set(linkRows.map((l) => `${l.source}\u0000${l.target}`));
+    const isLinked = (from: string, to: string) => linked.has(`${from}\u0000${to}`);
+
+    const terms = mentionTerms(rows.map(mentionCandidate));
+    const titleOf = new Map(rows.map((r) => [r.path, r.title]));
+
+    const summarise = (other: string, body: string, found: Mention[]): UnlinkedMention => ({
+      path: this.toLogical(ownerId, other),
+      title: titleOf.get(other) ?? other,
+      text: found[0]!.text,
+      count: found.length,
+      snippet: mentionSnippet(body, found[0]!),
+    });
+
+    // Always matched against every term, then filtered: a shorter title inside
+    // a longer one ("Atlas" in "Visión — Atlas") must lose that overlap, which
+    // it cannot do if the longer term was never looked for.
+    const byTarget = new Map<string, Mention[]>();
+    for (const m of findMentions(self.body, terms)) {
+      if (m.target === physical || isLinked(physical, m.target)) continue;
+      const list = byTarget.get(m.target) ?? [];
+      list.push(m);
+      byTarget.set(m.target, list);
+    }
+    const outgoing = [...byTarget].map(([target, found]) => summarise(target, self.body, found));
+
+    const incoming: UnlinkedMention[] = [];
+    if (terms.some((t) => t.target === physical)) {
+      for (const row of rows) {
+        if (row.path === physical || isLinked(row.path, physical)) continue;
+        const found = findMentions(row.body, terms).filter((m) => m.target === physical);
+        if (found.length > 0) incoming.push(summarise(row.path, row.body, found));
+      }
+    }
+
+    const byCount = (a: UnlinkedMention, b: UnlinkedMention) =>
+      b.count - a.count || a.title.localeCompare(b.title);
+    return { incoming: incoming.sort(byCount), outgoing: outgoing.sort(byCount) };
+  }
+
+  /**
+   * Turn every unlinked mention of `targetPath` inside `sourcePath` into a
+   * wikilink, keeping the text as written: `[[proyectos/atlas/_Atlas|Atlas]]`.
+   * The link names the full path, so it resolves the same wherever it sits.
+   * Returns how many were linked; zero leaves the note untouched.
+   */
+  async linkMentions(
+    ownerId: string,
+    sourcePath: string,
+    targetPath: string,
+  ): Promise<{ linked: number }> {
+    const source = this.toPhysical(ownerId, sourcePath);
+    const target = this.toPhysical(ownerId, targetPath);
+    if (source === target) return { linked: 0 };
+
+    const rows = await this.vaultForMentions(ownerId);
+    const sourceRow = rows.find((r) => r.path === source);
+    if (!sourceRow) throw new PgNoteNotFoundError(this.toLogical(ownerId, source));
+    if (!rows.some((r) => r.path === target)) {
+      throw new PgNoteNotFoundError(this.toLogical(ownerId, target));
+    }
+
+    // Every term in the vault, not the target's alone: a title another note
+    // shares is ambiguous here exactly as it was when listed, and a longer
+    // title containing this one keeps its text.
+    const terms: MentionTerm[] = mentionTerms(rows.map(mentionCandidate));
+    const linkTarget = this.toLogical(ownerId, target).replace(/\.md$/i, '');
+    const result = linkMentions(sourceRow.body, target, linkTarget, terms);
+    if (result.linked === 0) return { linked: 0 };
+
+    await this.store.upsert(
+      source,
+      toMarkdown({ frontmatter: sourceRow.frontmatter, body: result.body }),
+      ownerId,
+    );
+    return { linked: result.linked };
+  }
+
+  private async vaultForMentions(ownerId: string) {
+    return this.opts.db
+      .select({
+        path: notes.path,
+        title: notes.title,
+        frontmatter: notes.frontmatter,
+        body: notes.body,
+      })
+      .from(notes)
+      .where(this.ownedBy(ownerId));
   }
 
   // -- Graph -----------------------------------------------------------------

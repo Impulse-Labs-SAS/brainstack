@@ -222,6 +222,58 @@ describe('NoteService.affinity', () => {
   });
 });
 
+describe('NoteService unlinked mentions', () => {
+  beforeEach(async () => {
+    await notes.create(USER, 'Atlas/_Atlas.md', '# Atlas', { aliases: ['App de finanzas'] });
+    await notes.create(USER, 'Nimbus/bot.md', '# Nimbus bot\n\nComparte el lector con atlas y con la app de finanzas.');
+    await notes.create(USER, 'Nimbus/enlazada.md', '# Enlazada\n\nVer [[Atlas/_Atlas]]. Atlas otra vez.');
+  });
+
+  it('lists who names a note without linking it, and what a note names', async () => {
+    const atlas = await notes.unlinkedMentions(USER, 'Atlas/_Atlas.md');
+    expect(atlas.incoming).toMatchObject([
+      { path: 'Nimbus/bot.md', title: 'Nimbus bot', text: 'atlas', count: 2 },
+    ]);
+    expect(atlas.outgoing).toEqual([]);
+
+    const bot = await notes.unlinkedMentions(USER, 'Nimbus/bot.md');
+    expect(bot.outgoing).toMatchObject([{ path: 'Atlas/_Atlas.md', count: 2 }]);
+  });
+
+  it('leaves out a pair already joined by a link', async () => {
+    const atlas = await notes.unlinkedMentions(USER, 'Atlas/_Atlas.md');
+    expect(atlas.incoming.map((m) => m.path)).not.toContain('Nimbus/enlazada.md');
+  });
+
+  it('links every mention, keeping the text, and then stops listing it', async () => {
+    const { linked } = await notes.linkMentions(USER, 'Nimbus/bot.md', 'Atlas/_Atlas.md');
+    expect(linked).toBe(2);
+
+    const body = (await notes.get(USER, 'Nimbus/bot.md')).body;
+    expect(body).toContain('con [[Atlas/_Atlas|atlas]] y con la [[Atlas/_Atlas|app de finanzas]].');
+
+    const back = await notes.listLinks(USER, 'Atlas/_Atlas.md');
+    expect(back.map((l) => l.sourcePath)).toContain('Nimbus/bot.md');
+    expect((await notes.unlinkedMentions(USER, 'Atlas/_Atlas.md')).incoming).toEqual([]);
+  });
+
+  it('does not count a title that sits inside a longer one', async () => {
+    await notes.create(USER, 'Atlas/vision.md', '# Visión — Atlas');
+    await notes.create(USER, 'Demo/nota.md', '# Nota\n\nver la vision — ATLAS');
+
+    const atlas = await notes.unlinkedMentions(USER, 'Atlas/_Atlas.md');
+    expect(atlas.incoming.map((m) => m.path)).not.toContain('Demo/nota.md');
+    const demo = await notes.unlinkedMentions(USER, 'Demo/nota.md');
+    expect(demo.outgoing).toMatchObject([{ path: 'Atlas/vision.md', text: 'vision — ATLAS' }]);
+  });
+
+  it('keeps the frontmatter of the note it rewrites', async () => {
+    await notes.create(USER, 'Nimbus/con-fm.md', 'menciona Atlas', { tags: ['ia'] });
+    await notes.linkMentions(USER, 'Nimbus/con-fm.md', 'Atlas/_Atlas.md');
+    expect((await notes.get(USER, 'Nimbus/con-fm.md')).frontmatter).toMatchObject({ tags: ['ia'] });
+  });
+});
+
 describe('NoteService.listDecisions', () => {
   it('matches the decision tag', async () => {
     await notes.create(USER, 'Decisiones/tag.md', '# T', { tags: ['decisión'] });
