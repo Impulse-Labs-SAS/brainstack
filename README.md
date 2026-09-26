@@ -56,7 +56,7 @@ pnpm --filter @brainstack/web dev
 
 ## Connecting an AI assistant
 
-Generate an API key in the web app (**Settings → API keys**), then:
+The web app's sidebar has **Connect AI** and **Skill** dialogs with this instance's MCP URL and copyable setup for each client. To connect by hand, generate an API key in the web app (**Settings → API keys**), then:
 
 ### Claude Code / Cursor (local stdio)
 
