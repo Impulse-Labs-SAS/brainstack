@@ -1,8 +1,8 @@
 'use client';
 
 // The "Ecosystem" strip at the foot of a note: tags, facets, backlinks,
-// outbound links, and notes related by shared tag/facet — replacing the old
-// backlinks-only side panel. Purely props-driven (no fetching of its own) so
+// outbound links, notes related by shared tag/facet, and unlinked mentions —
+// replacing the old backlinks-only side panel. Purely props-driven (no fetching of its own) so
 // the shared-note page can reuse it with only `outboundLinks` filled in.
 
 import Link from 'next/link';
@@ -30,6 +30,17 @@ export interface RelatedNote {
   score: number;
 }
 
+/** One note on the other side of an unlinked mention. */
+export interface MentionRow {
+  path: string;
+  title: string;
+  text: string;
+  count: number;
+  snippet: string;
+}
+
+export type MentionDirection = 'incoming' | 'outgoing';
+
 export interface EcosystemSectionProps {
   /** Frontmatter `tags`, shown as chips linking to /notes/tag/<tag>. */
   tags?: readonly string[];
@@ -37,6 +48,16 @@ export interface EcosystemSectionProps {
   backlinks?: readonly EcosystemLink[];
   outboundLinks?: readonly EcosystemLink[];
   related?: readonly RelatedNote[];
+  /** Absent hides the column: the shared-note page does not offer it. */
+  mentions?: { incoming: readonly MentionRow[]; outgoing: readonly MentionRow[] };
+  onLinkMention?: (direction: MentionDirection, path: string) => void;
+  /** `direction:path` of the mention being linked right now. */
+  linkingMention?: string | null;
+  /**
+   * Why linking inside the open note is not possible right now — unsaved
+   * edits would be overwritten by the rewrite. Null when it is fine.
+   */
+  outgoingBlockedReason?: string | null;
   className?: string;
 }
 
@@ -97,21 +118,81 @@ function LinkList({ links, direction }: { links: readonly EcosystemLink[]; direc
   );
 }
 
+function MentionList({
+  rows,
+  direction,
+  onLink,
+  linking,
+  blockedReason,
+}: {
+  rows: readonly MentionRow[];
+  direction: MentionDirection;
+  onLink?: (direction: MentionDirection, path: string) => void;
+  linking?: string | null;
+  blockedReason?: string | null;
+}) {
+  return (
+    <ul className="space-y-1.5">
+      {rows.map((row) => {
+        const busy = linking === `${direction}:${row.path}`;
+        return (
+          <li key={row.path} className="rounded px-1 py-0.5 hover:bg-bg-elevated">
+            <div className="flex items-center justify-between gap-2">
+              <Link
+                href={notePathToRoute(row.path)}
+                className="min-w-0 truncate text-xs text-fg-secondary hover:text-fg-primary"
+              >
+                {row.title}
+              </Link>
+              {onLink && (
+                <button
+                  type="button"
+                  disabled={busy || !!blockedReason}
+                  title={
+                    blockedReason ??
+                    (row.count > 1
+                      ? `Convertir las ${row.count} menciones en enlaces`
+                      : 'Convertir la mención en enlace')
+                  }
+                  onClick={() => onLink(direction, row.path)}
+                  className="shrink-0 rounded border border-border-subtle px-1.5 font-mono text-[10px] text-fg-muted transition-colors hover:border-border-strong hover:text-fg-primary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? 'enlazando…' : 'enlazar'}
+                </button>
+              )}
+            </div>
+            <div className="line-clamp-2 text-[11px] text-fg-muted">
+              {row.snippet}
+              {row.count > 1 && <span className="font-mono"> · ×{row.count}</span>}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function EcosystemSection({
   tags = [],
   facets = [],
   backlinks = [],
   outboundLinks = [],
   related = [],
+  mentions,
+  onLinkMention,
+  linkingMention = null,
+  outgoingBlockedReason = null,
   className,
 }: EcosystemSectionProps) {
   const facetGroups = groupFacetsByKey(facets);
+  const mentionCount = (mentions?.incoming.length ?? 0) + (mentions?.outgoing.length ?? 0);
   const hasAnything =
     tags.length > 0 ||
     facetGroups.length > 0 ||
     backlinks.length > 0 ||
     outboundLinks.length > 0 ||
-    related.length > 0;
+    related.length > 0 ||
+    mentionCount > 0;
 
   if (!hasAnything) return null;
 
@@ -120,7 +201,12 @@ export function EcosystemSection({
   return (
     <div className={cn('border-t border-border-subtle bg-bg-surface/60 px-4 py-3', className)}>
       <div className="mb-2 font-mono text-[11px] text-fg-muted">ecosistema</div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div
+        className={cn(
+          'grid grid-cols-1 gap-4 md:grid-cols-2',
+          mentions ? 'lg:grid-cols-5' : 'lg:grid-cols-4',
+        )}
+      >
         {(tagChips.length > 0 || facetGroups.length > 0) && (
           <Section title="Tags & facetas">
             <div className="space-y-2">
@@ -164,6 +250,40 @@ export function EcosystemSection({
             </ul>
           )}
         </Section>
+
+        {mentions && (
+          <Section title="Menciones sin enlazar" count={mentionCount}>
+            {mentionCount === 0 ? (
+              <div className="text-xs text-fg-muted">Nada todavía.</div>
+            ) : (
+              <div className="space-y-2">
+                {mentions.incoming.length > 0 && (
+                  <div>
+                    <div className="mb-1 font-mono text-[10px] text-fg-muted">te nombran</div>
+                    <MentionList
+                      rows={mentions.incoming}
+                      direction="incoming"
+                      onLink={onLinkMention}
+                      linking={linkingMention}
+                    />
+                  </div>
+                )}
+                {mentions.outgoing.length > 0 && (
+                  <div>
+                    <div className="mb-1 font-mono text-[10px] text-fg-muted">nombra</div>
+                    <MentionList
+                      rows={mentions.outgoing}
+                      direction="outgoing"
+                      onLink={onLinkMention}
+                      linking={linkingMention}
+                      blockedReason={outgoingBlockedReason}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </Section>
+        )}
       </div>
     </div>
   );
