@@ -403,12 +403,12 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           if (!ctx.sharing.enabled) {
-            throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
+            throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
           }
           const target = await ctx.auth.findUserByEmail(input.email);
           if (!target) {
             // El flow con invitación por email/link entra en el paso 9.
-            throw new AppError('user no encontrado; usar invitación', 'NOT_FOUND', 404);
+            throw new AppError('no user with that email; send an invitation instead', 'NOT_FOUND', 404);
           }
           const id = await ctx.sharing.grant({
             ownerId: ctx.user.id,
@@ -430,7 +430,7 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           if (!ctx.sharing.enabled) {
-            throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
+            throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
           }
           await ctx.sharing.revoke({
             ownerId: ctx.user.id,

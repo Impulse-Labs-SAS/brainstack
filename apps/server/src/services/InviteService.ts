@@ -83,7 +83,7 @@ export class InviteService {
     permission?: SharePermission;
   }): Promise<CreatedInvite> {
     if (!this.opts.sharing.enabled) {
-      throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
+      throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
     }
     const folderPath = normalizeFolderPath(params.folderPath);
     if (!folderPath) {
@@ -192,7 +192,7 @@ export class InviteService {
     user: { id: string; email: string };
   }): Promise<AcceptResult> {
     if (!this.opts.sharing.enabled) {
-      throw new AppError('sharing no disponible en este deployment', 'NOT_FOUND', 404);
+      throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
     }
 
     const [row] = await this.opts.db
@@ -201,21 +201,21 @@ export class InviteService {
       .where(eq(folderShareInvites.tokenHash, sha256(params.token)))
       .limit(1);
 
-    if (!row) throw new AppError('invite no encontrada', 'NOT_FOUND', 404);
+    if (!row) throw new AppError('invitation not found', 'NOT_FOUND', 404);
     if (row.revokedAt != null) throw new AppError('invite revocada', 'FORBIDDEN', 403);
     if (Number(row.expiresAt) < this.now()) {
       throw new AppError('invite expirada', 'FORBIDDEN', 403);
     }
 
     if (row.mode === 'email') {
-      if (row.acceptedAt != null) throw new AppError('invite ya aceptada', 'FORBIDDEN', 403);
+      if (row.acceptedAt != null) throw new AppError('this invitation was already accepted', 'FORBIDDEN', 403);
       if (!row.inviteeEmail || row.inviteeEmail.toLowerCase() !== params.user.email.toLowerCase()) {
-        throw new AppError('esta invitación es para otro email', 'FORBIDDEN', 403);
+        throw new AppError('this invitation is for a different email address', 'FORBIDDEN', 403);
       }
     }
 
     if (row.ownerId === params.user.id) {
-      throw new AppError('no se puede aceptar tu propia invitación', 'INVALID_INPUT', 400);
+      throw new AppError("you can't accept your own invitation", 'INVALID_INPUT', 400);
     }
 
     const shareId = await this.opts.sharing.grant({
