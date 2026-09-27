@@ -407,7 +407,8 @@ export class GraphEngine {
   private makeSim(alpha: number): void {
     this.sim?.stop();
     const model = this.model!;
-    const active = this.growth ? this.growth.active : model.nodes;
+    // A copy during a replay: d3 keeps the array it is given, and `active` grows between syncs.
+    const active = this.growth ? [...this.growth.active] : model.nodes;
     const activeSet = new Set(active);
     const edges = this.growth ? model.edges.filter((e) => activeSet.has(e.source) && activeSet.has(e.target)) : model.edges;
     const minDegree = (e: GraphEdge) => Math.max(1, Math.min(e.source.degree, e.target.degree));
@@ -704,7 +705,13 @@ export class GraphEngine {
     // Grow the running simulation in place, so the notes already on screen
     // keep their momentum instead of restarting. Setting the nodes
     // re-initialises every force, anchors included.
-    this.sim.nodes(g.active);
+    //
+    // A copy, never `g.active` itself: d3 keeps the array it is given, so the
+    // notes pushed onto it before the next sync were ticked by forces never
+    // initialised for them. Their per-node strengths were undefined, their
+    // positions went NaN, and d3 then re-seeded them on a spiral hundreds of
+    // units out — every 90 ms, for the whole replay.
+    this.sim.nodes([...g.active]);
     (this.sim.force('link') as ForceLink<GraphNode, GraphEdge>).links(
       this.model!.edges.filter((e) => g.activeSet.has(e.source) && g.activeSet.has(e.target)),
     );

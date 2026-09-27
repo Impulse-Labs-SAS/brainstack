@@ -86,6 +86,18 @@ describe('growth replay', () => {
     expect(status.at).toBe(1_750_000_000_000 + 9 * MINUTE);
   });
 
+  it('in the brain, keeps every note shown so far at a real position, frame by frame', () => {
+    // 300 notes over 8.4 s: a note every 28 ms, several between two syncs of the simulation.
+    const model = importedVault(300);
+    const engine = engineWith(model, 'brain');
+    engine.startGrowth(0);
+    for (let t = 0; engine.growth; t += 16) {
+      engine.advance(t);
+      const lost = engine.growth?.active.filter((n) => !Number.isFinite(n.x + n.y + n.z)) ?? [];
+      expect(lost).toEqual([]);
+    }
+  });
+
   it('places every note when stopped halfway', () => {
     const model = importedVault(30);
     const engine = engineWith(model);
