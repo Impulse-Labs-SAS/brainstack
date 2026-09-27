@@ -86,7 +86,7 @@ export function MarkdownPreview({
           if (!resolved) {
             return (
               <span className="inline-flex items-center gap-1 rounded border border-border-subtle bg-bg-elevated px-2 py-0.5 font-mono text-[11px] text-fg-muted">
-                📎 {target} (no encontrado)
+                📎 {target} (not found)
               </span>
             );
           }

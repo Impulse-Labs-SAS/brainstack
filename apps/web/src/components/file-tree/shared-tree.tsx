@@ -39,7 +39,7 @@ export function SharedTree({ ownerId, rootPath, activePath, droppableIdFor, hide
   );
 
   if (q.isLoading) {
-    return <div className="px-3 py-2 font-mono text-[11px] text-fg-muted">cargando…</div>;
+    return <div className="px-3 py-2 font-mono text-[11px] text-fg-muted">Loading…</div>;
   }
   if (q.error) {
     return <div className="px-3 py-2 font-mono text-[11px] text-red-300">{q.error.message}</div>;

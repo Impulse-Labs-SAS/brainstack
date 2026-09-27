@@ -121,7 +121,7 @@ export default function SharedNotePage() {
                 </span>
               </>
             ) : (
-              'cargando…'
+              'Loading…'
             )}
           </div>
           <div className="flex-1 overflow-y-auto">
@@ -145,7 +145,7 @@ export default function SharedNotePage() {
         <div className="flex h-full overflow-hidden">
           {tree}
           <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
-            sin acceso a {path}
+            No access to {path}
           </div>
         </div>
       </AppShell>
@@ -158,7 +158,7 @@ export default function SharedNotePage() {
         <div className="flex h-full overflow-hidden">
           {tree}
           <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
-            elegí una nota del árbol
+            Pick a note from the tree
           </div>
         </div>
       </AppShell>
@@ -198,7 +198,7 @@ export default function SharedNotePage() {
             <div className="flex min-w-0 items-center gap-2">
               <Link
                 href="/notes"
-                title="Volver al árbol"
+                title="Back to notes"
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden"
               >
                 <ChevronLeft size={16} />

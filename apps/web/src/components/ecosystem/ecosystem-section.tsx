@@ -88,7 +88,7 @@ function Section({ title, count, children }: { title: string; count?: number; ch
 
 function LinkList({ links, direction }: { links: readonly EcosystemLink[]; direction: 'in' | 'out' }) {
   if (links.length === 0) {
-    return <div className="text-xs text-fg-muted">Nada todavía.</div>;
+    return <div className="text-xs text-fg-muted">None yet.</div>;
   }
   return (
     <ul className="space-y-0.5">
@@ -98,7 +98,7 @@ function LinkList({ links, direction }: { links: readonly EcosystemLink[]; direc
         const label = linkLabel(link, direction);
         if (!href) {
           return (
-            <li key={key} className="truncate text-xs text-fg-muted line-through" title="sin resolver">
+            <li key={key} className="truncate text-xs text-fg-muted line-through" title="Not created yet">
               {label}
             </li>
           );
@@ -151,13 +151,13 @@ function MentionList({
                   title={
                     blockedReason ??
                     (row.count > 1
-                      ? `Convertir las ${row.count} menciones en enlaces`
-                      : 'Convertir la mención en enlace')
+                      ? `Turn all ${row.count} mentions into links`
+                      : 'Turn this mention into a link')
                   }
                   onClick={() => onLink(direction, row.path)}
                   className="shrink-0 rounded border border-border-subtle px-1.5 font-mono text-[10px] text-fg-muted transition-colors hover:border-border-strong hover:text-fg-primary disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {busy ? 'enlazando…' : 'enlazar'}
+                  {busy ? 'Linking…' : 'Link'}
                 </button>
               )}
             </div>
@@ -200,7 +200,7 @@ export function EcosystemSection({
 
   return (
     <div className={cn('border-t border-border-subtle bg-bg-surface/60 px-4 py-3', className)}>
-      <div className="mb-2 font-mono text-[11px] text-fg-muted">ecosistema</div>
+      <div className="mb-2 font-mono text-[11px] text-fg-muted">Connections</div>
       <div
         className={cn(
           'grid grid-cols-1 gap-4 md:grid-cols-2',
@@ -208,7 +208,7 @@ export function EcosystemSection({
         )}
       >
         {(tagChips.length > 0 || facetGroups.length > 0) && (
-          <Section title="Tags & facetas">
+          <Section title="Properties">
             <div className="space-y-2">
               {tagChips.length > 0 && <TagFacetChips aria-label="Tags" chips={tagChips} />}
               {facetGroups.map((group) => (
@@ -228,13 +228,13 @@ export function EcosystemSection({
           <LinkList links={backlinks} direction="in" />
         </Section>
 
-        <Section title="Enlaces salientes" count={outboundLinks.length}>
+        <Section title="Outgoing links" count={outboundLinks.length}>
           <LinkList links={outboundLinks} direction="out" />
         </Section>
 
-        <Section title="Relacionadas" count={related.length}>
+        <Section title="Related" count={related.length}>
           {related.length === 0 ? (
-            <div className="text-xs text-fg-muted">Nada todavía.</div>
+            <div className="text-xs text-fg-muted">None yet.</div>
           ) : (
             <ul className="space-y-0.5">
               {related.map((r) => (
@@ -252,14 +252,14 @@ export function EcosystemSection({
         </Section>
 
         {mentions && (
-          <Section title="Menciones sin enlazar" count={mentionCount}>
+          <Section title="Unlinked mentions" count={mentionCount}>
             {mentionCount === 0 ? (
-              <div className="text-xs text-fg-muted">Nada todavía.</div>
+              <div className="text-xs text-fg-muted">None yet.</div>
             ) : (
               <div className="space-y-2">
                 {mentions.incoming.length > 0 && (
                   <div>
-                    <div className="mb-1 font-mono text-[10px] text-fg-muted">te nombran</div>
+                    <div className="mb-1 font-mono text-[10px] text-fg-muted">Mention this note</div>
                     <MentionList
                       rows={mentions.incoming}
                       direction="incoming"
@@ -270,7 +270,7 @@ export function EcosystemSection({
                 )}
                 {mentions.outgoing.length > 0 && (
                   <div>
-                    <div className="mb-1 font-mono text-[10px] text-fg-muted">nombra</div>
+                    <div className="mb-1 font-mono text-[10px] text-fg-muted">Mentioned here</div>
                     <MentionList
                       rows={mentions.outgoing}
                       direction="outgoing"
