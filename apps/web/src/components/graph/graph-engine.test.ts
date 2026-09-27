@@ -19,7 +19,7 @@ function importedVault(count: number) {
     updatedAt: 1_750_000_000_000,
   }));
   const edges: InputEdge[] = nodes.slice(1).map((n, i) => ({ source: n.id, target: nodes[i]!.id, weight: 1 }));
-  return buildGraphModel({ nodes, edges, affinity: null, layers: DEFAULT_LAYERS, viewerId: 'me', ownerNames: new Map(), cache: new Map() });
+  return buildGraphModel({ nodes, edges, affinity: null, layers: DEFAULT_LAYERS, viewerId: 'me', vaultNames: new Map(), cache: new Map() });
 }
 
 /** Two vaults nothing links together, each a chain, plus three notes without a single link. */
@@ -43,7 +43,7 @@ function islands() {
     affinity: null,
     layers: DEFAULT_LAYERS,
     viewerId: 'me',
-    ownerNames: new Map([['ana', 'Ana']]),
+    vaultNames: new Map([['ana', { label: 'Research', owner: 'Ana' }]]),
     cache: new Map(),
   });
 }

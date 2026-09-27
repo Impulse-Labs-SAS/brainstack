@@ -38,6 +38,7 @@ import {
   type GraphView as View,
   type InputEdge,
   type InputNode,
+  type SharedVaultName,
 } from '@/lib/graph-model';
 import { BRIDGE_COLOR, LABEL_COLORS, OWN_VAULT_COLOR, SHARED_VAULT_COLORS, TOPIC_COLOR } from '@/lib/graph-palette';
 import { cn } from '@/lib/utils';
@@ -54,7 +55,7 @@ interface GraphViewProps {
   /** Who is looking: a node owned by anyone else is a shared note. */
   viewerId: string | null;
   /** Owner id → how to name their vault. */
-  ownerNames: ReadonlyMap<string, string>;
+  vaultNames: ReadonlyMap<string, SharedVaultName>;
   /** Whether shared vaults are fetched at all; null when sharing is off on this deployment. */
   includeShared: boolean | null;
   onIncludeSharedChange(include: boolean): void;
@@ -110,7 +111,7 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includeShared, onIncludeSharedChange }: GraphViewProps) {
+export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includeShared, onIncludeSharedChange }: GraphViewProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -207,8 +208,8 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
   // leaves topic nodes out whatever the layer says, and the others bring them back.
   const modelLayers = useMemo(() => (view === 'territories' && layers.topics ? { ...layers, topics: false } : layers), [view, layers]);
   const model = useMemo(
-    () => (ready ? buildGraphModel({ nodes, edges, affinity, layers: modelLayers, viewerId, ownerNames, cache: cacheRef.current }) : null),
-    [ready, nodes, edges, affinity, modelLayers, viewerId, ownerNames],
+    () => (ready ? buildGraphModel({ nodes, edges, affinity, layers: modelLayers, viewerId, vaultNames, cache: cacheRef.current }) : null),
+    [ready, nodes, edges, affinity, modelLayers, viewerId, vaultNames],
   );
 
   useEffect(() => {

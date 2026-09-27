@@ -155,9 +155,16 @@ export interface ProjectGroup {
   vault: string;
   nodes: GraphNode[];
 }
+/** How a shared vault is named: the folders its owner shared with you, and who they are. */
+export interface SharedVaultName {
+  label: string;
+  owner: string;
+}
 export interface VaultSummary {
   id: string;
   label: string;
+  /** Who shared it; null for your own vault. */
+  owner: string | null;
   own: boolean;
   /** Notes in the vault, visible or not. */
   total: number;
@@ -287,14 +294,38 @@ function cached(cache: Map<string, GraphNode>, id: string): GraphNode {
   return node;
 }
 
+/** A folder's own name: the last segment of its path. */
+const folderName = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
+
 /**
- * Every vault in the input, yours first. Colours go by label order so a vault
- * keeps its colour when another one appears or is hidden.
+ * Names every shared vault after the folders its owner shared with you, as the
+ * file tree does, with the person beside them. One person may share several.
+ */
+export function sharedVaultNames(
+  roots: readonly { ownerId: string; folderPath: string; ownerDisplayName: string | null; ownerEmail: string }[],
+): Map<string, SharedVaultName> {
+  const byOwner = new Map<string, { folders: Set<string>; owner: string }>();
+  for (const r of roots) {
+    const entry = byOwner.get(r.ownerId) ?? { folders: new Set<string>(), owner: r.ownerDisplayName ?? r.ownerEmail.split('@')[0] ?? r.ownerEmail };
+    entry.folders.add(folderName(r.folderPath));
+    byOwner.set(r.ownerId, entry);
+  }
+  const out = new Map<string, SharedVaultName>();
+  for (const [id, { folders, owner }] of byOwner) {
+    out.set(id, { label: [...folders].sort((a, b) => a.localeCompare(b)).join(', '), owner });
+  }
+  return out;
+}
+
+/**
+ * Every vault in the input, yours first. Colours go by owner, then label, so a
+ * vault keeps its colour when another one appears or is hidden — and when its
+ * owner shares one more folder.
  */
 export function summariseVaults(
   nodes: readonly InputNode[],
   viewerId: string | null,
-  ownerNames: ReadonlyMap<string, string>,
+  vaultNames: ReadonlyMap<string, SharedVaultName>,
   hiddenVaults: readonly string[],
 ): VaultSummary[] {
   const totals = new Map<string, number>();
@@ -305,14 +336,14 @@ export function summariseVaults(
   const hidden = new Set(hiddenVaults);
   const shared = [...totals.keys()]
     .filter((v) => v !== OWN_VAULT)
-    .map((id) => ({ id, label: ownerNames.get(id) ?? 'Shared vault' }))
-    .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+    .map((id) => ({ id, label: vaultNames.get(id)?.label ?? 'Shared vault', owner: vaultNames.get(id)?.owner ?? null }))
+    .sort((a, b) => (a.owner ?? '').localeCompare(b.owner ?? '') || a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
   const out: VaultSummary[] = [];
   if (totals.has(OWN_VAULT)) {
-    out.push({ id: OWN_VAULT, label: 'Your vault', own: true, total: totals.get(OWN_VAULT)!, hidden: hidden.has(OWN_VAULT), color: OWN_VAULT_COLOR });
+    out.push({ id: OWN_VAULT, label: 'Your vault', owner: null, own: true, total: totals.get(OWN_VAULT)!, hidden: hidden.has(OWN_VAULT), color: OWN_VAULT_COLOR });
   }
-  shared.forEach(({ id, label }, i) => {
-    out.push({ id, label, own: false, total: totals.get(id)!, hidden: hidden.has(id), color: SHARED_VAULT_COLORS[i] ?? OTHER_VAULT_COLOR });
+  shared.forEach(({ id, label, owner }, i) => {
+    out.push({ id, label, owner, own: false, total: totals.get(id)!, hidden: hidden.has(id), color: SHARED_VAULT_COLORS[i] ?? OTHER_VAULT_COLOR });
   });
   return out;
 }
@@ -328,12 +359,13 @@ export function buildGraphModel(input: {
   affinity: AffinityInput | null;
   layers: GraphLayers;
   viewerId: string | null;
-  ownerNames: ReadonlyMap<string, string>;
+  /** Names of the shared vaults, by owner id (see `sharedVaultNames`). */
+  vaultNames: ReadonlyMap<string, SharedVaultName>;
   /** Node objects from earlier builds, so positions survive a rebuild. */
   cache: Map<string, GraphNode>;
 }): GraphModel {
-  const { nodes, edges, affinity, layers, viewerId, ownerNames, cache } = input;
-  const vaults = summariseVaults(nodes, viewerId, ownerNames, layers.hiddenVaults);
+  const { nodes, edges, affinity, layers, viewerId, vaultNames, cache } = input;
+  const vaults = summariseVaults(nodes, viewerId, vaultNames, layers.hiddenVaults);
   const hidden = new Set(layers.hiddenVaults);
 
   const topicsByNote = new Map<string, string[]>();

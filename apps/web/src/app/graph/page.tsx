@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { GraphView } from '@/components/graph/graph-view';
+import { sharedVaultNames } from '@/lib/graph-model';
 import { useSharingEnabled } from '@/lib/use-deployment';
 import { trpc } from '@/lib/trpc';
 
@@ -43,13 +44,7 @@ export default function GraphPage() {
   const affinity = trpc.notes.affinity.useQuery();
   const shared = trpc.sharing.listSharedWithMe.useQuery(undefined, { enabled: sharingEnabled });
 
-  const ownerNames = useMemo(() => {
-    const names = new Map<string, string>();
-    for (const root of shared.data ?? []) {
-      names.set(root.ownerId, root.ownerDisplayName ?? root.ownerEmail.split('@')[0] ?? root.ownerEmail);
-    }
-    return names;
-  }, [shared.data]);
+  const vaultNames = useMemo(() => sharedVaultNames(shared.data ?? []), [shared.data]);
 
   return (
     <AppShell>
@@ -67,7 +62,7 @@ export default function GraphPage() {
             edges={data.edges}
             affinity={affinity.data ?? null}
             viewerId={me.data?.user?.id ?? null}
-            ownerNames={ownerNames}
+            vaultNames={vaultNames}
             includeShared={sharingEnabled ? includeShared : null}
             onIncludeSharedChange={onIncludeSharedChange}
           />
