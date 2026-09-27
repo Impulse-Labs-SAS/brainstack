@@ -34,6 +34,7 @@ export {
   type NoteBodySource,
   type RewriteResult,
 } from './links/rewrite-links.js';
+export { linkSnippet } from './links/snippet.js';
 export {
   findMentions,
   foldForMatch,

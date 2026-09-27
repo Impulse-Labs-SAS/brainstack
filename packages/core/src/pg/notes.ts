@@ -14,6 +14,7 @@ import matter from 'gray-matter';
 
 import { parseNote } from '../parser/index.js';
 import { normalizeNoteKey, normalizeRelativePath } from '../paths.js';
+import { linkSnippet } from '../links/snippet.js';
 import { resolveLinks } from '../resolver/wikilinks.js';
 import type { Frontmatter, ParsedFacet, ParsedLink, ResolvedLink } from '../types.js';
 
@@ -71,6 +72,11 @@ export interface Backlink {
   linkKind: string;
   alias: string | null;
   section: string | null;
+  /**
+   * The line of the source note the link sits in. Only backlinks carry it:
+   * it is what tells a reader how the note is cited, not only that it is.
+   */
+  snippet?: string;
 }
 
 export interface Facet {
@@ -394,7 +400,7 @@ export class PgNoteStore {
   /** Every link pointing at `path` — the backlinks panel and `list_links`. */
   async listBacklinks(path: string): Promise<Backlink[]> {
     const key = normalizeRelativePath(path);
-    return this.db
+    const rows = await this.db
       .select({
         sourcePath: links.sourcePath,
         targetPath: links.targetPath,
@@ -402,10 +408,17 @@ export class PgNoteStore {
         linkKind: links.linkKind,
         alias: links.alias,
         section: links.section,
+        position: links.position,
+        body: notes.body,
       })
       .from(links)
+      .leftJoin(notes, eq(notes.path, links.sourcePath))
       .where(eq(links.targetPath, key))
       .orderBy(links.sourcePath, links.position);
+    return rows.map(({ position, body, ...link }) => ({
+      ...link,
+      snippet: body ? linkSnippet(body, position) : '',
+    }));
   }
 
   /** Every link `path` points at — the mirror of `listBacklinks`. */
