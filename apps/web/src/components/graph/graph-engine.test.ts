@@ -224,3 +224,25 @@ describe('first layout', () => {
     expect(model.nodes.every((n) => n.bornAt < Infinity)).toBe(true);
   });
 });
+
+describe('dimensions', () => {
+  const dimensions = (engine: GraphEngine) => (engine as unknown as { sim: { numDimensions(): number } }).sim.numDimensions();
+
+  it('lays Network out in two dimensions and the brain in three', () => {
+    expect(dimensions(engineWith(importedVault(30)))).toBe(2);
+    expect(dimensions(engineWith(importedVault(30), 'brain'))).toBe(3);
+  });
+
+  it('from the brain, lets the notes fall onto the plane in three dimensions before dropping the third', () => {
+    const model = importedVault(60);
+    const engine = engineWith(model, 'brain');
+    settle(engine, 100);
+    engine.setView('network');
+    engine.advance(0);
+    expect(dimensions(engine)).toBe(3);
+    expect(Math.max(...model.nodes.map((n) => Math.abs(n.z)))).toBeGreaterThan(1);
+    settle(engine);
+    expect(dimensions(engine)).toBe(2);
+    expect(model.nodes.every((n) => n.z === 0)).toBe(true);
+  });
+});

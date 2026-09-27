@@ -47,6 +47,8 @@ const MAP_EASE = 0.14;
  * visit, whatever the vault's size.
  */
 const WARMUP_BUDGET_MS = 12;
+/** How close to the plane every note must be before Network drops the third dimension. */
+const FLAT_EPSILON = 0.05;
 
 export type RebuildReason = 'init' | 'data' | 'layers' | 'view';
 type Point = { x: number; y: number; z: number };
@@ -77,6 +79,9 @@ interface Growth {
 }
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
+
+const isFlat = (nodes: readonly GraphNode[]) =>
+  nodes.every((n) => Math.abs(n.z || 0) < FLAT_EPSILON && Math.abs(n.vz || 0) < FLAT_EPSILON);
 
 /** Brain only: each project drifts towards its own centre, so it stays one cluster in the volume. */
 function forceCluster(strength: number): Force<GraphNode> {
@@ -264,6 +269,7 @@ export class GraphEngine {
       if (moving && this.sim) {
         this.sim.tick();
         if ((this.model?.nodes.length ?? 0) < 500 && this.sim.alpha() > 0.05) this.sim.tick();
+        this.dropThirdDimension();
       }
     }
     this.stepGrowth(now);
@@ -278,10 +284,23 @@ export class GraphEngine {
       this.sim!.tick();
       this.warmup--;
     } while (this.warmup && performance.now() - start < WARMUP_BUDGET_MS);
+    this.dropThirdDimension();
     if (!this.warmup) this.wave(this.model!.nodes, now);
     return true;
   }
 
+  /**
+   * Network is flat, and a flat layout costs about 40% less to tick in two
+   * dimensions. Arriving from the brain, the notes first fall onto the plane in
+   * three, exactly as they always have; once all of them are there, the third
+   * dimension goes.
+   */
+  private dropThirdDimension(): void {
+    const sim = this.sim!;
+    if (this.is3D || sim.numDimensions() === 2 || !isFlat(sim.nodes())) return;
+    for (const n of sim.nodes()) n.z = n.vz = 0;
+    sim.numDimensions(2);
+  }
 
   /** Whether a dragged note may be moved: on the map, a note's place is where it is filed. */
   get canPin(): boolean {
@@ -451,7 +470,7 @@ export class GraphEngine {
     const minDegree = (e: GraphEdge) => Math.max(1, Math.min(e.source.degree, e.target.degree));
     const pullOf = (n: GraphNode) => this.pull.get(n) ?? (this.is3D ? 0.01 : 0.04);
 
-    const sim = forceSimulation<GraphNode>(active, 3)
+    const sim = forceSimulation<GraphNode>(active, this.is3D || !isFlat(active) ? 3 : 2)
       .stop()
       .velocityDecay(0.42)
       .alphaDecay(0.02)
