@@ -1,11 +1,15 @@
 'use client';
 
-// Modal de gestión de sharing para una carpeta. Lista miembros actuales,
-// permite invitar por email o generar un link compartible y revocar
-// invitaciones pendientes. Sólo se monta en hosted (gated por el caller).
+// Who can see one folder of your vault. Invite by email or by link, change a
+// member's permission, revoke access or a pending invitation. Mounted only
+// where sharing exists (gated by the caller).
+//
+// The unit is the folder: everything under it is shared, including notes
+// added later, and nothing outside it. The header says so, because "share"
+// on its own reads as "share my vault".
 
-import { Copy, Link as LinkIcon, Loader2, Mail, Trash2, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { Copy, Link as LinkIcon, Loader2, Mail, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -14,6 +18,44 @@ interface Props {
   folderPath: string;
   open: boolean;
   onClose(): void;
+}
+
+type Permission = 'read' | 'write';
+
+const PERMISSION_LABEL: Record<Permission, string> = { read: 'Read only', write: 'Can edit' };
+
+function initials(name: string): string {
+  return name
+    .split(/[\s@._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join('');
+}
+
+function PermissionSelect({
+  value,
+  onChange,
+  disabled,
+  label,
+}: {
+  value: Permission;
+  onChange(p: Permission): void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <select
+      aria-label={label}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value as Permission)}
+      className="h-8 shrink-0 rounded-md border border-border bg-bg-base px-1.5 text-xs text-fg-primary outline-none focus:border-accent disabled:opacity-50"
+    >
+      <option value="read">{PERMISSION_LABEL.read}</option>
+      <option value="write">{PERMISSION_LABEL.write}</option>
+    </select>
+  );
 }
 
 export function ShareFolderModal({ folderPath, open, onClose }: Props) {
@@ -51,10 +93,11 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
 
   const [email, setEmail] = useState('');
   /** What a new invite will grant. Applies to both the email and the link. */
-  const [permission, setPermission] = useState<'read' | 'write'>('read');
-  const [linkToken, setLinkToken] = useState<string | null>(null);
+  const [permission, setPermission] = useState<Permission>('read');
+  const [link, setLink] = useState<{ url: string; permission: Permission } | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const emailRef = useRef<HTMLInputElement | null>(null);
 
   const members = useMemo(
     () => (mySharesQ.data ?? []).filter((m) => m.folderPath === folderPath),
@@ -65,7 +108,21 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
     [pendingQ.data, folderPath],
   );
 
+  useEffect(() => {
+    if (!open) return;
+    setLink(null);
+    setError(null);
+    emailRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, folderPath, onClose]);
+
   if (!open) return null;
+
+  const folderName = folderPath.split('/').pop() ?? folderPath;
 
   const sendEmail = async () => {
     setError(null);
@@ -88,8 +145,8 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
     setError(null);
     try {
       const inv = await inviteLink.mutateAsync({ folderPath, mode: 'link', permission });
-      if (inv && 'token' in inv && inv.token) {
-        setLinkToken(inv.acceptUrl);
+      if (inv && 'token' in inv && inv.token && inv.acceptUrl) {
+        setLink({ url: inv.acceptUrl, permission });
       }
     } catch (e) {
       setError((e as Error).message);
@@ -97,239 +154,212 @@ export function ShareFolderModal({ folderPath, open, onClose }: Props) {
   };
 
   const copyLink = async () => {
-    if (!linkToken) return;
+    if (!link) return;
     try {
-      await navigator.clipboard.writeText(linkToken);
+      await navigator.clipboard.writeText(link.url);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      /* clipboard puede fallar fuera de https */
+      // The clipboard is refused outside https; the link stays selectable.
     }
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[12vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-3 pt-[10vh]"
       onClick={onClose}
     >
       <div
-        className="w-[min(520px,92vw)] rounded-lg border border-border bg-bg-surface p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-folder-title"
+        className="grid w-[min(480px,100%)] gap-5 rounded-xl border border-border bg-bg-surface p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-start justify-between">
-          <div>
-            <div className="text-sm font-medium text-fg-primary">Compartir carpeta</div>
-            <div className="mt-0.5 font-mono text-[11px] text-fg-muted">{folderPath}</div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 id="share-folder-title" className="text-base font-semibold text-fg-primary">
+              Share “{folderName}”
+            </h2>
+            <p className="mt-1 text-sm text-fg-secondary">
+              Only this folder and everything inside it, including notes added later. The rest of
+              your vault stays private.
+            </p>
+            <p className="mt-1 truncate font-mono text-[11px] text-fg-muted">{folderPath}/</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
+            aria-label="Close"
+            className="rounded-md p-1 text-fg-muted hover:bg-bg-hover hover:text-fg-primary"
           >
-            <X size={14} />
+            <X size={15} />
           </button>
         </div>
 
-        {/* Permiso: gobierna tanto la invitación por email como el link */}
-        <div className="mb-3">
-          <div className="mb-1.5 font-mono text-[11px] text-fg-muted">
-            permiso para quien invites
-          </div>
-          <div className="flex gap-1 rounded border border-border bg-bg-elevated p-0.5">
-            {(
-              [
-                ['read', 'sólo lectura', 'Puede leer todo lo que haya en la carpeta.'],
-                ['write', 'lectura y escritura', 'Además puede crear y editar notas acá.'],
-              ] as const
-            ).map(([value, label, hint]) => (
-              <button
-                key={value}
-                type="button"
-                title={hint}
-                onClick={() => setPermission(value)}
-                className={cn(
-                  'flex-1 rounded px-2 py-1 font-mono text-[11px] transition-colors',
-                  permission === value
-                    ? 'bg-accent/20 text-fg-primary'
-                    : 'text-fg-muted hover:text-fg-secondary',
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Invitar por email */}
-        <div className="mb-4">
-          <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] text-fg-muted">
-            <Mail size={11} /> invitar por email
-          </div>
-          <div className="flex gap-2">
+        <form
+          className="flex flex-wrap gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void sendEmail();
+          }}
+        >
+          <label className="sr-only" htmlFor="share-folder-email">
+            Email to invite
+          </label>
+          <div className="relative min-w-[160px] flex-1">
+            <Mail
+              size={13}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-muted"
+            />
             <input
+              id="share-folder-email"
+              ref={emailRef}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="persona@ejemplo.com"
-              className="flex-1 rounded border border-border bg-bg-elevated px-2.5 py-1.5 text-xs text-fg-primary outline-none focus:border-accent"
+              placeholder="name@company.com"
+              autoComplete="off"
+              className="h-8 w-full rounded-md border border-border bg-bg-base pl-8 pr-2.5 text-sm text-fg-primary outline-none focus:border-accent"
             />
-            <button
-              type="button"
-              onClick={sendEmail}
-              disabled={inviteEmail.isPending || !email.trim()}
-              className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-40"
-            >
-              {inviteEmail.isPending ? <Loader2 size={12} className="animate-spin" /> : 'Invitar'}
-            </button>
           </div>
+          <PermissionSelect value={permission} onChange={setPermission} label="Permission" />
+          <button
+            type="submit"
+            disabled={inviteEmail.isPending || !email.trim()}
+            className="flex h-8 items-center rounded-md bg-accent px-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-40"
+          >
+            {inviteEmail.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Invite'}
+          </button>
+        </form>
+
+        {error && (
+          <div className="rounded-md border border-red-700/40 bg-red-950/40 px-2.5 py-1.5 text-xs text-red-300">
+            {error}
+          </div>
+        )}
+
+        <div>
+          <div className="mb-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
+            People with access
+          </div>
+          <ul className="grid gap-0.5">
+            {members.map((m) => {
+              const name = m.displayName ?? m.email;
+              return (
+                <li key={m.shareId} className="flex items-center gap-2.5 py-1">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-bg-elevated font-mono text-[10px] font-semibold text-fg-secondary">
+                    {initials(name)}
+                  </span>
+                  <span className="grid min-w-0 flex-1">
+                    <span className="truncate text-sm text-fg-primary">{name}</span>
+                    {m.displayName && (
+                      <span className="truncate font-mono text-[11px] text-fg-muted">
+                        {m.email}
+                      </span>
+                    )}
+                  </span>
+                  <PermissionSelect
+                    value={m.permission}
+                    label={`Permission for ${name}`}
+                    disabled={setPermissionM.isPending}
+                    onChange={(value) => {
+                      if (m.permission === value) return;
+                      setError(null);
+                      setPermissionM.mutate(
+                        { folderPath, email: m.email, permission: value },
+                        { onError: (e) => setError(e.message) },
+                      );
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => revokeShare.mutate({ folderPath, sharedWithUserId: m.userId })}
+                    title="Remove access"
+                    aria-label={`Remove access for ${name}`}
+                    className="rounded-md p-1.5 text-fg-muted hover:bg-red-950/40 hover:text-red-300"
+                  >
+                    <X size={13} />
+                  </button>
+                </li>
+              );
+            })}
+            {pending.map((p) => (
+              <li key={p.id} className="flex items-center gap-2.5 py-1">
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-bg-elevated text-fg-muted">
+                  <Mail size={12} />
+                </span>
+                <span className="grid min-w-0 flex-1">
+                  <span className="truncate text-sm text-fg-primary">{p.inviteeEmail}</span>
+                  <span className="font-mono text-[11px] text-fg-muted">
+                    Invitation not accepted yet
+                  </span>
+                </span>
+                <span className="rounded border border-amber-500/40 px-1.5 font-mono text-[10.5px] text-amber-400">
+                  Pending
+                </span>
+                <button
+                  type="button"
+                  onClick={() => revokeInvite.mutate({ inviteId: p.id })}
+                  title="Cancel invitation"
+                  aria-label={`Cancel invitation for ${p.inviteeEmail}`}
+                  className="rounded-md p-1.5 text-fg-muted hover:bg-red-950/40 hover:text-red-300"
+                >
+                  <X size={13} />
+                </button>
+              </li>
+            ))}
+            {members.length === 0 && pending.length === 0 && (
+              <li className="py-1 text-sm text-fg-muted">Not shared with anyone yet.</li>
+            )}
+          </ul>
         </div>
 
-        {/* Link compartible */}
-        <div className="mb-4">
-          <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] text-fg-muted">
-            <LinkIcon size={11} /> link compartible
+        <div>
+          <div className="mb-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
+            Invite link
           </div>
-          {linkToken ? (
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={linkToken}
-                className="flex-1 rounded border border-border bg-bg-elevated px-2.5 py-1.5 font-mono text-[11px] text-fg-secondary"
-              />
-              <button
-                type="button"
-                onClick={copyLink}
-                className="flex items-center gap-1 rounded border border-border px-3 py-1.5 text-xs text-fg-secondary hover:bg-bg-elevated"
-              >
-                <Copy size={12} /> {copied ? '¡copiado!' : 'copiar'}
-              </button>
-            </div>
+          <p className="mb-2.5 text-xs text-fg-secondary">
+            Anyone signed in who opens it gets access with the permission chosen above, until you
+            revoke it.
+          </p>
+          {link ? (
+            <>
+              <div className="flex gap-1.5">
+                <input
+                  readOnly
+                  aria-label="Invite link"
+                  value={link.url}
+                  onFocus={(e) => e.target.select()}
+                  className="h-8 min-w-0 flex-1 rounded-md border border-border bg-bg-base px-2.5 font-mono text-[11px] text-fg-secondary"
+                />
+                <button
+                  type="button"
+                  onClick={copyLink}
+                  className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-bg-elevated px-3 text-sm text-fg-primary hover:border-border-strong"
+                >
+                  <Copy size={13} /> {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <p className="mt-1.5 text-xs text-fg-muted">
+                Gives {PERMISSION_LABEL[link.permission].toLowerCase()} access.
+              </p>
+            </>
           ) : (
             <button
               type="button"
               onClick={generateLink}
               disabled={inviteLink.isPending}
-              className="rounded border border-border px-3 py-1.5 text-xs text-fg-secondary hover:bg-bg-elevated disabled:opacity-40"
+              className={cn(
+                'flex h-8 items-center gap-1.5 rounded-md border border-border bg-bg-elevated px-3 text-sm text-fg-primary',
+                'hover:border-border-strong disabled:opacity-40',
+              )}
             >
-              {inviteLink.isPending ? 'Generando…' : 'Generar link'}
+              <LinkIcon size={13} />
+              {inviteLink.isPending ? 'Creating…' : 'Create link'}
             </button>
           )}
         </div>
-
-        {error && (
-          <div className="mb-3 rounded border border-red-700/40 bg-red-950/40 px-2.5 py-1.5 font-mono text-[11px] text-red-300">
-            {error}
-          </div>
-        )}
-
-        {/* Miembros */}
-        {members.length > 0 && (
-          <div className="mb-3">
-            <div className="mb-1.5 font-mono text-[11px] text-fg-muted">
-              con acceso ({members.length})
-            </div>
-            <ul className="divide-y divide-border-subtle rounded border border-border">
-              {members.map((m) => (
-                <li key={m.shareId} className="flex items-center justify-between px-2.5 py-1.5">
-                  <div className="min-w-0">
-                    <div className="truncate text-xs text-fg-primary">
-                      {m.displayName ?? m.email}
-                    </div>
-                    {m.displayName && (
-                      <div className="truncate font-mono text-[10px] text-fg-muted">{m.email}</div>
-                    )}
-                  </div>
-                  {/*
-                    Editable, not a label. The selector at the top of this modal
-                    only ever applied to a *new* invite, so somebody already on
-                    the list could not be moved from read to write: the toggle
-                    looked like it belonged to the folder, changing it did
-                    nothing, and nothing said so. Re-granting is what changes a
-                    permission, and this is where it belongs.
-                  */}
-                  <div className="ml-2 flex shrink-0 gap-0.5 rounded border border-border bg-bg-elevated p-0.5">
-                    {(
-                      [
-                        ['read', 'lectura', 'Sólo puede leer'],
-                        ['write', 'escritura', 'Puede crear y editar notas en esta carpeta'],
-                      ] as const
-                    ).map(([value, label, hint]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        title={hint}
-                        disabled={setPermissionM.isPending}
-                        onClick={() => {
-                          if (m.permission === value) return;
-                          setError(null);
-                          setPermissionM.mutate(
-                            { folderPath, email: m.email, permission: value },
-                            { onError: (e) => setError(e.message) },
-                          );
-                        }}
-                        className={cn(
-                          'rounded px-1.5 py-0.5 font-mono text-[9px] uppercase transition-colors',
-                          m.permission === value
-                            ? 'bg-accent/20 text-fg-primary'
-                            : 'text-fg-muted hover:text-fg-secondary',
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      revokeShare.mutate({
-                        folderPath,
-                        sharedWithUserId: m.userId,
-                      })
-                    }
-                    title="Revocar acceso"
-                    className="rounded p-1 text-fg-muted hover:bg-red-950/40 hover:text-red-300"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Invitaciones pendientes (email mode) */}
-        {pending.length > 0 && (
-          <div className="mb-3">
-            <div className="mb-1.5 font-mono text-[11px] text-fg-muted">
-              invitaciones pendientes ({pending.length})
-            </div>
-            <ul className="divide-y divide-border-subtle rounded border border-border">
-              {pending.map((p) => (
-                <li key={p.id} className="flex items-center justify-between px-2.5 py-1.5">
-                  <div className="min-w-0 text-xs text-fg-secondary">
-                    <span className="truncate">{p.inviteeEmail}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => revokeInvite.mutate({ inviteId: p.id })}
-                    title="Revocar invitación"
-                    className={cn(
-                      'rounded p-1 text-fg-muted hover:bg-red-950/40 hover:text-red-300',
-                    )}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {members.length === 0 && pending.length === 0 && (
-          <div className="rounded border border-dashed border-border-subtle px-3 py-4 text-center font-mono text-[11px] text-fg-muted">
-            Aún no compartiste esta carpeta con nadie.
-          </div>
-        )}
       </div>
     </div>
   );
