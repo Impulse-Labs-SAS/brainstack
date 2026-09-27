@@ -77,6 +77,11 @@ export interface Backlink {
    * it is what tells a reader how the note is cited, not only that it is.
    */
   snippet?: string;
+  /**
+   * The title of the note on the other end: the source for a backlink, the
+   * target for an outbound link. Absent when that end is not a note (yet).
+   */
+  title?: string;
 }
 
 export interface Facet {
@@ -410,21 +415,23 @@ export class PgNoteStore {
         section: links.section,
         position: links.position,
         body: notes.body,
+        title: notes.title,
       })
       .from(links)
       .leftJoin(notes, eq(notes.path, links.sourcePath))
       .where(eq(links.targetPath, key))
       .orderBy(links.sourcePath, links.position);
-    return rows.map(({ position, body, ...link }) => ({
+    return rows.map(({ position, body, title, ...link }) => ({
       ...link,
       snippet: body ? linkSnippet(body, position) : '',
+      ...(title ? { title } : {}),
     }));
   }
 
   /** Every link `path` points at — the mirror of `listBacklinks`. */
   async listOutboundLinks(path: string): Promise<Backlink[]> {
     const key = normalizeRelativePath(path);
-    return this.db
+    const rows = await this.db
       .select({
         sourcePath: links.sourcePath,
         targetPath: links.targetPath,
@@ -432,10 +439,13 @@ export class PgNoteStore {
         linkKind: links.linkKind,
         alias: links.alias,
         section: links.section,
+        title: notes.title,
       })
       .from(links)
+      .leftJoin(notes, eq(notes.path, links.targetPath))
       .where(eq(links.sourcePath, key))
       .orderBy(links.position);
+    return rows.map(({ title, ...link }) => ({ ...link, ...(title ? { title } : {}) }));
   }
 
   /** Distinct tags in use, for autocomplete and "what tags exist?" questions. */

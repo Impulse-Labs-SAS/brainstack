@@ -181,6 +181,10 @@ describe('links and tags', () => {
 
     const [link] = await notes.listBacklinks('Contexto/destino.md');
     expect(link?.snippet).toBe('Decidido en [[destino|la nota]], por ahora.');
+    expect(link?.title).toBe('Origen');
+
+    const [out] = await notes.listOutboundLinks('Contexto/origen.md');
+    expect(out?.title).toBe('Destino');
   });
 
   it('rebuilds the graph on every write instead of accumulating stale rows', async () => {
