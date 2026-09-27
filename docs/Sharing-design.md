@@ -262,6 +262,19 @@ Dos secciones top-level colapsables:
 
 Context menu en carpeta propia → nueva acción "**Compartir…**" que abre el modal.
 
+### Shared note view (`apps/web/src/app/notes/shared/[ownerId]/[...path]/page.tsx`)
+
+- **One sidebar for all of `/notes`.** The tree lives in `apps/web/src/app/notes/layout.tsx`, not in
+  the pages: Next keeps a layout mounted across navigations and remounts a page whenever the route
+  changes, so going from an own note to a shared one no longer redraws the sidebar. A shared folder
+  appears under "Shared with me", with the same persisted open/closed state as your own folders.
+- **URLs.** The path is the note's place in the owner's vault with `.md` dropped, as every link
+  producer writes it. A path equal to one of the owner's share roots is that folder — where an
+  accepted invite lands — and reveals it in the sidebar. The mapping is `lib/shared-path.ts`.
+- **Header.** `NoteHeader` with the owner (colour dot + name, same colour as the sidebar group via
+  `lib/shared-owners.ts`) leading crumbs that start at the shared folder — nothing above it is
+  shown. A crumb reveals its folder in the owner's vault (`revealFolder({ ownerId, path })`).
+
 ### Modal de compartir (`apps/web/src/components/sharing/share-folder-modal.tsx`, nuevo)
 
 Basado en `prompt-modal.tsx`:

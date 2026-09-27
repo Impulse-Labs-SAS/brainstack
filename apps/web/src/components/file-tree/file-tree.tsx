@@ -51,11 +51,11 @@ import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
 import { isInside, nodeId, parseNodeId, sameNode, type NodeRef } from '@/lib/tree-node-id';
 import { importMarkdownFiles, isMarkdownFile, summarizeImport } from '@/lib/import-md';
 import { forgetRecent, useRecentNotes } from '@/lib/recent-notes';
-import { OTHER_VAULT_COLOR, SHARED_VAULT_COLORS } from '@/lib/graph-palette';
+import { groupSharedOwners } from '@/lib/shared-owners';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 import { useSharingEnabled } from '@/lib/use-deployment';
 
-import { REVEAL_FOLDER_EVENT } from '@/components/note/note-header';
+import { REVEAL_FOLDER_EVENT, type RevealFolderDetail } from '@/components/note/note-header';
 
 import { DeleteDialog, type DeleteTarget } from './delete-dialog';
 
@@ -589,9 +589,9 @@ export function FileTree() {
   useEffect(() => {
     if (!mine) return;
     const onReveal = (e: Event) => {
-      const folder = (e as CustomEvent<string>).detail;
-      const parts = folder.split('/');
-      const ids = parts.map((_, i) => nodeId({ ownerId: mine, path: parts.slice(0, i + 1).join('/') }));
+      const { ownerId = mine, path } = (e as CustomEvent<RevealFolderDetail>).detail;
+      const parts = path.split('/');
+      const ids = parts.map((_, i) => nodeId({ ownerId, path: parts.slice(0, i + 1).join('/') }));
       setExpanded((prev) => new Set([...prev, ...ids]));
       requestAnimationFrame(() => {
         const row = scrollRef.current?.querySelector<HTMLElement>(
@@ -1047,17 +1047,7 @@ export function FileTree() {
   // Render
   // ---------------------------------------------------------------------------
 
-  const ownerGroups = useMemo(() => {
-    const byOwner = new Map<string, { name: string; roots: typeof sharedRoots }>();
-    for (const r of sharedRoots) {
-      const name = r.ownerDisplayName ?? r.ownerEmail.split('@')[0] ?? r.ownerEmail;
-      const g = byOwner.get(r.ownerId) ?? { name, roots: [] };
-      byOwner.set(r.ownerId, { name: g.name, roots: [...g.roots, r] });
-    }
-    return [...byOwner.entries()]
-      .map(([ownerId, g]) => ({ ownerId, ...g }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [sharedRoots]);
+  const ownerGroups = useMemo(() => groupSharedOwners(sharedRoots), [sharedRoots]);
 
   const recentOthers = recent.filter((r) => r.href !== pathname).slice(0, 4);
 
@@ -1182,8 +1172,8 @@ export function FileTree() {
               <GroupHeader>
                 <Users size={11} /> Shared with me
               </GroupHeader>
-              {ownerGroups.map((g, i) => {
-                const color = (SHARED_VAULT_COLORS[i] ?? OTHER_VAULT_COLOR).hue;
+              {ownerGroups.map((g) => {
+                const { color } = g;
                 const canEdit = g.roots.some((r) => r.permission === 'write');
                 return (
                   <div key={g.ownerId} className="mt-1">
