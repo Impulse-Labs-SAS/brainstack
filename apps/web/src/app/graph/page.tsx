@@ -1,64 +1,75 @@
 'use client';
 
-import { useState } from 'react';
+import { keepPreviousData } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { GraphView } from '@/components/graph/graph-view';
-import type { GraphMode } from '@/lib/graph-model';
 import { useSharingEnabled } from '@/lib/use-deployment';
-import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
+
+const INCLUDE_SHARED_KEY = 'brainstack.graph.includeShared';
+
+// A per-browser preference; a blocked or private store falls back to the default.
+function readIncludeShared(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    return localStorage.getItem(INCLUDE_SHARED_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
 
 export default function GraphPage() {
   const sharingEnabled = useSharingEnabled();
-  const [includeShared, setIncludeShared] = useState(false);
-  const { data, isLoading, error } = trpc.notes.graph.useQuery({
-    scope: includeShared && sharingEnabled ? 'all' : 'mine',
-  });
+  const [includeShared, setIncludeShared] = useState(readIncludeShared);
+  const onIncludeSharedChange = useCallback((include: boolean) => {
+    setIncludeShared(include);
+    try {
+      localStorage.setItem(INCLUDE_SHARED_KEY, String(include));
+    } catch {
+      // storage full or blocked; the choice lasts until the page closes
+    }
+  }, []);
+
+  // Shared vaults are only fetched when included. Keeping the previous data
+  // while the other scope loads keeps the graph, its camera and layout, on screen.
+  const { data, isLoading, error } = trpc.notes.graph.useQuery(
+    { scope: includeShared && sharingEnabled ? 'all' : 'mine' },
+    { placeholderData: keepPreviousData },
+  );
   // Which nodes are somebody else's, and so open under the shared route.
   const me = trpc.auth.me.useQuery();
-  // Affinity by default: the graph is for finding connections, and links alone
-  // mostly show where notes are filed.
-  const [mode, setMode] = useState<GraphMode>('affinity');
-  // Only fetched once a view needs it; the links view never pays for it.
-  const affinity = trpc.notes.affinity.useQuery(undefined, { enabled: mode !== 'links' });
+  const affinity = trpc.notes.affinity.useQuery();
+  const shared = trpc.sharing.listSharedWithMe.useQuery(undefined, { enabled: sharingEnabled });
+
+  const ownerNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const root of shared.data ?? []) {
+      names.set(root.ownerId, root.ownerDisplayName ?? root.ownerEmail.split('@')[0] ?? root.ownerEmail);
+    }
+    return names;
+  }, [shared.data]);
 
   return (
     <AppShell>
       <div className="flex h-full w-full flex-col overflow-hidden">
-        {sharingEnabled && (
-          <div className="flex items-center justify-end border-b border-border-subtle bg-bg-surface px-4 py-1.5 font-mono text-[11px] text-fg-muted">
-            <label className="flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
-                checked={includeShared}
-                onChange={(e) => setIncludeShared(e.target.checked)}
-                className="h-3 w-3 accent-accent"
-              />
-              <span className={cn(includeShared && 'text-fg-primary')}>
-                incluir compartidos
-              </span>
-            </label>
-          </div>
-        )}
         {isLoading && (
-          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
-            loading graph…
-          </div>
+          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">loading graph…</div>
         )}
         {error && (
-          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-red-400">
-            {error.message}
-          </div>
+          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-red-400">{error.message}</div>
         )}
-        {data && (
+        {/* Wait for the viewer: who owns what decides every vault and colour. */}
+        {data && !me.isLoading && (
           <GraphView
             nodes={data.nodes}
             edges={data.edges}
-            affinity={mode === 'links' ? null : (affinity.data ?? null)}
-            mode={mode}
-            onModeChange={setMode}
+            affinity={affinity.data ?? null}
             viewerId={me.data?.user?.id ?? null}
+            ownerNames={ownerNames}
+            includeShared={sharingEnabled ? includeShared : null}
+            onIncludeSharedChange={onIncludeSharedChange}
           />
         )}
       </div>

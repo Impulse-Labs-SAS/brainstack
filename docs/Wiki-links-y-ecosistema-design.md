@@ -185,8 +185,7 @@ Las cuatro columnas de texto de la sección Ecosistema (tags/facetas, backlinks,
 enlaces salientes, relacionadas) cubren la misma información sin confundir un enlace
 con una afinidad, y `/graph` sigue siendo la vista de estructura.
 
-`apps/web/src/lib/graph-palette.ts` (`readPalette()`/`Palette`, extraído de
-`graph-view.tsx`) sobrevive: hoy lo usa sólo el grafo completo.
+`apps/web/src/lib/graph-palette.ts` now holds only the graph's vault colours (see `Graph-design.md`).
 
 ## 9. Fast-follows documentados (no construidos en esta rama)
 
@@ -218,47 +217,33 @@ con una afinidad, y `/graph` sigue siendo la vista de estructura.
   usuarios de prueba con una carpeta parcialmente compartida confirman que el backlink
   desde la carpeta no compartida no se filtra.
 
-## 11. `/graph`: estructura, afinidad, temas y proyectos
+## 11. `/graph`: structure, affinity, topics and projects
 
-El grafo sólo leía `links`, así que la mayoría de las aristas eran las de los MOC
-(`_<Carpeta>.md` enlaza a cada nota de su carpeta): mostraba dónde está archivada una
-nota, no de qué trata, y dos proyectos que usan la misma tecnología no se tocaban.
+The graph itself — its views, layers and behaviour — is described in `Graph-design.md`. What
+stays here is what the server decides for it.
 
-**Estructura vs. contenido.** Una arista hacia o desde un índice es `structure`: tira
-al 30 %, se dibuja tenue, cuenta un cuarto para el tamaño del nodo y se puede ocultar
-(toggle "índices"). Los índices son cuadrados; las notas de otro dueño, anillos huecos.
+**Structure vs. content.** An edge to or from an index (`_<Folder>.md`) is `structure`: it says
+where a note is filed, not what it is about, so it pulls less, draws faint and counts a quarter
+towards a node's size. Indexes can be hidden as a layer.
 
-**Cuatro vistas** (`lib/graph-model.ts`, sin canvas y con tests):
+**What a topic is** (`services/affinity.ts`, `NoteService.affinity`): content tags and facets.
+`tipo/*`, `persona/*`, `decisión`, `status`, `owner` and the keys `list_related` already
+ignores are left out: they joined everything to everything. A topic counts when at least two
+notes carry it and no more than 25% of the vault (minimum 3); it weighs `1 / notes`, as in
+`list_related`. Each note keeps its three strongest affinity edges. Own vault only, like
+`list_related`. The lesson of §8 holds: an affinity is never drawn like a link, and a pair that
+is already linked gets no affinity edge.
 
-| vista | qué agrega a los enlaces |
-|---|---|
-| enlaces | nada |
-| afinidad (default) | aristas **punteadas** entre notas que comparten un tema raro |
-| temas | un nodo hexagonal por tema, unido a las notas que lo llevan |
-| proyectos | un nodo por proyecto; sólida si hay enlaces entre sus notas, punteada si sólo comparten temas |
+**What a project is** (`services/projects.ts`, carried on every node of `notes.graph`): the
+`proyecto/*` tag when the note has exactly one; otherwise the nearest index above it (and that
+index's project tag, if it has one); otherwise the top-level folder, or the root. The top-level
+folder alone was wrong: `Pablo/` holds several projects.
 
-La lección del §8 sigue en pie: una afinidad nunca se dibuja como un enlace. Si dos
-notas ya están enlazadas no se agrega la punteada (la tarjeta de hover sigue nombrando
-los temas).
-
-**Qué es un tema** (`services/affinity.ts`, `NoteService.affinity`): tags de contenido y
-facetas. Quedan fuera `tipo/*`, `persona/*`, `decisión`, `status`, `owner` y las claves
-que ya ignora `list_related`: unían todo con todo. Un tema cuenta si lo llevan ≥ 2 notas
-y no más del 25 % de la bóveda (mínimo 3); pesa `1 / notas`, igual que `list_related`.
-Cada nota conserva sus 3 aristas más fuertes. Sólo la bóveda propia, como `list_related`.
-
-**Qué es un proyecto** (`services/projects.ts`, viaja en cada nodo de `notes.graph`):
-el tag `proyecto/*` si la nota tiene exactamente uno; si no, el MOC más cercano hacia
-arriba (y si ese MOC tiene tag de proyecto, ese proyecto); si no, la carpeta de primer
-nivel o la raíz. "Carpeta de primer nivel" sola era incorrecta: `Pablo/` guarda varios
-proyectos.
-
-**Sin color por proyecto.** Se probó colorear las 3 carpetas más grandes (la paleta
-validada no admite más con todos los pares a la vista) y se descartó: con proyectos
-bien definidos aparecen decenas, y 3 colores entre 50 confunden. La identidad la da el
-panel de proyectos: lista con búsqueda y scroll, hover resalta un proyecto, clic lo
-enfoca. Clic en un nodo de la vista proyectos enfoca ese proyecto y sus vecinos y pasa a
-la vista afinidad.
+**No colour per project.** Colouring the three largest folders was tried and dropped: with
+well-defined projects there are dozens, and three colours among fifty confuse. The graph colours
+by vault instead, and names projects when zoomed out. In Territories the project is the unit of
+the map itself: each one is a country of its vault's continent, and its subfolders are the
+dotted lines inside it.
 
 ## 12. Menciones sin enlazar
 

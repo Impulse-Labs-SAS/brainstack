@@ -1,26 +1,37 @@
-// Builds what the graph simulates and draws from what the server sent: note
-// nodes, topic nodes, project nodes, and the four kinds of edge between them.
-// Pure — no canvas, no React — so the rules about what connects to what are
-// testable in Node like graph-structure.ts.
+// What the graph simulates and draws, built from what the server sent. Pure —
+// no canvas, no WebGL, no React — so the rules about what connects to what
+// are testable in Node like graph-structure.ts.
 //
-// The four kinds, and why they never look alike:
+// The edge kinds, and why they never look alike:
 //
 //  - `link`: a wikilink someone wrote. Solid. The only kind that is a fact.
 //  - `structure`: a link to or from a MOC index. Faint: it says where a note is
 //    filed, not what it is about.
-//  - `affinity`: two notes share a rare content topic (a tag or a facet), but
-//    nobody linked them. Dashed. Drawing it like a link is what got the first
+//  - `affinity`: two notes share a rare topic, but nobody linked them. Dotted
+//    and never glowing. Drawing it like a link is what got the first
 //    ego-graph removed — it claimed connections that did not exist.
-//  - `topic`: a note to the topic node it carries, in the topics view.
+//  - `topic`: a note to the topic node it carries, when topics are nodes.
 //
-// The projects view is the same notes folded one node per project, so the
-// question "how do my projects relate?" stays readable at fifty projects. It
-// changes nothing about the other three views.
+// Views (brain, network, territories) only change how the layout is shaped.
+// Layers change what is in the model: which vaults, which kinds of edge,
+// whether indexes and topics are nodes — plus whether the map shows every
+// route at rest, which is drawing, not content.
 
+import {
+  OTHER_VAULT_COLOR,
+  OWN_VAULT_COLOR,
+  SHARED_VAULT_COLORS,
+  TOPIC_COLOR,
+  type VaultColor,
+} from './graph-palette';
 import { isIndexNote, isStructureEdge } from './graph-structure';
 
-export type GraphMode = 'links' | 'affinity' | 'topics' | 'projects';
+export type GraphView = 'brain' | 'network' | 'territories';
+export const GRAPH_VIEWS: readonly GraphView[] = ['brain', 'network', 'territories'];
 export type EdgeKind = 'link' | 'structure' | 'affinity' | 'topic';
+
+/** The vault key for the viewer's own notes; a shared vault is keyed by its owner's id. */
+export const OWN_VAULT = 'own';
 
 export interface ProjectRef {
   id: string;
@@ -34,6 +45,8 @@ export interface InputNode {
   title: string;
   ownerId: string | null;
   project: ProjectRef;
+  createdAt: number;
+  updatedAt: number;
 }
 export interface InputEdge {
   source: string;
@@ -60,397 +73,466 @@ export interface AffinityInput {
   edges: InputAffinityEdge[];
 }
 
-export interface SimNode {
+export interface GraphLayers {
+  hiddenVaults: string[];
+  affinity: boolean;
+  indexes: boolean;
+  topics: boolean;
+  /** Territories: every link drawn faintly over the map, not only the routes of what you point at. */
+  routes: boolean;
+}
+export const DEFAULT_LAYERS: GraphLayers = { hiddenVaults: [], affinity: true, indexes: true, topics: false, routes: false };
+
+export interface GraphNode {
   id: string;
-  kind: 'note' | 'topic' | 'project';
+  kind: 'note' | 'topic';
   path: string;
   title: string;
+  /** The title without a trailing "— Project" that the node's position already says. */
+  label: string;
   ownerId: string | null;
-  /** The project a note belongs to; for a project node, itself. Null for a topic. */
-  project: ProjectRef | null;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  /** Edges touching it, every kind: what the springs balance on. */
-  degree: number;
-  /** What radius and label priority go by: links count 1, index links a quarter, affinity nothing. */
-  size: number;
+  vault: string;
+  /** Somebody else's note: drawn with a ring, opened under the shared route. */
   foreign: boolean;
   isIndex: boolean;
-  /** Where the user parked it. Set by dragging; the sim never overrides it. */
-  fx: number | null;
-  fy: number | null;
+  /** The project a note belongs to. Null for a topic. */
+  project: ProjectRef | null;
+  createdAt: number;
+  updatedAt: number;
+  /** Topic labels the note carries (own vault only, like affinity). */
+  topics: string[];
+  /** For a topic node: how many visible notes carry it. */
+  carriers: number;
+  /** Edges touching it, every kind. */
+  degree: number;
+  /** What radius and label priority go by: links count 1, index links a quarter. */
+  size: number;
+  /** World units. */
+  radius: number;
+  /** The radius drawn this frame: `radius`, eased towards an even city size on the map. */
+  drawRadius: number;
+  // Layout, in world units. The cache keeps these across rebuilds, so turning
+  // a layer on or off never reshuffles the map.
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  fx?: number | null;
+  fy?: number | null;
+  fz?: number | null;
+  /** performance.now() when it appears; -Infinity for always, Infinity for not yet. */
+  bornAt: number;
+  /** A per-node offset so active notes do not pulse in unison. */
+  phase: number;
+  // Screen projection, rewritten every frame by the renderer.
+  sx: number;
+  sy: number;
+  sDepth: number;
+  /** Screen pixels per world unit at the node's depth. */
+  sScale: number;
+  /** 1 in front, fading towards the back of the brain. */
+  sFade: number;
+  onScreen: boolean;
 }
 
-export interface SimEdge {
-  source: SimNode;
-  target: SimNode;
+export interface GraphEdge {
+  source: GraphNode;
+  target: GraphNode;
   kind: EdgeKind;
   weight: number;
-  /** Spring constant: an edge between hubs pulls less, as in d3-force. */
-  strength: number;
-  /** How the correction splits between the ends, by relative degree. */
-  bias: number;
-  distance: number;
-  /** For an affinity edge: the topics the two ends share, strongest first. */
+  /** Topics the two ends share (affinity), or the topic itself (topic). */
   shared: string[];
 }
-
 export interface Neighbour {
+  node: GraphNode;
+  edge: GraphEdge;
+}
+export interface ProjectGroup {
   id: string;
-  title: string;
-  /** Topics shared with it, strongest first; empty when only links join them. */
-  shared: string[];
-  /** Links between the two (a project pair counts every note link). */
-  links: number;
+  label: string;
+  vault: string;
+  nodes: GraphNode[];
 }
-
-export interface ProjectSummary extends ProjectRef {
-  count: number;
+export interface VaultSummary {
+  id: string;
+  label: string;
+  own: boolean;
+  /** Notes in the vault, visible or not. */
+  total: number;
+  hidden: boolean;
+  color: VaultColor;
 }
-
 export interface GraphModel {
-  simNodes: SimNode[];
-  simEdges: SimEdge[];
-  /** Every node's neighbours, across every kind of edge drawn. */
-  neighbours: Map<string, Set<string>>;
-  /** For the hover card: who a node is affine or linked to, and through what. */
-  related: Map<string, Neighbour[]>;
-  counts: {
-    notes: number;
-    links: number;
-    structure: number;
-    affinity: number;
-    topics: number;
-    projects: number;
-    foreign: number;
-  };
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  adjacency: Map<GraphNode, Neighbour[]>;
+  projects: ProjectGroup[];
+  vaults: VaultSummary[];
+  /** Biggest first: who gets a label when they do not all fit. */
+  labelOrder: GraphNode[];
 }
 
-export const LINK_DISTANCE = 78; // plus both radii, so hubs hold their ring wider
-// An index edge still holds a folder together, just loosely enough that the
-// links between notes decide the shape.
-export const STRUCTURE_STRENGTH = 0.3;
-export const STRUCTURE_SIZE_WEIGHT = 0.25;
-// Affinity pulls related projects toward each other without folding them into
-// one ball: weak, and longer than a link.
-export const AFFINITY_STRENGTH = 0.25;
-export const AFFINITY_DISTANCE_FACTOR = 1.5;
-export const TOPIC_STRENGTH = 0.5;
+const SEPARATORS = [' — ', ' – ', ' - '];
 
-const NODE_BASE_RADIUS = 4.5;
-const NODE_DEGREE_SCALE = 2.6;
-const TOPIC_RADIUS = 6;
-const PROJECT_BASE_RADIUS = 7;
-const PROJECT_SCALE = 3.2;
-
-/** The id a project gets as a node, kept apart from any note id. */
-export function projectNodeId(projectId: string): string {
-  return `project:${projectId}`;
+export function fold(text: string): string {
+  return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
-export function worldRadius(node: SimNode): number {
-  if (node.kind === 'topic') return TOPIC_RADIUS;
-  if (node.kind === 'project') return PROJECT_BASE_RADIUS + Math.sqrt(node.size) * PROJECT_SCALE;
-  return NODE_BASE_RADIUS + Math.sqrt(node.size) * NODE_DEGREE_SCALE;
-}
-
-/** Every project with its note count, largest first, ties by name. */
-export function summariseProjects(nodes: readonly InputNode[]): ProjectSummary[] {
-  const byId = new Map<string, ProjectSummary>();
-  for (const node of nodes) {
-    const entry = byId.get(node.project.id) ?? { ...node.project, count: 0 };
-    entry.count += 1;
-    byId.set(node.project.id, entry);
+/**
+ * "Arquitectura — Seek & Destroy" reads "Arquitectura" when the node already
+ * sits in Seek & Destroy's region. Only a trailing part that names the
+ * project goes; anything else after a dash is part of the title.
+ */
+export function shortLabel(title: string, projectLabel: string | null): string {
+  if (!projectLabel) return title;
+  const project = fold(projectLabel).trim();
+  for (const sep of SEPARATORS) {
+    const at = title.lastIndexOf(sep);
+    if (at <= 0) continue;
+    const tail = fold(title.slice(at + sep.length)).trim();
+    if (tail && project && (project.includes(tail) || tail.includes(project))) return title.slice(0, at);
   }
-  return [...byId.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  return title;
+}
+
+export function vaultOf(ownerId: string | null, viewerId: string | null): string {
+  return ownerId && viewerId && ownerId !== viewerId ? ownerId : OWN_VAULT;
+}
+
+export function topicLabel(topic: Pick<InputTopic, 'key' | 'label'>): string {
+  return topic.key ? `${topic.key}: ${topic.label}` : `#${topic.label}`;
+}
+
+/** Deterministic 0..1 from a string: the same note breathes the same way every visit. */
+export function hash01(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 100000) / 100000;
+}
+
+const DAY_MS = 86_400_000;
+
+/** How recently a note was edited, as brightness: this week is fully lit, last year an ember. */
+export function activity(updatedAt: number, now: number): number {
+  const days = (now - updatedAt) / DAY_MS;
+  return days <= 7 ? 1 : days <= 30 ? 0.78 : days <= 120 ? 0.55 : 0.36;
+}
+
+/** Edited in the last week: these breathe. */
+export function isActive(updatedAt: number, now: number): boolean {
+  return now - updatedAt <= 7 * DAY_MS;
+}
+
+export function nodeRadius(node: Pick<GraphNode, 'kind' | 'isIndex' | 'size' | 'carriers'>): number {
+  if (node.kind === 'topic') return 3 + Math.sqrt(node.carriers) * 0.9;
+  return (node.isIndex ? 3.2 : 2.4) + Math.sqrt(node.size) * 1.55;
+}
+
+/**
+ * On the map every note is a city of the same size and the index a capital a
+ * little bigger: cities sit a fixed distance apart, and a hub drawn by its
+ * connections would cover its neighbours. How connected a note is shows on hover.
+ */
+export function cityRadius(node: Pick<GraphNode, 'isIndex'>): number {
+  return node.isIndex ? 4.2 : 2.6;
 }
 
 function pairKey(a: string, b: string): string {
   return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
 }
 
-function place(i: number): { x: number; y: number } {
-  // Phyllotaxis, not random: the same vault lays out the same way twice, and
-  // no two nodes start on top of each other.
-  const radius = 12 * Math.sqrt(0.5 + i);
-  const angle = i * Math.PI * (3 - Math.sqrt(5));
-  return { x: radius * Math.cos(angle), y: radius * Math.sin(angle) };
+function cached(cache: Map<string, GraphNode>, id: string): GraphNode {
+  const hit = cache.get(id);
+  if (hit) return hit;
+  const node: GraphNode = {
+    id,
+    kind: 'note',
+    path: '',
+    title: '',
+    label: '',
+    ownerId: null,
+    vault: OWN_VAULT,
+    foreign: false,
+    isIndex: false,
+    project: null,
+    createdAt: 0,
+    updatedAt: 0,
+    topics: [],
+    carriers: 0,
+    degree: 0,
+    size: 0,
+    radius: 3,
+    drawRadius: 3,
+    x: Number.NaN,
+    y: Number.NaN,
+    z: Number.NaN,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    bornAt: -Infinity,
+    phase: hash01(id) * Math.PI * 2,
+    sx: 0,
+    sy: 0,
+    sDepth: 0,
+    sScale: 1,
+    sFade: 1,
+    onScreen: false,
+  };
+  cache.set(id, node);
+  return node;
 }
 
-interface RawEdge {
-  source: SimNode;
-  target: SimNode;
-  kind: EdgeKind;
-  weight: number;
-  shared: string[];
-}
-
-function finish(
-  map: Map<string, SimNode>,
-  raw: RawEdge[],
-  related: Map<string, Neighbour[]>,
-  extra: { topics: number; projects: number },
-): GraphModel {
-  const adjacency = new Map<string, Set<string>>();
-  for (const { source, target } of raw) {
-    source.degree += 1;
-    target.degree += 1;
-    if (!adjacency.has(source.id)) adjacency.set(source.id, new Set());
-    if (!adjacency.has(target.id)) adjacency.set(target.id, new Set());
-    adjacency.get(source.id)!.add(target.id);
-    adjacency.get(target.id)!.add(source.id);
+/**
+ * Every vault in the input, yours first. Colours go by label order so a vault
+ * keeps its colour when another one appears or is hidden.
+ */
+export function summariseVaults(
+  nodes: readonly InputNode[],
+  viewerId: string | null,
+  ownerNames: ReadonlyMap<string, string>,
+  hiddenVaults: readonly string[],
+): VaultSummary[] {
+  const totals = new Map<string, number>();
+  for (const n of nodes) {
+    const v = vaultOf(n.ownerId, viewerId);
+    totals.set(v, (totals.get(v) ?? 0) + 1);
   }
+  const hidden = new Set(hiddenVaults);
+  const shared = [...totals.keys()]
+    .filter((v) => v !== OWN_VAULT)
+    .map((id) => ({ id, label: ownerNames.get(id) ?? 'Shared vault' }))
+    .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+  const out: VaultSummary[] = [];
+  if (totals.has(OWN_VAULT)) {
+    out.push({ id: OWN_VAULT, label: 'Your vault', own: true, total: totals.get(OWN_VAULT)!, hidden: hidden.has(OWN_VAULT), color: OWN_VAULT_COLOR });
+  }
+  shared.forEach(({ id, label }, i) => {
+    out.push({ id, label, own: false, total: totals.get(id)!, hidden: hidden.has(id), color: SHARED_VAULT_COLORS[i] ?? OTHER_VAULT_COLOR });
+  });
+  return out;
+}
 
-  const factor: Record<EdgeKind, number> = {
-    link: 1,
-    structure: STRUCTURE_STRENGTH,
-    affinity: AFFINITY_STRENGTH,
-    topic: TOPIC_STRENGTH,
-  };
-  const simEdges: SimEdge[] = raw.map(({ source, target, kind, weight, shared }) => ({
-    source,
-    target,
-    kind,
-    weight,
-    shared,
-    strength: (1 / Math.min(source.degree, target.degree)) * factor[kind],
-    bias: source.degree / (source.degree + target.degree),
-    distance:
-      (LINK_DISTANCE + worldRadius(source) + worldRadius(target)) *
-      (kind === 'affinity' ? AFFINITY_DISTANCE_FACTOR : 1),
-  }));
-
-  const simNodes = Array.from(map.values());
-  const count = (kind: EdgeKind) => simEdges.filter((e) => e.kind === kind).length;
-  return {
-    simNodes,
-    simEdges,
-    neighbours: adjacency,
-    related,
-    counts: {
-      notes: simNodes.filter((n) => n.kind === 'note').length,
-      links: count('link'),
-      structure: count('structure'),
-      affinity: count('affinity'),
-      topics: extra.topics,
-      projects: extra.projects,
-      foreign: simNodes.filter((n) => n.foreign).length,
-    },
-  };
+export function colorOf(model: Pick<GraphModel, 'vaults'>, node: Pick<GraphNode, 'kind' | 'vault'>): VaultColor {
+  if (node.kind === 'topic') return TOPIC_COLOR;
+  return model.vaults.find((v) => v.id === node.vault)?.color ?? OTHER_VAULT_COLOR;
 }
 
 export function buildGraphModel(input: {
   nodes: readonly InputNode[];
   edges: readonly InputEdge[];
   affinity: AffinityInput | null;
-  mode: GraphMode;
-  showIndexes: boolean;
-  isForeign: (ownerId: string | null) => boolean;
+  layers: GraphLayers;
+  viewerId: string | null;
+  ownerNames: ReadonlyMap<string, string>;
+  /** Node objects from earlier builds, so positions survive a rebuild. */
+  cache: Map<string, GraphNode>;
 }): GraphModel {
-  if (input.mode === 'projects') return buildProjectModel(input);
+  const { nodes, edges, affinity, layers, viewerId, ownerNames, cache } = input;
+  const vaults = summariseVaults(nodes, viewerId, ownerNames, layers.hiddenVaults);
+  const hidden = new Set(layers.hiddenVaults);
 
-  const { nodes, edges, affinity, mode, showIndexes, isForeign } = input;
-  const shown = showIndexes ? nodes : nodes.filter((n) => !isIndexNote(n.path));
-
-  const map = new Map<string, SimNode>();
-  shown.forEach((n, i) => {
-    map.set(n.id, {
-      id: n.id,
-      kind: 'note',
-      path: n.path,
-      title: n.title,
-      ownerId: n.ownerId,
-      project: n.project,
-      ...place(i),
-      vx: 0,
-      vy: 0,
-      degree: 0,
-      size: 0,
-      foreign: isForeign(n.ownerId),
-      isIndex: isIndexNote(n.path),
-      fx: null,
-      fy: null,
-    });
-  });
-
-  const raw: RawEdge[] = [];
-  const linked = new Set<string>();
-
-  for (const e of edges) {
-    const s = map.get(e.source);
-    const t = map.get(e.target);
-    if (!s || !t || s === t) continue;
-    const kind: EdgeKind = isStructureEdge(s.path, t.path) ? 'structure' : 'link';
-    const sizeStep = kind === 'structure' ? STRUCTURE_SIZE_WEIGHT : 1;
-    s.size += sizeStep;
-    t.size += sizeStep;
-    raw.push({ source: s, target: t, kind, weight: e.weight, shared: [] });
-    linked.add(pairKey(s.id, t.id));
-  }
-
-  const related = new Map<string, Neighbour[]>();
-  let topicCount = 0;
-
-  if (affinity && mode === 'affinity') {
-    for (const e of affinity.edges) {
-      const s = map.get(e.source);
-      const t = map.get(e.target);
-      if (!s || !t) continue;
-      const note = (from: SimNode, to: SimNode) => {
-        const list = related.get(from.id) ?? [];
-        list.push({ id: to.id, title: to.title, shared: e.shared, links: 0 });
-        related.set(from.id, list);
-      };
-      note(s, t);
-      note(t, s);
-      // Already linked: the solid line says more than a dashed one would, and
-      // two lines on one pair is noise. The hover card still names the topics.
-      if (linked.has(pairKey(s.id, t.id))) continue;
-      raw.push({ source: s, target: t, kind: 'affinity', weight: e.weight, shared: e.shared });
+  const topicsByNote = new Map<string, string[]>();
+  for (const t of affinity?.topics ?? []) {
+    for (const id of t.notes) {
+      const list = topicsByNote.get(id) ?? [];
+      list.push(topicLabel(t));
+      topicsByNote.set(id, list);
     }
   }
 
-  if (affinity && mode === 'topics') {
-    let i = map.size;
-    for (const topic of affinity.topics) {
-      const carriers = topic.notes.map((id) => map.get(id)).filter((n): n is SimNode => !!n);
+  const map = new Map<string, GraphNode>();
+  for (const n of nodes) {
+    const vault = vaultOf(n.ownerId, viewerId);
+    if (hidden.has(vault)) continue;
+    const isIndex = isIndexNote(n.path);
+    if (isIndex && !layers.indexes) continue;
+    const node = cached(cache, n.id);
+    node.kind = 'note';
+    node.path = n.path;
+    node.title = n.title;
+    node.label = shortLabel(n.title, n.project.label);
+    node.ownerId = n.ownerId;
+    node.vault = vault;
+    node.foreign = vault !== OWN_VAULT;
+    node.isIndex = isIndex;
+    node.project = n.project;
+    node.createdAt = n.createdAt;
+    node.updatedAt = n.updatedAt;
+    node.topics = topicsByNote.get(n.id) ?? [];
+    node.carriers = 0;
+    map.set(n.id, node);
+  }
+
+  const out: GraphEdge[] = [];
+  const linked = new Set<string>();
+  for (const e of edges) {
+    const source = map.get(e.source);
+    const target = map.get(e.target);
+    if (!source || !target || source === target) continue;
+    const kind: EdgeKind = isStructureEdge(source.path, target.path) ? 'structure' : 'link';
+    out.push({ source, target, kind, weight: e.weight, shared: [] });
+    linked.add(pairKey(source.id, target.id));
+  }
+
+  if (layers.affinity && affinity) {
+    for (const e of affinity.edges) {
+      const source = map.get(e.source);
+      const target = map.get(e.target);
+      // Already linked: the solid line says more than a dotted one would.
+      if (!source || !target || linked.has(pairKey(source.id, target.id))) continue;
+      out.push({ source, target, kind: 'affinity', weight: e.weight, shared: e.shared });
+    }
+  }
+
+  if (layers.topics && affinity) {
+    for (const t of affinity.topics) {
+      const carriers = t.notes.map((id) => map.get(id)).filter((n): n is GraphNode => !!n);
       // A topic only one visible note carries connects nothing on screen.
       if (carriers.length < 2) continue;
-      const node: SimNode = {
-        id: `topic:${topic.id}`,
-        kind: 'topic',
-        path: topic.key ? `${topic.key}: ${topic.label}` : `#${topic.label}`,
-        title: topic.label,
-        ownerId: null,
-        project: null,
-        ...place(i++),
-        vx: 0,
-        vy: 0,
-        degree: 0,
-        size: carriers.length,
-        foreign: false,
-        isIndex: false,
-        fx: null,
-        fy: null,
-      };
+      const label = topicLabel(t);
+      const node = cached(cache, `topic:${t.id}`);
+      node.kind = 'topic';
+      node.path = label;
+      node.title = label;
+      node.label = label;
+      node.ownerId = viewerId;
+      node.vault = OWN_VAULT;
+      node.foreign = false;
+      node.isIndex = false;
+      node.project = null;
+      // A topic connects nothing until a second note carries it: that is when it is born.
+      node.createdAt = carriers.map((c) => c.createdAt).sort((a, b) => a - b)[1]!;
+      node.updatedAt = Math.max(...carriers.map((c) => c.updatedAt));
+      node.topics = [];
+      node.carriers = carriers.length;
       map.set(node.id, node);
-      topicCount += 1;
-      for (const carrier of carriers) {
-        raw.push({ source: carrier, target: node, kind: 'topic', weight: 1, shared: [] });
-      }
+      for (const c of carriers) out.push({ source: c, target: node, kind: 'topic', weight: 1, shared: [label] });
     }
   }
 
-  return finish(map, raw, related, { topics: topicCount, projects: 0 });
+  const modelNodes = [...map.values()];
+  const adjacency = new Map<GraphNode, Neighbour[]>();
+  for (const n of modelNodes) {
+    n.degree = 0;
+    n.size = n.kind === 'topic' ? n.carriers * 0.5 : 0;
+    adjacency.set(n, []);
+  }
+  for (const e of out) {
+    e.source.degree += 1;
+    e.target.degree += 1;
+    const step = e.kind === 'link' ? 1 : e.kind === 'structure' ? 0.25 : 0;
+    e.source.size += step;
+    e.target.size += step;
+    adjacency.get(e.source)!.push({ node: e.target, edge: e });
+    adjacency.get(e.target)!.push({ node: e.source, edge: e });
+  }
+
+  const projects = new Map<string, ProjectGroup>();
+  for (const n of modelNodes) {
+    n.radius = nodeRadius(n);
+    n.drawRadius = n.radius;
+    if (!n.project) continue;
+    const group = projects.get(n.project.id) ?? { id: n.project.id, label: n.project.label, vault: n.vault, nodes: [] };
+    group.nodes.push(n);
+    projects.set(n.project.id, group);
+  }
+
+  return {
+    nodes: modelNodes,
+    edges: out,
+    adjacency,
+    projects: [...projects.values()],
+    vaults,
+    labelOrder: [...modelNodes].sort((a, b) => b.size - a.size),
+  };
 }
 
 /**
- * One node per project. A link between notes of two projects becomes a solid
- * edge between the projects, weighted by how many there are; topics shared
- * across two projects become a dashed one when nothing links them. Links
- * inside a project fold away — they are what the other views are for.
+ * Where a click opens a note. Someone else's note lives under the shared
+ * route, which carries the owner; the plain route resolves against the viewer.
+ * Each segment is encoded: a note called "FAQ #1" or "100%" must survive the
+ * route, and both note pages decode the path back.
  */
-function buildProjectModel(input: {
-  nodes: readonly InputNode[];
-  edges: readonly InputEdge[];
-  affinity: AffinityInput | null;
-  showIndexes: boolean;
-  isForeign: (ownerId: string | null) => boolean;
-}): GraphModel {
-  const { nodes, edges, affinity, showIndexes, isForeign } = input;
-  const noteById = new Map(nodes.map((n) => [n.id, n]));
+export function noteHref(node: Pick<GraphNode, 'path' | 'foreign' | 'ownerId'>): string {
+  const route = node.path.replace(/\.md$/i, '').split('/').map(encodeURIComponent).join('/');
+  return node.foreign && node.ownerId ? `/notes/shared/${encodeURIComponent(node.ownerId)}/${route}` : `/notes/${route}`;
+}
 
-  const map = new Map<string, SimNode>();
-  summariseProjects(nodes).forEach((p, i) => {
-    const owner = nodes.find((n) => n.project.id === p.id)?.ownerId ?? null;
-    map.set(projectNodeId(p.id), {
-      id: projectNodeId(p.id),
-      kind: 'project',
-      path: `${p.count} ${p.count === 1 ? 'nota' : 'notas'}`,
-      title: p.label,
-      ownerId: owner,
-      project: { id: p.id, label: p.label },
-      ...place(i),
-      vx: 0,
-      vy: 0,
-      degree: 0,
-      size: p.count,
-      foreign: isForeign(owner),
-      isIndex: false,
-      fx: null,
-      fy: null,
-    });
-  });
-
-  const projectOf = (noteId: string) => {
-    const note = noteById.get(noteId);
-    return note ? map.get(projectNodeId(note.project.id)) : undefined;
-  };
-
-  const pairs = new Map<
-    string,
-    { a: SimNode; b: SimNode; links: number; structure: number; weight: number; shared: Map<string, number> }
-  >();
-  const pairFor = (a: SimNode, b: SimNode) => {
-    const key = pairKey(a.id, b.id);
-    const entry = pairs.get(key) ?? { a, b, links: 0, structure: 0, weight: 0, shared: new Map() };
-    pairs.set(key, entry);
-    return entry;
-  };
-
-  for (const e of edges) {
-    const a = projectOf(e.source);
-    const b = projectOf(e.target);
-    if (!a || !b || a === b) continue;
-    const source = noteById.get(e.source)!;
-    const target = noteById.get(e.target)!;
-    if (isStructureEdge(source.path, target.path)) {
-      if (showIndexes) pairFor(a, b).structure += e.weight;
-    } else {
-      pairFor(a, b).links += e.weight;
+/**
+ * The neighbour of `from` that lies most nearly in screen direction (dx, dy),
+ * for walking links with the arrow keys. Uses the last projected screen
+ * positions; ignores neighbours more than ~70° off the direction.
+ */
+export function neighbourToward(model: Pick<GraphModel, 'adjacency'>, from: GraphNode, dx: number, dy: number): GraphNode | null {
+  let best: GraphNode | null = null;
+  let bestScore = 0.35;
+  for (const { node } of model.adjacency.get(from) ?? []) {
+    if (!node.onScreen) continue;
+    const vx = node.sx - from.sx;
+    const vy = node.sy - from.sy;
+    const score = (vx * dx + vy * dy) / (Math.hypot(vx, vy) || 1);
+    if (score > bestScore) {
+      bestScore = score;
+      best = node;
     }
   }
+  return best;
+}
 
-  // From the topics, not the per-note top edges: a project pair should show
-  // every topic its notes share, not only the ones that won a note's top three.
-  for (const topic of affinity?.topics ?? []) {
-    const projects = [...new Set(topic.notes.map(projectOf).filter((p): p is SimNode => !!p))];
-    for (let i = 0; i < projects.length; i++) {
-      for (let j = i + 1; j < projects.length; j++) {
-        const entry = pairFor(projects[i]!, projects[j]!);
-        entry.weight += topic.weight;
-        entry.shared.set(topic.label, (entry.shared.get(topic.label) ?? 0) + topic.weight);
+/** Every node within `max` hops of `start`, with its distance. */
+export function hopsFrom(model: Pick<GraphModel, 'adjacency'>, start: GraphNode, max = 2): Map<GraphNode, number> {
+  const hops = new Map<GraphNode, number>([[start, 0]]);
+  let frontier = [start];
+  for (let h = 1; h <= max; h++) {
+    const next: GraphNode[] = [];
+    for (const u of frontier) {
+      for (const { node } of model.adjacency.get(u) ?? []) {
+        if (hops.has(node)) continue;
+        hops.set(node, h);
+        next.push(node);
       }
     }
+    frontier = next;
   }
+  return hops;
+}
 
-  const raw: RawEdge[] = [];
-  const related = new Map<string, Neighbour[]>();
-  for (const { a, b, links, structure, weight, shared } of pairs.values()) {
-    const labels = [...shared.entries()]
-      .sort(([la, x], [lb, y]) => y - x || la.localeCompare(lb))
-      .map(([label]) => label);
-    if (links > 0) raw.push({ source: a, target: b, kind: 'link', weight: links, shared: labels });
-    else if (labels.length > 0) raw.push({ source: a, target: b, kind: 'affinity', weight, shared: labels });
-    else if (structure > 0) raw.push({ source: a, target: b, kind: 'structure', weight: structure, shared: [] });
-    else continue;
+export interface GraphPath {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  /** It needed a shared topic or a topic node: nobody linked the whole way. */
+  implicit: boolean;
+}
 
-    if (links > 0 || labels.length > 0) {
-      for (const [from, to] of [
-        [a, b],
-        [b, a],
-      ] as const) {
-        const list = related.get(from.id) ?? [];
-        list.push({ id: to.id, title: to.title, shared: labels, links });
-        related.set(from.id, list);
-      }
+function breadthFirst(model: Pick<GraphModel, 'adjacency'>, a: GraphNode, b: GraphNode, kinds: ReadonlySet<EdgeKind> | null): GraphPath | null {
+  const prev = new Map<GraphNode, { from: GraphNode; edge: GraphEdge } | null>([[a, null]]);
+  const queue = [a];
+  for (let i = 0; i < queue.length; i++) {
+    const u = queue[i]!;
+    if (u === b) break;
+    for (const { node, edge } of model.adjacency.get(u) ?? []) {
+      if (kinds && !kinds.has(edge.kind)) continue;
+      if (prev.has(node)) continue;
+      prev.set(node, { from: u, edge });
+      queue.push(node);
     }
   }
-  for (const list of related.values()) {
-    list.sort((x, y) => y.links - x.links || y.shared.length - x.shared.length);
+  if (!prev.has(b)) return null;
+  const nodes = [b];
+  const edges: GraphEdge[] = [];
+  for (let step = prev.get(b); step; step = prev.get(step.from)) {
+    edges.unshift(step.edge);
+    nodes.unshift(step.from);
   }
+  return { nodes, edges, implicit: edges.some((e) => e.kind === 'affinity' || e.kind === 'topic') };
+}
 
-  return finish(map, raw, related, { topics: 0, projects: map.size });
+/** The shortest path through what people wrote; failing that, through anything drawn. */
+export function findPath(model: Pick<GraphModel, 'adjacency'>, a: GraphNode, b: GraphNode): GraphPath | null {
+  return breadthFirst(model, a, b, new Set<EdgeKind>(['link', 'structure'])) ?? breadthFirst(model, a, b, null);
 }

@@ -192,6 +192,16 @@ describe('NoteService.graph projects', () => {
     expect(projectOf('Pablo/proyectos/sd/_sd.md')).toBe('Seek & Destroy');
     expect(projectOf('Pablo/life/perfil.md')).toBe('Pablo');
   });
+
+  it('carries when each note was created and last edited, as epoch numbers', async () => {
+    const before = Date.now();
+    await notes.create(USER, 'Nota.md', '# Nota');
+
+    const [node] = (await notes.graph(USER)).nodes;
+    expect(typeof node!.createdAt).toBe('number');
+    expect(node!.createdAt).toBeGreaterThanOrEqual(before);
+    expect(node!.updatedAt).toBeGreaterThanOrEqual(node!.createdAt);
+  });
 });
 
 describe('NoteService.affinity', () => {

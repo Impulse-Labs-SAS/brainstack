@@ -1116,6 +1116,9 @@ export class NoteService {
       title: string;
       ownerId: string | null;
       project: ProjectRef;
+      /** Epoch ms. The graph replays growth by the first and lights up activity by the second. */
+      createdAt: number;
+      updatedAt: number;
     }>;
     edges: Array<{ source: string; target: string; weight: number }>;
   }> {
@@ -1127,7 +1130,13 @@ export class NoteService {
 
     const [nodeRows, tagRows] = await Promise.all([
       this.opts.db
-        .select({ path: notes.path, title: notes.title, ownerId: notes.ownerId })
+        .select({
+          path: notes.path,
+          title: notes.title,
+          ownerId: notes.ownerId,
+          createdAt: notes.createdAt,
+          updatedAt: notes.updatedAt,
+        })
         .from(notes)
         .where(where),
       // Only what decides a project: the rest of the tags are affinity's job.
@@ -1178,6 +1187,8 @@ export class NoteService {
         title: r.title,
         ownerId: r.ownerId ?? null,
         project: projects.get(r.path)!,
+        createdAt: Number(r.createdAt),
+        updatedAt: Number(r.updatedAt),
       })),
       // An edge to a note nobody can see would draw a line into nothing.
       edges: edgeRows
