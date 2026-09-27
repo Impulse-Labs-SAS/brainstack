@@ -241,7 +241,9 @@ folder alone was wrong: `Pablo/` holds several projects.
 
 **No colour per project.** Colouring the three largest folders was tried and dropped: with
 well-defined projects there are dozens, and three colours among fifty confuse. The graph colours
-by vault instead, and names projects when zoomed out.
+by vault instead, and names projects when zoomed out. In Territories the project is the unit of
+the map itself: each one is a country of its vault's continent, and its subfolders are the
+dotted lines inside it.
 
 ## 12. Menciones sin enlazar
 
