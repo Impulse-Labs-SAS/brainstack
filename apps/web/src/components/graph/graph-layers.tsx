@@ -145,7 +145,15 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
                   </>
                 }
               >
-                {v.label}
+                <span className="block truncate" title={v.label}>
+                  {v.label}
+                </span>
+                {/* Who shared it, as the file tree shows it: the menu is too narrow for both on one line. */}
+                {v.owner && (
+                  <span className="block truncate font-mono text-[10px] text-fg-muted" title={`Shared by ${v.owner}`}>
+                    @{v.owner}
+                  </span>
+                )}
               </Row>
             );
           })}

@@ -10,6 +10,7 @@ import {
   hopsFrom,
   neighbourToward,
   noteHref,
+  sharedVaultNames,
   shortLabel,
   summariseVaults,
   type AffinityInput,
@@ -58,7 +59,7 @@ function build(layers: Partial<GraphLayers> = {}, input: { nodes?: InputNode[]; 
     affinity,
     layers: { ...DEFAULT_LAYERS, ...layers },
     viewerId: VIEWER,
-    ownerNames: new Map([['ana', 'Ana'], ['bruno', 'Bruno']]),
+    vaultNames: new Map([['ana', { label: 'Research', owner: 'Ana' }], ['bruno', { label: 'Atlas', owner: 'Bruno' }]]),
     cache: input.cache ?? new Map(),
   });
 }
@@ -139,18 +140,30 @@ describe('vaults', () => {
   it('drops hidden vaults from the model but keeps them listed, with their size', () => {
     const model = build({ hiddenVaults: ['ana'] }, { nodes: shared });
     expect(model.nodes.some((n) => n.vault === 'ana')).toBe(false);
-    expect(model.vaults.find((v) => v.id === 'ana')).toMatchObject({ hidden: true, total: 2, label: 'Ana' });
+    expect(model.vaults.find((v) => v.id === 'ana')).toMatchObject({ hidden: true, total: 2, label: 'Research', owner: 'Ana' });
   });
 
-  it('lists your vault first and colours shared vaults by name, so a colour survives hiding another vault', () => {
-    const vaults = summariseVaults(shared, VIEWER, new Map([['ana', 'Ana'], ['bruno', 'Bruno']]), []);
+  it('lists your vault first and colours shared vaults by owner, so a colour survives hiding another vault', () => {
+    const vaults = summariseVaults(shared, VIEWER, new Map([['ana', { label: 'Research', owner: 'Ana' }], ['bruno', { label: 'Atlas', owner: 'Bruno' }]]), []);
     expect(vaults.map((v) => [v.id, v.color])).toEqual([
       [OWN_VAULT, OWN_VAULT_COLOR],
       ['ana', SHARED_VAULT_COLORS[0]],
       ['bruno', SHARED_VAULT_COLORS[1]],
     ]);
-    const without = summariseVaults(shared, VIEWER, new Map([['ana', 'Ana'], ['bruno', 'Bruno']]), ['ana']);
+    const without = summariseVaults(shared, VIEWER, new Map([['ana', { label: 'Research', owner: 'Ana' }], ['bruno', { label: 'Atlas', owner: 'Bruno' }]]), ['ana']);
     expect(without.find((v) => v.id === 'bruno')!.color).toBe(SHARED_VAULT_COLORS[1]);
+  });
+
+  it('names a shared vault after the folders shared, with the person beside them', () => {
+    const root = (ownerId: string, folderPath: string, ownerDisplayName: string | null = null) => ({
+      ownerId,
+      folderPath,
+      ownerDisplayName,
+      ownerEmail: `${ownerId}.smith@example.com`,
+    });
+    const names = sharedVaultNames([root('fede', 'Kora'), root('fede', 'Brutus/App'), root('ana', 'Research', 'Ana')]);
+    expect(names.get('fede')).toEqual({ label: 'App, Kora', owner: 'fede.smith' });
+    expect(names.get('ana')).toEqual({ label: 'Research', owner: 'Ana' });
   });
 
   it('falls back to a neutral once the palette runs out', () => {

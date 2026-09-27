@@ -104,7 +104,11 @@ most of its length and then drop everything at once.
 
 - **Colour is the vault**, never the project. A viewer sees a handful of vaults, not the fifty
   projects that made per-project colour unreadable. Your vault uses the accent family; shared
-  vaults take five fixed hues by name order, and a neutral after that.
+  vaults take five fixed hues in order of their owner's name, and a neutral after that — so a
+  vault keeps its hue when its owner shares one more folder.
+- **A shared vault is named after the folders shared**, as the file tree names them, with the
+  person who shared them beside it (`Brutus, Kora` · `@federico`). A vault is still one
+  person: every folder they share with you lands in it.
 - **A ring marks somebody else's note**, so identity never rests on hue alone — except on the
   map, where the note's continent says it.
 - **A square is an index (MOC); a hollow hexagon is a topic.**
@@ -119,7 +123,7 @@ most of its length and then drop everything at once.
 ## How it is built
 
 All of it is client-side. The server adds `createdAt` and `updatedAt` to each node of
-`notes.graph`; vault names come from `sharing.listSharedWithMe`.
+`notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` (`sharedVaultNames`).
 
 | File | Role |
 |---|---|

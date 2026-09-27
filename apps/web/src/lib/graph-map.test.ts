@@ -34,7 +34,7 @@ function model(edges: InputEdge[] = []) {
     affinity: null,
     layers: DEFAULT_LAYERS,
     viewerId: VIEWER,
-    ownerNames: new Map([['ana', 'Ana']]),
+    vaultNames: new Map([['ana', { label: 'Research', owner: 'Ana' }]]),
     cache: new Map(),
   });
 }
