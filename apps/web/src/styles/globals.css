@@ -10,6 +10,7 @@
 
   --fg-primary: #ededed;
   --fg-secondary: #a0a0a0;
+  --fg-body: #d4d4d4;
   --fg-muted: #6b6b6b;
   --fg-disabled: #404040;
 
@@ -19,6 +20,8 @@
 
   --accent: #7c5cff;
   --accent-hover: #9579ff;
+  --accent-rgb: 124 92 255;
+  --accent-hover-rgb: 149 121 255;
   --accent-fg: #ffffff;
 
   --success: #22c55e;

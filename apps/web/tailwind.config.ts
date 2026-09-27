@@ -15,6 +15,7 @@ const config: Config = {
         },
         fg: {
           primary: 'var(--fg-primary)',
+          body: 'var(--fg-body)',
           secondary: 'var(--fg-secondary)',
           muted: 'var(--fg-muted)',
           disabled: 'var(--fg-disabled)',
@@ -24,9 +25,12 @@ const config: Config = {
           DEFAULT: 'var(--border-default)',
           strong: 'var(--border-strong)',
         },
+        // Channels rather than a hex, so opacity modifiers (`bg-accent/20`)
+        // work: with a plain var() Tailwind cannot mix in the alpha and
+        // silently generates nothing.
         accent: {
-          DEFAULT: 'var(--accent)',
-          hover: 'var(--accent-hover)',
+          DEFAULT: 'rgb(var(--accent-rgb) / <alpha-value>)',
+          hover: 'rgb(var(--accent-hover-rgb) / <alpha-value>)',
           fg: 'var(--accent-fg)',
         },
         success: 'var(--success)',
