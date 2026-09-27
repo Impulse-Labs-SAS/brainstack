@@ -168,8 +168,23 @@ disabled, with the reason in the legend.
 ## Performance
 
 Measured on the prototype with 1,600 notes and 5,100 edges: drawing costs about 2 ms a frame;
-the 3D layout costs about 24 ms per tick while it settles, then stops. The simulation runs on
-the main thread today. Moving it to a Web Worker is the next step for vaults in the thousands.
+the 3D layout costs about 24 ms per tick while it settles, then stops. About three quarters of
+a tick is many-body repulsion, the rest collision. At 300 notes a tick is about 3 ms.
+
+**The first layout settles out of sight, a few ticks per frame.** Opening the graph runs 30 to
+150 ticks before a note is shown. They used to run in one go inside `setModel` and froze the
+page for 0.5–0.9 s at any vault size; now each frame spends up to 12 ms on them, the notes stay
+hidden until they are done, and the camera frames them the moment they appear.
+
+**Network ticks in two dimensions.** A flat layout in a 3D simulation paid for an octree it did
+not need: in 2D a Network tick costs about 40% less (14 ms instead of 25 ms at 1,600 notes).
+Arriving from the brain, the notes still fall onto the plane in three dimensions, exactly as
+before; the third is dropped once every note is within 0.05 of it.
+
+The simulation runs on the main thread. A Web Worker would free it while the layout settles,
+but half of the engine moves notes directly (placement, the replay, the rescale into the brain,
+the map) and each of those would become a message; it is worth it once vaults in the thousands
+are real, not before.
 
 The map costs nothing per frame once built. For 1,600 notes, placing them takes about 7 ms
 and the land about 16 ms (40 ms the first time, before the JIT warms up); it is rebuilt when
