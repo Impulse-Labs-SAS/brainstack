@@ -16,7 +16,7 @@ You interact with BrainStack via these MCP tools:
 - `list_notes(folder?, tag?, facetKey?, facetValue?, status?, limit?, ownerId?)`
 - `list_tree(path?, depth?, ownerId?)` — hierarchical view of the vault, folders first
 - `list_links(path, ownerId?)` — backlinks for a path; in your own vault each one carries the source note's `title` and the `snippet` line it is cited in
-- `list_outbound_links(path, ownerId?)` — what a path links to or embeds; the mirror of `list_links`
+- `list_outbound_links(path, ownerId?)` — what a path links to or embeds, with each target note's `title`; the mirror of `list_links`
 - `list_related(path, limit?)` — notes related by a shared tag or facet, ranked by rarity, each with the `reasons` (tags and facet values) it shares, rarest first; **own vault only** (no `ownerId`)
 - `list_facets(path?, key?, ownerId?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
 - `list_unlinked_mentions(path)` — where a note is named without a wikilink: `incoming` (other notes whose text says its title or an alias) and `outgoing` (titles its own text says); **own vault only** (no `ownerId`)
