@@ -8,7 +8,8 @@ shows, how it behaves, how it is built, and the decisions worth not undoing.
 Two independent choices, kept apart on purpose.
 
 **A view is the shape of the map, and each one answers its own question.** A segmented
-control in the toolbar, keys `1` `2` `3`:
+control in the toolbar, each tab an icon and a name; the keys `1` `2` `3` switch views too,
+without a number printed on the tabs to say so:
 
 | View | Question | Shape |
 |---|---|---|

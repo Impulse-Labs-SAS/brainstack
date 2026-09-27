@@ -338,7 +338,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
           }}
           className={cn(GLASS, 'pointer-events-auto flex gap-0.5 rounded-lg p-[3px]')}
         >
-          {VIEWS.map((v, i) => (
+          {VIEWS.map((v) => (
             <ToggleButton
               key={v.id}
               id={v.id}
@@ -351,9 +351,6 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
             >
               <v.icon size={14} aria-hidden />
               {v.label}
-              <span aria-hidden className="hidden font-mono text-[10px] text-fg-muted md:inline">
-                {i + 1}
-              </span>
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
