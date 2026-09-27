@@ -181,6 +181,9 @@ importers:
       d3-force-3d:
         specifier: ^3.0.6
         version: 3.0.6
+      d3-hierarchy:
+        specifier: ^3.1.2
+        version: 3.1.2
       geist:
         specifier: ^1.5.1
         version: 1.7.0(next@15.5.18(@opentelemetry/api@1.8.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))
@@ -233,6 +236,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@types/d3-hierarchy':
+        specifier: ^3.1.7
+        version: 3.1.7
       '@types/react':
         specifier: ^19.2.0
         version: 19.2.14
@@ -1754,6 +1760,9 @@ packages:
   '@types/better-sqlite3@7.6.13':
     resolution: {integrity: sha512-NMv9ASNARoKksWtsq/SHakpYAYnhBrQgGD8zkLYk/jaK8jUGn08CfEdTRgYhMypUQAfzSP8W6gNLe0q19/t4VA==}
 
+  '@types/d3-hierarchy@3.1.7':
+    resolution: {integrity: sha512-tJFtNoYBtRtkNysX1Xq4sxtjK8YgoWUNpIiUee0/jHGRwqvzYxkq0hGVbbOGSz+JgFxxRu4K8nb3YpG3CMARtg==}
+
   '@types/debug@4.1.13':
     resolution: {integrity: sha512-KSVgmQmzMwPlmtljOomayoR89W4FynCAi3E8PPs7vmDVPe84hT+vGPKkJfThkmXs0x0jAaa9U8uW8bbfyS2fWw==}
 
@@ -2529,6 +2538,10 @@ packages:
 
   d3-force-3d@3.0.6:
     resolution: {integrity: sha512-4tsKHUPLOVkyfEffZo1v6sFHvGFwAIIjt/W8IThbp08DYAsXZck+2pSHEG5W1+gQgEvFLdZkYvmJAbRM2EzMnA==}
+    engines: {node: '>=12'}
+
+  d3-hierarchy@3.1.2:
+    resolution: {integrity: sha512-FX/9frcub54beBdugHjDCdikxThEqjnR93Qt7PvQTOHxyiNCAlvMrHhclk3cD5VeAaq9fxmfRp+CnWw9rEMBuA==}
     engines: {node: '>=12'}
 
   d3-octree@1.1.0:
@@ -6319,6 +6332,8 @@ snapshots:
       '@types/node': 20.19.41
     optional: true
 
+  '@types/d3-hierarchy@3.1.7': {}
+
   '@types/debug@4.1.13':
     dependencies:
       '@types/ms': 2.1.0
@@ -7142,6 +7157,8 @@ snapshots:
       d3-octree: 1.1.0
       d3-quadtree: 3.0.1
       d3-timer: 3.0.1
+
+  d3-hierarchy@3.1.2: {}
 
   d3-octree@1.1.0: {}
 

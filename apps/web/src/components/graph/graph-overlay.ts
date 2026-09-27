@@ -1,14 +1,41 @@
 // The 2D layer over the WebGL scene: what needs crisp text or strokes wider
 // than a pixel. Labels, the focused note's signal, paths, rings, project and
-// vault names — and, when there is no WebGL, the notes and edges themselves.
+// vault names, the map's coasts and borders — and, when there is no WebGL, the
+// notes and edges themselves.
 //
 // Labels are drawn in screen space and dropped when they would collide, so
 // text stays 12px at any zoom and never piles up. Vault chips and project
 // names claim their space first; note labels fit around them.
 
 import { projector, pixelsPerUnit, type Camera, type Viewport } from '@/lib/graph-camera';
-import { colorOf, type GraphEdge, type GraphModel, type GraphNode, type GraphPath } from '@/lib/graph-model';
+import { MAP_SPACING, type MapLand, type TerritoryLayout } from '@/lib/graph-map';
+import { cityRadius, colorOf, type GraphEdge, type GraphModel, type GraphNode, type GraphPath, type GraphView } from '@/lib/graph-model';
 import { LABEL_COLORS } from '@/lib/graph-palette';
+
+import type { LooseRing } from './graph-engine';
+
+/** The map's lines as paths in world units, built once per land. */
+export interface LandPaths {
+  coast: Map<string, Path2D>;
+  borders: Map<string, Path2D>;
+  provinces: Map<string, Path2D>;
+}
+
+export function landPaths(land: MapLand): LandPaths {
+  const toPaths = (segments: Map<string, number[]>) => {
+    const out = new Map<string, Path2D>();
+    for (const [vault, list] of segments) {
+      const path = new Path2D();
+      for (let i = 0; i < list.length; i += 4) {
+        path.moveTo(list[i]!, list[i + 1]!);
+        path.lineTo(list[i + 2]!, list[i + 3]!);
+      }
+      out.set(vault, path);
+    }
+    return out;
+  };
+  return { coast: toPaths(land.coast), borders: toPaths(land.borders), provinces: toPaths(land.provinces) };
+}
 
 export interface OverlayFrame {
   now: number;
@@ -16,9 +43,21 @@ export interface OverlayFrame {
   dpr: number;
   cam: Camera;
   is3D: boolean;
+  view: GraphView;
   brainScale: number;
   cloud: number;
   model: GraphModel;
+  /** Territories: the map's lines and names, faded in with the land. */
+  landAlpha: number;
+  land: LandPaths | null;
+  /** Which projects have land yet: during a replay, the countries that exist so far. */
+  landed: ReadonlySet<string> | null;
+  territory: TerritoryLayout | null;
+  /** The country under the pointer, and the links that leave it: its routes. */
+  hotCountry: string | null;
+  countryRoutes: GraphEdge[] | null;
+  /** Network: the ring of notes without links. */
+  ring: LooseRing | null;
   hover: GraphNode | null;
   selected: GraphNode | null;
   pathFrom: GraphNode | null;
@@ -41,7 +80,7 @@ type Rect = { x: number; y: number; w: number; h: number };
 type Curve = [number, number, number, number, number, number];
 
 const MAX_NODE_PX = 11;
-const screenRadius = (n: GraphNode) => Math.min(MAX_NODE_PX, Math.max(1.8, n.radius * n.sScale));
+const screenRadius = (n: GraphNode) => Math.min(MAX_NODE_PX, Math.max(1.8, n.drawRadius * n.sScale));
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 function truncate(text: string, max: number): string {
@@ -92,10 +131,15 @@ function glowSprite(rgb: readonly number[]): HTMLCanvasElement {
 }
 const WHITE = [255, 255, 255];
 
-/** Screen position, depth and scale of every note, for drawing and for picking. */
-export function projectNodes(model: GraphModel, cam: Camera, vp: Viewport, is3D: boolean, brainScale: number): void {
+/**
+ * Screen position, depth and scale of every note, for drawing and for
+ * picking — and the radius it is drawn at, which on the map (`mapBlend` 1) is
+ * the same for every city.
+ */
+export function projectNodes(model: GraphModel, cam: Camera, vp: Viewport, is3D: boolean, brainScale: number, mapBlend = 0): void {
   const project = projector(cam, vp);
   for (const n of model.nodes) {
+    n.drawRadius = n.radius + (cityRadius(n) - n.radius) * mapBlend;
     n.onScreen = false;
     if (!Number.isFinite(n.x)) continue;
     const p = project(n.x, n.y, Number.isFinite(n.z) ? n.z : 0);
@@ -161,6 +205,8 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): voi
     drawFallback(ctx, f);
   }
   const project = projector(f.cam, vp);
+  drawLand(ctx, f);
+  drawLooseRing(ctx, f, project);
   drawSignal(ctx, f, project);
 
   ctx.globalCompositeOperation = 'source-over';
@@ -169,16 +215,174 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): voi
   if (f.pathFrom && !f.path) ring(ctx, f.pathFrom, 6, '#ffffff', 1.4, true);
 
   const placed: Rect[] = [];
-  if (f.vaultLabels) drawVaultLabels(ctx, f, project, placed);
+  if (f.landAlpha > 0.01 && f.territory) {
+    drawContinentLabels(ctx, f, project, placed);
+    drawCountryLabels(ctx, f, project, placed);
+  } else if (f.vaultLabels) {
+    drawVaultLabels(ctx, f, project, placed);
+  }
   if (f.cloud > 0.01) drawProjectLabels(ctx, f, project, placed);
   drawNoteLabels(ctx, f, placed);
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * The map's lines, in world units: folder lines dotted, borders thin, the
+ * coast glowing in the vault's colour. The flat views look straight down, so
+ * world to screen is a scale and a shift.
+ */
+function drawLand(ctx: CanvasRenderingContext2D, f: OverlayFrame) {
+  if (!f.land || f.landAlpha <= 0.01) return;
+  const s = pixelsPerUnit(f.cam, f.vp);
+  const { width, height } = f.vp;
+  ctx.save();
+  ctx.setTransform(f.dpr * s, 0, 0, -f.dpr * s, f.dpr * (width / 2 - f.cam.tx * s), f.dpr * (height / 2 + f.cam.ty * s));
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  for (const vault of f.model.vaults) {
+    if (vault.hidden) continue;
+    const [r, g, b] = vault.color.rgb;
+    const provinces = f.land.provinces.get(vault.id);
+    if (provinces) {
+      ctx.setLineDash([2.5 / s, 3.5 / s]);
+      ctx.strokeStyle = `rgba(${r},${g},${b},${0.4 * f.landAlpha})`;
+      ctx.lineWidth = 0.8 / s;
+      ctx.stroke(provinces);
+      ctx.setLineDash([]);
+    }
+    const borders = f.land.borders.get(vault.id);
+    if (borders) {
+      ctx.strokeStyle = vault.color.core;
+      ctx.globalAlpha = 0.42 * f.landAlpha;
+      ctx.lineWidth = 1.1 / s;
+      ctx.stroke(borders);
+      ctx.globalAlpha = 1;
+    }
+    const coast = f.land.coast.get(vault.id);
+    if (coast) {
+      ctx.shadowColor = vault.color.hue;
+      ctx.shadowBlur = 14 * f.dpr;
+      ctx.strokeStyle = `rgba(${r},${g},${b},${0.85 * f.landAlpha})`;
+      ctx.lineWidth = 1.5 / s;
+      ctx.stroke(coast);
+      ctx.shadowBlur = 0;
+    }
+  }
+  ctx.restore();
+}
+
+/** Network: a dotted ring where the notes without a single link wait, and how many there are. */
+function drawLooseRing(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>) {
+  if (!f.ring || f.view !== 'network') return;
+  const c = project(0, 0, 0);
+  if (!c) return;
+  const r = f.ring.r * c.scale;
+  ctx.globalAlpha = 0.16;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 6]);
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const y = c.y - r - 12;
+  if (y < 60) return;
+  ctx.globalAlpha = 0.7;
+  ctx.font = `500 10.5px ${f.fonts.mono}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = LABEL_COLORS.topic;
+  ctx.fillText(`NO LINKS · ${f.ring.count}`, c.x, y);
+  ctx.globalAlpha = 1;
+}
+
+function setSpacing(ctx: CanvasRenderingContext2D, px: number) {
+  if ('letterSpacing' in ctx) ctx.letterSpacing = `${px}px`;
+}
+
+/** A chip over each continent, like the vault chips of the other views. */
+function drawContinentLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `500 11px ${f.fonts.mono}`;
+  const counts = new Map<string, number>();
+  for (const n of f.model.nodes) if (n.kind === 'note' && f.appear(n) > 0) counts.set(n.vault, (counts.get(n.vault) ?? 0) + 1);
+  for (const c of f.territory!.continents) {
+    const vault = f.model.vaults.find((v) => v.id === c.vault);
+    const count = counts.get(c.vault) ?? 0;
+    if (!vault || !count) continue;
+    const p = project(c.x, c.top, 0);
+    if (!p) continue;
+    const text = `${vault.label.toUpperCase()} · ${count}`;
+    const w = ctx.measureText(text).width;
+    const x = p.x;
+    const y = p.y - 18;
+    if (x < -w || x > f.vp.width + w || y < -20 || y > f.vp.height + 20) continue;
+    placed.push({ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 });
+    ctx.globalAlpha = 0.92 * f.landAlpha;
+    ctx.fillStyle = 'rgba(12,12,15,0.8)';
+    ctx.beginPath();
+    roundRect(ctx, x - w / 2 - 10, y - 11, w + 20, 22, 11);
+    ctx.fill();
+    ctx.strokeStyle = vault.color.hue;
+    ctx.globalAlpha = 0.45 * f.landAlpha;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.globalAlpha = f.landAlpha;
+    ctx.fillStyle = vault.color.core;
+    ctx.fillText(text, x, y + 0.5);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Country names, as on a map: spaced capitals, as big as the country allows,
+ * fading as you zoom in far enough to read the cities themselves.
+ */
+function drawCountryLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+  const k = pixelsPerUnit(f.cam, f.vp);
+  const fade = k < 1.7 ? 1 : k > 2.8 ? 0.22 : 1 - ((k - 1.7) / 1.1) * 0.78;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  const list = [...f.territory!.countries].filter((c) => !f.landed || f.landed.has(c.id)).sort((a, b) => b.count - a.count);
+  for (const c of list) {
+    const p = project(c.x, c.y, 0);
+    if (!p || p.x < -200 || p.x > f.vp.width + 200 || p.y < -40 || p.y > f.vp.height + 40) continue;
+    const text = c.label.toUpperCase();
+    // Within the country's own width, so a neighbour's name still fits beside it.
+    const fitting = (1.75 * (c.r + 0.5 * MAP_SPACING) * k) / (text.length * 0.78);
+    const size = Math.round(Math.max(9, Math.min(24, fitting, (7 + Math.sqrt(c.count) * 1.7) * clamp(k, 0.75, 1.5))));
+    const spacing = size * 0.16;
+    const font = `600 ${size}px ${f.fonts.sans}`;
+    ctx.font = font;
+    setSpacing(ctx, spacing);
+    const w = ctx.measureText(text).width;
+    const rect = { x: p.x - w / 2 - 2, y: p.y - size / 2 - 2, w: w + 4, h: size + 4 };
+    const hot = f.hotCountry === c.id;
+    if (overlaps(rect, placed)) {
+      setSpacing(ctx, 0);
+      continue;
+    }
+    // Once faded, a name no longer keeps the cities under it from being labelled.
+    if (hot || fade > 0.5) placed.push(rect);
+    const vault = f.model.vaults.find((v) => v.id === c.vault);
+    ctx.globalAlpha = (hot ? 1 : 0.9 * fade) * f.landAlpha;
+    ctx.strokeStyle = 'rgba(10,10,10,0.75)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(text, p.x + spacing / 2, p.y);
+    ctx.fillStyle = vault?.color.core ?? LABEL_COLORS.note;
+    ctx.fillText(text, p.x + spacing / 2, p.y);
+    setSpacing(ctx, 0);
+  }
   ctx.globalAlpha = 1;
 }
 
 /** Without WebGL: straight edges and flat dots, enough to use the flat views. */
 function drawFallback(ctx: CanvasRenderingContext2D, f: OverlayFrame) {
   ctx.lineWidth = 1;
-  for (const e of f.model.edges) {
+  // The map shows links only as routes of what the pointer is on.
+  for (const e of f.landAlpha > 0.5 ? [] : f.model.edges) {
     if (!e.source.onScreen || !e.target.onScreen || f.appear(e.source) < 0.6 || f.appear(e.target) < 0.6) continue;
     ctx.globalAlpha = e.kind === 'structure' ? 0.12 : 0.3;
     ctx.strokeStyle = e.kind === 'affinity' || e.kind === 'topic' ? '#8f8ca3' : colorOf(f.model, e.source).hue;
@@ -215,6 +419,12 @@ function drawSignal(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: Ret
       if (level === 2 && second++ > 400) continue;
       const c = curveOf(e, project);
       if (c) lit.push({ e, c, fromSource: hs < ht, level });
+    }
+  } else if (f.countryRoutes && f.hotCountry) {
+    // A country under the pointer: its routes, the signal travelling outwards.
+    for (const e of f.countryRoutes.slice(0, 240)) {
+      const c = curveOf(e, project);
+      if (c) lit.push({ e, c, fromSource: e.source.project?.id === f.hotCountry, level: 1 });
     }
   }
   for (const h of lit) {
@@ -334,9 +544,14 @@ function drawNoteLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, placed: 
   const k = pixelsPerUnit(f.cam, f.vp);
   const minSize = f.is3D ? (k >= 1.8 ? 0 : k >= 1.1 ? 2 : k >= 0.6 ? 4 : 8) : k >= 1 ? 0 : k >= 0.7 ? 1.2 : k >= 0.45 ? 3 : 7;
   const cap = Math.round((f.vp.width * f.vp.height) / (f.is3D ? 10000 : 5200));
+  // On the map the country names speak first; the cities get theirs once you
+  // are close enough that the names have faded. A capital's name would only
+  // repeat its country's.
+  const onMap = f.landAlpha > 0.5;
   for (const n of f.model.labelOrder) {
     if (placed.length > cap) break;
-    if (seen.has(n) || n.size < minSize || f.appear(n) < 0.9) continue;
+    if (seen.has(n) || f.appear(n) < 0.9) continue;
+    if (onMap ? k < 1.9 : n.size < minSize) continue;
     if (f.is3D && n.sFade < 0.45) continue;
     label(n, 0);
   }

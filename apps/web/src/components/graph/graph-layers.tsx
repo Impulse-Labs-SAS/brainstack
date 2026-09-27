@@ -2,13 +2,14 @@
 
 // What the graph draws, like the layers button of a map: whether shared
 // vaults are loaded at all, which vaults show, which kinds of connection,
-// whether topics become nodes. Replaces the four old connection modes.
+// whether topics become nodes, whether the map shows every route. Replaces
+// the four old connection modes.
 
 import { Check, Layers, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Button, Checkbox, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 
-import type { GraphLayers, GraphModel } from '@/lib/graph-model';
+import type { GraphLayers, GraphModel, GraphView } from '@/lib/graph-model';
 import { cn } from '@/lib/utils';
 
 import { GLASS } from './graph-preview';
@@ -17,6 +18,8 @@ interface GraphLayersMenuProps {
   model: GraphModel;
   layers: GraphLayers;
   onChange(layers: GraphLayers): void;
+  /** Some layers only mean something in one view; the others show them disabled. */
+  view: GraphView;
   /** Whether shared vaults are fetched at all; null when sharing is off on this deployment. */
   includeShared: boolean | null;
   onIncludeSharedChange(include: boolean): void;
@@ -29,6 +32,7 @@ function Row({
   glyph,
   children,
   trailing,
+  note,
 }: {
   isSelected: boolean;
   isDisabled?: boolean;
@@ -36,6 +40,8 @@ function Row({
   glyph: ReactNode;
   children: ReactNode;
   trailing?: ReactNode;
+  /** Why the row is disabled, said where it is. */
+  note?: string;
 }) {
   return (
     <div className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-bg-hover">
@@ -57,10 +63,11 @@ function Row({
               {on && <Check size={10} strokeWidth={3} />}
             </span>
             {glyph}
-            <span className={cn('min-w-0 flex-1 truncate', on ? 'text-fg-primary' : 'text-fg-muted')}>{children}</span>
+            <span className={cn('min-w-0 flex-1 truncate', on && !isDisabled ? 'text-fg-primary' : 'text-fg-muted')}>{children}</span>
           </>
         )}
       </Checkbox>
+      {note && <span className="shrink-0 text-[11px] text-fg-muted">{note}</span>}
       {trailing}
     </div>
   );
@@ -70,13 +77,14 @@ const Heading = ({ children }: { children: ReactNode }) => (
   <div className="px-1.5 pb-1 pt-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted first:pt-0.5">{children}</div>
 );
 
-export function GraphLayersMenu({ model, layers, onChange, includeShared, onIncludeSharedChange }: GraphLayersMenuProps) {
+export function GraphLayersMenu({ model, layers, onChange, view, includeShared, onIncludeSharedChange }: GraphLayersMenuProps) {
   const hidden = new Set(layers.hiddenVaults);
   const visibleVaults = model.vaults.filter((v) => !hidden.has(v.id));
   const shown = new Map<string, number>();
   for (const n of model.nodes) if (n.kind === 'note') shown.set(n.vault, (shown.get(n.vault) ?? 0) + 1);
   const isDefault =
-    includeShared !== false && !layers.hiddenVaults.length && layers.affinity && layers.indexes && !layers.topics;
+    includeShared !== false && !layers.hiddenVaults.length && layers.affinity && layers.indexes && !layers.topics && !layers.routes;
+  const onMap = view === 'territories';
 
   const setVault = (id: string, visible: boolean) =>
     onChange({ ...layers, hiddenVaults: visible ? layers.hiddenVaults.filter((v) => v !== id) : [...layers.hiddenVaults, id] });
@@ -154,10 +162,23 @@ export function GraphLayersMenu({ model, layers, onChange, includeShared, onIncl
           >
             Indexes (MOC)
           </Row>
+          <Row
+            isSelected={layers.routes}
+            // Routes are how the map shows links; elsewhere every link is drawn anyway.
+            isDisabled={!onMap}
+            note={onMap ? undefined : 'Territories'}
+            onChange={(on) => onChange({ ...layers, routes: on })}
+            glyph={<span aria-hidden className="w-4 shrink-0 border-t border-fg-secondary" />}
+          >
+            All routes
+          </Row>
           <div className="my-1 h-px bg-border-subtle" />
           <Heading>Nodes</Heading>
           <Row
             isSelected={layers.topics}
+            // A topic belongs to no project, so it has no place on the map.
+            isDisabled={onMap}
+            note={onMap ? 'not on the map' : undefined}
             onChange={(on) => onChange({ ...layers, topics: on })}
             glyph={<span aria-hidden className="shrink-0 text-[11px] leading-none text-fg-secondary">⬡</span>}
           >

@@ -30,3 +30,5 @@ export const LABEL_COLORS = {
   note: '#b6b3c2',
 } as const;
 export const TOPIC_COLOR: VaultColor = { hue: '#b9b6cc', core: '#ebe9f5', rgb: [185, 182, 204] };
+/** Network: a link from one project to another, warm white so it reads apart from any vault's hue. */
+export const BRIDGE_COLOR = { hue: '#f5ebd9', rgb: [245, 235, 217] } as const;

@@ -22,17 +22,38 @@ import {
   type Camera,
   type Viewport,
 } from '@/lib/graph-camera';
-import { findPath, hopsFrom, neighbourToward, type GraphModel, type GraphNode, type GraphPath, type GraphView } from '@/lib/graph-model';
+import { findPath, hopsFrom, neighbourToward, type GraphEdge, type GraphModel, type GraphNode, type GraphPath, type GraphView } from '@/lib/graph-model';
 
 import { GraphEngine, type RebuildReason } from './graph-engine';
-import { drawMinimap, drawOverlay, forgetTextWidths, pickNode, projectNodes, type MinimapTransform } from './graph-overlay';
+import {
+  drawMinimap,
+  drawOverlay,
+  forgetTextWidths,
+  landPaths,
+  pickNode,
+  projectNodes,
+  type LandPaths,
+  type MinimapTransform,
+} from './graph-overlay';
 import { GraphScene } from './graph-scene';
 
 export type Selection = { kind: 'note'; node: GraphNode } | { kind: 'path'; path: GraphPath };
 
+/** Territories: the country under the pointer, for its tooltip. */
+export interface CountryHover {
+  id: string;
+  label: string;
+  vault: string;
+  notes: number;
+  folders: number;
+  /** Links from its notes to notes in other countries. */
+  routes: number;
+}
+
 export interface ControllerEvents {
   onSelection(selection: Selection | null): void;
   onHover(node: GraphNode | null): void;
+  onHoverCountry(country: CountryHover | null): void;
   onToast(message: string): void;
   onGrowth(active: boolean): void;
   onSpin(spinning: boolean): void;
@@ -98,6 +119,15 @@ export class GraphController {
   /** When edge brightness was last recomputed. */
   private edgesLitAt = 0;
 
+  // Territories.
+  private hotCountry: string | null = null;
+  private countryRoutes: GraphEdge[] | null = null;
+  private routesLayer = false;
+  private landAlpha = 0;
+  private mapBlend = 0;
+  private edgeScale = 1;
+  private land: { version: number; paths: LandPaths; landed: Set<string> } | null = null;
+
   private drag: Drag | null = null;
   private raf = 0;
   private lastFrame = 0;
@@ -161,6 +191,7 @@ export class GraphController {
       this.setSpin(this.engine.is3D);
     }
     const keep = (n: GraphNode | null) => (n && model.nodes.includes(n) ? n : null);
+    this.setHotCountry(null);
     if (this.selected && !keep(this.selected)) this.clearSelection();
     if (this.path && !this.path.nodes.every((n) => model.nodes.includes(n))) this.clearSelection();
     this.hover = keep(this.hover);
@@ -179,6 +210,7 @@ export class GraphController {
     if (view === 'brain' && !this.webgl) return;
     const was3D = this.engine.is3D;
     this.stopGrowth();
+    this.setHotCountry(null);
     const rescale = this.engine.setView(view);
     this.userMoved = false;
     this.edgesDirty = true;
@@ -189,10 +221,16 @@ export class GraphController {
       this.cam = { ...this.cam, tx: (this.cam.tx - cx) * k, ty: (this.cam.ty - cy) * k + oy, tz: 0, dist: this.cam.dist * k };
       this.animateTo({ ...this.cam, ...this.fitTarget(), ...ANGLES.threeQuarter }, 1300);
       this.setSpin(true);
-    } else if (was3D) {
+    } else if (was3D || this.engine.isMap) {
+      // The map's shape is known before the notes get there: fly straight to it.
       this.animateTo({ ...this.cam, ...this.fitTarget(), tz: 0, yaw: 0, pitch: 0 }, 1000);
       this.setSpin(false);
     }
+  }
+
+  /** Territories: every link drawn faintly over the map, not only the routes of what you point at. */
+  setRoutes(on: boolean): void {
+    this.routesLayer = on;
   }
 
   setMatched(matched: Set<GraphNode> | null): void {
@@ -297,8 +335,10 @@ export class GraphController {
         this.hover = node;
         this.events.onHover(node);
       }
-      this.el.overlay.style.cursor = node ? 'pointer' : 'grab';
-      if (node) this.placeTooltip(x, y);
+      const country = node ? null : this.countryAt(x, y);
+      this.setHotCountry(country);
+      this.el.overlay.style.cursor = node || country ? 'pointer' : 'grab';
+      if (node || country) this.placeTooltip(x, y);
       return;
     }
     const dx = x - drag.lastX;
@@ -311,13 +351,15 @@ export class GraphController {
       this.hover = null;
       this.events.onHover(null);
     }
+    this.setHotCountry(null);
     this.setSpin(false);
     this.events.onAngle(null);
     this.tween = null;
     if (drag.kind === 'orbit') {
       this.cam = orbitBy(this.cam, dx, dy);
       this.el.overlay.style.cursor = 'grabbing';
-    } else if (drag.kind === 'pan') {
+    } else if (drag.kind === 'pan' || !this.engine.canPin) {
+      // On the map a note stays where it is filed: dragging one moves the map instead.
       this.cam = panBy(this.cam, this.vp, dx, dy);
       this.userMoved = true;
       this.el.overlay.style.cursor = 'grabbing';
@@ -350,13 +392,18 @@ export class GraphController {
       this.engine.release(drag.node);
       if (click) this.clickNode(drag.node, drag.shift);
     } else if (click && !this.pathPick) {
+      const { x, y } = this.local(e);
+      const country = this.countryAt(x, y);
       this.clearSelection();
+      if (country) this.zoomToCountry(country);
     }
-    this.el.overlay.style.cursor = this.hover ? 'pointer' : 'grab';
+    this.el.overlay.style.cursor = this.hover || this.hotCountry ? 'pointer' : 'grab';
   }
 
   pointerLeave(): void {
-    if (this.drag || !this.hover) return;
+    if (this.drag) return;
+    this.setHotCountry(null);
+    if (!this.hover) return;
     this.hover = null;
     this.events.onHover(null);
   }
@@ -448,8 +495,49 @@ export class GraphController {
     this.userMoved = true;
   }
 
+  /** Territories: the project whose land is under the screen point (x, y). */
+  private countryAt(x: number, y: number): string | null {
+    if (!this.engine.isMap || this.landAlpha < 0.5) return null;
+    const p = pixelsPerUnit(this.cam, this.vp);
+    return this.engine.countryAt(this.cam.tx + (x - this.vp.width / 2) / p, this.cam.ty - (y - this.vp.height / 2) / p);
+  }
+
+  private setHotCountry(id: string | null): void {
+    if (id === this.hotCountry) return;
+    this.hotCountry = id;
+    const model = this.model;
+    const t = this.engine.territory;
+    if (!id || !model || !t) {
+      this.countryRoutes = null;
+      this.events.onHoverCountry(null);
+      return;
+    }
+    this.countryRoutes = model.edges.filter((e) => (e.source.project?.id === id) !== (e.target.project?.id === id) && e.kind !== 'topic');
+    this.focusT0 = performance.now();
+    const group = model.projects.find((p) => p.id === id);
+    const country = t.countries.find((c) => c.id === id);
+    const folders = new Set((group?.nodes ?? []).map((n) => t.province.get(n)).filter(Boolean));
+    this.events.onHoverCountry({
+      id,
+      label: country?.label ?? group?.label ?? '',
+      vault: country?.vault ?? group?.vault ?? '',
+      notes: group?.nodes.length ?? 0,
+      folders: folders.size,
+      routes: this.countryRoutes.length,
+    });
+  }
+
+  private zoomToCountry(id: string): void {
+    const nodes = this.model?.projects.find((p) => p.id === id)?.nodes;
+    if (!nodes?.length) return;
+    this.animateTo({ ...this.cam, ...this.fitTarget(nodes, 3.2) });
+    this.userMoved = true;
+  }
+
   private fitTarget(nodes?: GraphNode[], maxScale?: number): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
     if (this.engine.is3D && !nodes) return fitBrain(this.engine.brainScale, this.vp);
+    const map = !nodes && !this.engine.growth ? this.engine.mapBounds() : null;
+    if (map) return fitBounds(map, this.vp);
     const list = (nodes ?? this.model?.nodes ?? []).filter((n) => n.bornAt !== Infinity);
     const b = boundsOf(list);
     if (!b) return { tx: this.cam.tx, ty: this.cam.ty, tz: this.cam.tz, dist: this.cam.dist };
@@ -507,8 +595,36 @@ export class GraphController {
 
   private cloud(): number {
     const n = this.model?.nodes.length ?? 0;
+    // The map has its own way of zooming out: country names over the land.
+    if (this.engine.isMap) return 0;
     if (this.engine.is3D) return clamp((this.cam.dist / this.engine.brainScale - 2.1) / 0.9, 0, 1) * (n > 150 ? 1 : 0.5);
     return clamp((0.62 - pixelsPerUnit(this.cam, this.vp)) / 0.3, 0, 1);
+  }
+
+  /**
+   * Ease what differs between views, by time: the land fades in once the notes
+   * have reached their places, the notes turn into cities, and the edges fade
+   * out — on the map they are routes, drawn only for what the pointer is on.
+   * Returns whether edge brightness has to be recomputed.
+   */
+  private easeViews(dt: number): boolean {
+    const map = this.engine.isMap;
+    const k = this.reduceMotion ? 1 : 1 - Math.exp(-dt / 220);
+    const ease = (value: number, target: number) => (Math.abs(target - value) < 0.004 ? target : value + (target - value) * k);
+    this.landAlpha = ease(this.landAlpha, map && !this.engine.moving ? 1 : 0);
+    this.mapBlend = ease(this.mapBlend, map ? 1 : 0);
+    const edgeTarget = map ? (this.routesLayer ? 0.4 : 0) : 1;
+    const before = this.edgeScale;
+    this.edgeScale = ease(this.edgeScale, edgeTarget);
+    if (this.engine.landVersion !== this.land?.version && this.engine.land && this.model) {
+      this.land = {
+        version: this.engine.landVersion,
+        paths: landPaths(this.engine.land),
+        landed: new Set(this.engine.land.sites.map((s) => s.project)),
+      };
+      this.scene?.setLand(this.engine.land, this.model);
+    }
+    return before !== this.edgeScale;
   }
 
   /**
@@ -578,9 +694,11 @@ export class GraphController {
     }
 
     const is3D = this.engine.is3D;
+    const view = this.engine.view;
     const cloud = this.cloud();
     const visibleVaults = model.vaults.filter((v) => !v.hidden).length;
-    projectNodes(model, this.cam, this.vp, is3D, this.engine.brainScale);
+    const edgesFading = this.easeViews(dt);
+    projectNodes(model, this.cam, this.vp, is3D, this.engine.brainScale, this.mapBlend);
     const appear = (n: GraphNode) => this.engine.appear(n, now);
     const pathNodes = this.path ? new Set(this.path.nodes) : null;
     this.scene?.render({
@@ -593,13 +711,17 @@ export class GraphController {
       is3D,
       brainScale: this.engine.brainScale,
       cloud,
-      territories: this.engine.view === 'territories' && visibleVaults > 1,
+      view,
+      landAlpha: this.landAlpha,
+      mapBlend: this.mapBlend,
+      hotCountry: this.hover ? (this.hover.project?.id ?? null) : this.hotCountry,
+      edgeScale: this.edgeScale,
       hops: this.hops,
       pathNodes,
       pathEdges: this.path ? new Set(this.path.edges) : null,
       matched: this.matched,
       moved: moved || !!this.drag,
-      edgesDirty: this.relightEdges(now, !!growth),
+      edgesDirty: this.relightEdges(now, !!growth) || edgesFading,
       appear,
       flash: (n) => this.engine.flash(n, now),
       reduceMotion: this.reduceMotion,
@@ -612,9 +734,17 @@ export class GraphController {
       dpr: this.dpr,
       cam: this.cam,
       is3D,
+      view,
       brainScale: this.engine.brainScale,
       cloud,
       model,
+      landAlpha: this.landAlpha,
+      land: this.land?.paths ?? null,
+      landed: this.engine.growth ? (this.land?.landed ?? null) : null,
+      territory: this.engine.territory,
+      hotCountry: this.hotCountry,
+      countryRoutes: this.countryRoutes,
+      ring: this.engine.ring,
       hover: this.hover,
       selected: this.selected,
       pathFrom: this.pathFrom,
@@ -624,7 +754,7 @@ export class GraphController {
       focusT0: this.focusT0,
       hops: this.hops,
       matched: this.matched,
-      vaultLabels: this.engine.view !== 'network' && visibleVaults > 1,
+      vaultLabels: is3D && visibleVaults > 1,
       fallback: !this.webgl,
       appear,
       reduceMotion: this.reduceMotion,

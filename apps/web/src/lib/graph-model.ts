@@ -14,7 +14,8 @@
 //
 // Views (brain, network, territories) only change how the layout is shaped.
 // Layers change what is in the model: which vaults, which kinds of edge,
-// whether indexes and topics are nodes.
+// whether indexes and topics are nodes — plus whether the map shows every
+// route at rest, which is drawing, not content.
 
 import {
   OTHER_VAULT_COLOR,
@@ -77,8 +78,10 @@ export interface GraphLayers {
   affinity: boolean;
   indexes: boolean;
   topics: boolean;
+  /** Territories: every link drawn faintly over the map, not only the routes of what you point at. */
+  routes: boolean;
 }
-export const DEFAULT_LAYERS: GraphLayers = { hiddenVaults: [], affinity: true, indexes: true, topics: false };
+export const DEFAULT_LAYERS: GraphLayers = { hiddenVaults: [], affinity: true, indexes: true, topics: false, routes: false };
 
 export interface GraphNode {
   id: string;
@@ -106,6 +109,8 @@ export interface GraphNode {
   size: number;
   /** World units. */
   radius: number;
+  /** The radius drawn this frame: `radius`, eased towards an even city size on the map. */
+  drawRadius: number;
   // Layout, in world units. The cache keeps these across rebuilds, so turning
   // a layer on or off never reshuffles the map.
   x: number;
@@ -228,6 +233,15 @@ export function nodeRadius(node: Pick<GraphNode, 'kind' | 'isIndex' | 'size' | '
   return (node.isIndex ? 3.2 : 2.4) + Math.sqrt(node.size) * 1.55;
 }
 
+/**
+ * On the map every note is a city of the same size and the index a capital a
+ * little bigger: cities sit a fixed distance apart, and a hub drawn by its
+ * connections would cover its neighbours. How connected a note is shows on hover.
+ */
+export function cityRadius(node: Pick<GraphNode, 'isIndex'>): number {
+  return node.isIndex ? 4.2 : 2.6;
+}
+
 function pairKey(a: string, b: string): string {
   return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
 }
@@ -253,6 +267,7 @@ function cached(cache: Map<string, GraphNode>, id: string): GraphNode {
     degree: 0,
     size: 0,
     radius: 3,
+    drawRadius: 3,
     x: Number.NaN,
     y: Number.NaN,
     z: Number.NaN,
@@ -420,6 +435,7 @@ export function buildGraphModel(input: {
   const projects = new Map<string, ProjectGroup>();
   for (const n of modelNodes) {
     n.radius = nodeRadius(n);
+    n.drawRadius = n.radius;
     if (!n.project) continue;
     const group = projects.get(n.project.id) ?? { id: n.project.id, label: n.project.label, vault: n.vault, nodes: [] };
     group.nodes.push(n);

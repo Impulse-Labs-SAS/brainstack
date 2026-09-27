@@ -1,15 +1,16 @@
 'use client';
 
-// The graph page's canvas and chrome. Three views of the same notes — Brain
-// (3D, inside a brain), Network and Territories (flat) — and one behaviour
-// across all of them: a click brings the camera to a note and opens its
-// preview without leaving the graph.
+// The graph page's canvas and chrome. Three views of the same notes, each
+// answering its own question — Brain (3D, inside a brain), Network (how it
+// connects) and Territories (what there is and where it is filed) — and one
+// behaviour across all of them: a click brings the camera to a note and opens
+// its preview without leaving the graph.
 //
 // The heavy lifting lives outside React: graph-controller runs the loop,
 // graph-engine the layout, graph-scene the WebGL, graph-overlay the text.
 // This file owns what React is good at: the toolbar, panels and preferences.
 
-import { Blend, Brain, Network, Play, Search, Square, X } from 'lucide-react';
+import { Brain, Map as MapIcon, Network, Play, Search, Square, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import {
   useCallback,
@@ -38,10 +39,10 @@ import {
   type InputEdge,
   type InputNode,
 } from '@/lib/graph-model';
-import { LABEL_COLORS, OWN_VAULT_COLOR, SHARED_VAULT_COLORS, TOPIC_COLOR } from '@/lib/graph-palette';
+import { BRIDGE_COLOR, LABEL_COLORS, OWN_VAULT_COLOR, SHARED_VAULT_COLORS, TOPIC_COLOR } from '@/lib/graph-palette';
 import { cn } from '@/lib/utils';
 
-import { GraphController, type Selection } from './graph-controller';
+import { GraphController, type CountryHover, type Selection } from './graph-controller';
 import { GraphLayersMenu } from './graph-layers';
 import { GLASS, GraphPreview, edited } from './graph-preview';
 
@@ -65,8 +66,18 @@ const LAYOUT_KEY = 'brainstack.graph.layout';
 
 const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }> = [
   { id: 'brain', label: 'Brain', icon: Brain, hint: 'Drag to turn the brain, Shift+drag to move it. Click a note to focus it.' },
-  { id: 'network', label: 'Network', icon: Network, hint: 'Click a note to preview it. Shift+click two notes for the path between them. Zoom out to see projects.' },
-  { id: 'territories', label: 'Territories', icon: Blend, hint: 'Each vault in its own territory. Hide or isolate vaults from Layers.' },
+  {
+    id: 'network',
+    label: 'Network',
+    icon: Network,
+    hint: 'Links alone decide where a note sits: hubs grow, and links between projects glow. Shift+click two notes for the path between them.',
+  },
+  {
+    id: 'territories',
+    label: 'Territories',
+    icon: MapIcon,
+    hint: 'Each project is a country, sized by its notes, and each vault a continent. Point at a note or a country to see its routes; click a country to zoom in.',
+  },
 ];
 
 // Preferences are per-browser conveniences: a blocked or private store just
@@ -119,6 +130,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
   const [webgl, setWebgl] = useState(true);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
+  const [hoveredCountry, setHoveredCountry] = useState<CountryHover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [growing, setGrowing] = useState(false);
   const [spinning, setSpinning] = useState(false);
@@ -159,6 +171,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
       {
         onSelection: setSelection,
         onHover: setHovered,
+        onHoverCountry: setHoveredCountry,
         onToast: setToast,
         onGrowth: setGrowing,
         onSpin: setSpinning,
@@ -190,9 +203,12 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
     };
   }, [saveLayout]);
 
+  // A topic belongs to no project, so it has no place on the map: Territories
+  // leaves topic nodes out whatever the layer says, and the others bring them back.
+  const modelLayers = useMemo(() => (view === 'territories' && layers.topics ? { ...layers, topics: false } : layers), [view, layers]);
   const model = useMemo(
-    () => (ready ? buildGraphModel({ nodes, edges, affinity, layers, viewerId, ownerNames, cache: cacheRef.current }) : null),
-    [ready, nodes, edges, affinity, layers, viewerId, ownerNames],
+    () => (ready ? buildGraphModel({ nodes, edges, affinity, layers: modelLayers, viewerId, ownerNames, cache: cacheRef.current }) : null),
+    [ready, nodes, edges, affinity, modelLayers, viewerId, ownerNames],
   );
 
   useEffect(() => {
@@ -226,6 +242,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
 
   useEffect(() => {
     if (ready) writePref(LAYERS_KEY, layers);
+    controllerRef.current?.setRoutes(layers.routes);
   }, [layers, ready]);
 
   useEffect(() => {
@@ -304,6 +321,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
             model={model}
             layers={layers}
             onChange={setLayers}
+            view={view}
             includeShared={includeShared}
             onIncludeSharedChange={onIncludeSharedChange}
           />
@@ -395,10 +413,14 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
         className={cn(
           GLASS,
           'pointer-events-none absolute z-20 max-w-[280px] gap-px rounded-lg px-2.5 py-2 text-xs',
-          hovered ? 'grid' : 'hidden',
+          hovered || hoveredCountry ? 'grid' : 'hidden',
         )}
       >
-        {hovered && <Tooltip node={hovered} vaultLabel={model?.vaults.find((v) => v.id === hovered.vault)?.label ?? ''} />}
+        {hovered ? (
+          <Tooltip node={hovered} vaultLabel={model?.vaults.find((v) => v.id === hovered.vault)?.label ?? ''} />
+        ) : (
+          hoveredCountry && <CountryTooltip country={hoveredCountry} vaultLabel={model?.vaults.find((v) => v.id === hoveredCountry.vault)?.label ?? ''} />
+        )}
       </div>
 
       <div
@@ -434,9 +456,29 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includ
               someone else&apos;s note
             </LegendItem>
           )}
-          <LegendItem glyph={<span className="w-4 border-t" style={{ borderColor: OWN_VAULT_COLOR.hue }} />}>link</LegendItem>
-          {layers.affinity && <LegendItem glyph={<span className="w-4 border-t-2 border-dotted border-[#a7a4b8]" />}>shared topic</LegendItem>}
-          {layers.topics && <LegendItem glyph={<span className="text-[11px] leading-none" style={{ color: TOPIC_COLOR.hue }}>⬡</span>}>topic</LegendItem>}
+          {view === 'territories' ? (
+            <>
+              <LegendItem
+                glyph={<span className="h-2.5 w-4 rounded-[3px] border" style={{ borderColor: OWN_VAULT_COLOR.hue, background: `${OWN_VAULT_COLOR.hue}40` }} />}
+              >
+                project
+              </LegendItem>
+              <LegendItem glyph={<span className="w-4 border-t border-dashed" style={{ borderColor: OWN_VAULT_COLOR.hue }} />}>folder</LegendItem>
+              <LegendItem glyph={<span className="w-4 border-t border-white/80" />}>route, on hover</LegendItem>
+            </>
+          ) : (
+            <>
+              <LegendItem glyph={<span className="w-4 border-t" style={{ borderColor: OWN_VAULT_COLOR.hue }} />}>link</LegendItem>
+              {view === 'network' && (
+                <LegendItem glyph={<span className="w-4 border-t-2" style={{ borderColor: BRIDGE_COLOR.hue }} />}>link between projects</LegendItem>
+              )}
+              {layers.affinity && <LegendItem glyph={<span className="w-4 border-t-2 border-dotted border-[#a7a4b8]" />}>shared topic</LegendItem>}
+              {layers.topics && <LegendItem glyph={<span className="text-[11px] leading-none" style={{ color: TOPIC_COLOR.hue }}>⬡</span>}>topic</LegendItem>}
+              {view === 'network' && (
+                <LegendItem glyph={<span className="h-2.5 w-2.5 rounded-full border border-dashed border-fg-muted" />}>outer ring: no links</LegendItem>
+              )}
+            </>
+          )}
         </ul>
       </div>
 
@@ -535,6 +577,21 @@ function Tooltip({ node, vaultLabel }: { node: GraphNode; vaultLabel: string }) 
       </span>
       <span className="font-mono text-[11px] text-fg-muted">
         {edited(node.updatedAt)} · {node.degree} connections
+      </span>
+    </>
+  );
+}
+
+function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultLabel: string }) {
+  return (
+    <>
+      <b className="text-[13px] font-semibold text-fg-primary">{country.label}</b>
+      <span className="text-fg-secondary">
+        {country.notes} {country.notes === 1 ? 'note' : 'notes'}
+        {country.folders > 0 && ` · ${country.folders} ${country.folders === 1 ? 'folder' : 'folders'}`} · {vaultLabel}
+      </span>
+      <span className="font-mono text-[11px] text-fg-muted">
+        {country.routes} {country.routes === 1 ? 'route' : 'routes'} to other projects · click to zoom in
       </span>
     </>
   );
