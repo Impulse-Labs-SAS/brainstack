@@ -1,48 +1,56 @@
 'use client';
 
-// Vista de una nota compartida por otro user. La URL es
-// /notes/shared/<ownerId>/<...path>. El path puede apuntar a una nota
-// (.md) o a la carpeta raíz del share — en ese caso mostramos solo el
-// tree sin nota seleccionada.
+// A note somebody shared with you, at /notes/shared/<ownerId>/<...path>; how
+// the URL maps to a note is in `lib/shared-path.ts`. A share's own folder, where
+// an accepted invite lands, shows the sidebar with that folder revealed.
 //
-// Editable o no según el permiso del grant: con 'write' es el mismo editor
-// con autosave que la vista propia, escribiendo contra el vault del dueño.
+// The sidebar is the same tree as everywhere else under /notes, so opening a
+// shared note never hides your own vault or the other shares, and folders stay
+// as open or closed as you left them.
+//
+// Editable or not according to the grant: with 'write' it is the same
+// autosaving editor as your own notes, writing to the owner's vault.
 
 import { keepPreviousData } from '@tanstack/react-query';
-import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
+import { Link2 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { AppShell } from '@/components/layout/app-shell';
+import { useModKey } from '@/components/layout/app-shell';
+import { useNoteOpen, useNotesChrome } from '@/components/layout/notes-chrome';
 import { NoteEditor } from '@/components/editor/note-editor';
 import { ConnectionsPanel } from '@/components/ecosystem/connections-panel';
+import { NoteHeader, revealFolder, type NoteMenuItem } from '@/components/note/note-header';
+import { readFlag, writeFlag } from '@/lib/local-flag';
 import { extractOutline } from '@/lib/outline';
+import { groupSharedOwners } from '@/lib/shared-owners';
+import { resolveSharedPath } from '@/lib/shared-path';
 import { encodePath } from '@/lib/wikilinks-client';
-import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
-import { SharedTree } from '@/components/file-tree/shared-tree';
+import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 
+const CONNECTIONS_KEY = 'brainstack:connections-open';
+const WIDE = '(min-width: 1280px)';
+
 export default function SharedNotePage() {
+  const router = useRouter();
+  const mod = useModKey();
   const params = useParams<{ ownerId: string; path: string[] }>();
   const ownerId = decodeURIComponent(params.ownerId ?? '');
-  const path = decodeURIComponent((params.path ?? []).join('/'));
-  const isNote = /\.md$/i.test(path);
+  const urlPath = decodeURIComponent((params.path ?? []).join('/'));
 
   const sharedWithMe = trpc.sharing.listSharedWithMe.useQuery(undefined, {
     enabled: !!ownerId,
   });
+  const owners = useMemo(() => groupSharedOwners(sharedWithMe.data ?? []), [sharedWithMe.data]);
+  const owner = owners.find((o) => o.ownerId === ownerId) ?? null;
 
-  // El share root que cubre este path. Si listSharedWithMe trae múltiples
-  // grants del mismo owner, elegimos el más largo que sea prefijo del path.
-  const shareRoot = useMemo(() => {
-    const grants = (sharedWithMe.data ?? []).filter((g) => g.ownerId === ownerId);
-    const matches = grants
-      .filter((g) => path === g.folderPath || path.startsWith(g.folderPath + '/'))
-      .sort((a, b) => b.folderPath.length - a.folderPath.length);
-    return matches[0] ?? null;
-  }, [sharedWithMe.data, ownerId, path]);
+  const { isFolder, path, shareRoot, crumbs } = useMemo(
+    () => resolveSharedPath(urlPath, owner?.roots ?? []),
+    [urlPath, owner],
+  );
 
+  const isNote = !!sharedWithMe.data && !isFolder;
   const note = trpc.notes.getForOwner.useQuery(
     { ownerId, path },
     { enabled: isNote && !!ownerId, placeholderData: keepPreviousData },
@@ -53,6 +61,11 @@ export default function SharedNotePage() {
   );
 
   const canWrite = shareRoot?.permission === 'write';
+
+  // Landing on the share's folder opens it in the sidebar.
+  useEffect(() => {
+    if (isFolder) revealFolder({ ownerId, path });
+  }, [isFolder, ownerId, path]);
 
   // Autosave, matching the own-note view: the draft is compared against what
   // the server last accepted rather than against the query data, which is not
@@ -99,171 +112,118 @@ export default function SharedNotePage() {
     return () => clearTimeout(handle);
   }, [canWrite, draft, draftPath, path, ownerId, utils]);
 
-  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:shared-tree-width', 272);
-  const router = useRouter();
+  // -- Layout: the tree on the left (the layout's), connections on the right -
+
+  const { treeHidden, toggleTree } = useNotesChrome();
+  // The share's own folder has no note: a phone shows the tree there.
+  useNoteOpen(!isFolder);
   const [connOpen, setConnOpen] = useState(false);
   useEffect(() => {
-    setConnOpen(window.matchMedia('(min-width: 1280px)').matches);
+    setConnOpen(window.matchMedia(WIDE).matches ? (readFlag(CONNECTIONS_KEY) ?? true) : false);
   }, []);
+  const toggleConnections = useCallback(() => {
+    setConnOpen((open) => {
+      if (window.matchMedia(WIDE).matches) writeFlag(CONNECTIONS_KEY, !open);
+      return !open;
+    });
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key === '.') {
+        e.preventDefault();
+        toggleConnections();
+      } else if (e.key === '\\') {
+        e.preventDefault();
+        toggleTree();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleConnections, toggleTree]);
+
   const outline = useMemo(() => extractOutline(note.data?.body ?? ''), [note.data?.body]);
 
-  // Mismo criterio que la vista propia: en teléfono se ve el árbol o la nota,
-  // y con una nota abierta gana la nota.
-  const tree = (
-    <div className="hidden md:contents">
-      <ResizablePanel
-        side="left"
-        width={treeWidth}
-        onWidthChange={setTreeWidth}
-        min={200}
-        max={560}
-        className="border-r border-border-subtle"
-      >
-        <div className="flex h-full flex-col">
-          <div className="border-b border-border-subtle px-3 py-2 font-mono text-[11px] text-fg-muted">
-            {shareRoot ? (
-              <>
-                <span className="text-fg-secondary">{shareRoot.folderPath}</span>
-                <span className="ml-2 opacity-60">
-                  @{shareRoot.ownerDisplayName ?? shareRoot.ownerEmail.split('@')[0]}
-                </span>
-              </>
-            ) : (
-              'Loading…'
-            )}
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {shareRoot && (
-              <SharedTree
-                ownerId={ownerId}
-                rootPath={shareRoot.folderPath}
-                activePath={isNote ? path : undefined}
-              />
-            )}
-          </div>
-        </div>
-      </ResizablePanel>
+  const message = (text: string, tone = 'text-fg-muted') => (
+    <div
+      className={cn(
+        'flex-1 items-center justify-center px-6 text-center text-sm',
+        tone,
+        isFolder ? 'hidden md:flex' : 'flex',
+      )}
+    >
+      {text}
     </div>
   );
 
-  // Acceso denegado / share no encontrado.
-  if (sharedWithMe.data && !shareRoot) {
-    return (
-      <AppShell>
-        <div className="flex h-full overflow-hidden">
-          {tree}
-          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
-            No access to {path}
-          </div>
-        </div>
-      </AppShell>
-    );
-  }
+  if (sharedWithMe.error) return message(sharedWithMe.error.message, 'text-red-300');
+  if (sharedWithMe.data && !shareRoot) return message(`No access to ${urlPath}`);
+  if (isFolder) return message('Pick a note on the left');
+  if (note.error) return message(note.error.message, 'text-red-300');
+  if (!note.data) return message('Loading…');
 
-  if (!isNote) {
-    return (
-      <AppShell>
-        <div className="flex h-full overflow-hidden">
-          {tree}
-          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
-            Pick a note from the tree
-          </div>
-        </div>
-      </AppShell>
-    );
-  }
-
-  if (note.error) {
-    return (
-      <AppShell>
-        <div className="flex h-full overflow-hidden">
-          {tree}
-          <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-red-300">
-            {note.error.message}
-          </div>
-        </div>
-      </AppShell>
-    );
-  }
-
-  if (!note.data) {
-    return (
-      <AppShell>
-        <div className="flex h-full overflow-hidden">
-          {tree}
-          <div className="flex flex-1 items-center justify-center text-fg-muted">Loading…</div>
-        </div>
-      </AppShell>
-    );
-  }
+  const status = !canWrite
+    ? ({ kind: 'readonly', text: 'Read only' } as const)
+    : update.isPending
+      ? ({ kind: 'saving', text: 'Saving…' } as const)
+      : savedAt
+        ? ({ kind: 'saved', text: `Saved ${new Date(savedAt).toLocaleTimeString()}` } as const)
+        : ({ kind: 'idle', text: 'Shared · can edit' } as const);
+  const outgoing = new Set((linksQ.data ?? []).map((l) => l.targetPath)).size;
+  const menu: NoteMenuItem[] = [
+    {
+      label: 'Copy link',
+      icon: Link2,
+      run: () => void navigator.clipboard?.writeText(window.location.href).catch(() => {}),
+    },
+  ];
 
   return (
-    <AppShell>
-      <div className="flex h-full overflow-hidden">
-        {tree}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex h-12 items-center justify-between gap-2 border-b border-border-subtle px-3 pl-10 md:px-4">
-            <div className="flex min-w-0 items-center gap-2">
-              <Link
-                href="/notes"
-                title="Back to notes"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden"
-              >
-                <ChevronLeft size={16} />
-              </Link>
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-fg-primary">
-                  {note.data.title}
-                </div>
-                <div className="truncate font-mono text-[11px] text-fg-muted">{path}</div>
-              </div>
-            </div>
-            <div className="rounded border border-border-subtle px-2 py-0.5 font-mono text-[10px] uppercase text-fg-muted">
-              {!canWrite
-                ? 'Read only'
-                : update.isPending
-                  ? 'Saving…'
-                  : savedAt
-                    ? `Saved ${new Date(savedAt).toLocaleTimeString()}`
-                    : 'Shared · can edit'}
-            </div>
-          </div>
-          <div className="relative flex min-h-0 flex-1">
-            <div className="min-w-0 flex-1 overflow-hidden">
-              <NoteEditor
-                key={`${canWrite}`}
-                value={canWrite ? (draft ?? '') : reconstructBody(note.data)}
-                onChange={canWrite ? setDraft : undefined}
-                readOnly={!canWrite}
-                frontmatter={note.data.frontmatter}
-                onNavigate={(href) => router.push(href)}
-              />
-            </div>
-            {connOpen ? (
-              <ConnectionsPanel
-                currentPath={path}
-                outboundLinks={linksQ.data ?? []}
-                outline={outline}
-                onJump={() => {}}
-                onClose={() => setConnOpen(false)}
-                routeFor={(p) =>
-                  `/notes/shared/${encodeURIComponent(ownerId)}/${encodePath(p.replace(/\.md$/i, ''))}`
-                }
-                className="w-[min(336px,90%)] shrink-0 border-l border-border-subtle"
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConnOpen(true)}
-                className="absolute right-3 top-3 rounded-lg border border-border bg-bg-surface px-2 py-1 text-xs text-fg-secondary hover:text-fg-primary"
-              >
-                Connections
-              </button>
-            )}
-          </div>
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <NoteHeader
+        title={note.data.title}
+        crumbs={crumbs}
+        owner={owner && { id: owner.ownerId, name: owner.name, color: owner.color }}
+        status={status}
+        readOnly={!canWrite}
+        connections={{
+          open: connOpen,
+          count: outgoing,
+          summary: `${outgoing} outgoing`,
+          onToggle: toggleConnections,
+        }}
+        treeHidden={treeHidden}
+        onToggleTree={toggleTree}
+        menu={menu}
+        mod={mod}
+      />
+      <div className="relative flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <NoteEditor
+            key={`${path}:${canWrite}`}
+            value={canWrite ? (draft ?? '') : reconstructBody(note.data)}
+            onChange={canWrite ? setDraft : undefined}
+            readOnly={!canWrite}
+            frontmatter={note.data.frontmatter}
+            onNavigate={(href) => router.push(href)}
+          />
         </div>
+        {connOpen && (
+          <ConnectionsPanel
+            currentPath={path}
+            outboundLinks={linksQ.data ?? []}
+            outline={outline}
+            onJump={() => {}}
+            onClose={toggleConnections}
+            routeFor={(p) =>
+              `/notes/shared/${encodeURIComponent(ownerId)}/${encodePath(p.replace(/\.md$/i, ''))}`
+            }
+            className="w-[min(336px,90%)] shrink-0 border-l border-border-subtle"
+          />
+        )}
       </div>
-    </AppShell>
+    </div>
   );
 }
 

@@ -23,6 +23,16 @@ import type { ViewMode } from '@/lib/use-view-mode';
 
 export const REVEAL_FOLDER_EVENT = 'brainstack:reveal-folder';
 
+/** What a reveal asks the sidebar to open: a folder, in your vault unless an owner is named. */
+export interface RevealFolderDetail {
+  ownerId?: string;
+  path: string;
+}
+
+export function revealFolder(detail: RevealFolderDetail): void {
+  window.dispatchEvent(new CustomEvent(REVEAL_FOLDER_EVENT, { detail }));
+}
+
 export interface NoteMenuItem {
   label: string;
   icon: LucideIcon;
@@ -34,11 +44,12 @@ interface NoteHeaderProps {
   title: string;
   /** Folders above the note, outermost first, each with its full path. */
   crumbs: Array<{ label: string; path: string }>;
-  /** Shown instead of folder crumbs for a note somebody shared. */
-  owner?: { name: string; color?: string } | null;
+  /** Whose vault the note is in, when it is somebody else's. Leads the crumbs. */
+  owner?: { id: string; name: string; color?: string } | null;
   status: { kind: 'saving' | 'saved' | 'idle' | 'readonly'; text: string };
-  mode: ViewMode;
-  onMode(m: ViewMode): void;
+  /** The edit/preview switch. Left out where the page has only one view. */
+  mode?: ViewMode;
+  onMode?(m: ViewMode): void;
   readOnly?: boolean;
   share?: { count: number; folder: string; onOpen(): void } | null;
   connections: { open: boolean; count: number; summary: string; onToggle(): void };
@@ -121,7 +132,10 @@ export function NoteHeader({
   ];
 
   return (
-    <div ref={barRef} className="flex h-12 shrink-0 items-center gap-1 border-b border-border-subtle pl-10 pr-2 md:pl-2">
+    <div
+      ref={barRef}
+      className="flex h-12 shrink-0 items-center gap-1 border-b border-border-subtle pl-10 pr-2 md:pl-2"
+    >
       <Link
         href="/notes"
         title="Back to notes"
@@ -146,10 +160,17 @@ export function NoteHeader({
         </IconButton>
       </span>
 
-      <nav aria-label="Breadcrumb" className="ml-1 flex min-w-0 flex-1 items-center gap-1 text-[13px]">
-        {owner ? (
+      <nav
+        aria-label="Breadcrumb"
+        className="ml-1 flex min-w-0 flex-1 items-center gap-1 text-[13px]"
+      >
+        {owner && (
           <span
-            className={cn('shrink-0 items-center gap-1.5 text-fg-secondary', fits(480) ? 'flex' : 'hidden')}
+            className={cn(
+              'shrink-0 items-center gap-1.5 text-fg-secondary',
+              fits(480) ? 'flex' : 'hidden',
+            )}
+            title={`Shared by ${owner.name}`}
           >
             <span
               aria-hidden
@@ -159,26 +180,23 @@ export function NoteHeader({
             {owner.name}
             <span className="text-fg-disabled">/</span>
           </span>
-        ) : (
-          crumbs.map((c) => (
-            <span
-              key={c.path}
-              className={cn('shrink-0 items-center gap-1', fits(480) ? 'flex' : 'hidden')}
-            >
-              <button
-                type="button"
-                onClick={() =>
-                  window.dispatchEvent(new CustomEvent(REVEAL_FOLDER_EVENT, { detail: c.path }))
-                }
-                title={`Show ${c.path} in the sidebar`}
-                className="max-w-[160px] truncate rounded px-1 py-0.5 text-fg-muted hover:bg-bg-hover hover:text-fg-primary"
-              >
-                {c.label}
-              </button>
-              <span className="text-fg-disabled">/</span>
-            </span>
-          ))
         )}
+        {crumbs.map((c) => (
+          <span
+            key={c.path}
+            className={cn('shrink-0 items-center gap-1', fits(480) ? 'flex' : 'hidden')}
+          >
+            <button
+              type="button"
+              onClick={() => revealFolder({ ownerId: owner?.id, path: c.path })}
+              title={`Show ${c.path} in the sidebar`}
+              className="max-w-[160px] truncate rounded px-1 py-0.5 text-fg-muted hover:bg-bg-hover hover:text-fg-primary"
+            >
+              {c.label}
+            </button>
+            <span className="text-fg-disabled">/</span>
+          </span>
+        ))}
         <span className="truncate px-1 font-medium text-fg-primary" title={title}>
           {title}
         </span>
@@ -221,30 +239,34 @@ export function NoteHeader({
         </button>
       )}
 
-      <div
-        role="group"
-        aria-label="View mode"
-        className="flex shrink-0 gap-0.5 rounded-lg border border-border bg-bg-surface p-0.5"
-      >
-        {modes.map(([m, Icon, label]) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => onMode(m)}
-            disabled={readOnly && m === 'edit'}
-            aria-pressed={mode === m}
-            title={readOnly && m === 'edit' ? 'Read only' : `${label} (${mod}+E)`}
-            className={cn(
-              'flex h-6 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors',
-              mode === m ? 'bg-bg-elevated text-fg-primary' : 'text-fg-muted hover:text-fg-primary',
-              'disabled:cursor-not-allowed disabled:opacity-40',
-            )}
-          >
-            <Icon size={13} strokeWidth={1.75} />
-            {fits(760) && <span>{label}</span>}
-          </button>
-        ))}
-      </div>
+      {mode && onMode && (
+        <div
+          role="group"
+          aria-label="View mode"
+          className="flex shrink-0 gap-0.5 rounded-lg border border-border bg-bg-surface p-0.5"
+        >
+          {modes.map(([m, Icon, label]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onMode(m)}
+              disabled={readOnly && m === 'edit'}
+              aria-pressed={mode === m}
+              title={readOnly && m === 'edit' ? 'Read only' : `${label} (${mod}+E)`}
+              className={cn(
+                'flex h-6 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors',
+                mode === m
+                  ? 'bg-bg-elevated text-fg-primary'
+                  : 'text-fg-muted hover:text-fg-primary',
+                'disabled:cursor-not-allowed disabled:opacity-40',
+              )}
+            >
+              <Icon size={13} strokeWidth={1.75} />
+              {fits(760) && <span>{label}</span>}
+            </button>
+          ))}
+        </div>
+      )}
 
       <button
         type="button"
@@ -279,7 +301,8 @@ export function NoteHeader({
                 className="absolute right-0 top-9 z-[61] w-[230px] rounded-lg border border-border bg-bg-elevated p-1 shadow-2xl"
                 onKeyDown={(e) => {
                   const items = [
-                    ...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []),
+                    ...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ??
+                      []),
                   ];
                   const i = items.indexOf(document.activeElement as HTMLButtonElement);
                   if (e.key === 'ArrowDown') {

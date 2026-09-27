@@ -6,22 +6,19 @@ import { keepPreviousData } from '@tanstack/react-query';
 import { EditorView } from '@codemirror/view';
 import { FolderInput, Link2, Pencil, Trash2, UserPlus } from 'lucide-react';
 
-import { AppShell, useModKey } from '@/components/layout/app-shell';
-import { FileTree } from '@/components/file-tree/file-tree';
+import { useModKey } from '@/components/layout/app-shell';
+import { useNoteOpen, useNotesChrome } from '@/components/layout/notes-chrome';
 import { DeleteDialog, type DeleteTarget } from '@/components/file-tree/delete-dialog';
 import { NoteEditor } from '@/components/editor/note-editor';
 import { MarkdownPreview } from '@/components/editor/markdown-preview';
-import {
-  ConnectionsPanel,
-  type MentionDirection,
-} from '@/components/ecosystem/connections-panel';
+import { ConnectionsPanel, type MentionDirection } from '@/components/ecosystem/connections-panel';
 import { NoteHeader, type NoteMenuItem } from '@/components/note/note-header';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 import { PromptModal } from '@/components/ui/prompt-modal';
-import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { extractOutline, type OutlineHeading } from '@/lib/outline';
+import { readFlag, writeFlag } from '@/lib/local-flag';
 import { forgetRecent, pushRecent } from '@/lib/recent-notes';
 import { useSharingEnabled } from '@/lib/use-deployment';
 import { usePersistedViewMode } from '@/lib/use-view-mode';
@@ -38,28 +35,10 @@ import { splitWikilinkTarget } from '@/lib/wikilink-target';
 
 const MAX_TREE_DEPTH = 20;
 const CONNECTIONS_KEY = 'brainstack:connections-open';
-const TREE_HIDDEN_KEY = 'brainstack:notes-tree-hidden';
 /** From here up the connections panel sits beside the note; below, over it. */
 const WIDE = '(min-width: 1280px)';
 
 const noteRoute = (path: string) => `/notes/${encodePath(path.replace(/\.md$/i, ''))}`;
-
-function readFlag(key: string): boolean | null {
-  try {
-    const v = window.localStorage.getItem(key);
-    return v === null ? null : v === '1';
-  } catch {
-    return null;
-  }
-}
-
-function writeFlag(key: string, on: boolean): void {
-  try {
-    window.localStorage.setItem(key, on ? '1' : '0');
-  } catch {
-    // ignore
-  }
-}
 
 /** "2 days ago", in the reader's language. */
 function relativeTime(ms: number): string {
@@ -139,17 +118,16 @@ export default function NotePage() {
 
   const [viewMode, setViewMode] = usePersistedViewMode('edit');
 
-  // -- Layout: the tree on the left, the connections panel on the right ------
+  // -- Layout: the tree on the left (the layout's), connections on the right -
 
-  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 272);
-  const [treeHidden, setTreeHidden] = useState(false);
+  const { treeHidden, toggleTree } = useNotesChrome();
+  useNoteOpen(true);
   const [connOpen, setConnOpen] = useState(false);
   const [wide, setWide] = useState(true);
   useEffect(() => {
     const mql = window.matchMedia(WIDE);
     const apply = () => setWide(mql.matches);
     apply();
-    setTreeHidden(readFlag(TREE_HIDDEN_KEY) ?? false);
     // Open by default where it fits beside the note; over it, only when asked.
     setConnOpen(mql.matches ? (readFlag(CONNECTIONS_KEY) ?? true) : false);
     mql.addEventListener('change', apply);
@@ -159,12 +137,6 @@ export default function NotePage() {
     setConnOpen((open) => {
       if (window.matchMedia(WIDE).matches) writeFlag(CONNECTIONS_KEY, !open);
       return !open;
-    });
-  }, []);
-  const toggleTree = useCallback(() => {
-    setTreeHidden((hidden) => {
-      writeFlag(TREE_HIDDEN_KEY, !hidden);
-      return !hidden;
     });
   }, []);
   // Over the note, the panel closes on the way to another note.
@@ -476,47 +448,17 @@ export default function NotePage() {
     },
   ];
 
-  /*
-   * The tree and the note do not fit side by side on a phone. The route
-   * decides which one shows: `/notes` has no note and shows the tree; here a
-   * note is open and shows alone, with a way back to the tree in its header.
-   */
-  const treePanel = !treeHidden && (
-    <div className="hidden md:contents">
-      <ResizablePanel
-        side="left"
-        width={treeWidth}
-        onWidthChange={setTreeWidth}
-        min={200}
-        max={560}
-        className="border-r border-border-subtle"
-      >
-        <FileTree />
-      </ResizablePanel>
-    </div>
-  );
-
   if (!note.data && note.isLoading) {
     return (
-      <AppShell>
-        <div className="flex h-full overflow-hidden">
-          {treePanel}
-          <div className="flex flex-1 items-center justify-center text-sm text-fg-muted">Loading…</div>
-        </div>
-      </AppShell>
+      <div className="flex flex-1 items-center justify-center text-sm text-fg-muted">Loading…</div>
     );
   }
 
   if (!note.data) {
     return (
-      <AppShell>
-        <div className="flex h-full overflow-hidden">
-          {treePanel}
-          <div className="flex flex-1 items-center justify-center text-sm text-fg-muted">
-            No note at <span className="ml-1 font-mono text-xs">{path}</span>
-          </div>
-        </div>
-      </AppShell>
+      <div className="flex flex-1 items-center justify-center text-sm text-fg-muted">
+        No note at <span className="ml-1 font-mono text-xs">{path}</span>
+      </div>
     );
   }
 
@@ -534,99 +476,95 @@ export default function NotePage() {
   const outgoingTargets = new Set((outboundLinks.data ?? []).map((l) => l.targetPath)).size;
 
   return (
-    <AppShell>
-      <div className="flex h-full overflow-hidden">
-        {treePanel}
+    <>
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <NoteHeader
+          title={note.data.title}
+          crumbs={crumbs}
+          status={status}
+          mode={viewMode}
+          onMode={setViewMode}
+          share={shared ? { ...shared, onOpen: () => setShareFolder(shared.folder) } : null}
+          connections={{
+            open: connOpen,
+            count: backlinkSources + outgoingTargets + mentionCount,
+            summary: `${backlinkSources} backlinks · ${outgoingTargets} outgoing · ${related.data?.length ?? 0} related · ${mentionCount} unlinked mentions`,
+            onToggle: toggleConnections,
+          }}
+          treeHidden={treeHidden}
+          onToggleTree={toggleTree}
+          menu={menu}
+          mod={mod}
+        />
+        {actionError && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 border-b border-red-700/40 bg-red-950/40 px-4 py-1.5 text-xs text-red-200"
+          >
+            {actionError}
+            <button type="button" onClick={() => setActionError(null)} className="underline">
+              Dismiss
+            </button>
+          </div>
+        )}
 
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <NoteHeader
-            title={note.data.title}
-            crumbs={crumbs}
-            status={status}
-            mode={viewMode}
-            onMode={setViewMode}
-            share={shared ? { ...shared, onOpen: () => setShareFolder(shared.folder) } : null}
-            connections={{
-              open: connOpen,
-              count: backlinkSources + outgoingTargets + mentionCount,
-              summary: `${backlinkSources} backlinks · ${outgoingTargets} outgoing · ${related.data?.length ?? 0} related · ${mentionCount} unlinked mentions`,
-              onToggle: toggleConnections,
-            }}
-            treeHidden={treeHidden}
-            onToggleTree={toggleTree}
-            menu={menu}
-            mod={mod}
-          />
-          {actionError && (
-            <div
-              role="alert"
-              className="flex items-center justify-between gap-3 border-b border-red-700/40 bg-red-950/40 px-4 py-1.5 text-xs text-red-200"
-            >
-              {actionError}
-              <button type="button" onClick={() => setActionError(null)} className="underline">
-                Dismiss
-              </button>
-            </div>
-          )}
-
-          <div className="relative flex min-h-0 flex-1">
-            <div ref={previewRef} className="min-w-0 flex-1 overflow-hidden">
-              {draft !== null && viewMode === 'edit' && (
-                <NoteEditor
-                  key={path}
-                  value={draft}
-                  onChange={setDraft}
-                  wikilinkCandidates={getWikilinkCandidates}
-                  frontmatter={note.data.frontmatter}
-                  onNavigate={(href) => router.push(href)}
-                  onOpenLink={onOpenLink}
-                  onReady={(view) => {
-                    editorViewRef.current = view;
-                  }}
-                />
-              )}
-              {draft !== null && viewMode === 'preview' && (
-                <MarkdownPreview
-                  body={stripFrontmatter(draft)}
-                  frontmatter={note.data.frontmatter}
-                  resolveLink={resolveLink}
-                  resolveEmbed={resolveEmbed}
-                />
-              )}
-            </div>
-
-            {connOpen && (
-              <>
-                {!wide && (
-                  <div
-                    aria-hidden
-                    onClick={() => setConnOpen(false)}
-                    className="absolute inset-0 z-20 bg-black/45"
-                  />
-                )}
-                <ConnectionsPanel
-                  currentPath={path}
-                  backlinks={backlinks.data ?? []}
-                  outboundLinks={outboundLinks.data ?? []}
-                  related={related.data ?? []}
-                  mentions={mentions.data}
-                  outline={outline}
-                  onLinkMention={onLinkMention}
-                  linkingMention={linkingMention}
-                  outgoingBlockedReason={dirty ? 'Waiting for your changes to save' : null}
-                  onCreate={(t) => void onCreateTarget(t)}
-                  onJump={jumpTo}
-                  onClose={toggleConnections}
-                  className={cn(
-                    'border-l border-border-subtle',
-                    wide
-                      ? 'w-[336px] shrink-0'
-                      : 'absolute inset-y-0 right-0 z-30 w-[min(340px,90%)] shadow-2xl',
-                  )}
-                />
-              </>
+        <div className="relative flex min-h-0 flex-1">
+          <div ref={previewRef} className="min-w-0 flex-1 overflow-hidden">
+            {draft !== null && viewMode === 'edit' && (
+              <NoteEditor
+                key={path}
+                value={draft}
+                onChange={setDraft}
+                wikilinkCandidates={getWikilinkCandidates}
+                frontmatter={note.data.frontmatter}
+                onNavigate={(href) => router.push(href)}
+                onOpenLink={onOpenLink}
+                onReady={(view) => {
+                  editorViewRef.current = view;
+                }}
+              />
+            )}
+            {draft !== null && viewMode === 'preview' && (
+              <MarkdownPreview
+                body={stripFrontmatter(draft)}
+                frontmatter={note.data.frontmatter}
+                resolveLink={resolveLink}
+                resolveEmbed={resolveEmbed}
+              />
             )}
           </div>
+
+          {connOpen && (
+            <>
+              {!wide && (
+                <div
+                  aria-hidden
+                  onClick={() => setConnOpen(false)}
+                  className="absolute inset-0 z-20 bg-black/45"
+                />
+              )}
+              <ConnectionsPanel
+                currentPath={path}
+                backlinks={backlinks.data ?? []}
+                outboundLinks={outboundLinks.data ?? []}
+                related={related.data ?? []}
+                mentions={mentions.data}
+                outline={outline}
+                onLinkMention={onLinkMention}
+                linkingMention={linkingMention}
+                outgoingBlockedReason={dirty ? 'Waiting for your changes to save' : null}
+                onCreate={(t) => void onCreateTarget(t)}
+                onJump={jumpTo}
+                onClose={toggleConnections}
+                className={cn(
+                  'border-l border-border-subtle',
+                  wide
+                    ? 'w-[336px] shrink-0'
+                    : 'absolute inset-y-0 right-0 z-30 w-[min(340px,90%)] shadow-2xl',
+                )}
+              />
+            </>
+          )}
         </div>
       </div>
 
@@ -679,7 +617,7 @@ export default function NotePage() {
             .catch((err: Error) => setActionError(err.message));
         }}
       />
-    </AppShell>
+    </>
   );
 }
 
