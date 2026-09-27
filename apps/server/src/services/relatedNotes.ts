@@ -35,18 +35,43 @@ export function rankRelated(
 ): RankedNote[] {
   const weightOf = new Map(counts.map((c) => [c.signal, 1 / Math.max(1, c.count)]));
 
+  const weight = (signal: string): number => weightOf.get(signal) ?? 0;
+
   const byPath = new Map<string, { score: number; signals: string[] }>();
   for (const hit of hits) {
     const entry = byPath.get(hit.path) ?? { score: 0, signals: [] };
-    entry.score += weightOf.get(hit.signal) ?? 0;
+    entry.score += weight(hit.signal);
     entry.signals.push(hit.signal);
     byPath.set(hit.path, entry);
   }
 
   return [...byPath.entries()]
-    .map(([path, v]) => ({ path, score: v.score, signals: v.signals }))
+    .map(([path, v]) => ({
+      path,
+      score: v.score,
+      // Rarest first: the signal that did the most for the score is the best
+      // answer to "why is this related?".
+      signals: [...v.signals].sort((a, b) => weight(b) - weight(a)),
+    }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
+}
+
+/** Why two notes are related: one tag or one facet value they both carry. */
+export type RelatedReason =
+  | { kind: 'tag'; tag: string }
+  | { kind: 'facet'; key: string; value: string };
+
+/** The reason a signal key stands for — the inverse of tagSignal/facetSignal. */
+export function signalReason(signal: string): RelatedReason | null {
+  if (signal.startsWith('tag:')) return { kind: 'tag', tag: signal.slice(4) };
+  if (signal.startsWith('facet:')) {
+    const rest = signal.slice(6);
+    const sep = rest.indexOf(':');
+    if (sep === -1) return null;
+    return { kind: 'facet', key: rest.slice(0, sep), value: rest.slice(sep + 1) };
+  }
+  return null;
 }
 
 /**

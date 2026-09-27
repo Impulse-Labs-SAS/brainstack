@@ -49,6 +49,8 @@ import { resolveProjects, type ProjectRef } from './projects.js';
 import {
   facetSignal,
   rankRelated,
+  signalReason,
+  type RelatedReason,
   RELATED_IGNORED_FACET_KEYS,
   tagSignal,
   type RankedNote,
@@ -373,7 +375,16 @@ export class NoteService {
     ownerId: string,
     path: string,
     opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }>; limit?: number } = {},
-  ): Promise<Array<{ path: string; title: string; ownerId: string | null; score: number }>> {
+  ): Promise<
+    Array<{
+      path: string;
+      title: string;
+      ownerId: string | null;
+      score: number;
+      /** What the two notes share, rarest first. */
+      reasons: RelatedReason[];
+    }>
+  > {
     const physical = this.toPhysical(ownerId, path);
     const limit = opts.limit ?? 10;
 
@@ -484,6 +495,9 @@ export class NoteService {
           title: note.title,
           ownerId: note.ownerId ?? null,
           score: r.score,
+          reasons: r.signals
+            .map(signalReason)
+            .filter((reason): reason is RelatedReason => reason !== null),
         };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
