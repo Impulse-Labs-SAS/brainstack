@@ -182,6 +182,10 @@ export default function NotePage() {
             // Graph view and this note's own ecosystem panels would
             // otherwise keep serving a stale, pre-edit snapshot.
             void utils.notes.graph.invalidate();
+            // Tags and the preview's frontmatter come from `notes.get`, so it
+            // is refetched too; the draft is not reset by it, since the draft
+            // already belongs to this path.
+            void utils.notes.get.invalidate({ path });
             void utils.notes.backlinks.invalidate();
             void utils.notes.outboundLinks.invalidate();
             void utils.notes.related.invalidate();
@@ -290,7 +294,7 @@ export default function NotePage() {
             <div className="flex min-w-0 items-center gap-2">
               <Link
                 href="/notes"
-                title="Volver al árbol"
+                title="Back to notes"
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden"
               >
                 <ChevronLeft size={16} />
@@ -308,7 +312,7 @@ export default function NotePage() {
                 {update.isPending
                   ? 'saving…'
                   : savedAt
-                    ? `saved ${new Date(savedAt).toISOString().slice(11, 19)}`
+                    ? `saved ${new Date(savedAt).toLocaleTimeString()}`
                     : 'idle'}
               </div>
             </div>
@@ -353,7 +357,7 @@ export default function NotePage() {
               mentions={mentions.data}
               onLinkMention={onLinkMention}
               linkingMention={linkingMention}
-              outgoingBlockedReason={dirty ? 'Esperando a que se guarden los cambios' : null}
+              outgoingBlockedReason={dirty ? 'Waiting for your changes to save' : null}
             />
           </div>
         </div>

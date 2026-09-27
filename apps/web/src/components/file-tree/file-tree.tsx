@@ -345,7 +345,7 @@ export function FileTree() {
   const sharedWith = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const m of mySharesQ.data ?? []) {
-      const who = `${m.displayName ?? m.email} (${m.permission === 'write' ? 'escritura' : 'lectura'})`;
+      const who = `${m.displayName ?? m.email} (${m.permission === 'write' ? 'can edit' : 'read only'})`;
       const at = map.get(m.folderPath);
       if (at) at.push(who);
       else map.set(m.folderPath, [who]);
@@ -525,9 +525,9 @@ export function FileTree() {
   /** El nombre con el que esta persona aparece en el árbol. */
   const ownerLabel = useCallback(
     (ownerId: string): string => {
-      if (ownerId === mine) return 'vos';
+      if (ownerId === mine) return 'you';
       const root = sharedRoots.find((r) => r.ownerId === ownerId);
-      if (!root) return 'la otra persona';
+      if (!root) return 'the other person';
       return root.ownerDisplayName ?? root.ownerEmail.split('@')[0] ?? root.ownerEmail;
     },
     [mine, sharedRoots],
@@ -549,7 +549,7 @@ export function FileTree() {
         const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
         pushToast(
           'info',
-          `moved to ${result.path} — ahora es de ${ownerLabel(dst.ownerId)}` +
+          `moved to ${result.path}, now owned by ${ownerLabel(dst.ownerId)}` +
             (dangling > 0 ? `; ${dangling} wikilink(s) no longer resolve` : ''),
         );
       } catch (err) {
@@ -959,7 +959,7 @@ export function FileTree() {
               </MenuItem>
             )}
             {!menu.canWrite && (
-              <div className="px-3 py-2 font-mono text-[11px] text-fg-muted">sólo lectura</div>
+              <div className="px-3 py-2 font-mono text-[11px] text-fg-muted">Read only</div>
             )}
           </div>
         </>
@@ -992,20 +992,20 @@ export function FileTree() {
 
       <ConfirmModal
         open={confirmCrossVault !== null}
-        title="¿Cambiar de dueño?"
+        title="Change owner?"
         message={
           confirmCrossVault
-            ? `«${confirmCrossVault.src.path.split('/').pop()}» pasa de ` +
-              `${ownerLabel(confirmCrossVault.src.ownerId)} a ` +
+            ? `“${confirmCrossVault.src.path.split('/').pop()}” moves from ` +
+              `${ownerLabel(confirmCrossVault.src.ownerId)} to ` +
               `${ownerLabel(confirmCrossVault.dst.ownerId)}.
 
 ` +
-              'No es una copia: las notas se van de la bóveda de origen. Quien deja de ser ' +
-              'dueño sólo la seguirá viendo si el destino está compartido con esa persona, y ' +
-              'con el permiso que tenga ahí.'
+              'It is not a copy: the notes leave the vault they are in. Whoever stops owning ' +
+              'them keeps seeing them only if the destination is shared with them, and with ' +
+              'the permission they have there.'
             : undefined
         }
-        okLabel="Mover y cambiar dueño"
+        okLabel="Move and change owner"
         onCancel={() => setConfirmCrossVault(null)}
         onConfirm={() => {
           const pending = confirmCrossVault;
@@ -1017,7 +1017,9 @@ export function FileTree() {
       <ConfirmModal
         open={confirmDelete !== null}
         title="Delete?"
-        message={confirmDelete ? `${confirmDelete} will be removed permanently.` : undefined}
+        message={
+          confirmDelete ? `${confirmDelete.path} will be removed permanently.` : undefined
+        }
         okLabel="Delete"
         danger
         onCancel={() => setConfirmDelete(null)}
@@ -1115,7 +1117,7 @@ function SharedBranch({
   if (q.error) {
     return (
       <div className="px-4 py-1 font-mono text-[11px] text-red-300" title={q.error.message}>
-        {root.folderPath} — sin acceso
+        {root.folderPath}: no access
       </div>
     );
   }
@@ -1131,8 +1133,8 @@ function SharedBranch({
   return (
     <div className="relative">
       <span
-        title={`Compartida por ${root.ownerEmail} — ${
-          root.permission === 'write' ? 'lectura y escritura' : 'sólo lectura'
+        title={`Shared by ${root.ownerEmail}, ${
+          root.permission === 'write' ? 'can edit' : 'read only'
         }`}
         className="pointer-events-none absolute right-1 top-1 z-10 rounded border border-border-subtle bg-bg-surface px-1 font-mono text-[9px] text-fg-muted"
       >

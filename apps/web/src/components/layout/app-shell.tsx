@@ -33,6 +33,13 @@ const links = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
+/** The nav entry a path belongs to: the longest href it starts with. */
+function activeHref(pathname: string): string | undefined {
+  return links
+    .filter((l) => pathname === l.href || pathname.startsWith(`${l.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+}
+
 const COLLAPSED_KEY = 'brainstack:sidebar-collapsed';
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -116,7 +123,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <nav className={cn('flex-1 overflow-y-auto', collapsed ? 'p-1.5' : 'p-2')}>
           {links.map((link) => {
-            const active = pathname.startsWith(link.href);
+            // The most specific match wins: /settings/api-keys is "API keys",
+            // not also "Settings".
+            const active = link.href === activeHref(pathname);
             const Icon = link.icon;
             return (
               <Link
@@ -145,7 +154,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <button
           type="button"
           onClick={() => setNavOpen(true)}
-          title="Menú"
+          title="Menu"
           className={cn(
             'absolute left-2 top-3 z-20 flex h-6 w-6 items-center justify-center rounded',
             'text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden',
