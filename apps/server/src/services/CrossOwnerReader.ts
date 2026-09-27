@@ -7,7 +7,7 @@
 // Paths in and out are relative to the owner's root, not the viewer's, because
 // that is how a shared folder is addressed: "this path, in that person's brain".
 
-import { pgSchema, type PgDb } from '@brainstack/core/pg';
+import { escapeLike, pgSchema, type PgDb } from '@brainstack/core/pg';
 import { asc, eq, like, or } from 'drizzle-orm';
 
 import { AppError } from '../lib/errors.js';
@@ -95,11 +95,11 @@ export class CrossOwnerReader {
       this.opts.db
         .select({ path: notes.path })
         .from(notes)
-        .where(like(notes.path, `${prefix}/%`)),
+        .where(like(notes.path, `${escapeLike(prefix)}/%`)),
       this.opts.db
         .select({ path: folders.path })
         .from(folders)
-        .where(or(eq(folders.path, prefix), like(folders.path, `${prefix}/%`))),
+        .where(or(eq(folders.path, prefix), like(folders.path, `${escapeLike(prefix)}/%`))),
     ]);
 
     const ownerPrefix = `${ownerId}/`;
