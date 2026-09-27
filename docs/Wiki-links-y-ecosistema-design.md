@@ -132,6 +132,8 @@ MCP (`apps/server/src/mcp/server.ts`): `list_outbound_links`, `list_related` (si
 
 ## 6. UI: la sección Ecosistema
 
+> Superseded by §13: the strip is now the Connections panel on the right of the note.
+
 Reemplaza el panel lateral (`ResizablePanel` de backlinks) por una franja al pie de la
 nota, debajo del editor/preview.
 
@@ -270,3 +272,40 @@ volvía a escribir el texto viejo encima de los links.
 
 **MCP:** `list_unlinked_mentions(path)` es de sólo lectura. La IA propone el link y lo
 escribe con `update_note` cuando el usuario aprueba, como cualquier escritura.
+
+## 13. The Connections panel and the note as a document
+
+Built on `feat/notes-navigation-ux`. It replaces the Ecosistema strip of §6 and reworks the notes
+screen around it.
+
+**Why the strip went.** It sat under the editor and took up to 40% of the height with five narrow
+columns: titles were cut off, a backlink showed only its alias ("Arquitectura", of which project?),
+unresolved links were struck through as if deleted, and tags and facets repeated the frontmatter
+shown above them.
+
+**The panel** (`apps/web/src/components/ecosystem/connections-panel.tsx`) sits on the right of the
+note from 1280px and over it below, toggled with Ctrl/⌘ + `.`. Four tabs:
+
+- **Links** — backlinks, one card per source note with the line that cites this one; outgoing
+  links, one row per target, where an unresolved target says *Not created yet* and offers Create.
+- **Related** — each note with the tag or value it shares, and a line saying these are not links.
+  Keeping them apart from links is the lesson of §8.
+- **Mentions** — the unlinked mentions of §12, with their Link button.
+- **Outline** — the note's headings (`lib/outline.ts`), which jump to the heading in Edit or Preview.
+
+**Server support.** `listBacklinks` joins the source body and returns `snippet`, the line the link
+sits in, found from `links.position` (`packages/core/src/links/snippet.ts`). Backlinks and outbound
+links carry the other note's `title`. `listRelated` returns `reasons`: the tags and facet values
+the two notes share, rarest first.
+
+**The note as a document.** The editor sets prose in the sans face on a ~72-character column,
+dims markdown's marks, shows wikilinks as links (Ctrl/⌘-click follows one) and folds the
+frontmatter into a Properties block (`components/note/properties-block.tsx`, mounted inside
+CodeMirror by `editor/properties-extension.tsx`); *Edit as YAML* reveals the raw text. Preview uses
+the same column and block, and hovering a wikilink previews the note. The Split mode was removed: it
+showed the same note twice.
+
+**Around it.** The app sidebar is a 48px icon rail. Ctrl/⌘ + K is a quick switcher with recent
+notes (kept per browser, `lib/recent-notes.ts`), arrow keys and `#tag` / `key:value` filters. The
+tree groups Recent, My vault and Shared with me (by owner); every row has a ⋯ menu, folders show a
+share button, and deleting asks first and says what it removes. All of it is in English.
