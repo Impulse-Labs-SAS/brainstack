@@ -1,10 +1,10 @@
 'use client';
 
-// What the graph draws, like the layers button of a map: which vaults, which
-// kinds of connection, whether topics become nodes. Replaces the old
-// "include shared" checkbox and the four connection modes.
+// What the graph draws, like the layers button of a map: whether shared
+// vaults are loaded at all, which vaults show, which kinds of connection,
+// whether topics become nodes. Replaces the four old connection modes.
 
-import { Check, Layers } from 'lucide-react';
+import { Check, Layers, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Button, Checkbox, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 
@@ -17,6 +17,9 @@ interface GraphLayersMenuProps {
   model: GraphModel;
   layers: GraphLayers;
   onChange(layers: GraphLayers): void;
+  /** Whether shared vaults are fetched at all; null when sharing is off on this deployment. */
+  includeShared: boolean | null;
+  onIncludeSharedChange(include: boolean): void;
 }
 
 function Row({
@@ -67,12 +70,13 @@ const Heading = ({ children }: { children: ReactNode }) => (
   <div className="px-1.5 pb-1 pt-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted first:pt-0.5">{children}</div>
 );
 
-export function GraphLayersMenu({ model, layers, onChange }: GraphLayersMenuProps) {
+export function GraphLayersMenu({ model, layers, onChange, includeShared, onIncludeSharedChange }: GraphLayersMenuProps) {
   const hidden = new Set(layers.hiddenVaults);
   const visibleVaults = model.vaults.filter((v) => !hidden.has(v.id));
   const shown = new Map<string, number>();
   for (const n of model.nodes) if (n.kind === 'note') shown.set(n.vault, (shown.get(n.vault) ?? 0) + 1);
-  const isDefault = !layers.hiddenVaults.length && layers.affinity && layers.indexes && !layers.topics;
+  const isDefault =
+    includeShared !== false && !layers.hiddenVaults.length && layers.affinity && layers.indexes && !layers.topics;
 
   const setVault = (id: string, visible: boolean) =>
     onChange({ ...layers, hiddenVaults: visible ? layers.hiddenVaults.filter((v) => v !== id) : [...layers.hiddenVaults, id] });
@@ -96,7 +100,16 @@ export function GraphLayersMenu({ model, layers, onChange }: GraphLayersMenuProp
       </Button>
       <Popover placement="bottom start" offset={6} className={cn(GLASS, 'w-[272px] rounded-lg p-2 text-sm shadow-2xl outline-none')}>
         <Dialog aria-label="Graph layers" className="outline-none">
-          {model.vaults.length > 0 && <Heading>Vaults</Heading>}
+          <Heading>Vaults</Heading>
+          {includeShared !== null && (
+            <Row
+              isSelected={includeShared}
+              onChange={onIncludeSharedChange}
+              glyph={<Users size={12} aria-hidden className="shrink-0 text-fg-secondary" />}
+            >
+              Include shared vaults
+            </Row>
+          )}
           {model.vaults.map((v) => {
             const alone = visibleVaults.length === 1 && !v.hidden;
             return (

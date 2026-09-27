@@ -64,6 +64,7 @@ type Drag = {
 };
 
 const CLICK_SLOP = 4;
+const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
 const PREVIEW_OFFSET = 160;
 const SPIN_PER_MS = 0.00008;
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -94,6 +95,8 @@ export class GraphController {
   private hops: Map<GraphNode, number> | null = null;
   private matched: Set<GraphNode> | null = null;
   private edgesDirty = true;
+  /** When edge brightness was last recomputed. */
+  private edgesLitAt = 0;
 
   private drag: Drag | null = null;
   private raf = 0;
@@ -508,6 +511,19 @@ export class GraphController {
     return clamp((0.62 - pixelsPerUnit(this.cam, this.vp)) / 0.3, 0, 1);
   }
 
+  /**
+   * Whether edge brightness needs recomputing this frame. An edge shows once
+   * both ends have faded in, so while notes are appearing it is recomputed
+   * every frame — and once more after the last one has finished. Stopping at
+   * the end of the fade instead left every edge dark whenever no frame landed
+   * inside it: a background tab, or a replay that ended in one frame.
+   */
+  private relightEdges(now: number, growing: boolean): boolean {
+    const dirty = this.edgesDirty || growing || this.edgesLitAt <= this.engine.appearingUntil;
+    if (dirty) this.edgesLitAt = now;
+    return dirty;
+  }
+
   private finishGrowth(): void {
     this.growing = false;
     this.events.onGrowth(false);
@@ -552,10 +568,10 @@ export class GraphController {
       this.edgesDirty = true;
     }
 
-    const growth = this.engine.growthStatus(now);
+    const growth = this.engine.growthStatus();
     if (growth) {
       this.el.timeChip.hidden = false;
-      const date = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' }).format(growth.at);
+      const date = MONTH_YEAR.format(growth.at);
       this.el.timeChip.textContent = `${date} · ${growth.count} ${growth.count === 1 ? 'note' : 'notes'}`;
     } else if (this.growing) {
       this.finishGrowth();
@@ -583,7 +599,7 @@ export class GraphController {
       pathEdges: this.path ? new Set(this.path.edges) : null,
       matched: this.matched,
       moved: moved || !!this.drag,
-      edgesDirty: this.edgesDirty || now < this.engine.appearingUntil || !!growth,
+      edgesDirty: this.relightEdges(now, !!growth),
       appear,
       flash: (n) => this.engine.flash(n, now),
       reduceMotion: this.reduceMotion,

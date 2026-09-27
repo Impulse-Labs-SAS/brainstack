@@ -1,16 +1,43 @@
 'use client';
 
-import { useMemo } from 'react';
+import { keepPreviousData } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { GraphView } from '@/components/graph/graph-view';
 import { useSharingEnabled } from '@/lib/use-deployment';
 import { trpc } from '@/lib/trpc';
 
+const INCLUDE_SHARED_KEY = 'brainstack.graph.includeShared';
+
+// A per-browser preference; a blocked or private store falls back to the default.
+function readIncludeShared(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    return localStorage.getItem(INCLUDE_SHARED_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
 export default function GraphPage() {
   const sharingEnabled = useSharingEnabled();
-  // Every vault the viewer can see; which of them are drawn is a layer, not a fetch.
-  const { data, isLoading, error } = trpc.notes.graph.useQuery({ scope: sharingEnabled ? 'all' : 'mine' });
+  const [includeShared, setIncludeShared] = useState(readIncludeShared);
+  const onIncludeSharedChange = useCallback((include: boolean) => {
+    setIncludeShared(include);
+    try {
+      localStorage.setItem(INCLUDE_SHARED_KEY, String(include));
+    } catch {
+      // storage full or blocked; the choice lasts until the page closes
+    }
+  }, []);
+
+  // Shared vaults are only fetched when included. Keeping the previous data
+  // while the other scope loads keeps the graph, its camera and layout, on screen.
+  const { data, isLoading, error } = trpc.notes.graph.useQuery(
+    { scope: includeShared && sharingEnabled ? 'all' : 'mine' },
+    { placeholderData: keepPreviousData },
+  );
   // Which nodes are somebody else's, and so open under the shared route.
   const me = trpc.auth.me.useQuery();
   const affinity = trpc.notes.affinity.useQuery();
@@ -41,6 +68,8 @@ export default function GraphPage() {
             affinity={affinity.data ?? null}
             viewerId={me.data?.user?.id ?? null}
             ownerNames={ownerNames}
+            includeShared={sharingEnabled ? includeShared : null}
+            onIncludeSharedChange={onIncludeSharedChange}
           />
         )}
       </div>

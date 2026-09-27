@@ -54,6 +54,9 @@ interface GraphViewProps {
   viewerId: string | null;
   /** Owner id → how to name their vault. */
   ownerNames: ReadonlyMap<string, string>;
+  /** Whether shared vaults are fetched at all; null when sharing is off on this deployment. */
+  includeShared: boolean | null;
+  onIncludeSharedChange(include: boolean): void;
 }
 
 const VIEW_KEY = 'brainstack.graph.view';
@@ -96,7 +99,7 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-export function GraphView({ nodes, edges, affinity, viewerId, ownerNames }: GraphViewProps) {
+export function GraphView({ nodes, edges, affinity, viewerId, ownerNames, includeShared, onIncludeSharedChange }: GraphViewProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -296,6 +299,16 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames }: Grap
       <WheelBinder target={overlayRef} controller={controllerRef} />
 
       <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2">
+        {model && (
+          <GraphLayersMenu
+            model={model}
+            layers={layers}
+            onChange={setLayers}
+            includeShared={includeShared}
+            onIncludeSharedChange={onIncludeSharedChange}
+          />
+        )}
+
         <ToggleButtonGroup
           aria-label="View"
           selectionMode="single"
@@ -326,8 +339,6 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames }: Grap
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
-
-        {model && <GraphLayersMenu model={model} layers={layers} onChange={setLayers} />}
 
         <SearchField
           aria-label="Search notes"
@@ -380,8 +391,12 @@ export function GraphView({ nodes, edges, affinity, viewerId, ownerNames }: Grap
 
       <div
         ref={tooltipRef}
-        hidden={!hovered}
-        className={cn(GLASS, 'pointer-events-none absolute z-20 grid max-w-[280px] gap-px rounded-lg px-2.5 py-2 text-xs')}
+        // Display comes from a class, not the `hidden` attribute: `grid` would override [hidden].
+        className={cn(
+          GLASS,
+          'pointer-events-none absolute z-20 max-w-[280px] gap-px rounded-lg px-2.5 py-2 text-xs',
+          hovered ? 'grid' : 'hidden',
+        )}
       >
         {hovered && <Tooltip node={hovered} vaultLabel={model?.vaults.find((v) => v.id === hovered.vault)?.label ?? ''} />}
       </div>

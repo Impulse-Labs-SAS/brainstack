@@ -20,15 +20,19 @@ the flat layout into the brain's side view and lets the forces inflate it into t
 The chosen view is remembered per browser and written to the URL hash (`#brain`, `#network`,
 `#territories`). The first visit opens in Brain; without WebGL, in Network.
 
-**A layer is what gets drawn.** One popover, like a map's layers button:
+**A layer is what gets drawn.** One popover, the first button of the toolbar, like a map's
+layers button:
 
+- **Include shared vaults** — whether folders others shared with you are loaded at all. On by
+  default and remembered per browser; off, they are not even fetched (`notes.graph` scope
+  `mine`). Only shown when sharing is enabled on the deployment.
 - **Vaults** — show, hide or isolate ("only") each vault. The last visible vault cannot be hidden.
 - **Shared topics** — dotted edges between notes that share a rare topic nobody linked (`notes.affinity`).
 - **Indexes (MOC)** — index notes and their structure edges.
 - **Topics as nodes** — a hollow hexagon per topic, joined to the notes that carry it.
 
-This replaced the old "include shared" checkbox and the four connection modes (links, affinity,
-topics, projects). The projects mode is gone because zooming out now shows projects (below).
+This replaced the four old connection modes (links, affinity, topics, projects). The projects
+mode is gone because zooming out now shows projects (below).
 
 ## Behaviour in every view
 
@@ -45,6 +49,12 @@ topics, projects). The projects mode is gone because zooming out now shows proje
 
 The brain spins slowly until the user touches anything; side, top and front presets reorient
 it. With `prefers-reduced-motion`, nothing spins, pulses or fades in.
+
+**Replay growth** shows the notes appearing one by one in order of creation, at an even pace,
+each beside the neighbour it links to, while a chip shows when the newest one was created. The
+pace is by order, not by date: a vault imported in one sitting has most of its notes created
+within minutes of each other, and one note dated years back would leave the replay idle for
+most of its length and then drop everything at once.
 
 ## What the marks mean
 

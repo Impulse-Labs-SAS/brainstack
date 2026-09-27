@@ -19,6 +19,7 @@ import {
   forceY,
   forceZ,
   type Force,
+  type ForceLink,
   type Simulation,
 } from 'd3-force-3d';
 
@@ -45,8 +46,6 @@ interface Growth {
   next: number;
   t0: number;
   duration: number;
-  from: number;
-  to: number;
   active: GraphNode[];
   activeSet: Set<GraphNode>;
   lastSync: number;
@@ -87,6 +86,22 @@ function forceCluster(strength: number): Force<GraphNode> {
       byProject.set(n.project.id, list);
     }
     groups = [...byProject.values()].filter((g) => g.length > 1);
+  };
+  return force;
+}
+
+/**
+ * Pulls every node to z = 0 in the flat views. Ignores alpha, like the brain's
+ * container: d3 nudges coincident nodes apart at random in all three axes, and
+ * a pull that cooled with the layout left them off the plane.
+ */
+function forceFlat(): Force<GraphNode> {
+  let nodes: GraphNode[] = [];
+  const force: Force<GraphNode> = () => {
+    for (const n of nodes) n.vz -= n.z * 0.3;
+  };
+  force.initialize = (ns) => {
+    nodes = ns;
   };
   return force;
 }
@@ -274,7 +289,7 @@ export class GraphEngine {
       sim.force('z', forceZ<GraphNode>(this.zTarget).strength(hasAnchors ? 0.06 : 0.03));
       sim.force('brain', forceBrain(() => this.brainScale) as Force<GraphNode>);
     } else {
-      sim.force('z', forceZ<GraphNode>(0).strength(0.5));
+      sim.force('z', forceFlat());
     }
     sim.alpha(alpha);
     this.sim = sim;
@@ -384,8 +399,6 @@ export class GraphEngine {
       next: 0,
       t0: now,
       duration: clamp(order.length * 28, 7000, 15000),
-      from: order[0]!.createdAt,
-      to: Math.max(order[order.length - 1]!.createdAt, order[0]!.createdAt + 1),
       active: [],
       activeSet: new Set(),
       lastSync: 0,
@@ -395,11 +408,12 @@ export class GraphEngine {
     this.syncGrowth();
   }
 
-  /** The date the replay has reached and how many notes exist by then; null when not replaying. */
-  growthStatus(now: number): { at: number; count: number } | null {
+  /** When the newest note so far was created, and how many exist; null when not replaying. */
+  growthStatus(): { at: number; count: number } | null {
     const g = this.growth;
     if (!g) return null;
-    return { at: g.from + (g.to - g.from) * clamp((now - g.t0) / g.duration, 0, 1), count: g.active.length };
+    const newest = g.active[g.active.length - 1] ?? g.order[0]!;
+    return { at: newest.createdAt, count: g.active.length };
   }
 
   endGrowth(): void {
@@ -422,8 +436,12 @@ export class GraphEngine {
     const g = this.growth;
     if (!g) return;
     const p = clamp((now - g.t0) / g.duration, 0, 1);
-    const at = g.from + (g.to - g.from) * p;
-    while (g.next < g.order.length && g.order[g.next]!.createdAt <= at) {
+    // An even pace, in order of creation. Pacing by timestamp stalled and then
+    // burst: a vault imported in one afternoon has most of its notes created
+    // within minutes of each other, and one note dated years back stretches the
+    // timeline so everything else lands in its last second.
+    const due = Math.ceil(p * g.order.length);
+    while (g.next < due) {
       const n = g.order[g.next++]!;
       this.spawn(n, g.activeSet);
       n.bornAt = now;
@@ -445,15 +463,27 @@ export class GraphEngine {
 
   private syncGrowth(): void {
     const g = this.growth!;
+    const anchorsBefore = this.anchors.size;
     this.brainTarget = brainScaleFor(g.active.length);
     this.computeAnchors();
-    const alpha = Math.max(this.sim?.alpha() ?? 0, 0.45);
-    if (g.active.length) this.makeSim(alpha);
-    else {
+    if (!g.active.length) {
       // Nothing exists yet: no simulation to tick until the first note appears.
       this.sim?.stop();
       this.sim = null;
+      return;
     }
+    // A new vault changes how hard the anchors pull, which is fixed when the
+    // simulation is built; otherwise grow the running one in place, so the
+    // notes already on screen keep their momentum instead of restarting.
+    if (!this.sim || this.anchors.size !== anchorsBefore) {
+      this.makeSim(Math.max(this.sim?.alpha() ?? 0, 0.45));
+      return;
+    }
+    this.sim.nodes(g.active);
+    (this.sim.force('link') as ForceLink<GraphNode, GraphEdge>).links(
+      this.model!.edges.filter((e) => g.activeSet.has(e.source) && g.activeSet.has(e.target)),
+    );
+    this.sim.alpha(Math.max(this.sim.alpha(), 0.45));
   }
 
   private spawn(n: GraphNode, active: Set<GraphNode>): void {
