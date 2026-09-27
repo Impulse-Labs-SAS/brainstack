@@ -52,7 +52,7 @@ export function noteNameFromFile(fileName: string): string {
     .trim();
   // `.` y `..` no son nombres, son movimientos.
   if (clean === '' || clean === '.' || clean === '..') {
-    throw new Error(`nombre de archivo sin nota dentro: ${fileName}`);
+    throw new Error(`file name has no note name in it: ${fileName}`);
   }
   return clean;
 }

@@ -70,7 +70,7 @@ describe('InviteService — email mode', () => {
       inviteeEmail: 'a@x.com',
     });
     await seedUser('eve', 'e@x.com');
-    await expect(svc.accept({ token: inv.token, user: { id: 'eve', email: 'e@x.com' } })).rejects.toThrow(/otro email/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'eve', email: 'e@x.com' } })).rejects.toThrow(/different email/);
   });
 
   it('email mode es single-use', async () => {
@@ -81,7 +81,7 @@ describe('InviteService — email mode', () => {
       inviteeEmail: 'a@x.com',
     });
     await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
-    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/ya aceptada/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/already accepted/);
   });
 });
 
@@ -108,7 +108,7 @@ describe('InviteService — link mode', () => {
       folderPath: 'p',
       mode: 'link',
     });
-    await expect(svc.accept({ token: inv.token, user: { id: 'owner', email: 'o@x.com' } })).rejects.toThrow(/propia invitación/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'owner', email: 'o@x.com' } })).rejects.toThrow(/your own invitation/);
   });
 });
 

@@ -82,7 +82,7 @@ export function buildMcpServer({
   const requireUserId = (): string => {
     if (principal?.userId) return principal.userId;
     if (sharing.enabled) {
-      throw new AppError('mcp request sin principal', 'UNAUTHORIZED', 401);
+      throw new AppError('MCP request has no principal', 'UNAUTHORIZED', 401);
     }
     return '';
   };

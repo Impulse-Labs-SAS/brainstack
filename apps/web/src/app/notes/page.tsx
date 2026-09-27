@@ -5,7 +5,7 @@ import { FileTree } from '@/components/file-tree/file-tree';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 
 export default function NotesPage() {
-  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 320);
+  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:notes-tree-width', 272);
 
   return (
     <AppShell>
@@ -20,10 +20,13 @@ export default function NotesPage() {
         >
           <FileTree />
         </ResizablePanel>
-        {/* Sin nota elegida, el teléfono muestra el árbol y nada más: el
-            cartel ocuparía la pantalla entera para no decir nada. */}
-        <div className="hidden flex-1 items-center justify-center font-mono text-[12px] text-fg-muted md:flex">
-          select a note on the left, or right-click to create one
+        {/* With no note picked, a phone shows the tree and nothing else: the
+            message would take the whole screen to say nothing. */}
+        <div className="hidden flex-1 flex-col items-center justify-center gap-1 text-center md:flex">
+          <div className="text-sm text-fg-secondary">Pick a note on the left</div>
+          <div className="text-xs text-fg-muted">
+            or press Ctrl/⌘ K to jump to one, or right-click the tree to create one.
+          </div>
         </div>
       </div>
     </AppShell>

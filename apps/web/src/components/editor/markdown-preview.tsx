@@ -10,12 +10,19 @@
 import 'highlight.js/styles/github-dark.css';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
+import {
+  PropertiesBlock,
+  readPropertiesOpen,
+  writePropertiesOpen,
+} from '@/components/note/properties-block';
+import { LinkPeek, usePeek } from '@/components/note/link-peek';
 import { remarkWikilinks } from '@/lib/remark-wikilinks';
 import { cn } from '@/lib/utils';
 import type { ResolvedAttachment } from '@/lib/wikilinks-client';
@@ -23,7 +30,8 @@ import type { ResolvedAttachment } from '@/lib/wikilinks-client';
 export interface MarkdownPreviewProps {
   body: string;
   frontmatter?: Record<string, unknown>;
-  resolveLink(target: string): { href: string; resolved: boolean };
+  /** `path` is the vault path of a resolved note, for the hover preview. */
+  resolveLink(target: string): { href: string; resolved: boolean; path?: string };
   resolveEmbed(target: string):
     | ResolvedAttachment
     | { kind: 'note'; path: string }
@@ -38,21 +46,31 @@ export function MarkdownPreview({
   resolveEmbed,
   className,
 }: MarkdownPreviewProps) {
+  const router = useRouter();
+  const peek = usePeek();
+  const [propsOpen, setPropsOpen] = useState(true);
+  useEffect(() => setPropsOpen(readPropertiesOpen()), []);
+
   const components = useMemo<Components>(
     () => ({
       a({ href, children, ...rest }) {
         const raw = href ?? '';
         if (raw.startsWith('wikilink://')) {
           const target = decodeURI(raw.slice('wikilink://'.length));
-          const { href: dest, resolved } = resolveLink(target);
+          const { href: dest, resolved, path } = resolveLink(target);
           return (
             <Link
               href={dest}
+              onMouseEnter={(e) =>
+                peek.show({ label: target.split('#')[0]!, path: resolved ? (path ?? null) : null }, e.currentTarget)
+              }
+              onMouseLeave={peek.hide}
+              onClick={peek.close}
               className={cn(
-                'underline decoration-dotted underline-offset-2',
+                'rounded-sm underline underline-offset-[3px]',
                 resolved
-                  ? 'text-accent hover:text-accent-hover'
-                  : 'text-fg-muted hover:text-fg-secondary',
+                  ? 'text-accent-hover decoration-accent-hover/40 hover:bg-accent/10'
+                  : 'text-fg-secondary decoration-dashed decoration-fg-muted hover:text-fg-primary',
               )}
               data-wikilink={target}
               data-resolved={resolved ? 'true' : 'false'}
@@ -86,7 +104,7 @@ export function MarkdownPreview({
           if (!resolved) {
             return (
               <span className="inline-flex items-center gap-1 rounded border border-border-subtle bg-bg-elevated px-2 py-0.5 font-mono text-[11px] text-fg-muted">
-                📎 {target} (no encontrado)
+                📎 {target} (not found)
               </span>
             );
           }
@@ -157,27 +175,33 @@ export function MarkdownPreview({
         );
       },
       h1: ({ children }) => (
-        <h1 className="mt-6 mb-3 text-2xl font-semibold text-fg-primary">{children}</h1>
+        <h1 className="mb-4 mt-8 text-[28px] font-semibold leading-9 tracking-tight text-fg-primary [text-wrap:balance] first:mt-0">
+          {children}
+        </h1>
       ),
       h2: ({ children }) => (
-        <h2 className="mt-5 mb-2 text-xl font-semibold text-fg-primary">{children}</h2>
+        <h2 className="mb-2 mt-8 text-[19px] font-semibold leading-7 text-fg-primary">{children}</h2>
       ),
       h3: ({ children }) => (
-        <h3 className="mt-4 mb-2 text-lg font-semibold text-fg-primary">{children}</h3>
+        <h3 className="mb-1.5 mt-6 text-base font-semibold text-fg-primary">{children}</h3>
       ),
       h4: ({ children }) => (
         <h4 className="mt-3 mb-2 text-base font-semibold text-fg-primary">{children}</h4>
       ),
       p: ({ children }) => (
-        <p className="my-2 leading-6 text-fg-primary">{children}</p>
+        <p className="my-3 text-[15px] leading-[1.75] text-fg-body">{children}</p>
       ),
       ul: ({ children }) => (
-        <ul className="my-2 ml-5 list-disc space-y-1 text-fg-primary">{children}</ul>
+        <ul className="my-3 ml-5 list-disc space-y-1 text-[15px] text-fg-body marker:text-fg-muted">
+          {children}
+        </ul>
       ),
       ol: ({ children }) => (
-        <ol className="my-2 ml-5 list-decimal space-y-1 text-fg-primary">{children}</ol>
+        <ol className="my-3 ml-5 list-decimal space-y-1 text-[15px] text-fg-body marker:text-fg-muted">
+          {children}
+        </ol>
       ),
-      li: ({ children }) => <li className="leading-6">{children}</li>,
+      li: ({ children }) => <li className="leading-[1.75]">{children}</li>,
       blockquote: ({ children }) => (
         <blockquote className="my-3 border-l-2 border-accent/60 bg-bg-elevated/40 px-3 py-1 text-fg-secondary">
           {children}
@@ -217,42 +241,42 @@ export function MarkdownPreview({
         </pre>
       ),
     }),
+    // `peek` exposes stable callbacks over refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [resolveLink, resolveEmbed],
   );
 
-  const hasFm = frontmatter && Object.keys(frontmatter).length > 0;
-
   return (
-    <div className={cn('h-full overflow-y-auto px-6 py-5', className)}>
-      {hasFm && (
-        <details className="mb-4 rounded border border-border-subtle bg-bg-elevated/40 px-3 py-1 text-[12px]">
-          <summary className="cursor-pointer select-none font-mono text-fg-muted">
-            frontmatter ({Object.keys(frontmatter!).length})
-          </summary>
-          <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono text-[11.5px]">
-            {Object.entries(frontmatter!).map(([k, v]) => (
-              <div key={k} className="contents">
-                <dt className="text-fg-muted">{k}</dt>
-                <dd className="text-fg-secondary">{formatValue(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      )}
-      {body.trim() === '' ? (
-        <div className="font-mono text-[12px] text-fg-muted">Empty note</div>
-      ) : (
-        <div className="max-w-3xl">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkWikilinks]}
-            rehypePlugins={[rehypeRaw, rehypeHighlight]}
-            components={components}
-            urlTransform={urlTransform}
-          >
-            {body}
-          </ReactMarkdown>
-        </div>
-      )}
+    <div className={cn('h-full overflow-y-auto', className)} onScroll={peek.close}>
+      <div className="mx-auto max-w-[calc(72ch+48px)] px-6 pb-28 pt-8">
+        {frontmatter && (
+          <PropertiesBlock
+            frontmatter={frontmatter}
+            open={propsOpen}
+            onToggle={() => {
+              writePropertiesOpen(!propsOpen);
+              setPropsOpen(!propsOpen);
+            }}
+            onNavigate={(href) => router.push(href)}
+            className="mb-6"
+          />
+        )}
+        {body.trim() === '' ? (
+          <div className="text-sm text-fg-muted">Empty note.</div>
+        ) : (
+          <div data-preview-body>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkWikilinks]}
+              rehypePlugins={[rehypeRaw, rehypeHighlight]}
+              components={components}
+              urlTransform={urlTransform}
+            >
+              {body}
+            </ReactMarkdown>
+          </div>
+        )}
+      </div>
+      <LinkPeek target={peek.target} onEnter={peek.keep} onLeave={peek.hide} />
     </div>
   );
 }
@@ -267,14 +291,4 @@ export function MarkdownPreview({
 function urlTransform(url: string): string {
   if (url.startsWith('wikilink://') || url.startsWith('embed://')) return url;
   return defaultUrlTransform(url);
-}
-
-function formatValue(v: unknown): string {
-  if (v === null) return 'null';
-  if (typeof v === 'string') return v;
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
-  }
 }

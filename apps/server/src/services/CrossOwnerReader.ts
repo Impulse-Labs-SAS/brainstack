@@ -45,7 +45,7 @@ export class CrossOwnerReader {
 
   private requireEnabled(): void {
     if (!this.enabled) {
-      throw new AppError('cross-owner reads no disponibles en self-host', 'FORBIDDEN', 403);
+      throw new AppError('reading another vault is not available in a self-hosted instance', 'FORBIDDEN', 403);
     }
   }
 

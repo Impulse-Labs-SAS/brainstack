@@ -49,6 +49,8 @@ import { resolveProjects, type ProjectRef } from './projects.js';
 import {
   facetSignal,
   rankRelated,
+  signalReason,
+  type RelatedReason,
   RELATED_IGNORED_FACET_KEYS,
   tagSignal,
   type RankedNote,
@@ -373,7 +375,16 @@ export class NoteService {
     ownerId: string,
     path: string,
     opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }>; limit?: number } = {},
-  ): Promise<Array<{ path: string; title: string; ownerId: string | null; score: number }>> {
+  ): Promise<
+    Array<{
+      path: string;
+      title: string;
+      ownerId: string | null;
+      score: number;
+      /** What the two notes share, rarest first. */
+      reasons: RelatedReason[];
+    }>
+  > {
     const physical = this.toPhysical(ownerId, path);
     const limit = opts.limit ?? 10;
 
@@ -484,6 +495,9 @@ export class NoteService {
           title: note.title,
           ownerId: note.ownerId ?? null,
           score: r.score,
+          reasons: r.signals
+            .map(signalReason)
+            .filter((reason): reason is RelatedReason => reason !== null),
         };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
@@ -599,7 +613,7 @@ export class NoteService {
     // A folder cannot be moved inside itself: the destination would be carried
     // along by the very move that is creating it.
     if (to.startsWith(`${from}/`)) {
-      throw new AppError('no se puede mover una carpeta dentro de sí misma', 'INVALID_INPUT', 400);
+      throw new AppError("can't move a folder inside itself", 'INVALID_INPUT', 400);
     }
 
     const [asNote] = await this.opts.db
@@ -666,7 +680,7 @@ export class NoteService {
       : [];
     if (taken.length > 0) {
       const names = taken.map((r) => this.toLogical(ownerId, r.path)).join(', ');
-      throw new AppError(`ya existe en el destino: ${names}`, 'ALREADY_EXISTS', 409);
+      throw new AppError(`already exists at the destination: ${names}`, 'ALREADY_EXISTS', 409);
     }
 
     for (const mapping of mappings) {
@@ -738,10 +752,10 @@ export class NoteService {
   }): Promise<CrossVaultMoveResult> {
     const { fromOwnerId, toOwnerId } = params;
     if (!this.hosted) {
-      throw new AppError('no hay otra bóveda en self-host', 'INVALID_INPUT', 400);
+      throw new AppError('there is no other vault in a self-hosted instance', 'INVALID_INPUT', 400);
     }
     if (fromOwnerId === toOwnerId) {
-      throw new AppError('mismo dueño: usá move', 'INVALID_INPUT', 400);
+      throw new AppError('same owner: use move instead', 'INVALID_INPUT', 400);
     }
 
     const from = this.toPhysical(fromOwnerId, params.fromPath);
@@ -790,7 +804,7 @@ export class NoteService {
       : [];
     if (taken.length > 0) {
       const names = taken.map((r) => this.toLogical(toOwnerId, r.path)).join(', ');
-      throw new AppError(`ya existe en el destino: ${names}`, 'ALREADY_EXISTS', 409);
+      throw new AppError(`already exists at the destination: ${names}`, 'ALREADY_EXISTS', 409);
     }
 
     // Measured before the move, because afterwards the rows are gone: who was

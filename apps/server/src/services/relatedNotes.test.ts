@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { facetSignal, rankRelated, tagSignal } from './relatedNotes.js';
+import { facetSignal, rankRelated, signalReason, tagSignal } from './relatedNotes.js';
 
 describe('rankRelated', () => {
   it('ranks a note sharing a rare signal above one sharing only a common one', () => {
@@ -51,5 +51,32 @@ describe('rankRelated', () => {
     const hits = [{ path: 'B', signal: tagSignal('ghost') }];
     const ranked = rankRelated(hits, [], 10);
     expect(ranked).toEqual([{ path: 'B', score: 0, signals: [tagSignal('ghost')] }]);
+  });
+});
+
+describe('related reasons', () => {
+  it('lists a note’s signals rarest first', () => {
+    const hits = [
+      { path: 'B', signal: facetSignal('technologies', 'postgres') },
+      { path: 'B', signal: tagSignal('atlas') },
+    ];
+    const counts = [
+      { signal: facetSignal('technologies', 'postgres'), count: 20 },
+      { signal: tagSignal('atlas'), count: 3 },
+    ];
+    expect(rankRelated(hits, counts, 10)[0]?.signals).toEqual([
+      tagSignal('atlas'),
+      facetSignal('technologies', 'postgres'),
+    ]);
+  });
+
+  it('turns a signal back into the tag or facet it stands for', () => {
+    expect(signalReason(tagSignal('proyecto/atlas'))).toEqual({ kind: 'tag', tag: 'proyecto/atlas' });
+    expect(signalReason(facetSignal('status', 'a:b'))).toEqual({
+      kind: 'facet',
+      key: 'status',
+      value: 'a:b',
+    });
+    expect(signalReason('other')).toBeNull();
   });
 });

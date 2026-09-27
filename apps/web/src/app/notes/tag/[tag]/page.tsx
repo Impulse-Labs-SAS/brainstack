@@ -24,7 +24,7 @@ export default function TagPage() {
           <h1 className="text-lg font-medium text-fg-primary">{tag}</h1>
         </div>
         {notes.data && notes.data.length === 0 && (
-          <div className="text-sm text-fg-muted">Ninguna nota con este tag.</div>
+          <div className="text-sm text-fg-muted">No notes with this tag.</div>
         )}
         <ul className="max-w-xl space-y-1">
           {(notes.data ?? []).map((n) => (

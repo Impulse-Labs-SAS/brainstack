@@ -172,6 +172,21 @@ describe('links and tags', () => {
     expect(backlinks[0]?.linkKind).toBe('wikilink');
   });
 
+  it('says where each backlink sits in its source note', async () => {
+    await notes.upsert('Contexto/destino.md', '# Destino');
+    await notes.upsert(
+      'Contexto/origen.md',
+      '---\ntags: [x]\n---\n# Origen\n\n- Decidido en [[destino|la nota]], por ahora.',
+    );
+
+    const [link] = await notes.listBacklinks('Contexto/destino.md');
+    expect(link?.snippet).toBe('Decidido en [[destino|la nota]], por ahora.');
+    expect(link?.title).toBe('Origen');
+
+    const [out] = await notes.listOutboundLinks('Contexto/origen.md');
+    expect(out?.title).toBe('Destino');
+  });
+
   it('rebuilds the graph on every write instead of accumulating stale rows', async () => {
     await notes.upsert('Grafo/uno.md', '# Uno');
     await notes.upsert('Grafo/dos.md', '# Dos');

@@ -11,12 +11,14 @@
 import { keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { NoteEditor } from '@/components/editor/note-editor';
-import { EcosystemSection } from '@/components/ecosystem/ecosystem-section';
+import { ConnectionsPanel } from '@/components/ecosystem/connections-panel';
+import { extractOutline } from '@/lib/outline';
+import { encodePath } from '@/lib/wikilinks-client';
 import { ResizablePanel, usePersistedWidth } from '@/components/layout/resizable-panel';
 import { SharedTree } from '@/components/file-tree/shared-tree';
 import { trpc } from '@/lib/trpc';
@@ -97,7 +99,13 @@ export default function SharedNotePage() {
     return () => clearTimeout(handle);
   }, [canWrite, draft, draftPath, path, ownerId, utils]);
 
-  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:shared-tree-width', 320);
+  const [treeWidth, setTreeWidth] = usePersistedWidth('brainstack:shared-tree-width', 272);
+  const router = useRouter();
+  const [connOpen, setConnOpen] = useState(false);
+  useEffect(() => {
+    setConnOpen(window.matchMedia('(min-width: 1280px)').matches);
+  }, []);
+  const outline = useMemo(() => extractOutline(note.data?.body ?? ''), [note.data?.body]);
 
   // Mismo criterio que la vista propia: en teléfono se ve el árbol o la nota,
   // y con una nota abierta gana la nota.
@@ -121,7 +129,7 @@ export default function SharedNotePage() {
                 </span>
               </>
             ) : (
-              'cargando…'
+              'Loading…'
             )}
           </div>
           <div className="flex-1 overflow-y-auto">
@@ -145,7 +153,7 @@ export default function SharedNotePage() {
         <div className="flex h-full overflow-hidden">
           {tree}
           <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
-            sin acceso a {path}
+            No access to {path}
           </div>
         </div>
       </AppShell>
@@ -158,7 +166,7 @@ export default function SharedNotePage() {
         <div className="flex h-full overflow-hidden">
           {tree}
           <div className="flex flex-1 items-center justify-center font-mono text-[12px] text-fg-muted">
-            elegí una nota del árbol
+            Pick a note from the tree
           </div>
         </div>
       </AppShell>
@@ -198,7 +206,7 @@ export default function SharedNotePage() {
             <div className="flex min-w-0 items-center gap-2">
               <Link
                 href="/notes"
-                title="Volver al árbol"
+                title="Back to notes"
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden"
               >
                 <ChevronLeft size={16} />
@@ -212,22 +220,47 @@ export default function SharedNotePage() {
             </div>
             <div className="rounded border border-border-subtle px-2 py-0.5 font-mono text-[10px] uppercase text-fg-muted">
               {!canWrite
-                ? 'read-only'
+                ? 'Read only'
                 : update.isPending
-                  ? 'saving…'
+                  ? 'Saving…'
                   : savedAt
-                    ? `saved ${new Date(savedAt).toISOString().slice(11, 19)}`
-                    : 'shared · can edit'}
+                    ? `Saved ${new Date(savedAt).toLocaleTimeString()}`
+                    : 'Shared · can edit'}
             </div>
           </div>
-          <div className="relative flex-1 overflow-hidden">
-            {canWrite ? (
-              <NoteEditor value={draft ?? ''} onChange={setDraft} />
+          <div className="relative flex min-h-0 flex-1">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <NoteEditor
+                key={`${canWrite}`}
+                value={canWrite ? (draft ?? '') : reconstructBody(note.data)}
+                onChange={canWrite ? setDraft : undefined}
+                readOnly={!canWrite}
+                frontmatter={note.data.frontmatter}
+                onNavigate={(href) => router.push(href)}
+              />
+            </div>
+            {connOpen ? (
+              <ConnectionsPanel
+                currentPath={path}
+                outboundLinks={linksQ.data ?? []}
+                outline={outline}
+                onJump={() => {}}
+                onClose={() => setConnOpen(false)}
+                routeFor={(p) =>
+                  `/notes/shared/${encodeURIComponent(ownerId)}/${encodePath(p.replace(/\.md$/i, ''))}`
+                }
+                className="w-[min(336px,90%)] shrink-0 border-l border-border-subtle"
+              />
             ) : (
-              <NoteEditor value={reconstructBody(note.data)} readOnly />
+              <button
+                type="button"
+                onClick={() => setConnOpen(true)}
+                className="absolute right-3 top-3 rounded-lg border border-border bg-bg-surface px-2 py-1 text-xs text-fg-secondary hover:text-fg-primary"
+              >
+                Connections
+              </button>
             )}
           </div>
-          <EcosystemSection outboundLinks={linksQ.data ?? []} />
         </div>
       </div>
     </AppShell>

@@ -14,6 +14,7 @@ import matter from 'gray-matter';
 
 import { parseNote } from '../parser/index.js';
 import { normalizeNoteKey, normalizeRelativePath } from '../paths.js';
+import { linkSnippet } from '../links/snippet.js';
 import { resolveLinks } from '../resolver/wikilinks.js';
 import type { Frontmatter, ParsedFacet, ParsedLink, ResolvedLink } from '../types.js';
 
@@ -71,6 +72,16 @@ export interface Backlink {
   linkKind: string;
   alias: string | null;
   section: string | null;
+  /**
+   * The line of the source note the link sits in. Only backlinks carry it:
+   * it is what tells a reader how the note is cited, not only that it is.
+   */
+  snippet?: string;
+  /**
+   * The title of the note on the other end: the source for a backlink, the
+   * target for an outbound link. Absent when that end is not a note (yet).
+   */
+  title?: string;
 }
 
 export interface Facet {
@@ -394,7 +405,7 @@ export class PgNoteStore {
   /** Every link pointing at `path` — the backlinks panel and `list_links`. */
   async listBacklinks(path: string): Promise<Backlink[]> {
     const key = normalizeRelativePath(path);
-    return this.db
+    const rows = await this.db
       .select({
         sourcePath: links.sourcePath,
         targetPath: links.targetPath,
@@ -402,16 +413,25 @@ export class PgNoteStore {
         linkKind: links.linkKind,
         alias: links.alias,
         section: links.section,
+        position: links.position,
+        body: notes.body,
+        title: notes.title,
       })
       .from(links)
+      .leftJoin(notes, eq(notes.path, links.sourcePath))
       .where(eq(links.targetPath, key))
       .orderBy(links.sourcePath, links.position);
+    return rows.map(({ position, body, title, ...link }) => ({
+      ...link,
+      snippet: body ? linkSnippet(body, position) : '',
+      ...(title ? { title } : {}),
+    }));
   }
 
   /** Every link `path` points at — the mirror of `listBacklinks`. */
   async listOutboundLinks(path: string): Promise<Backlink[]> {
     const key = normalizeRelativePath(path);
-    return this.db
+    const rows = await this.db
       .select({
         sourcePath: links.sourcePath,
         targetPath: links.targetPath,
@@ -419,10 +439,13 @@ export class PgNoteStore {
         linkKind: links.linkKind,
         alias: links.alias,
         section: links.section,
+        title: notes.title,
       })
       .from(links)
+      .leftJoin(notes, eq(notes.path, links.targetPath))
       .where(eq(links.sourcePath, key))
       .orderBy(links.position);
+    return rows.map(({ title, ...link }) => ({ ...link, ...(title ? { title } : {}) }));
   }
 
   /** Distinct tags in use, for autocomplete and "what tags exist?" questions. */

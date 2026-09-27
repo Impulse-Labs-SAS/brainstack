@@ -15,11 +15,9 @@ function wikilinkSource(candidates: () => readonly WikilinkCandidate[]) {
   return (context: CompletionContext): CompletionResult | null => {
     const match = context.matchBefore(TRIGGER_RE);
     if (!match) return null;
-    // Require an explicit request once the query is empty (just typed `[[`),
-    // otherwise every keystroke elsewhere in the document would be scanned
-    // against this regex for no reason.
+    // An empty query opens the list too: `[[` on its own is the moment to
+    // offer notes, and waiting for a first letter made it look broken.
     const query = TRIGGER_RE.exec(match.text)?.[1] ?? '';
-    if (query === '' && !context.explicit) return null;
 
     const hits = matchWikilinkCandidates(candidates(), query);
     if (hits.length === 0) return null;

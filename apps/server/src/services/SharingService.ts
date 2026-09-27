@@ -93,13 +93,13 @@ export class SharingService {
 
   async assertCanRead(userId: string, ownerId: string, relPath: string): Promise<void> {
     if (!(await this.canRead(userId, ownerId, relPath))) {
-      throw new AppError('sin acceso de lectura a este path', 'FORBIDDEN', 403);
+      throw new AppError('no read access to this path', 'FORBIDDEN', 403);
     }
   }
 
   async assertCanWrite(userId: string, ownerId: string, relPath: string): Promise<void> {
     if (!(await this.canWrite(userId, ownerId, relPath))) {
-      throw new AppError('sin acceso de escritura a este path', 'FORBIDDEN', 403);
+      throw new AppError('no write access to this path', 'FORBIDDEN', 403);
     }
   }
 
@@ -229,14 +229,14 @@ export class SharingService {
     permission?: SharePermission;
   }): Promise<string> {
     if (!this.enabled) {
-      throw new AppError('sharing no disponible en self-host', 'FORBIDDEN', 403);
+      throw new AppError('sharing is not available in a self-hosted instance', 'FORBIDDEN', 403);
     }
     const folderPath = normalizeFolderPath(params.folderPath);
     if (folderPath === '') {
-      throw new AppError('no se puede compartir el root del vault', 'INVALID_INPUT', 400);
+      throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
     if (params.ownerId === params.sharedWithUserId) {
-      throw new AppError('no se puede compartir consigo mismo', 'INVALID_INPUT', 400);
+      throw new AppError("you can't share a folder with yourself", 'INVALID_INPUT', 400);
     }
     const permission = params.permission ?? 'read';
 

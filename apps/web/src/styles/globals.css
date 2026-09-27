@@ -10,6 +10,7 @@
 
   --fg-primary: #ededed;
   --fg-secondary: #a0a0a0;
+  --fg-body: #d4d4d4;
   --fg-muted: #6b6b6b;
   --fg-disabled: #404040;
 
@@ -19,6 +20,8 @@
 
   --accent: #7c5cff;
   --accent-hover: #9579ff;
+  --accent-rgb: 124 92 255;
+  --accent-hover-rgb: 149 121 255;
   --accent-fg: #ffffff;
 
   --success: #22c55e;
@@ -40,6 +43,15 @@ body {
 ::selection {
   background-color: rgba(124, 92, 255, 0.35);
   color: var(--fg-primary);
+}
+
+/* The browser's default <mark> is yellow with black text. Every highlight in
+   the app (a backlink's citation, a search hit) is the accent instead. */
+mark {
+  background-color: rgb(var(--accent-rgb) / 0.2);
+  color: var(--fg-primary);
+  border-radius: 3px;
+  padding: 0 2px;
 }
 
 /* Scrollbar (dark, narrow, Linear-like) */

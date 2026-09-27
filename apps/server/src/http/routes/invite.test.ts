@@ -82,7 +82,7 @@ describe('GET /invite/accept/:token', () => {
 
   it('un error de aceptación va a la pantalla de error con su motivo', async () => {
     const router = routerFor(PABLO, async () => {
-      throw new AppError('invite ya aceptada', 'FORBIDDEN', 403);
+      throw new AppError('this invitation was already accepted', 'FORBIDDEN', 403);
     });
 
     const location = (await router.request('/accept/tok')).headers.get('location');
