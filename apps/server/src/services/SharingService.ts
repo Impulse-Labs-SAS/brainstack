@@ -233,10 +233,10 @@ export class SharingService {
     }
     const folderPath = normalizeFolderPath(params.folderPath);
     if (folderPath === '') {
-      throw new AppError('no se puede compartir el root del vault', 'INVALID_INPUT', 400);
+      throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
     if (params.ownerId === params.sharedWithUserId) {
-      throw new AppError('no se puede compartir consigo mismo', 'INVALID_INPUT', 400);
+      throw new AppError("you can't share a folder with yourself", 'INVALID_INPUT', 400);
     }
     const permission = params.permission ?? 'read';
 

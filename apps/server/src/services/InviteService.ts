@@ -87,7 +87,7 @@ export class InviteService {
     }
     const folderPath = normalizeFolderPath(params.folderPath);
     if (!folderPath) {
-      throw new AppError('no se puede compartir el root del vault', 'INVALID_INPUT', 400);
+      throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
     if (params.mode === 'email' && !params.inviteeEmail) {
       throw new AppError('email mode requiere inviteeEmail', 'INVALID_INPUT', 400);
