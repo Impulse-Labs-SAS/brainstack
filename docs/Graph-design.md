@@ -148,6 +148,11 @@ across rebuilds (node objects are cached by id), so toggling a layer never reshu
 graph, and a new note starts beside a placed neighbour — or, on the map, at its place. The
 last layout is saved per browser and reused on the next visit to the same view.
 
+During a replay the simulation grows in place, resynced with the notes shown so far every
+90 ms. It is always handed a **copy** of that list: d3 keeps the array it is given, and a note
+pushed onto it between two syncs is ticked by forces never initialised for it — its position
+turns `NaN`, and d3 re-seeds it on a spiral far outside the brain.
+
 **The map's land** is computed without a Delaunay triangulation: each note's cell starts as a
 disc and is cut by the perpendicular bisector with every note close enough to matter, found
 through a grid. The fills are one WebGL mesh under the notes, the only layer that blends
