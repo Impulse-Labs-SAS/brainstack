@@ -41,6 +41,12 @@ const LINK_FACTOR: Record<EdgeKind, number> = { link: 1, structure: 0.35, affini
 const APPEAR_MS = 420;
 /** Fraction of the remaining way a note travels towards its place on the map, per frame. */
 const MAP_EASE = 0.14;
+/**
+ * How much of a frame the first layout may take. It used to run in one go
+ * inside `setModel`, which froze the page for half a second or more on every
+ * visit, whatever the vault's size.
+ */
+const WARMUP_BUDGET_MS = 12;
 
 export type RebuildReason = 'init' | 'data' | 'layers' | 'view';
 type Point = { x: number; y: number; z: number };
@@ -148,6 +154,10 @@ export class GraphEngine {
   private lobes = new Map<string, Point>();
   /** Territories: notes still easing towards their place. */
   private travelling = false;
+  /** Ticks the first layout still needs before the notes are shown, a few per frame. */
+  private warmup = 0;
+  /** The time of the latest frame, for a wave started outside one. */
+  private clock = 0;
   private readonly random = seededRandom(20260926);
 
   constructor(private readonly reduceMotion: boolean) {}
@@ -164,6 +174,10 @@ export class GraphEngine {
   get moving(): boolean {
     if (this.isMap) return this.travelling;
     return !!this.sim && this.sim.alpha() > this.sim.alphaMin();
+  }
+  /** Whether the first layout is still being worked out, with every note hidden. */
+  get warming(): boolean {
+    return this.warmup > 0;
   }
 
   appear(n: GraphNode, now: number): number {
@@ -183,7 +197,10 @@ export class GraphEngine {
   /** A new model: keep every placed node where it is, place the new ones beside their neighbours. */
   setModel(model: GraphModel, reason: RebuildReason, now: number, saved?: ReadonlyMap<string, Point>): void {
     this.endGrowth();
-    const previous = new Set(this.model?.nodes ?? []);
+    this.clock = now;
+    // Notes still hidden behind the first layout count as new: nobody has seen them yet.
+    const previous = new Set(this.warmup ? [] : (this.model?.nodes ?? []));
+    this.warmup = 0;
     this.model = model;
     this.brainTarget = brainScaleFor(model.nodes.length);
     this.brainScale = this.brainTarget;
@@ -203,12 +220,13 @@ export class GraphEngine {
     } else {
       this.makeSim(reason === 'init' ? (saved?.size ? 0.4 : 1) : reason === 'layers' ? 0.5 : 0.8);
       if (reason === 'init') {
+        // The layout settles out of sight first, over the next frames (see `warm`).
         const n = model.nodes.length;
-        const ticks = saved?.size ? 20 : n > 1200 ? 30 : n > 500 ? 70 : 150;
-        this.sim!.tick(ticks);
+        this.warmup = saved?.size ? 20 : n > 1200 ? 30 : n > 500 ? 70 : 150;
       }
     }
-    this.wave(reason === 'init' ? model.nodes : model.nodes.filter((n) => !previous.has(n)), now);
+    if (this.warmup) for (const n of model.nodes) n.bornAt = Infinity;
+    else this.wave(reason === 'init' ? model.nodes : model.nodes.filter((n) => !previous.has(n)), now);
   }
 
   /** Switch views. Entering the brain rescales the layout; the caller scales the camera to match. */
@@ -217,6 +235,11 @@ export class GraphEngine {
     const entering = view === 'brain' && this.view !== 'brain';
     this.view = view;
     if (!this.model) return null;
+    if (this.warmup) {
+      // Leaving before the first layout settled: show the notes where they are.
+      this.warmup = 0;
+      this.wave(this.model.nodes, this.clock);
+    }
     this.shape();
     if (this.isMap) {
       this.stopSim();
@@ -231,6 +254,8 @@ export class GraphEngine {
 
   /** Advance one frame: layout, growth replay, brain size. Returns whether anything moved. */
   advance(now: number): boolean {
+    this.clock = now;
+    if (this.warmup) return this.warm(now);
     let moving: boolean;
     if (this.isMap) {
       moving = this.travel();
@@ -245,6 +270,18 @@ export class GraphEngine {
     this.brainScale += (this.brainTarget - this.brainScale) * 0.06;
     return moving || !!this.growth;
   }
+
+  /** Settle the first layout while nothing is shown, then light the notes up. */
+  private warm(now: number): boolean {
+    const start = performance.now();
+    do {
+      this.sim!.tick();
+      this.warmup--;
+    } while (this.warmup && performance.now() - start < WARMUP_BUDGET_MS);
+    if (!this.warmup) this.wave(this.model!.nodes, now);
+    return true;
+  }
+
 
   /** Whether a dragged note may be moved: on the map, a note's place is where it is filed. */
   get canPin(): boolean {
@@ -602,6 +639,7 @@ export class GraphEngine {
     const model = this.model;
     if (!model?.nodes.length) return;
     this.endGrowth();
+    this.warmup = 0;
     const order = [...model.nodes].sort((a, b) => a.createdAt - b.createdAt);
     for (const n of order) {
       n.bornAt = Infinity;
