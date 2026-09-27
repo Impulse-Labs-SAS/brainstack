@@ -189,3 +189,60 @@ describe('views', () => {
     expect(model.nodes.map((n) => [n.x, n.y])).toEqual(before);
   });
 });
+
+describe('first layout', () => {
+  function opened(view: 'brain' | 'network' = 'network') {
+    const model = importedVault(300);
+    const engine = new GraphEngine(false);
+    engine.view = view;
+    engine.setModel(model, 'init', 0);
+    return { model, engine };
+  }
+
+  it('settles out of sight over the next frames, then lights the notes up', () => {
+    const { model, engine } = opened();
+    expect(engine.warming).toBe(true);
+    expect(model.nodes.every((n) => engine.appear(n, 0) === 0)).toBe(true);
+    let t = 0;
+    while (engine.warming) engine.advance((t += 16));
+    expect(model.nodes.every((n) => Number.isFinite(n.x + n.y) && n.bornAt >= t && n.bornAt < Infinity)).toBe(true);
+    expect(engine.moving).toBe(true);
+  });
+
+  it('shows every note when the model is rebuilt before the layout settled', () => {
+    const { model, engine } = opened();
+    engine.setModel(model, 'layers', 16);
+    expect(engine.warming).toBe(false);
+    expect(model.nodes.every((n) => n.bornAt < Infinity)).toBe(true);
+  });
+
+  it('shows every note when the view changes before the layout settled', () => {
+    const { model, engine } = opened();
+    engine.advance(16);
+    engine.setView('brain');
+    expect(engine.warming).toBe(false);
+    expect(model.nodes.every((n) => n.bornAt < Infinity)).toBe(true);
+  });
+});
+
+describe('dimensions', () => {
+  const dimensions = (engine: GraphEngine) => (engine as unknown as { sim: { numDimensions(): number } }).sim.numDimensions();
+
+  it('lays Network out in two dimensions and the brain in three', () => {
+    expect(dimensions(engineWith(importedVault(30)))).toBe(2);
+    expect(dimensions(engineWith(importedVault(30), 'brain'))).toBe(3);
+  });
+
+  it('from the brain, lets the notes fall onto the plane in three dimensions before dropping the third', () => {
+    const model = importedVault(60);
+    const engine = engineWith(model, 'brain');
+    settle(engine, 100);
+    engine.setView('network');
+    engine.advance(0);
+    expect(dimensions(engine)).toBe(3);
+    expect(Math.max(...model.nodes.map((n) => Math.abs(n.z)))).toBeGreaterThan(1);
+    settle(engine);
+    expect(dimensions(engine)).toBe(2);
+    expect(model.nodes.every((n) => n.z === 0)).toBe(true);
+  });
+});

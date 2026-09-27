@@ -660,8 +660,12 @@ export class GraphController {
     this.frameNo++;
     if (!model) return;
 
+    const warming = this.engine.warming;
     const moved = this.engine.advance(now);
-    if (this.tween) {
+    if (warming && !this.engine.warming && !this.userMoved) {
+      // The notes are shown only now; frame where they settled, as the first frame used to.
+      this.cam = { ...this.cam, ...this.fitTarget() };
+    } else if (this.tween) {
       const p = clamp((now - this.tween.t0) / this.tween.duration, 0, 1);
       this.cam = interpolate(this.tween.from, this.tween.to, p);
       if (p >= 1) this.tween = null;
