@@ -45,6 +45,15 @@ body {
   color: var(--fg-primary);
 }
 
+/* The browser's default <mark> is yellow with black text. Every highlight in
+   the app (a backlink's citation, a search hit) is the accent instead. */
+mark {
+  background-color: rgb(var(--accent-rgb) / 0.2);
+  color: var(--fg-primary);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
 /* Scrollbar (dark, narrow, Linear-like) */
 ::-webkit-scrollbar {
   width: 10px;
