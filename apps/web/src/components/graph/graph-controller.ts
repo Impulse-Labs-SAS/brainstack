@@ -609,9 +609,12 @@ export class GraphController {
    */
   private easeViews(dt: number): boolean {
     const map = this.engine.isMap;
-    const k = this.reduceMotion ? 1 : 1 - Math.exp(-dt / 220);
-    const ease = (value: number, target: number) => (Math.abs(target - value) < 0.004 ? target : value + (target - value) * k);
-    this.landAlpha = ease(this.landAlpha, map && !this.engine.moving ? 1 : 0);
+    const rate = (ms: number) => (this.reduceMotion ? 1 : 1 - Math.exp(-dt / ms));
+    const k = rate(220);
+    const ease = (value: number, target: number, step = k) => (Math.abs(target - value) < 0.004 ? target : value + (target - value) * step);
+    // The land leaves faster than it comes: the notes start moving off it at once.
+    const landTarget = map && !this.engine.moving ? 1 : 0;
+    this.landAlpha = ease(this.landAlpha, landTarget, landTarget ? k : rate(80));
     this.mapBlend = ease(this.mapBlend, map ? 1 : 0);
     const edgeTarget = map ? (this.routesLayer ? 0.4 : 0) : 1;
     const before = this.edgeScale;

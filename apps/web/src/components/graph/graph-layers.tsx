@@ -32,7 +32,6 @@ function Row({
   glyph,
   children,
   trailing,
-  note,
 }: {
   isSelected: boolean;
   isDisabled?: boolean;
@@ -40,8 +39,6 @@ function Row({
   glyph: ReactNode;
   children: ReactNode;
   trailing?: ReactNode;
-  /** Why the row is disabled, said where it is. */
-  note?: string;
 }) {
   return (
     <div className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-bg-hover">
@@ -67,7 +64,6 @@ function Row({
           </>
         )}
       </Checkbox>
-      {note && <span className="shrink-0 text-[11px] text-fg-muted">{note}</span>}
       {trailing}
     </div>
   );
@@ -82,9 +78,16 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
   const visibleVaults = model.vaults.filter((v) => !hidden.has(v.id));
   const shown = new Map<string, number>();
   for (const n of model.nodes) if (n.kind === 'note') shown.set(n.vault, (shown.get(n.vault) ?? 0) + 1);
-  const isDefault =
-    includeShared !== false && !layers.hiddenVaults.length && layers.affinity && layers.indexes && !layers.topics && !layers.routes;
+  // A layer that belongs to one view is only offered there: shown disabled
+  // elsewhere, a ticked box could not be unticked. Its choice is kept for when
+  // you come back, and only counts as a change where it can be seen.
   const onMap = view === 'territories';
+  const isDefault =
+    includeShared !== false &&
+    !layers.hiddenVaults.length &&
+    layers.affinity &&
+    layers.indexes &&
+    !(onMap ? layers.routes : layers.topics);
 
   const setVault = (id: string, visible: boolean) =>
     onChange({ ...layers, hiddenVaults: visible ? layers.hiddenVaults.filter((v) => v !== id) : [...layers.hiddenVaults, id] });
@@ -162,28 +165,29 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
           >
             Indexes (MOC)
           </Row>
-          <Row
-            isSelected={layers.routes}
-            // Routes are how the map shows links; elsewhere every link is drawn anyway.
-            isDisabled={!onMap}
-            note={onMap ? undefined : 'Territories'}
-            onChange={(on) => onChange({ ...layers, routes: on })}
-            glyph={<span aria-hidden className="w-4 shrink-0 border-t border-fg-secondary" />}
-          >
-            All routes
-          </Row>
-          <div className="my-1 h-px bg-border-subtle" />
-          <Heading>Nodes</Heading>
-          <Row
-            isSelected={layers.topics}
+          {onMap ? (
+            // Routes are how the map shows links; the other views draw every link anyway.
+            <Row
+              isSelected={layers.routes}
+              onChange={(on) => onChange({ ...layers, routes: on })}
+              glyph={<span aria-hidden className="w-4 shrink-0 border-t border-fg-secondary" />}
+            >
+              All routes
+            </Row>
+          ) : (
             // A topic belongs to no project, so it has no place on the map.
-            isDisabled={onMap}
-            note={onMap ? 'not on the map' : undefined}
-            onChange={(on) => onChange({ ...layers, topics: on })}
-            glyph={<span aria-hidden className="shrink-0 text-[11px] leading-none text-fg-secondary">⬡</span>}
-          >
-            Topics as nodes
-          </Row>
+            <>
+              <div className="my-1 h-px bg-border-subtle" />
+              <Heading>Nodes</Heading>
+              <Row
+                isSelected={layers.topics}
+                onChange={(on) => onChange({ ...layers, topics: on })}
+                glyph={<span aria-hidden className="shrink-0 text-[11px] leading-none text-fg-secondary">⬡</span>}
+              >
+                Topics as nodes
+              </Row>
+            </>
+          )}
         </Dialog>
       </Popover>
     </DialogTrigger>

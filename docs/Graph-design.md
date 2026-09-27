@@ -66,8 +66,12 @@ layers button:
 - **Shared topics** — dotted edges between notes that share a rare topic nobody linked (`notes.affinity`).
 - **Indexes (MOC)** — index notes and their structure edges.
 - **All routes** — Territories only: every link drawn faintly over the map.
-- **Topics as nodes** — a hollow hexagon per topic, joined to the notes that carry it. Not in
-  Territories.
+- **Topics as nodes** — Brain and Network only: a hollow hexagon per topic, joined to the notes
+  that carry it.
+
+A layer that belongs to one view is only listed in that view. Shown disabled elsewhere, a
+ticked box could not be unticked; hidden, its choice waits for the view it belongs to. The dot
+on the button that says the layers were changed counts only what the current view shows.
 
 This replaced the four old connection modes (links, affinity, topics, projects). The projects
 mode is gone because zooming out now shows projects (below).
