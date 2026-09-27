@@ -14,7 +14,13 @@ import { PathTraversalError } from '../paths.js';
 
 import { ensurePgSchema, runPgMigrations, type PgDb } from './client.js';
 import { pgMigrations } from './migrations.js';
-import { PgNoteStore, NoteAlreadyExistsError, NoteNotFoundError, toMarkdown } from './notes.js';
+import {
+  escapeLike,
+  PgNoteStore,
+  NoteAlreadyExistsError,
+  NoteNotFoundError,
+  toMarkdown,
+} from './notes.js';
 import { facets as facetsTable } from './schema.js';
 import { normalizeNoteKey } from '../paths.js';
 import { PgSearchService, tokenize, toTsQuery } from './search.js';
@@ -75,6 +81,26 @@ describe('note paths', () => {
     expect(() => normalizeNoteKey('nota\0.md')).toThrow(PathTraversalError);
     expect(() => normalizeNoteKey('nota.txt')).toThrow(PathTraversalError);
     expect(() => normalizeNoteKey('   ')).toThrow(PathTraversalError);
+  });
+});
+
+describe('escapeLike', () => {
+  it('escapes both wildcards and the escape character itself', () => {
+    expect(escapeLike('a_b%c\\d')).toBe('a\\_b\\%c\\\\d');
+  });
+
+  it('makes Postgres match the folder name literally, with no ESCAPE clause', async () => {
+    const matches = async (value: string, prefix: string): Promise<boolean> => {
+      const result = await db.execute<{ hit: boolean }>(
+        sql`SELECT ${value} LIKE ${`${escapeLike(prefix)}/%`} AS hit`,
+      );
+      return result.rows[0]!.hit;
+    };
+    expect(await matches('a_b/x.md', 'a_b')).toBe(true);
+    expect(await matches('aXb/x.md', 'a_b')).toBe(false);
+    expect(await matches('a%b/x.md', 'a%b')).toBe(true);
+    expect(await matches('aZZb/x.md', 'a%b')).toBe(false);
+    expect(await matches('a\\b/x.md', 'a\\b')).toBe(true);
   });
 });
 

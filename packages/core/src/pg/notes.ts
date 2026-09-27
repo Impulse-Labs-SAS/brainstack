@@ -597,7 +597,14 @@ function dedupeLinks(resolved: readonly ResolvedLink[]): ResolvedLink[] {
   return out;
 }
 
-/** Escape LIKE wildcards so a path containing `%` or `_` stays literal. */
-function escapeLike(value: string): string {
+/**
+ * Escape LIKE wildcards so a path containing `%` or `_` stays literal.
+ *
+ * Backslash is Postgres's default LIKE escape, so no `ESCAPE` clause is needed.
+ * Every `like()` whose pattern is built from a path goes through here: a folder
+ * named `a_b` would otherwise also match `aXb`, and a delete, a move or a share
+ * scoped to one would reach into the other.
+ */
+export function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
