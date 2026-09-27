@@ -8,15 +8,21 @@ import {
   LogOut,
   Menu,
   Network,
-  PanelLeftClose,
-  PanelLeftOpen,
   Plug,
+  Search,
   Settings,
   Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import { authFetch } from '@/lib/authApi';
 import { trpc } from '@/lib/trpc';
@@ -40,39 +46,60 @@ function activeHref(pathname: string): string | undefined {
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 }
 
-const COLLAPSED_KEY = 'brainstack:sidebar-collapsed';
+/** Opens the quick switcher, for buttons that live outside the shell. */
+const PaletteContext = createContext<() => void>(() => {});
+export const useOpenPalette = (): (() => void) => useContext(PaletteContext);
+
+/** The platform's modifier key, for shortcut hints. */
+export function useModKey(): string {
+  const [mod, setMod] = useState('Ctrl');
+  useEffect(() => {
+    if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) setMod('⌘');
+  }, []);
+  return mod;
+}
+
+/**
+ * A label that shows beside a rail icon on hover or keyboard focus. The rail
+ * is 48px wide, so the icon alone has to be enough to find, and the label is
+ * what confirms it.
+ */
+function RailTip({ children }: { children: ReactNode }) {
+  return (
+    <span
+      className={cn(
+        'pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap',
+        'rounded-md border border-border bg-bg-elevated px-2 py-1 text-xs text-fg-primary shadow-lg',
+        'opacity-0 transition-opacity duration-fast group-hover:opacity-100 group-focus-visible:opacity-100',
+        'hidden md:block',
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+const railItem = (active = false) =>
+  cn(
+    'group relative flex h-9 items-center rounded-lg text-sm transition-colors duration-fast',
+    // Rail on md+, a labelled list in the phone drawer.
+    'w-full gap-2.5 px-2.5 md:w-9 md:justify-center md:gap-0 md:px-0',
+    active
+      ? 'bg-bg-elevated text-fg-primary'
+      : 'text-fg-muted hover:bg-bg-hover hover:text-fg-primary',
+  );
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  const mod = useModKey();
   const [paletteOpen, setPaletteOpen] = useState(false);
   /**
-   * Only on phones. The nav is 224px of a 390px screen, so there it slides in
-   * over the content instead of taking a share of it — and closes on the way
-   * out, because a link that leaves the drawer open covers what it navigated to.
+   * Only on phones. The nav slides in over the content instead of taking a
+   * share of it — and closes on the way out, because a link that leaves the
+   * drawer open covers what it navigated to.
    */
   const [navOpen, setNavOpen] = useState(false);
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(COLLAPSED_KEY);
-      if (raw === '1') setCollapsed(true);
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0');
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-  }, []);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -86,87 +113,98 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <div className="flex h-screen w-full">
-      {navOpen && (
-        <div
-          onClick={() => setNavOpen(false)}
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
-          aria-hidden
-        />
-      )}
-      <aside
-        className={cn(
-          'flex flex-col border-r border-border-subtle bg-bg-surface',
-          'transition-transform duration-150 md:transition-[width]',
-          // Phone: an overlay, off-screen until asked for. md+: in the flow,
-          // exactly as before.
-          'fixed inset-y-0 left-0 z-40 w-56 md:static md:z-auto md:translate-x-0',
-          navOpen ? 'translate-x-0' : '-translate-x-full',
-          collapsed ? 'md:w-12' : 'md:w-56',
+    <PaletteContext.Provider value={openPalette}>
+      <div className="flex h-screen w-full">
+        {navOpen && (
+          <div
+            onClick={() => setNavOpen(false)}
+            className="fixed inset-0 z-30 bg-black/50 md:hidden"
+            aria-hidden
+          />
         )}
-      >
-        <div
+        {/*
+          The app's own navigation is four places, so on md+ it is a 48px rail
+          of icons rather than a 224px column: what the notes screen needs room
+          for is the tree and the note.
+        */}
+        <aside
           className={cn(
-            'flex h-12 items-center border-b border-border-subtle font-mono text-sm font-medium text-fg-primary',
-            collapsed ? 'justify-center px-0' : 'justify-between px-4',
+            'flex flex-col border-r border-border-subtle bg-bg-surface',
+            'fixed inset-y-0 left-0 z-40 w-56 transition-transform duration-150',
+            'md:static md:z-auto md:w-12 md:translate-x-0 md:items-center',
+            navOpen ? 'translate-x-0' : '-translate-x-full',
           )}
         >
-          {!collapsed && <span>BrainStack</span>}
+          <div className="flex h-12 w-full items-center px-4 md:justify-center md:px-0">
+            <span
+              aria-hidden
+              className="grid h-7 w-7 place-items-center rounded-lg border border-accent/45 bg-accent/15 font-mono text-[13px] font-bold text-accent-hover"
+            >
+              B
+            </span>
+            <span className="ml-2.5 font-mono text-sm font-medium text-fg-primary md:sr-only">
+              BrainStack
+            </span>
+          </div>
+          <nav className="flex w-full flex-1 flex-col gap-1 p-2 md:items-center md:px-0 md:py-1.5">
+            {links.map((link) => {
+              // The most specific match wins: /settings/api-keys is "API keys",
+              // not also "Settings".
+              const active = link.href === activeHref(pathname);
+              const Icon = link.icon;
+              return (
+                <Link
+                  key={link.href}
+                  onClick={() => setNavOpen(false)}
+                  href={link.href}
+                  aria-label={link.label}
+                  aria-current={active ? 'page' : undefined}
+                  className={railItem(active)}
+                >
+                  <Icon size={16} strokeWidth={1.75} />
+                  <span className="md:hidden">{link.label}</span>
+                  <RailTip>{link.label}</RailTip>
+                </Link>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => {
+                setNavOpen(false);
+                openPalette();
+              }}
+              aria-label="Search"
+              className={railItem()}
+            >
+              <Search size={16} strokeWidth={1.75} />
+              <span className="md:hidden">Search</span>
+              <RailTip>
+                Search <span className="ml-1 font-mono text-fg-muted">{mod} K</span>
+              </RailTip>
+            </button>
+          </nav>
+          <HelpActions />
+          <UserFooter />
+        </aside>
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <button
             type="button"
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="flex h-6 w-6 items-center justify-center rounded text-fg-muted hover:bg-bg-elevated hover:text-fg-primary"
+            onClick={() => setNavOpen(true)}
+            title="Menu"
+            aria-label="Menu"
+            className={cn(
+              'absolute left-2 top-3 z-20 flex h-6 w-6 items-center justify-center rounded',
+              'text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden',
+              navOpen && 'hidden',
+            )}
           >
-            {collapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+            <Menu size={16} />
           </button>
-        </div>
-        <nav className={cn('flex-1 overflow-y-auto', collapsed ? 'p-1.5' : 'p-2')}>
-          {links.map((link) => {
-            // The most specific match wins: /settings/api-keys is "API keys",
-            // not also "Settings".
-            const active = link.href === activeHref(pathname);
-            const Icon = link.icon;
-            return (
-              <Link
-                key={link.href}
-                onClick={() => setNavOpen(false)}
-                href={link.href}
-                title={collapsed ? link.label : undefined}
-                className={cn(
-                  'mb-1 flex h-8 items-center rounded text-sm transition-colors duration-fast',
-                  collapsed ? 'justify-center px-0' : 'gap-2 px-2',
-                  active
-                    ? 'bg-bg-elevated text-fg-primary'
-                    : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg-primary',
-                )}
-              >
-                <Icon size={14} strokeWidth={1.75} />
-                {(!collapsed || navOpen) && <span>{link.label}</span>}
-              </Link>
-            );
-          })}
-        </nav>
-        <HelpActions collapsed={collapsed} expanded={navOpen} />
-        <UserFooter collapsed={collapsed} />
-      </aside>
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setNavOpen(true)}
-          title="Menu"
-          className={cn(
-            'absolute left-2 top-3 z-20 flex h-6 w-6 items-center justify-center rounded',
-            'text-fg-muted hover:bg-bg-elevated hover:text-fg-primary md:hidden',
-            navOpen && 'hidden',
-          )}
-        >
-          <Menu size={16} />
-        </button>
-        {children}
-      </main>
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-    </div>
+          {children}
+        </main>
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      </div>
+    </PaletteContext.Provider>
   );
 }
 
@@ -182,14 +220,13 @@ const helpActions: ReadonlyArray<{ id: HelpDialog; label: string; icon: LucideIc
  * Getting an assistant onto the brain, and telling us when something breaks.
  * They open dialogs rather than pages so nobody loses the note they were on.
  */
-function HelpActions({ collapsed, expanded }: { collapsed: boolean; expanded: boolean }) {
+function HelpActions() {
   const [openDialog, setOpenDialog] = useState<HelpDialog | null>(null);
   const close = useCallback(() => setOpenDialog(null), []);
-  const showLabel = !collapsed || expanded;
 
   return (
     <>
-      <div className={cn('border-t border-border-subtle', collapsed ? 'p-1.5' : 'p-2')}>
+      <div className="flex w-full flex-col gap-1 border-t border-border-subtle p-2 md:items-center md:px-0 md:py-1.5">
         {helpActions.map((action) => {
           const Icon = action.icon;
           return (
@@ -197,15 +234,12 @@ function HelpActions({ collapsed, expanded }: { collapsed: boolean; expanded: bo
               key={action.id}
               type="button"
               onClick={() => setOpenDialog(action.id)}
-              title={collapsed ? action.label : undefined}
-              className={cn(
-                'mb-1 flex h-8 w-full items-center rounded text-sm text-fg-secondary last:mb-0',
-                'transition-colors duration-fast hover:bg-bg-elevated hover:text-fg-primary',
-                collapsed ? 'justify-center px-0' : 'gap-2 px-2',
-              )}
+              aria-label={action.label}
+              className={railItem()}
             >
-              <Icon size={14} strokeWidth={1.75} />
-              {showLabel && <span>{action.label}</span>}
+              <Icon size={16} strokeWidth={1.75} />
+              <span className="md:hidden">{action.label}</span>
+              <RailTip>{action.label}</RailTip>
             </button>
           );
         })}
@@ -217,6 +251,14 @@ function HelpActions({ collapsed, expanded }: { collapsed: boolean; expanded: bo
   );
 }
 
+function initials(label: string): string {
+  const parts = label.split(/[\s@._-]+/).filter(Boolean);
+  return parts
+    .slice(0, 2)
+    .map((p) => p[0]!.toUpperCase())
+    .join('');
+}
+
 /**
  * Who is signed in, and the way out.
  *
@@ -224,7 +266,7 @@ function HelpActions({ collapsed, expanded }: { collapsed: boolean; expanded: bo
  * is a fine place for it to also be and a bad place for it to only be: on a
  * shared machine the way out has to be in sight.
  */
-function UserFooter({ collapsed }: { collapsed: boolean }) {
+function UserFooter() {
   const router = useRouter();
   const me = trpc.auth.me.useQuery();
   const [signingOut, setSigningOut] = useState(false);
@@ -244,38 +286,41 @@ function UserFooter({ collapsed }: { collapsed: boolean }) {
   }, [router]);
 
   return (
-    <div className="border-t border-border-subtle">
-      <div className={cn('flex items-center', collapsed ? 'justify-center p-1.5' : 'gap-2 p-2')}>
-        {!collapsed && (
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-xs text-fg-secondary" title={label}>
-              {label || '—'}
-            </div>
-            {user?.displayName && (
-              <div className="truncate font-mono text-[11px] text-fg-muted" title={user.email}>
-                {user.email}
-              </div>
-            )}
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={() => void signOut()}
-          disabled={signingOut}
-          title="Sign out"
-          aria-label="Sign out"
-          className={cn(
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded',
-            'text-fg-muted hover:bg-bg-elevated hover:text-danger',
-            'disabled:pointer-events-none disabled:opacity-50',
+    <div className="flex w-full items-center gap-2 border-t border-border-subtle p-2 md:flex-col md:gap-1 md:px-0 md:py-2">
+      <span
+        className="group relative grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent/20 font-mono text-[10px] font-semibold text-accent-hover"
+        tabIndex={0}
+        aria-label={label ? `Signed in as ${label}` : 'Signed in'}
+      >
+        {label ? initials(label) : '·'}
+        <RailTip>
+          <span className="block">{label || '—'}</span>
+          {user?.displayName && (
+            <span className="block font-mono text-[11px] text-fg-muted">{user.email}</span>
           )}
-        >
-          <LogOut size={14} strokeWidth={1.75} />
-        </button>
+          <span className="block font-mono text-[11px] text-fg-muted">v0.1.0 · pre-alpha</span>
+        </RailTip>
+      </span>
+      <div className="min-w-0 flex-1 md:hidden">
+        <div className="truncate text-xs text-fg-secondary" title={label}>
+          {label || '—'}
+        </div>
+        <div className="font-mono text-[11px] text-fg-muted">v0.1.0 · pre-alpha</div>
       </div>
-      {!collapsed && (
-        <div className="px-3 pb-2 font-mono text-[11px] text-fg-muted">v0.1.0 · pre-alpha</div>
-      )}
+      <button
+        type="button"
+        onClick={() => void signOut()}
+        disabled={signingOut}
+        aria-label="Sign out"
+        className={cn(
+          'group relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+          'text-fg-muted hover:bg-bg-hover hover:text-danger',
+          'disabled:pointer-events-none disabled:opacity-50',
+        )}
+      >
+        <LogOut size={14} strokeWidth={1.75} />
+        <RailTip>Sign out</RailTip>
+      </button>
     </div>
   );
 }
