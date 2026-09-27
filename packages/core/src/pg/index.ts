@@ -27,6 +27,7 @@ export {
   NoteAlreadyExistsError as PgNoteAlreadyExistsError,
   NoteNotFoundError as PgNoteNotFoundError,
   PgNoteStore,
+  escapeLike,
   toMarkdown,
   type Backlink,
   type Facet,

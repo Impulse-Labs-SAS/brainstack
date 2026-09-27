@@ -10,6 +10,7 @@
 // a second table.
 
 import {
+  escapeLike,
   PgNoteAlreadyExistsError,
   PgNoteNotFoundError,
   PgNoteStore,
@@ -92,6 +93,12 @@ export interface CrossVaultMoveResult {
   linksLeftDangling: Array<{ note: string; target: string }>;
   /** Notes that stayed behind, now pointing at what moved away. */
   linksNowBroken: Array<{ note: string; target: string }>;
+}
+
+/** A folder someone shared with the viewer, addressed in its owner's vault. */
+export interface SharedScope {
+  ownerId: string;
+  folderPath: string;
 }
 
 export interface ListFilter {
@@ -251,12 +258,37 @@ export class NoteService {
 
   /** Matches every note owned by this user, prefix or column depending on mode. */
   private ownedBy(ownerId: string) {
-    return this.hosted ? like(notes.path, `${ownerId}/%`) : sql`true`;
+    return this.hosted ? like(notes.path, `${escapeLike(ownerId)}/%`) : sql`true`;
   }
 
   /** The same, for the folders table. */
   private foldersOwnedBy(ownerId: string) {
-    return this.hosted ? like(folders.path, `${ownerId}/%`) : sql`true`;
+    return this.hosted ? like(folders.path, `${escapeLike(ownerId)}/%`) : sql`true`;
+  }
+
+  /**
+   * The viewer's own notes plus the folders shared with them, as SQL. It only
+   * narrows what Postgres returns; `inScope` is what decides what is shown.
+   */
+  private scopeWhere(ownerId: string, sharedScopes: SharedScope[] = []) {
+    const scopes = [this.ownedBy(ownerId)];
+    for (const s of sharedScopes) {
+      scopes.push(like(notes.path, `${escapeLike(`${s.ownerId}/${s.folderPath}`)}/%`));
+    }
+    return scopes.length === 1 ? scopes[0] : or(...scopes);
+  }
+
+  /**
+   * The same scope, over stored paths in memory. Share paths are matched here
+   * rather than trusted to a `LIKE`: a pattern that widens by accident is a
+   * note shown to someone it was never shared with.
+   */
+  private inScope(ownerId: string, sharedScopes: SharedScope[] = []): (physical: string) => boolean {
+    if (!this.hosted) return () => true;
+    const prefixes = [ownerId, ...sharedScopes.map((s) => `${s.ownerId}/${s.folderPath}`)].map(
+      (p) => `${p}/`,
+    );
+    return (physical) => prefixes.some((prefix) => physical.startsWith(prefix));
   }
 
   // -- Reads -----------------------------------------------------------------
@@ -374,7 +406,7 @@ export class NoteService {
   async listRelated(
     ownerId: string,
     path: string,
-    opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }>; limit?: number } = {},
+    opts: { sharedScopes?: SharedScope[]; limit?: number } = {},
   ): Promise<
     Array<{
       path: string;
@@ -400,11 +432,8 @@ export class NoteService {
     const facetSignals = targetFacets.map((f) => facetSignal(f.key, f.value));
     if (tagSignals.length === 0 && facetSignals.length === 0) return [];
 
-    const scopes = [this.ownedBy(ownerId)];
-    for (const s of opts.sharedScopes ?? []) {
-      scopes.push(like(notes.path, `${s.ownerId}/${s.folderPath}/%`));
-    }
-    const scopeWhere = scopes.length === 1 ? scopes[0] : or(...scopes);
+    const scopeWhere = this.scopeWhere(ownerId, opts.sharedScopes);
+    const inScope = this.inScope(ownerId, opts.sharedScopes);
 
     // Vault-wide rarity, independent of the viewer's scope: a signal's weight
     // is what it costs to share it with anyone, not just with what this
@@ -470,7 +499,7 @@ export class NoteService {
     const hits = [
       ...tagHitRows.map((r) => ({ path: r.path, signal: tagSignal(r.tag) })),
       ...facetHitRows.map((r) => ({ path: r.path, signal: facetSignal(r.key, r.value) })),
-    ];
+    ].filter((h) => inScope(h.path));
 
     const ranked: RankedNote[] = rankRelated(hits, counts, limit);
     if (ranked.length === 0) return [];
@@ -555,7 +584,7 @@ export class NoteService {
     const under = await this.opts.db
       .select({ path: notes.path })
       .from(notes)
-      .where(and(this.ownedBy(ownerId), like(notes.path, `${physical}/%`)));
+      .where(and(this.ownedBy(ownerId), like(notes.path, `${escapeLike(physical)}/%`)));
 
     if (under.length > 0) {
       await this.store.removeMany(under.map((r) => r.path));
@@ -567,7 +596,7 @@ export class NoteService {
       .where(
         and(
           this.foldersOwnedBy(ownerId),
-          or(eq(folders.path, physical), like(folders.path, `${physical}/%`)),
+          or(eq(folders.path, physical), like(folders.path, `${escapeLike(physical)}/%`)),
         ),
       )
       .returning({ path: folders.path });
@@ -643,7 +672,7 @@ export class NoteService {
     const contents = await this.opts.db
       .select({ path: notes.path })
       .from(notes)
-      .where(and(this.ownedBy(ownerId), like(notes.path, `${from}/%`)));
+      .where(and(this.ownedBy(ownerId), like(notes.path, `${escapeLike(from)}/%`)));
 
     const folderRows = await this.opts.db
       .select({ path: folders.path })
@@ -651,7 +680,7 @@ export class NoteService {
       .where(
         and(
           this.foldersOwnedBy(ownerId),
-          or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+          or(eq(folders.path, from), like(folders.path, `${escapeLike(from)}/%`)),
         ),
       );
 
@@ -700,7 +729,7 @@ export class NoteService {
       .where(
         and(
           this.foldersOwnedBy(ownerId),
-          or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+          or(eq(folders.path, from), like(folders.path, `${escapeLike(from)}/%`)),
         ),
       );
 
@@ -774,7 +803,7 @@ export class NoteService {
           await this.opts.db
             .select({ path: notes.path })
             .from(notes)
-            .where(and(this.ownedBy(fromOwnerId), like(notes.path, `${from}/%`)))
+            .where(and(this.ownedBy(fromOwnerId), like(notes.path, `${escapeLike(from)}/%`)))
         ).map((r) => r.path);
 
     const folderRows = asNote
@@ -785,7 +814,7 @@ export class NoteService {
           .where(
             and(
               this.foldersOwnedBy(fromOwnerId),
-              or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+              or(eq(folders.path, from), like(folders.path, `${escapeLike(from)}/%`)),
             ),
           );
 
@@ -858,7 +887,7 @@ export class NoteService {
         .where(
           and(
             this.foldersOwnedBy(fromOwnerId),
-            or(eq(folders.path, from), like(folders.path, `${from}/%`)),
+            or(eq(folders.path, from), like(folders.path, `${escapeLike(from)}/%`)),
           ),
         );
 
@@ -1122,7 +1151,7 @@ export class NoteService {
    */
   async graph(
     viewerId: string,
-    opts: { sharedScopes?: Array<{ ownerId: string; folderPath: string }> } = {},
+    opts: { sharedScopes?: SharedScope[] } = {},
   ): Promise<{
     nodes: Array<{
       id: string;
@@ -1136,13 +1165,10 @@ export class NoteService {
     }>;
     edges: Array<{ source: string; target: string; weight: number }>;
   }> {
-    const scopes = [this.ownedBy(viewerId)];
-    for (const s of opts.sharedScopes ?? []) {
-      scopes.push(like(notes.path, `${s.ownerId}/${s.folderPath}/%`));
-    }
-    const where = scopes.length === 1 ? scopes[0] : or(...scopes);
+    const where = this.scopeWhere(viewerId, opts.sharedScopes);
+    const inScope = this.inScope(viewerId, opts.sharedScopes);
 
-    const [nodeRows, tagRows] = await Promise.all([
+    const [scopedNodeRows, scopedTagRows] = await Promise.all([
       this.opts.db
         .select({
           path: notes.path,
@@ -1160,6 +1186,8 @@ export class NoteService {
         .innerJoin(notes, eq(notes.path, tags.notePath))
         .where(and(where, like(tags.tag, 'proyecto/%'))),
     ]);
+    const nodeRows = scopedNodeRows.filter((r) => inScope(r.path));
+    const tagRows = scopedTagRows.filter((r) => inScope(r.path));
     const tagsByPath = new Map<string, string[]>();
     for (const row of tagRows) {
       const list = tagsByPath.get(row.path) ?? [];
@@ -1244,7 +1272,7 @@ export class NoteService {
         and(
           this.ownedBy(ownerId),
           or(inArray(tags.tag, ['decisión', 'decision']), sql`${facets.value} IS NOT NULL`),
-          ...(scope ? [like(notes.path, `${scope}/%`)] : []),
+          ...(scope ? [like(notes.path, `${escapeLike(scope)}/%`)] : []),
         ),
       )
       .orderBy(sql`${notes.updatedAt} desc`)
