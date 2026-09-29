@@ -82,6 +82,15 @@ describe('buildGraphModel', () => {
     expect(between.map((e) => e.kind)).toEqual(['link']);
   });
 
+  it('joins two notes that link to each other with one edge, carrying both weights', () => {
+    const both: InputEdge[] = [...edges, { source: 'Atlas/lector.md', target: 'Atlas/_Atlas.md', weight: 2 }];
+    const model = build({ affinity: false }, { edges: both });
+    const structure = model.edges.filter((e) => e.kind === 'structure');
+    expect(structure.map((e) => e.weight)).toEqual([3]);
+    expect(model.adjacency.get(byId(model, 'Atlas/lector.md'))!.map((n) => n.node.id)).toEqual(['Atlas/_Atlas.md']);
+    expect(byId(model, 'Atlas/lector.md').degree).toBe(1);
+  });
+
   it('does not let a shared topic grow a node', () => {
     expect(byId(build(), 'Atlas/lector.md').size).toBe(byId(build({ affinity: false }), 'Atlas/lector.md').size);
   });
