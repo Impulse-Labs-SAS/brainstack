@@ -23,12 +23,27 @@
 #     /api while byte-identical drafts answered 200; publishing the verified
 #     draft (restoreSiteDeploy) is the path that has never lied.
 #
-# Requires: Node 20 + unzip on PATH, a clone at ~/brainstack, and a Netlify
-# CLI login for the account that owns the site.
+# Requires: Node 20 + unzip on PATH, a clone at ~/brainstack, a Netlify CLI
+# login for the account that owns the site, and where that site is:
+#
+#   BRAINSTACK_SITE_ID    the Netlify site id
+#   BRAINSTACK_SITE_URL   its production URL, e.g. https://brain.example.com
+#
+# Set them in the environment, or in scripts/deploy.local.env (gitignored),
+# which is read when present. They are not in the repository: it is public,
+# and a deploy pointed at somebody's guess of a site id does not announce itself.
 
 set -euo pipefail
 
-SITE_ID="${BRAINSTACK_SITE_ID:-your-netlify-site-id}"
+LOCAL_ENV="$(cd "$(dirname "$0")" && pwd)/deploy.local.env"
+# shellcheck source=/dev/null
+[ -f "$LOCAL_ENV" ] && . "$LOCAL_ENV"
+SITE_ID="${BRAINSTACK_SITE_ID:-}"
+SITE_URL="${BRAINSTACK_SITE_URL:-}"
+if [ -z "$SITE_ID" ] || [ -z "$SITE_URL" ]; then
+  echo "✗ set BRAINSTACK_SITE_ID and BRAINSTACK_SITE_URL, or put them in $LOCAL_ENV"
+  exit 1
+fi
 CLONE="${BRAINSTACK_CLONE:-$HOME/brainstack}"
 CLI="netlify-cli@27.1.2"
 
@@ -123,7 +138,7 @@ if [ "${1:-}" = "publish" ]; then
   npx -y "$CLI" api restoreSiteDeploy \
     --data "{\"site_id\":\"$SITE_ID\",\"deploy_id\":\"$DEPLOY_ID\"}" >/dev/null
   for path in /api/config /login; do
-    status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 "https://brain.example.com$path")
+    status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 "$SITE_URL$path")
     echo "   prod $path -> $status"
   done
 else

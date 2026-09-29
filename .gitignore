@@ -77,3 +77,6 @@ apps/web/.netlify/
 
 # Salida temporal de scripts/check-functions.mjs
 .netlify-check/
+
+# Where scripts/deploy.sh publishes (site id and URL). Never committed.
+scripts/deploy.local.env
