@@ -2,10 +2,10 @@
 
 This repo is BrainStack: shared second brain for humans + AI assistants.
 
-The system's own knowledge base lives **inside BrainStack**, under `impulse-labs/brainstack/` — start at
-`_brainstack.md`. It covers architecture, the data model, the API and MCP surfaces, the frontend, the design
-system, sharing, deployment, and the incidents worth not repeating. Read it before making non-trivial changes.
-The older design vault is at `<local-checkout>/projects-memory/01-Impulse-Labs/BrainStack/`.
+Design notes for the larger subsystems live in `docs/`: sharing and permissions (`Sharing-design.md`), the
+graph (`Graph-design.md`), and wikilinks, facets and the Connections panel
+(`Wiki-links-y-ecosistema-design.md`). Most of the reasoning lives next to the code, in comments that say why.
+Read the relevant ones before making non-trivial changes.
 
 ## Stack
 
@@ -14,7 +14,8 @@ The older design vault is at `<local-checkout>/projects-memory/01-Impulse-Labs/B
 - Frontend: Next.js 15 App Router + Tailwind + `react-aria-components` + CodeMirror 6.
 - Storage: **Postgres** — any provider. `openPgDatabase` picks the driver from the connection string: Neon over its HTTP driver, everything else over node-postgres. Tests run on PGlite — real Postgres, in process.
 - Self-hosting: `docker compose up` runs Postgres, the server, the web app and Caddy on one origin.
-- Logger pino, validation zod, email+password (`@node-rs/argon2`) + Google OAuth (`arctic`) + optional TOTP (`@oslojs/otp`), transactional email via Resend.
+- Logger pino, validation zod, email+password (scrypt from `node:crypto`) + Google OAuth (`arctic`) + optional TOTP (`@oslojs/otp`), transactional email via Resend or any SMTP server (optional).
+- Sign-up is closed by default: the first account is the instance's owner; after it, only `AUTHORIZED_EMAILS`, a pending email invitation or `OPEN_SIGNUP=true` let anyone in. Every account has its own vault, and folders can be shared between accounts.
 - MCP clients connect through this server's own OAuth 2.1 provider.
 
 ## Workspaces
@@ -39,7 +40,7 @@ The older design vault is at `<local-checkout>/projects-memory/01-Impulse-Labs/B
 
 ## Deploying
 
-Use `bash scripts/deploy.sh publish`, from WSL. Do **not** reach for `netlify deploy --build --prod --filter` — with a packagePath stamped on the deploy, the Next catch-all shadows the API function and every `/api` route answers 404. The script's header lists that trap and four more, each of which broke production once.
+This is for Impulse Labs' hosted instance; self-hosters use `docker compose`. Use `bash scripts/deploy.sh publish`, from WSL, with `BRAINSTACK_SITE_ID` and `BRAINSTACK_SITE_URL` set (or in the gitignored `scripts/deploy.local.env`). Do **not** reach for `netlify deploy --build --prod --filter` — with a packagePath stamped on the deploy, the Next catch-all shadows the API function and every `/api` route answers 404. The script's header lists that trap and four more, each of which broke production once.
 
 ## Commit style
 
