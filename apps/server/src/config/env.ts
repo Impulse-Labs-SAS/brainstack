@@ -76,7 +76,9 @@ let cached: AppConfig | null = null;
 
 export function loadConfig(): AppConfig {
   if (cached) return cached;
-  loadDotenv();
+  // Quiet: dotenv otherwise prints a banner to stdout, which is the JSON-RPC
+  // channel under stdio MCP and the output of the reset-password command.
+  loadDotenv({ quiet: true });
   const parsed = Env.parse(process.env);
   const authorizedEmails = new Set(
     (parsed.AUTHORIZED_EMAILS ?? '')
