@@ -70,7 +70,7 @@ After the first account, sign-up is closed. People get in when one of these appl
 - their address is in `AUTHORIZED_EMAILS` (comma-separated);
 - `OPEN_SIGNUP=true`, which lets in anyone who can reach the server.
 
-New accounts verify their address by email, so the last two need email configured.
+New accounts verify their address by email, so all three need email configured. Any account holder can invite by email, so everyone you let in can bring someone else in, into a folder they share. Keep that in mind before you add people you don't know.
 
 ## Local development
 

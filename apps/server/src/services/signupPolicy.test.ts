@@ -227,3 +227,22 @@ describe('createEmailSender', () => {
     ).toBeInstanceOf(ResendEmailSender);
   });
 });
+
+describe('a verification email that fails to send', () => {
+  it('leaves no account behind, so the person can try again', async () => {
+    const failing = {
+      send: async () => {
+        throw new Error('smtp down');
+      },
+    };
+    const auth = authWith({ email: failing, openSignup: true });
+    await auth.signup('owner@brain.test', STRONG);
+
+    await expect(auth.signup('guest@brain.test', STRONG)).rejects.toThrow('smtp down');
+    expect(await userCount()).toBe(1);
+
+    const working = authWith({ openSignup: true });
+    await working.signup('guest@brain.test', STRONG);
+    expect(await userCount()).toBe(2);
+  });
+});

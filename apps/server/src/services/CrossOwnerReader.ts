@@ -62,7 +62,7 @@ export class CrossOwnerReader {
     depth?: number,
   ): Promise<TreeNode> {
     if (!scopePath || scopePath.trim() === '') {
-      throw new AppError('scopePath requerido', 'INVALID_INPUT', 400);
+      throw new AppError('scopePath is required', 'INVALID_INPUT', 400);
     }
     await this.opts.sharing.assertCanRead(viewerId, ownerId, scopePath);
 

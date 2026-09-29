@@ -302,8 +302,18 @@ export class AuthService {
 
     if (!row) throw new AppError('email already registered', 'ALREADY_EXISTS', 409);
 
-    const verification = first ? null : await this.issueEmailVerification(row as UserRow, email);
-    return { user: toUser(row as UserRow), verification };
+    if (first) return { user: toUser(row as UserRow), verification: null };
+
+    try {
+      const verification = await this.issueEmailVerification(row as UserRow, email);
+      return { user: toUser(row as UserRow), verification };
+    } catch (err) {
+      // The mail never left. Kept, the row would hold the address unverified
+      // and answer every retry with "already registered"; gone, the person can
+      // simply try again once the mail server is back. Its token goes with it.
+      await this.opts.db.delete(users).where(eq(users.id, (row as UserRow).id));
+      throw err;
+    }
   }
 
   async login(
