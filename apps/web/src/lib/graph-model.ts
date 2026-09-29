@@ -401,14 +401,25 @@ export function buildGraphModel(input: {
   }
 
   const out: GraphEdge[] = [];
-  const linked = new Set<string>();
+  // Links arrive directed, but the graph is not: two notes that link to each
+  // other are one line, carrying both directions' weight. Kept apart, the
+  // pair drew twice, counted twice in degree and size, and listed the same
+  // neighbour twice in the preview.
+  const linked = new Map<string, GraphEdge>();
   for (const e of edges) {
     const source = map.get(e.source);
     const target = map.get(e.target);
     if (!source || !target || source === target) continue;
+    const key = pairKey(source.id, target.id);
+    const existing = linked.get(key);
+    if (existing) {
+      existing.weight += e.weight;
+      continue;
+    }
     const kind: EdgeKind = isStructureEdge(source.path, target.path) ? 'structure' : 'link';
-    out.push({ source, target, kind, weight: e.weight, shared: [] });
-    linked.add(pairKey(source.id, target.id));
+    const edge: GraphEdge = { source, target, kind, weight: e.weight, shared: [] };
+    out.push(edge);
+    linked.set(key, edge);
   }
 
   if (layers.affinity && affinity) {
