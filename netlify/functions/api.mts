@@ -40,7 +40,12 @@ let cached: Promise<Hono<never>> | null = null;
  * together on a cold container share one bootstrap instead of racing it.
  */
 export function getApp(): Promise<Hono<never>> {
-  cached ??= boot();
+  // A boot that failed is not remembered: the next request tries again rather
+  // than every request answering 500 until the container is recycled.
+  cached ??= boot().catch((err: unknown) => {
+    cached = null;
+    throw err;
+  });
   return cached;
 }
 

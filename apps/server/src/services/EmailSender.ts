@@ -48,7 +48,7 @@ export class ResendEmailSender implements EmailSender {
 export interface SmtpOptions {
   host: string;
   port: number;
-  /** TLS from the first byte (port 465). Otherwise STARTTLS is used when offered. */
+  /** TLS from the first byte (port 465). Otherwise STARTTLS, required except on localhost. */
   secure: boolean;
   user?: string | undefined;
   password?: string | undefined;
@@ -61,11 +61,21 @@ export class SmtpEmailSender implements EmailSender {
     options: SmtpOptions,
     private readonly from: string,
   ) {
+    const local = ['localhost', '127.0.0.1', '::1'].includes(options.host);
     this.transport = nodemailer.createTransport({
       host: options.host,
       port: options.port,
       secure: options.secure,
+      // Without `secure`, the upgrade to TLS is offered by the server, and
+      // whoever sits in between can strip the offer and read the credentials.
+      // Insist on it, except for a mail catcher on this machine, which has no
+      // certificate to offer.
+      requireTLS: !options.secure && !local,
       ...(options.user ? { auth: { user: options.user, pass: options.password ?? '' } } : {}),
+      // A dead mail host otherwise holds a sign-up open until the platform kills it.
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
   }
 
