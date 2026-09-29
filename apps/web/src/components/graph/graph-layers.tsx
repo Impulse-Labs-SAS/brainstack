@@ -20,8 +20,8 @@ interface GraphLayersMenuProps {
   onChange(layers: GraphLayers): void;
   /** Some layers only mean something in one view; the others show them disabled. */
   view: GraphView;
-  /** Whether shared vaults are fetched at all; null when sharing is off on this deployment. */
-  includeShared: boolean | null;
+  /** Whether shared vaults are fetched at all. */
+  includeShared: boolean;
   onIncludeSharedChange(include: boolean): void;
 }
 
@@ -83,7 +83,7 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
   // you come back, and only counts as a change where it can be seen.
   const onMap = view === 'territories';
   const isDefault =
-    includeShared !== false &&
+    includeShared &&
     !layers.hiddenVaults.length &&
     layers.affinity &&
     layers.indexes &&
@@ -112,15 +112,13 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
       <Popover placement="bottom start" offset={6} className={cn(GLASS, 'w-[272px] rounded-lg p-2 text-sm shadow-2xl outline-none')}>
         <Dialog aria-label="Graph layers" className="outline-none">
           <Heading>Vaults</Heading>
-          {includeShared !== null && (
-            <Row
-              isSelected={includeShared}
-              onChange={onIncludeSharedChange}
-              glyph={<Users size={12} aria-hidden className="shrink-0 text-fg-secondary" />}
-            >
-              Include shared vaults
-            </Row>
-          )}
+          <Row
+            isSelected={includeShared}
+            onChange={onIncludeSharedChange}
+            glyph={<Users size={12} aria-hidden className="shrink-0 text-fg-secondary" />}
+          >
+            Include shared vaults
+          </Row>
           {model.vaults.map((v) => {
             const alone = visibleVaults.length === 1 && !v.hidden;
             return (

@@ -6,7 +6,6 @@ import { useCallback, useMemo, useState } from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { GraphView } from '@/components/graph/graph-view';
 import { sharedVaultNames } from '@/lib/graph-model';
-import { useSharingEnabled } from '@/lib/use-deployment';
 import { trpc } from '@/lib/trpc';
 
 const INCLUDE_SHARED_KEY = 'brainstack.graph.includeShared';
@@ -22,7 +21,6 @@ function readIncludeShared(): boolean {
 }
 
 export default function GraphPage() {
-  const sharingEnabled = useSharingEnabled();
   const [includeShared, setIncludeShared] = useState(readIncludeShared);
   const onIncludeSharedChange = useCallback((include: boolean) => {
     setIncludeShared(include);
@@ -36,13 +34,13 @@ export default function GraphPage() {
   // Shared vaults are only fetched when included. Keeping the previous data
   // while the other scope loads keeps the graph, its camera and layout, on screen.
   const { data, isLoading, error } = trpc.notes.graph.useQuery(
-    { scope: includeShared && sharingEnabled ? 'all' : 'mine' },
+    { scope: includeShared ? 'all' : 'mine' },
     { placeholderData: keepPreviousData },
   );
   // Which nodes are somebody else's, and so open under the shared route.
   const me = trpc.auth.me.useQuery();
   const affinity = trpc.notes.affinity.useQuery();
-  const shared = trpc.sharing.listSharedWithMe.useQuery(undefined, { enabled: sharingEnabled });
+  const shared = trpc.sharing.listSharedWithMe.useQuery();
 
   const vaultNames = useMemo(() => sharedVaultNames(shared.data ?? []), [shared.data]);
 
@@ -63,7 +61,7 @@ export default function GraphPage() {
             affinity={affinity.data ?? null}
             viewerId={me.data?.user?.id ?? null}
             vaultNames={vaultNames}
-            includeShared={sharingEnabled ? includeShared : null}
+            includeShared={includeShared}
             onIncludeSharedChange={onIncludeSharedChange}
           />
         )}

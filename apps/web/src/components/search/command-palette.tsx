@@ -11,7 +11,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
-import { useSharingEnabled } from '@/lib/use-deployment';
 import { useRecentNotes } from '@/lib/recent-notes';
 import { splitSnippet } from '@/lib/search-snippet';
 import { encodePath } from '@/lib/wikilinks-client';
@@ -71,7 +70,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const router = useRouter();
   const pathname = usePathname();
   const recent = useRecentNotes().filter((r) => r.href !== pathname);
-  const sharingEnabled = useSharingEnabled();
   const utils = trpc.useUtils();
   const createM = trpc.notes.create.useMutation();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -120,7 +118,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const filter = parseFilter(debounced);
   const filterKey = JSON.stringify(filter);
   const search = trpc.search.query.useQuery(
-    { query: debounced, limit: 20, scope: sharingEnabled ? scope : 'mine' },
+    { query: debounced, limit: 20, scope },
     { enabled: open && debounced.length > 0 && !filter },
   );
   const filtered = trpc.notes.list.useQuery(
@@ -308,7 +306,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent text-[15px] text-fg-primary outline-none placeholder:text-fg-muted"
           />
-          {sharingEnabled && searching && (
+          {searching && (
             <div className="flex shrink-0 rounded-md border border-border bg-bg-elevated p-0.5 text-[11px]">
               {(['mine', 'shared', 'all'] as const).map((s) => (
                 <button

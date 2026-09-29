@@ -141,7 +141,7 @@ describe('vaults', () => {
     expect(byId(model, 'Zuno/pricing.md')).toMatchObject({ vault: 'ana', foreign: true });
   });
 
-  it('treats a note without an owner (self-host) as yours', () => {
+  it('treats a note without an owner as yours', () => {
     const model = build({}, { nodes: [note('Solo/a.md', { ownerId: null })] });
     expect(model.nodes[0]!.vault).toBe(OWN_VAULT);
   });
