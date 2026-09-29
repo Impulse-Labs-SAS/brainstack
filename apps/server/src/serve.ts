@@ -44,6 +44,13 @@ async function main(): Promise<void> {
     googleRedirectUri: cfg.GOOGLE_OAUTH_REDIRECT_URI,
   });
 
+  if (cfg.EXPOSE_AUTH_LINKS) {
+    logger.warn(
+      'EXPOSE_AUTH_LINKS is on: sign-up and password-reset responses carry their links. ' +
+        'Anyone who can reach this server can reset any account. Local development only.',
+    );
+  }
+
   const backfill = await backfillOwnerId(db, {
     deployment: cfg.BRAINSTACK_DEPLOYMENT,
     logger,
@@ -73,13 +80,13 @@ async function main(): Promise<void> {
      * Returns verification and reset links in the response body, so signing up
      * locally does not need a mail server.
      *
-     * Derived from the scheme rather than NODE_ENV, which defaults to
-     * 'development' and cannot be scoped to the runtime on Netlify's free plan.
-     * Left to that default in production, this would hand a reset link to
-     * anyone who can POST an address to /auth/forgot-password — which is the
-     * whole account. An https origin is never a development machine.
+     * An explicit opt-in, not inferred. It used to follow the origin's scheme,
+     * and a self-hosted instance left at the template's http:// origin handed a
+     * reset link — the whole account — to anyone who could POST an address to
+     * /auth/forgot-password. NODE_ENV is no better: it defaults to
+     * 'development'.
      */
-    exposeDevTokens: !cfg.PUBLIC_ORIGIN.startsWith('https://'),
+    exposeDevTokens: cfg.EXPOSE_AUTH_LINKS,
     // Same OAuth provider as production, so the whole flow is testable locally.
     oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
     publicConfig: {

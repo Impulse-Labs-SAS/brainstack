@@ -27,7 +27,15 @@ const Env = z.object({
     .url()
     .default('http://localhost:3000')
     .transform((v) => v.replace(/\/+$/, '')),
-  SESSION_SECRET: z.string().min(16).default('dev-secret-please-change-at-least-32-bytes'),
+  /**
+   * Return verification and reset links in the HTTP response, so a local
+   * sign-up needs no mail server. Off unless asked for: on a reachable server it
+   * hands the reset link for any address to whoever asks for it.
+   */
+  EXPOSE_AUTH_LINKS: z
+    .string()
+    .default('false')
+    .transform((v) => trueish.has(v.toLowerCase())),
   MCP_STDIO: z
     .string()
     .default('false')
