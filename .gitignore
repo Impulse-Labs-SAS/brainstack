@@ -80,3 +80,6 @@ apps/web/.netlify/
 
 # Where scripts/deploy.sh publishes (site id and URL). Never committed.
 scripts/deploy.local.env
+
+# Git worktrees created by Claude Code sessions.
+.claude/worktrees/
