@@ -33,7 +33,7 @@ You interact with BrainStack via these MCP tools:
 - `move_to_owner(from, to, toOwnerId, fromOwnerId?, userConfirmedOwnershipTransfer?)` — **transfers ownership** across vaults; without `userConfirmedOwnershipTransfer: true` it moves nothing and returns a cost summary. See **Shared folders**.
 - `delete(path, recursive?, ownerId?)` — returns `{ deleted: [...] }` so you can confirm the blast radius. Does **not** rewrite wikilinks in note bodies.
 
-**Sharing (require user approval — see below; hosted only — not registered in self-host):**
+**Sharing (require user approval — see below):**
 
 - `share_folder(path, email, permission?)` — grant read or write on a folder and everything under it
 - `unshare(path, email)` — revoke that person's access
@@ -130,7 +130,7 @@ user — they are the part of the move that needs a human decision.
 
 ## Sharing folders
 
-Sharing hands another person access to everything under a folder, including notes created later. It reaches a real person by email, so it is never a routine action. **`share_folder`**, **`unshare`**, and **`list_shares`** are available on hosted BrainStack only — they are not registered when the server runs in self-host mode.
+Sharing hands another person access to everything under a folder, including notes created later. It reaches a real person by email, so it is never a routine action.
 
 - **Always ask first, and echo the exact folder and email back** before calling `share_folder`. "Share `Zuno/` with pablo@example.com — that covers every note under it, now and in the future. Confirm?"
 - `permission` is `read` (default) or `write`. **`write`** lets them create and edit inside the folder (they pass your `ownerId` on writes). Re-sharing with the same person **updates** their permission rather than adding a second grant.
