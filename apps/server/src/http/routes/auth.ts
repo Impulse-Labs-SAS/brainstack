@@ -33,9 +33,6 @@ export interface AuthRouterOptions extends AuthMiddlewareOptions {
   secureCookies: boolean;
   /** Where to redirect after a successful verification / reset. */
   appHome: string;
-  /** When true (dev), responses include verification/reset URLs so testing
-   * without SMTP works. Always false in production. */
-  exposeDevTokens: boolean;
 }
 
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
@@ -79,10 +76,7 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
         parsed.data.password,
         parsed.data.displayName ?? null,
       );
-      options.logger.info({ url: result.verification.url }, 'email verification link');
-      const body: Record<string, unknown> = { user: result.user };
-      if (options.exposeDevTokens) body.verificationUrl = result.verification.url;
-      return c.json(body, 201);
+      return c.json({ user: result.user }, 201);
     } catch (err) {
       return jsonError(c, err);
     }
@@ -151,13 +145,8 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
     if (!parsed.success) return c.json({ ok: true }); // don't leak validation
 
     try {
-      const result = await options.auth.requestPasswordReset(parsed.data.email);
-      if (result.url) {
-        options.logger.info({ url: result.url }, 'password reset link');
-      }
-      const body: Record<string, unknown> = { ok: true };
-      if (options.exposeDevTokens && result.url) body.resetUrl = result.url;
-      return c.json(body);
+      await options.auth.requestPasswordReset(parsed.data.email);
+      return c.json({ ok: true });
     } catch (err) {
       options.logger.error({ err }, 'forgot-password failed');
       // Still return ok to avoid enumeration.
@@ -209,11 +198,8 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       .safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ ok: true });
     try {
-      const result = await options.auth.resendVerification(parsed.data.email);
-      if (result.url) options.logger.info({ url: result.url }, 'email verification link');
-      const body: Record<string, unknown> = { ok: true };
-      if (options.exposeDevTokens && result.url) body.verificationUrl = result.url;
-      return c.json(body);
+      await options.auth.resendVerification(parsed.data.email);
+      return c.json({ ok: true });
     } catch (err) {
       options.logger.error({ err }, 'resend verification failed');
       return c.json({ ok: true });

@@ -37,9 +37,8 @@ name: Deploy
 # So the site id is the script's own default rather than the NETLIFY_SITE_ID
 # secret, which almost certainly still holds the id of the-old-site — now
 # answering 502. A deploy pointed at the wrong site does not announce itself.
-# Set BRAINSTACK_SITE_ID to override. Everything else — DATABASE_URL,
-# SESSION_SECRET, the OAuth credentials — lives on the site and is pulled in at
-# build time.
+# Set BRAINSTACK_SITE_ID to override. Everything else — DATABASE_URL, the OAuth
+# credentials — lives on the site and is pulled in at build time.
 
 on:
   push:

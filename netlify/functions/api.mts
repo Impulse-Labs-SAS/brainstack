@@ -110,12 +110,6 @@ async function boot(): Promise<Hono<never>> {
     // Same origin, so there is no cross-origin request to allow.
     corsOrigins: [],
     appHome: cfg.PUBLIC_ORIGIN,
-    /*
-     * Never here. An https origin is not a development machine, and leaving
-     * this on would hand a password reset link to anyone who can POST an
-     * address to /api/auth/forgot-password — which is the whole account.
-     */
-    exposeDevTokens: false,
     // MCP hosts (claude.ai, Claude Code, Cursor) authenticate via OAuth: the
     // `.well-known` documents, /api/oauth/* and provider-issued tokens all
     // hang off this. The issuer is the configured origin, never the request's.

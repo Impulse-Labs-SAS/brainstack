@@ -69,17 +69,6 @@ async function main(): Promise<void> {
     secureCookies: cfg.PUBLIC_ORIGIN.startsWith('https://'),
     corsOrigins: cfg.corsOrigins,
     appHome: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
-    /*
-     * Returns verification and reset links in the response body, so signing up
-     * locally does not need a mail server.
-     *
-     * Derived from the scheme rather than NODE_ENV, which defaults to
-     * 'development' and cannot be scoped to the runtime on Netlify's free plan.
-     * Left to that default in production, this would hand a reset link to
-     * anyone who can POST an address to /auth/forgot-password — which is the
-     * whole account. An https origin is never a development machine.
-     */
-    exposeDevTokens: !cfg.PUBLIC_ORIGIN.startsWith('https://'),
     // Same OAuth provider as production, so the whole flow is testable locally.
     oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
     publicConfig: {

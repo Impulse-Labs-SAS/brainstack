@@ -7,29 +7,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { authFetch } from '@/lib/authApi';
 
-interface SignupResult {
-  user: { id: string; email: string };
-  verificationUrl?: string;
-}
-
 export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [done, setDone] = useState<{ devUrl?: string } | null>(null);
+  const [done, setDone] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setPending(true);
     setError(null);
     try {
-      const result = await authFetch<SignupResult>('/auth/signup', {
+      await authFetch('/auth/signup', {
         method: 'POST',
         json: { email, password, displayName: displayName || undefined },
       });
-      setDone({ devUrl: result.verificationUrl });
+      setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'signup failed');
     } finally {
@@ -47,17 +42,6 @@ export default function SignupPage() {
             We sent a verification link to <b>{email}</b>. Click it to finish creating your
             account.
           </p>
-          {done.devUrl && (
-            <div className="mt-4 rounded-md border border-warning bg-bg-elevated p-3 text-xs">
-              <div className="mb-1 font-mono text-warning">DEV MODE — use this link</div>
-              <a
-                href={done.devUrl}
-                className="block break-all rounded bg-bg-base p-2 font-mono text-fg-primary"
-              >
-                {done.devUrl}
-              </a>
-            </div>
-          )}
           <Link href="/login" className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary">
             ← Back to sign in
           </Link>

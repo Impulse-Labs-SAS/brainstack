@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { useSharingEnabled } from '@/lib/use-deployment';
 import { useRecentNotes } from '@/lib/recent-notes';
+import { splitSnippet } from '@/lib/search-snippet';
 import { encodePath } from '@/lib/wikilinks-client';
 
 interface CommandPaletteProps {
@@ -372,10 +373,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     )}
                   </span>
                   {item.snippet && (
-                    <span
-                      className="mt-0.5 line-clamp-1 block text-xs text-fg-secondary [&_mark]:rounded [&_mark]:bg-accent/30 [&_mark]:px-0.5 [&_mark]:text-fg-primary"
-                      dangerouslySetInnerHTML={{ __html: item.snippet }}
-                    />
+                    <span className="mt-0.5 line-clamp-1 block text-xs text-fg-secondary [&_mark]:rounded [&_mark]:bg-accent/30 [&_mark]:px-0.5 [&_mark]:text-fg-primary">
+                      {splitSnippet(item.snippet).map((part, n) =>
+                        part.marked ? <mark key={n}>{part.text}</mark> : part.text,
+                      )}
+                    </span>
                   )}
                 </span>
                 {item.detail && (

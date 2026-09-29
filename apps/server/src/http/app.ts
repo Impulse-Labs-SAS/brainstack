@@ -58,8 +58,6 @@ export interface BuildAppOptions {
   corsOrigins: string[];
   /** First CORS origin or PUBLIC_ORIGIN — where verify/reset redirect lands. */
   appHome: string;
-  /** When true (dev), responses include verification/reset URLs. */
-  exposeDevTokens: boolean;
   /** Inject a custom limiter (tests). Defaults to an in-memory one. */
   loginLimiter?: LoginRateLimiter;
   /** Google OAuth service. When omitted, /auth/google* routes are disabled. */
@@ -154,7 +152,6 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       secureCookies: opts.secureCookies,
       loginLimiter,
       appHome: opts.appHome,
-      exposeDevTokens: opts.exposeDevTokens,
     }),
   );
 

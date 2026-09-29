@@ -51,7 +51,6 @@ beforeEach(async () => {
     loginLimiter: createLoginRateLimiter(),
     secureCookies: false,
     appHome: 'https://brain.test',
-    exposeDevTokens: false,
   });
 });
 
@@ -104,5 +103,53 @@ describe('POST /logout', () => {
 
     expect(res.status).toBe(200);
     expect(await auth.validateSession(token)).toBeNull();
+  });
+});
+
+describe('auth links', () => {
+  // A verification or reset link is the account. It goes to the inbox and
+  // nowhere else: not into the response, and not into the server log.
+  it('never appear in a response or in the log', async () => {
+    const lines: string[] = [];
+    const capturing = pino({ level: 'trace' }, { write: (line: string) => lines.push(line) });
+    const email = new CapturingEmailSender();
+    const service = new AuthService({
+      db: database.db,
+      email,
+      logger: capturing,
+      publicOrigin: 'http://localhost',
+      authorizedEmails: new Set(),
+    });
+    const r = createAuthRouter({
+      auth: service,
+      apiKeys: new ApiKeyService({ db: database.db }),
+      resolveUser: () => {
+        throw new Error('no API key reaches these routes');
+      },
+      logger: capturing,
+      loginLimiter: createLoginRateLimiter(),
+      secureCookies: false,
+      appHome: 'http://localhost',
+    });
+    const post = (path: string, body: unknown) =>
+      r.request(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    const bodies = [
+      await (await post('/signup', { email: 'a@brain.test', password: 'Passw0rd!xyz' })).text(),
+      await (await post('/resend-verification', { email: 'a@brain.test' })).text(),
+      await (await post('/forgot-password', { email: 'a@brain.test' })).text(),
+    ];
+
+    const tokens = email.sent.map((m) => /token=([A-Za-z0-9_-]+)/.exec(m.text)?.[1]);
+    expect(tokens.length).toBeGreaterThanOrEqual(2);
+    for (const token of tokens) {
+      expect(token).toBeTruthy();
+      for (const body of bodies) expect(body).not.toContain(token!);
+      for (const line of lines) expect(line).not.toContain(token!);
+    }
   });
 });

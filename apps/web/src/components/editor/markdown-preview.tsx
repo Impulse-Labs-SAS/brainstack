@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -23,6 +24,7 @@ import {
   writePropertiesOpen,
 } from '@/components/note/properties-block';
 import { LinkPeek, usePeek } from '@/components/note/link-peek';
+import { noteSanitizeSchema } from '@/lib/markdown-sanitize';
 import { remarkWikilinks } from '@/lib/remark-wikilinks';
 import { cn } from '@/lib/utils';
 import type { ResolvedAttachment } from '@/lib/wikilinks-client';
@@ -267,7 +269,9 @@ export function MarkdownPreview({
           <div data-preview-body>
             <ReactMarkdown
               remarkPlugins={[remarkGfm, remarkWikilinks]}
-              rehypePlugins={[rehypeRaw, rehypeHighlight]}
+              // Sanitise after the raw HTML is parsed and before highlighting,
+              // which adds classes the allowlist would otherwise strip.
+              rehypePlugins={[rehypeRaw, [rehypeSanitize, noteSanitizeSchema], rehypeHighlight]}
               components={components}
               urlTransform={urlTransform}
             >

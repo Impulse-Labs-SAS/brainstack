@@ -27,7 +27,6 @@ const Env = z.object({
     .url()
     .default('http://localhost:3000')
     .transform((v) => v.replace(/\/+$/, '')),
-  SESSION_SECRET: z.string().min(16).default('dev-secret-please-change-at-least-32-bytes'),
   MCP_STDIO: z
     .string()
     .default('false')
