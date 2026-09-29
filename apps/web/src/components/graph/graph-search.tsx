@@ -477,7 +477,11 @@ function OptionList({ title, options, selected, onChange }: { title: string; opt
           className="mx-1.5 mb-1 w-[calc(100%-0.75rem)] rounded border border-border-subtle bg-transparent px-2 py-1 text-xs text-fg-primary outline-none placeholder:text-fg-muted focus:border-border-strong"
         />
       )}
-      <div className="max-h-40 overflow-y-auto">
+      {/* `relative` keeps each checkbox's visually hidden input inside this
+          scroller. Without it they are positioned against the popover, at
+          their unscrolled place, and a long list stretches the popover's
+          scroll area with empty space. */}
+      <div className="relative max-h-40 overflow-y-auto">
         {shown.map((o) => (
           <Row
             key={o.id}
