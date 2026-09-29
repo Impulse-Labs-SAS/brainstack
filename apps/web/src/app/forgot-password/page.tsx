@@ -7,30 +7,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { authFetch } from '@/lib/authApi';
 
-interface ForgotResult {
-  ok: boolean;
-  resetUrl?: string;
-}
-
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
   const [pending, setPending] = useState(false);
-  const [done, setDone] = useState<{ devUrl?: string } | null>(null);
+  const [done, setDone] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setPending(true);
     try {
-      const result = await authFetch<ForgotResult>('/auth/forgot-password', {
+      await authFetch('/auth/forgot-password', {
         method: 'POST',
         json: { email },
       });
-      setDone({ devUrl: result.resetUrl });
     } catch {
       // Always pretend success to avoid email enumeration.
-      setDone({});
     } finally {
       setPending(false);
+      setDone(true);
     }
   }
 
@@ -43,17 +37,6 @@ export default function ForgotPasswordPage() {
           <p className="text-sm text-fg-secondary">
             If <b>{email}</b> has an account, we sent a reset link. The link expires in one hour.
           </p>
-          {done.devUrl && (
-            <div className="mt-4 rounded-md border border-warning bg-bg-elevated p-3 text-xs">
-              <div className="mb-1 font-mono text-warning">DEV MODE — use this link</div>
-              <a
-                href={done.devUrl}
-                className="block break-all rounded bg-bg-base p-2 font-mono text-fg-primary"
-              >
-                {done.devUrl}
-              </a>
-            </div>
-          )}
           <Link href="/login" className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary">
             ← Back to sign in
           </Link>

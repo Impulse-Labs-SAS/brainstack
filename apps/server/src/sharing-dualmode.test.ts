@@ -68,7 +68,6 @@ function buildHarness(
     secureCookies: false,
     corsOrigins: [],
     appHome: 'http://test',
-    exposeDevTokens: false,
     publicConfig: {
       deployment,
       features: { sharing: deployment === 'hosted' },
