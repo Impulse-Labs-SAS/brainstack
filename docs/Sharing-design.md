@@ -1,7 +1,10 @@
 # Sharing de carpetas — diseño
 
 > **Estado**: V1 implementado. V2 (escritura) implementado — ver §17. Migración entre bóvedas — ver §18.
-> **Scope**: hosted deployment de Impulse Labs únicamente. Self-host queda single-user.
+> **Scope**: every instance. The two deployment modes this document designs (`self-host` single-user,
+> `hosted` with sharing) no longer exist: `BRAINSTACK_DEPLOYMENT` was removed, and every instance runs what
+> it calls hosted mode, with per-account vaults and sharing always on. Sections about the self-host mode are
+> history.
 > **Licencia**: todo el código vive en este repo bajo AGPL-3.0.
 
 > **Nota de lectura.** Las secciones 1–11 describen V1, que era **read-only por

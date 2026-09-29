@@ -27,7 +27,7 @@ There are two templates, for two audiences:
 
 - Compose-internal hostnames and ports (`postgres:5432`), which exist only on the compose network.
 - Local-only defaults that are obviously local (`http://localhost:3000`).
-- Enum and boolean flags (`BRAINSTACK_DEPLOYMENT=self-host`).
+- Enum and boolean flags at their safe default (`LOG_LEVEL=info`, `OPEN_SIGNUP=`).
 
 ## When a secret was committed
 
