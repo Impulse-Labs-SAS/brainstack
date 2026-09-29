@@ -5,12 +5,12 @@ import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { authFetch } from '@/lib/authApi';
+import { AuthApiError, authFetch } from '@/lib/authApi';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
   const [pending, setPending] = useState(false);
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState<'sent' | 'no-email' | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -20,11 +20,12 @@ export default function ForgotPasswordPage() {
         method: 'POST',
         json: { email },
       });
-    } catch {
-      // Always pretend success to avoid email enumeration.
+      setDone('sent');
+    } catch (err) {
+      // Anything else still reads as success, so an address reveals nothing.
+      setDone(err instanceof AuthApiError && err.code === 'UNAVAILABLE' ? 'no-email' : 'sent');
     } finally {
       setPending(false);
-      setDone(true);
     }
   }
 
@@ -33,10 +34,22 @@ export default function ForgotPasswordPage() {
       <div className="flex min-h-screen items-center justify-center bg-bg-base px-6">
         <div className="w-full max-w-sm rounded-lg border border-border bg-bg-surface p-6 shadow-lg">
           <div className="mb-1 font-mono text-xs text-fg-muted">brainstack</div>
-          <h1 className="mb-3 text-xl font-medium text-fg-primary">Check your email</h1>
-          <p className="text-sm text-fg-secondary">
-            If <b>{email}</b> has an account, we sent a reset link. The link expires in one hour.
-          </p>
+          {done === 'sent' ? (
+            <>
+              <h1 className="mb-3 text-xl font-medium text-fg-primary">Check your email</h1>
+              <p className="text-sm text-fg-secondary">
+                If <b>{email}</b> has an account, we sent a reset link. The link expires in one hour.
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 className="mb-3 text-xl font-medium text-fg-primary">This server sends no email</h1>
+              <p className="text-sm text-fg-secondary">
+                It cannot mail you a reset link. Whoever runs it can give you a new password with its{' '}
+                <code className="font-mono text-fg-primary">reset-password</code> command.
+              </p>
+            </>
+          )}
           <Link href="/login" className="mt-6 inline-block text-xs text-fg-muted hover:text-fg-primary">
             ← Back to sign in
           </Link>

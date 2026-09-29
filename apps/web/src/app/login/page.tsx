@@ -12,10 +12,17 @@ interface LoginResult {
   user: { id: string };
 }
 
+/** Codes the Google sign-in redirect can carry back, in words. Anything else shows as it came. */
+const REDIRECT_ERRORS: Record<string, string> = {
+  SIGNUP_CLOSED:
+    'Sign-up is closed on this server. Ask whoever runs it to invite you, or to add your address.',
+};
+
 function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const initialError = params.get('error');
+  const errorParam = params.get('error');
+  const initialError = errorParam ? (REDIRECT_ERRORS[errorParam] ?? errorParam) : null;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');

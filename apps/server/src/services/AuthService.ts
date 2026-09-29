@@ -202,7 +202,7 @@ export class AuthService {
     const [existing] = await this.opts.db.select({ id: users.id }).from(users).limit(1);
     if (!existing) {
       if (listed.size > 0 && !listed.has(email)) {
-        throw new AppError('sign-up is closed on this instance', 'FORBIDDEN', 403);
+        throw new AppError('sign-up is closed on this instance', 'SIGNUP_CLOSED', 403);
       }
       return { first: true };
     }
@@ -225,7 +225,7 @@ export class AuthService {
 
     throw new AppError(
       'sign-up is closed on this instance; ask its owner for an invitation',
-      'FORBIDDEN',
+      'SIGNUP_CLOSED',
       403,
     );
   }
@@ -496,18 +496,15 @@ export class AuthService {
    * controls the address, which is the same proof a reset ever had.
    */
   async requestPasswordReset(rawEmail: string): Promise<PasswordResetRequestResult> {
+    // Refused before the lookup, the same for every address, so it says
+    // something about the instance and nothing about the account. Saying it
+    // beats "check your email" for a message that will never come: the person
+    // learns to ask whoever runs the server for the reset-password command.
+    if (!this.opts.email) throw emailUnavailable();
+
     const row = await this.rowByEmail(rawEmail);
     if (!row) {
       // Do not leak account existence — the caller reports success either way.
-      return { token: null, url: null, expiresAt: null };
-    }
-    if (!this.opts.email) {
-      // The caller still reports success, so this answers nothing about the
-      // address. The operator resets it from the server instead.
-      this.opts.logger.warn(
-        'password reset requested, but this instance has no email configured; ' +
-          'reset it with the reset-password command',
-      );
       return { token: null, url: null, expiresAt: null };
     }
 

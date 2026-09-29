@@ -82,7 +82,7 @@ describe('AuthService signup + email verification', () => {
 
   it('enforces the authorized-emails allowlist', async () => {
     await expect(auth.signup('intruder@brain.test', STRONG)).rejects.toMatchObject({
-      code: 'FORBIDDEN',
+      code: 'SIGNUP_CLOSED',
     });
   });
 

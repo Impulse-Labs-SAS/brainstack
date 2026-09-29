@@ -73,7 +73,7 @@ describe('the first account', () => {
   it('must be on AUTHORIZED_EMAILS when that is set', async () => {
     const auth = authWith({ authorizedEmails: new Set(['owner@brain.test']) });
     await expect(auth.signup('someone@brain.test', STRONG)).rejects.toMatchObject({
-      code: 'FORBIDDEN',
+      code: 'SIGNUP_CLOSED',
     });
     await auth.signup('owner@brain.test', STRONG);
   });
@@ -84,7 +84,7 @@ describe('every account after the first', () => {
     const auth = authWith();
     await auth.signup('owner@brain.test', STRONG);
     await expect(auth.signup('stranger@brain.test', STRONG)).rejects.toMatchObject({
-      code: 'FORBIDDEN',
+      code: 'SIGNUP_CLOSED',
     });
     expect(await userCount()).toBe(1);
   });
@@ -129,7 +129,7 @@ describe('every account after the first', () => {
 
     await auth.signup('invited@brain.test', STRONG);
     for (const email of ['late@brain.test', 'revoked@brain.test']) {
-      await expect(auth.signup(email, STRONG)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(auth.signup(email, STRONG)).rejects.toMatchObject({ code: 'SIGNUP_CLOSED' });
     }
   });
 
@@ -165,7 +165,7 @@ describe('signing in', () => {
         email: 'stranger@brain.test',
         googleEmailVerified: true,
       }),
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({ code: 'SIGNUP_CLOSED' });
     // The owner can still link Google to the account that exists.
     const linked = await auth.upsertGoogleUser({
       googleId: 'g2',
@@ -177,10 +177,15 @@ describe('signing in', () => {
 });
 
 describe('without email', () => {
-  it('answers a reset request without issuing a link', async () => {
+  it('refuses a reset request the same way for every address, and issues nothing', async () => {
     const auth = authWith({ email: null });
     await auth.signup('owner@brain.test', STRONG);
-    expect(await auth.requestPasswordReset('owner@brain.test')).toMatchObject({ url: null });
+    for (const address of ['owner@brain.test', 'nobody@brain.test']) {
+      await expect(auth.requestPasswordReset(address)).rejects.toMatchObject({
+        code: 'UNAVAILABLE',
+        status: 503,
+      });
+    }
     expect(await database.db.select().from(passwordResetTokens)).toHaveLength(0);
   });
 
