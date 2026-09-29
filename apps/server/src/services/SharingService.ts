@@ -1,7 +1,7 @@
 // The one place that answers "can this user read or write this path".
 //
-// Self-host has a single user and every `can*` returns true without touching
-// the database. Hosted consults folder_shares. See docs/Sharing-design.md §6.
+// An owner can always read and write their own vault; anyone else needs a
+// grant in folder_shares. See docs/Sharing-design.md §6.
 //
 // Grants are per folder, not per note, so a share keeps covering notes created
 // after it was handed out.
@@ -15,14 +15,11 @@ import { AppError } from '../lib/errors.js';
 
 const { folderShares, folderShareInvites, users } = pgSchema;
 
-export type Deployment = 'self-host' | 'hosted';
-
 /** What a grant allows. Ordered: 'write' implies 'read'. */
 export type SharePermission = 'read' | 'write';
 
 export interface SharingServiceOptions {
   db: PgDb;
-  deployment: Deployment;
   now?: () => number;
 }
 
@@ -66,13 +63,7 @@ export class SharingService {
     return this.opts.now ? this.opts.now() : Date.now();
   }
 
-  /** True when the deployment has sharing at all. */
-  get enabled(): boolean {
-    return this.opts.deployment === 'hosted';
-  }
-
   async canRead(userId: string, ownerId: string, relPath: string): Promise<boolean> {
-    if (!this.enabled) return true;
     if (userId === ownerId) return true;
     return (await this.findGrantForPath(userId, ownerId, relPath)) !== null;
   }
@@ -85,7 +76,6 @@ export class SharingService {
    * up is not a permission.
    */
   async canWrite(userId: string, ownerId: string, relPath: string): Promise<boolean> {
-    if (!this.enabled) return true;
     if (userId === ownerId) return true;
     const grant = await this.findGrantForPath(userId, ownerId, relPath);
     return grant?.permission === 'write';
@@ -120,7 +110,6 @@ export class SharingService {
    * Null when the path collides with nothing, which is the common case.
    */
   async findShadowedShare(userId: string, relPath: string): Promise<SharedRoot | null> {
-    if (!this.enabled) return null;
     for (const root of await this.listSharedRoots(userId)) {
       if (pathFallsUnder(relPath, root.folderPath)) return root;
     }
@@ -142,8 +131,6 @@ export class SharingService {
     relPath: string,
     sharedRoots?: SharedRoot[],
   ): Promise<void> {
-    if (!this.enabled) return;
-
     const roots = sharedRoots ?? (await this.listSharedRoots(userId));
     const hit = roots.find((r) => pathFallsUnder(relPath, r.folderPath));
     if (!hit) return;
@@ -161,8 +148,6 @@ export class SharingService {
 
   /** Folders other people shared with me. */
   async listSharedRoots(userId: string): Promise<SharedRoot[]> {
-    if (!this.enabled) return [];
-
     const rows = await this.opts.db
       .select({
         folderPath: folderShares.folderPath,
@@ -189,8 +174,6 @@ export class SharingService {
 
   /** The people I shared with, groupable by folder. */
   async listMyShares(ownerId: string): Promise<ShareMember[]> {
-    if (!this.enabled) return [];
-
     const rows = await this.opts.db
       .select({
         shareId: folderShares.id,
@@ -228,9 +211,6 @@ export class SharingService {
     grantedBy: string;
     permission?: SharePermission;
   }): Promise<string> {
-    if (!this.enabled) {
-      throw new AppError('sharing is not available in a self-hosted instance', 'FORBIDDEN', 403);
-    }
     const folderPath = normalizeFolderPath(params.folderPath);
     if (folderPath === '') {
       throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
@@ -303,7 +283,6 @@ export class SharingService {
     sharedWithUserId: string;
     folderPath: string;
   }): Promise<void> {
-    if (!this.enabled) return;
     const folderPath = normalizeFolderPath(params.folderPath);
 
     await this.opts.db
@@ -353,7 +332,6 @@ export class SharingService {
    * its permission, and only the path it names changes.
    */
   async reparentUnder(params: { ownerId: string; from: string; to: string }): Promise<number> {
-    if (!this.enabled) return 0;
     const from = normalizeFolderPath(params.from);
     const to = normalizeFolderPath(params.to);
     if (from === '' || to === '' || from === to) return 0;
@@ -450,7 +428,6 @@ export class SharingService {
    * allowed to. This only stops the grant from outliving what it was about.
    */
   async revokeUnder(params: { ownerId: string; folderPath: string }): Promise<number> {
-    if (!this.enabled) return 0;
     const folderPath = normalizeFolderPath(params.folderPath);
     if (folderPath === '') return 0;
 

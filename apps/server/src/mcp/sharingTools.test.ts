@@ -34,9 +34,8 @@ let sharing: SharingService;
 
 /** An MCP client talking to a server that acts as `userId`. */
 async function clientFor(userId: string): Promise<Client> {
-  const vaultCfg = { deployment: 'hosted' as const };
-  const notes = new NoteService({ cfg: vaultCfg, db: database.db });
-  const search = new SearchService({ db: database.db, cfg: vaultCfg });
+  const notes = new NoteService({ db: database.db });
+  const search = new SearchService({ db: database.db });
   const totp = new TotpService({ db: database.db, issuer: 'BrainStack' });
   const auth = new AuthService({
     db: database.db,
@@ -52,7 +51,7 @@ async function clientFor(userId: string): Promise<Client> {
     sharing,
     publicOrigin: 'http://test',
   });
-  const crossOwner = new CrossOwnerReader({ sharing, vaultCfg, db: database.db });
+  const crossOwner = new CrossOwnerReader({ sharing, db: database.db });
 
   const server = buildMcpServer({
     notes,
@@ -99,7 +98,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await database.reset();
   email = new CapturingEmailSender();
-  sharing = new SharingService({ db: database.db, deployment: 'hosted' });
+  sharing = new SharingService({ db: database.db });
   for (const u of [OWNER, PABLO]) {
     await database.db
       .insert(users)
@@ -108,7 +107,7 @@ beforeEach(async () => {
 });
 
 describe('the sharing tools exist at all', () => {
-  it('exposes both sides of sharing in hosted', async () => {
+  it('exposes both sides of sharing', async () => {
     const client = await clientFor(OWNER.id);
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).toEqual(
@@ -116,14 +115,6 @@ describe('the sharing tools exist at all', () => {
     );
   });
 
-  it('hides them in self-host, where there is nobody to share with', async () => {
-    sharing = new SharingService({ db: database.db, deployment: 'self-host' });
-    const client = await clientFor(OWNER.id);
-    const names = (await client.listTools()).tools.map((t) => t.name);
-    for (const tool of ['share_folder', 'unshare', 'list_shares', 'list_shared_with_me']) {
-      expect(names).not.toContain(tool);
-    }
-  });
 });
 
 describe('share_folder', () => {

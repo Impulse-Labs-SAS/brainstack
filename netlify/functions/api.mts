@@ -69,7 +69,6 @@ async function boot(): Promise<Hono<never>> {
     appOrigin: cfg.PUBLIC_ORIGIN,
     authorizedEmails: cfg.authorizedEmails,
     apiBasePath: API_BASE_PATH,
-    deployment: cfg.BRAINSTACK_DEPLOYMENT,
     email: cfg.email,
     openSignup: cfg.OPEN_SIGNUP,
     googleClientId: cfg.GOOGLE_OAUTH_CLIENT_ID,
@@ -79,10 +78,7 @@ async function boot(): Promise<Hono<never>> {
 
   // Notes written before ownership existed belong to nobody and are listed by
   // nobody. Claiming them before the first listing keeps them from vanishing.
-  const backfill = await backfillOwnerId(db, {
-    deployment: cfg.BRAINSTACK_DEPLOYMENT,
-    logger,
-  });
+  const backfill = await backfillOwnerId(db, { logger });
   if (!backfill.skipped) {
     logger.info({ notesUpdated: backfill.notesUpdated }, 'claimed notes that had no owner');
   }
@@ -114,11 +110,6 @@ async function boot(): Promise<Hono<never>> {
     // `.well-known` documents, /api/oauth/* and provider-issued tokens all
     // hang off this. The issuer is the configured origin, never the request's.
     oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
-    publicConfig: {
-      deployment: cfg.BRAINSTACK_DEPLOYMENT,
-      features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },
-    },
-    vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT },
     basePath: API_BASE_PATH,
     buildMcpServer: (principal) =>
       buildMcpServer({

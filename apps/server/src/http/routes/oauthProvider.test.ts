@@ -32,7 +32,6 @@ const REDIRECT_URI = 'https://client.test/callback';
 const VERIFIER = 'a-code-verifier-that-is-long-enough-for-rfc-7636';
 const CHALLENGE = createHash('sha256').update(VERIFIER, 'ascii').digest('base64url');
 
-const hosted = { deployment: 'hosted' as const };
 
 let database: TestDatabase;
 let auth: AuthService;
@@ -69,10 +68,10 @@ beforeEach(async () => {
   });
   const apiKeys = new ApiKeyService({ db });
   oauth = new OAuthProviderService({ db });
-  const notes = new NoteService({ db, cfg: hosted });
-  const search = new SearchService({ db, cfg: hosted });
-  const sharing = new SharingService({ db, deployment: 'hosted' });
-  const crossOwner = new CrossOwnerReader({ db, sharing, vaultCfg: hosted });
+  const notes = new NoteService({ db });
+  const search = new SearchService({ db });
+  const sharing = new SharingService({ db });
+  const crossOwner = new CrossOwnerReader({ db, sharing });
   const invites = new InviteService({
     db,
     sharing,
@@ -99,8 +98,6 @@ beforeEach(async () => {
     corsOrigins: [],
     appHome: ISSUER,
     oauth: { service: oauth, issuer: ISSUER },
-    publicConfig: { deployment: 'hosted', features: { sharing: true } },
-    vaultCfg: hosted,
     buildMcpServer: (principal) =>
       buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, logger, principal }),
   });
@@ -220,19 +217,18 @@ describe('discovery', () => {
       logger,
       auth,
       apiKeys: new ApiKeyService({ db: database.db }),
-      notes: new NoteService({ db: database.db, cfg: hosted }),
-      search: new SearchService({ db: database.db, cfg: hosted }),
-      sharing: new SharingService({ db: database.db, deployment: 'hosted' }),
+      notes: new NoteService({ db: database.db }),
+      search: new SearchService({ db: database.db }),
+      sharing: new SharingService({ db: database.db }),
       invites: new InviteService({
         db: database.db,
-        sharing: new SharingService({ db: database.db, deployment: 'hosted' }),
+        sharing: new SharingService({ db: database.db }),
         email: new CapturingEmailSender(),
         publicOrigin: ISSUER,
       }),
       crossOwner: new CrossOwnerReader({
         db: database.db,
-        sharing: new SharingService({ db: database.db, deployment: 'hosted' }),
-        vaultCfg: hosted,
+        sharing: new SharingService({ db: database.db }),
       }),
       resolveUserForApiKey: async (): Promise<User> => {
         throw new Error('unused');
@@ -242,8 +238,6 @@ describe('discovery', () => {
       corsOrigins: [],
       appHome: ISSUER,
       oauth: { service: oauth, issuer: ISSUER },
-      publicConfig: { deployment: 'hosted', features: { sharing: true } },
-      vaultCfg: hosted,
       basePath: '/api',
       buildMcpServer: () => {
         throw new Error('unused');

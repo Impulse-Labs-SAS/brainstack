@@ -83,9 +83,6 @@ export class InviteService {
     inviteeEmail?: string;
     permission?: SharePermission;
   }): Promise<CreatedInvite> {
-    if (!this.opts.sharing.enabled) {
-      throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
-    }
     const folderPath = normalizeFolderPath(params.folderPath);
     if (!folderPath) {
       throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
@@ -152,8 +149,6 @@ export class InviteService {
       createdAt: number;
     }>
   > {
-    if (!this.opts.sharing.enabled) return [];
-
     const rows = await this.opts.db
       .select({
         id: folderShareInvites.id,
@@ -184,7 +179,6 @@ export class InviteService {
 
   /** Revoking is scoped to the owner, so one cannot revoke another's invite. */
   async revoke(ownerId: string, inviteId: string): Promise<void> {
-    if (!this.opts.sharing.enabled) return;
     await this.opts.db
       .update(folderShareInvites)
       .set({ revokedAt: this.now() })
@@ -201,10 +195,6 @@ export class InviteService {
     token: string;
     user: { id: string; email: string };
   }): Promise<AcceptResult> {
-    if (!this.opts.sharing.enabled) {
-      throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
-    }
-
     const [row] = await this.opts.db
       .select()
       .from(folderShareInvites)

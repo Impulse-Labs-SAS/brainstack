@@ -1,6 +1,6 @@
-// Dual-mode smoke test: boots the Hono app in both deployments and checks the
-// gating of sharing and /api/config. No network and no disk — the database is
-// Postgres in-process.
+// Smoke test for the route prefix: boots the Hono app behind `/api` and checks
+// that every surface answers there and nowhere else. No network and no disk —
+// the database is Postgres in-process.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pino from 'pino';
@@ -12,7 +12,7 @@ import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
-import { SharingService, type Deployment } from './services/SharingService.js';
+import { SharingService } from './services/SharingService.js';
 import { TotpService } from './services/TotpService.js';
 import { buildApp } from './http/app.js';
 import { buildMcpServer } from './mcp/server.js';
@@ -24,14 +24,9 @@ interface Harness {
   fetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-function buildHarness(
-  deployment: Deployment,
-  bs: TestDatabase['db'],
-  basePath?: string,
-): Harness {
-  const vaultCfg = { deployment };
-  const notes = new NoteService({ cfg: vaultCfg, db: bs });
-  const search = new SearchService({ db: bs, cfg: vaultCfg });
+function buildHarness(bs: TestDatabase['db'], basePath?: string): Harness {
+  const notes = new NoteService({ db: bs });
+  const search = new SearchService({ db: bs });
   const email = new CapturingEmailSender();
   const totp = new TotpService({ db: bs, issuer: 'BrainStack' });
   const auth = new AuthService({
@@ -43,14 +38,14 @@ function buildHarness(
     totp,
   });
   const apiKeys = new ApiKeyService({ db: bs });
-  const sharing = new SharingService({ db: bs, deployment });
+  const sharing = new SharingService({ db: bs });
   const invites = new InviteService({
     db: bs,
     email,
     sharing,
     publicOrigin: 'http://test',
   });
-  const crossOwner = new CrossOwnerReader({ sharing, vaultCfg, db: bs });
+  const crossOwner = new CrossOwnerReader({ sharing, db: bs });
 
   const app = buildApp({
     buildMcpServer: (principal) =>
@@ -68,11 +63,6 @@ function buildHarness(
     secureCookies: false,
     corsOrigins: [],
     appHome: 'http://test',
-    publicConfig: {
-      deployment,
-      features: { sharing: deployment === 'hosted' },
-    },
-    vaultCfg,
     ...(basePath ? { basePath } : {}),
   });
 
@@ -80,41 +70,6 @@ function buildHarness(
     fetch: (p, init) => Promise.resolve(app.fetch(new Request(`http://test${p}`, init))),
   };
 }
-
-describe('dual-mode: /api/config', () => {
-  let database: TestDatabase;
-  let selfHost: Harness;
-  let hosted: Harness;
-
-  beforeAll(async () => {
-    database = await createTestDatabase();
-    selfHost = buildHarness('self-host', database.db);
-    hosted = buildHarness('hosted', database.db);
-  });
-
-  afterAll(async () => {
-    await database.close();
-  });
-
-  it('reporta deployment y feature flag por modo', async () => {
-    const a = await (await selfHost.fetch('/config')).json();
-    expect(a).toEqual({
-      deployment: 'self-host',
-      features: { sharing: false },
-    });
-
-    const b = await (await hosted.fetch('/config')).json();
-    expect(b).toEqual({
-      deployment: 'hosted',
-      features: { sharing: true },
-    });
-  });
-
-  it('endpoint /api/config no requiere auth en ningún modo', async () => {
-    expect((await selfHost.fetch('/config')).status).toBe(200);
-    expect((await hosted.fetch('/config')).status).toBe(200);
-  });
-});
 
 /**
  * Netlify routes one path pattern to one function, so deployed the whole API
@@ -127,28 +82,27 @@ describe('basePath', () => {
 
   beforeAll(async () => {
     db = await createTestDatabase();
-    app = buildHarness('hosted', db.db, '/api');
+    app = buildHarness(db.db, '/api');
   });
 
   afterAll(async () => {
     await db.close();
   });
 
-  it('mueve todas las rutas detrás del prefijo', async () => {
-
+  it('moves every route behind the prefix', async () => {
     expect((await app.fetch('/api/config')).status).toBe(200);
     expect((await app.fetch('/api/health')).status).toBe(200);
-    // Sin sesión, pero enrutada: el 401 dice que la ruta existe.
+    // No session, but routed: the 401 says the route exists.
     expect((await app.fetch('/api/trpc/notes.tree?input=%7B%7D')).status).toBe(401);
   });
 
-  it('sin el prefijo no responde nada', async () => {
+  it('answers nothing without the prefix', async () => {
     expect((await app.fetch('/config')).status).toBe(404);
     expect((await app.fetch('/health')).status).toBe(404);
   });
 
-  it('el MCP también vive bajo el prefijo', async () => {
-    // 401 y no 404: la ruta está, falta la credencial.
+  it('serves MCP under the prefix too', async () => {
+    // 401 rather than 404: the route is there, the credential is missing.
     const res = await app.fetch('/api/mcp', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

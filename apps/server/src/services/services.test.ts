@@ -14,7 +14,6 @@ import { createTestDatabase, type TestDatabase } from './testDb.js';
 const { users } = pgSchema;
 
 const USER = 'u1';
-const selfHost = { deployment: 'self-host' as const };
 
 let database: TestDatabase;
 let notes: NoteService;
@@ -33,8 +32,8 @@ beforeEach(async () => {
   await database.db
     .insert(users)
     .values({ id: USER, email: 'u1@brain.test', createdAt: Date.now(), updatedAt: 0 });
-  notes = new NoteService({ db: database.db, cfg: selfHost });
-  search = new SearchService({ db: database.db, cfg: selfHost });
+  notes = new NoteService({ db: database.db });
+  search = new SearchService({ db: database.db });
 });
 
 describe('NoteService', () => {
@@ -214,10 +213,11 @@ describe('NoteService.affinity', () => {
 
     const { topics, edges } = await notes.affinity(USER);
     expect(topics.map((t) => t.label)).toEqual(['gemini-api']);
+    // Stored paths, the same ids `graph` gives its nodes.
     expect(edges).toEqual([
       {
-        source: 'Atlas/lector.md',
-        target: 'Nimbus/clasificador.md',
+        source: `${USER}/Atlas/lector.md`,
+        target: `${USER}/Nimbus/clasificador.md`,
         weight: 0.5,
         shared: ['gemini-api'],
       },

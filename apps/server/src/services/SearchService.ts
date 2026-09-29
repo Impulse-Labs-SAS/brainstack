@@ -9,7 +9,7 @@
 
 import { PgSearchService, type PgDb } from '@brainstack/core/pg';
 
-import { ownerIdFromPhysicalPath, toLogical, type VaultConfig } from '../lib/vault.js';
+import { ownerIdFromPhysicalPath, toLogical } from '../lib/vault.js';
 
 import { pathFallsUnder } from './SharingService.js';
 
@@ -19,8 +19,8 @@ export interface SearchHit {
   snippet: string;
   /** Relevance, lower is better. */
   score: number;
-  /** Owner of the hit. Null in self-host. When it differs from the caller, the hit is shared. */
-  ownerId: string | null;
+  /** Owner of the hit. When it differs from the caller, the hit is shared. */
+  ownerId: string;
 }
 
 export interface SearchScope {
@@ -41,7 +41,6 @@ export interface SearchOptions {
 
 export interface SearchServiceOptions {
   db: PgDb;
-  cfg: VaultConfig;
   search?: PgSearchService;
 }
 
@@ -59,7 +58,7 @@ const OVERSCAN = 4;
 export class SearchService {
   private readonly engine: PgSearchService;
 
-  constructor(private readonly opts: SearchServiceOptions) {
+  constructor(opts: SearchServiceOptions) {
     this.engine = opts.search ?? new PgSearchService(opts.db);
   }
 
@@ -68,19 +67,14 @@ export class SearchService {
     if (trimmed === '') return [];
 
     const limit = options.limit ?? 10;
-    const hosted = this.opts.cfg.deployment === 'hosted';
-    const hits = await this.engine.search(trimmed, { limit: hosted ? limit * OVERSCAN : limit });
-
-    if (!hosted) {
-      return hits.map((h) => ({ ...h, score: Number(h.score), ownerId: null }));
-    }
+    const hits = await this.engine.search(trimmed, { limit: limit * OVERSCAN });
 
     const includeMine = options.includeMine ?? true;
     const sharedScopes = options.sharedScopes ?? [];
 
     const visible: SearchHit[] = [];
     for (const hit of hits) {
-      const ownerId = ownerIdFromPhysicalPath(hit.path, this.opts.cfg);
+      const ownerId = ownerIdFromPhysicalPath(hit.path);
       if (!ownerId) continue;
 
       const mine = ownerId === userId;
@@ -95,7 +89,7 @@ export class SearchService {
       }
 
       visible.push({
-        path: mine ? toLogical(userId, hit.path, this.opts.cfg) : stripOwner(hit.path, ownerId),
+        path: mine ? toLogical(userId, hit.path) : stripOwner(hit.path, ownerId),
         title: hit.title,
         snippet: hit.snippet,
         score: Number(hit.score),

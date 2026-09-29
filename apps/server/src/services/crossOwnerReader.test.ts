@@ -12,7 +12,6 @@ let store: PgNoteStore;
 let sharing: SharingService;
 let reader: CrossOwnerReader;
 
-const hosted = { deployment: 'hosted' as const };
 
 async function seedUser(id: string, email: string): Promise<void> {
   await database.db.insert(users).values({ id, email, createdAt: Date.now(), updatedAt: 0 });
@@ -43,30 +42,13 @@ afterAll(async () => {
 beforeEach(async () => {
   await database.reset();
   store = new PgNoteStore(database.db);
-  sharing = new SharingService({ db: database.db, deployment: 'hosted' });
-  reader = new CrossOwnerReader({ sharing, vaultCfg: hosted, db: database.db });
+  sharing = new SharingService({ db: database.db });
+  reader = new CrossOwnerReader({ sharing, db: database.db });
   await seedUser('owner', 'o@x.com');
   await seedUser('viewer', 'v@x.com');
 });
 
-describe('CrossOwnerReader in self-host', () => {
-  it('refuses every method, because there is nobody to read across from', async () => {
-    const selfSharing = new SharingService({ db: database.db, deployment: 'self-host' });
-    const selfReader = new CrossOwnerReader({
-      sharing: selfSharing,
-      vaultCfg: { deployment: 'self-host' },
-      db: database.db,
-    });
-
-    expect(selfReader.enabled).toBe(false);
-    await expect(selfReader.getNote('viewer', 'owner', 'x.md')).rejects.toThrow();
-    await expect(selfReader.listTree('viewer', 'owner', 'p')).rejects.toThrow();
-    await expect(selfReader.linksForOwner('viewer', 'owner', 'x.md')).rejects.toThrow();
-    await expect(selfReader.backlinksForOwner('viewer', 'owner', 'x.md')).rejects.toThrow();
-  });
-});
-
-describe('CrossOwnerReader in hosted', () => {
+describe('CrossOwnerReader', () => {
   it('getNote refuses without a grant', async () => {
     await seedNote('owner', 'proyectos/x.md', '# X');
     await expect(reader.getNote('viewer', 'owner', 'proyectos/x.md')).rejects.toThrow(

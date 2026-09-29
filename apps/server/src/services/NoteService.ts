@@ -37,7 +37,7 @@ import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 import matter from 'gray-matter';
 
 import { AppError } from '../lib/errors.js';
-import { toLogical, toPhysical, type VaultConfig } from '../lib/vault.js';
+import { toLogical, toPhysical } from '../lib/vault.js';
 
 import {
   affinityEdges,
@@ -141,7 +141,6 @@ function mentionCandidate(row: { path: string; title: string; frontmatter: unkno
 
 export interface NoteServiceOptions {
   db: PgDb;
-  cfg: VaultConfig;
   store?: PgNoteStore;
   /**
    * Called with a folder that has just stopped existing in `ownerId`'s vault,
@@ -192,16 +191,12 @@ export class NoteService {
     this.store = opts.store ?? new PgNoteStore(opts.db);
   }
 
-  private get hosted(): boolean {
-    return this.opts.cfg.deployment === 'hosted';
-  }
-
   private toPhysical(ownerId: string, logical: string): string {
-    return toPhysical(ownerId, this.normalizeLogical(logical), this.opts.cfg);
+    return toPhysical(ownerId, this.normalizeLogical(logical));
   }
 
   private toLogical(ownerId: string, physical: string): string {
-    return toLogical(ownerId, physical, this.opts.cfg);
+    return toLogical(ownerId, physical);
   }
 
   /**
@@ -213,7 +208,6 @@ export class NoteService {
    * exist, so it carries no owner and must survive the trip unchanged.
    */
   private toLogicalIfMine(ownerId: string, value: string): string {
-    if (!this.hosted) return value;
     const prefix = `${ownerId}/`;
     return value.startsWith(prefix) ? value.slice(prefix.length) : value;
   }
@@ -247,7 +241,7 @@ export class NoteService {
   }
 
   private stripOwner(physical: string, ownerId: string | null): string {
-    if (!this.hosted || !ownerId) return physical;
+    if (!ownerId) return physical;
     const prefix = `${ownerId}/`;
     return physical.startsWith(prefix) ? physical.slice(prefix.length) : physical;
   }
@@ -256,14 +250,14 @@ export class NoteService {
     return path.replace(/^[\\/]+/, '').replace(/\/+$/, '');
   }
 
-  /** Matches every note owned by this user, prefix or column depending on mode. */
+  /** Matches every note owned by this user, by its path prefix. */
   private ownedBy(ownerId: string) {
-    return this.hosted ? like(notes.path, `${escapeLike(ownerId)}/%`) : sql`true`;
+    return like(notes.path, `${escapeLike(ownerId)}/%`);
   }
 
   /** The same, for the folders table. */
   private foldersOwnedBy(ownerId: string) {
-    return this.hosted ? like(folders.path, `${escapeLike(ownerId)}/%`) : sql`true`;
+    return like(folders.path, `${escapeLike(ownerId)}/%`);
   }
 
   /**
@@ -284,7 +278,6 @@ export class NoteService {
    * note shown to someone it was never shared with.
    */
   private inScope(ownerId: string, sharedScopes: SharedScope[] = []): (physical: string) => boolean {
-    if (!this.hosted) return () => true;
     const prefixes = [ownerId, ...sharedScopes.map((s) => `${s.ownerId}/${s.folderPath}`)].map(
       (p) => `${p}/`,
     );
@@ -331,11 +324,11 @@ export class NoteService {
   }
 
   async list(ownerId: string, filter: ListFilter = {}): Promise<NoteSummary[]> {
-    const folder = filter.folder
-      ? this.toPhysical(ownerId, filter.folder)
-      : this.scopeRoot(ownerId);
+    // Every stored path starts with its owner, so the owner's id is the root of
+    // their vault.
+    const folder = filter.folder ? this.toPhysical(ownerId, filter.folder) : ownerId;
     const rows = await this.store.list({
-      ...(folder ? { folder } : {}),
+      folder,
       ...(filter.tag ? { tag: filter.tag } : {}),
       ...(filter.facet ? { facet: filter.facet } : {}),
       ...(filter.status ? { status: filter.status } : {}),
@@ -780,9 +773,6 @@ export class NoteService {
     toPath: string;
   }): Promise<CrossVaultMoveResult> {
     const { fromOwnerId, toOwnerId } = params;
-    if (!this.hosted) {
-      throw new AppError('there is no other vault in a self-hosted instance', 'INVALID_INPUT', 400);
-    }
     if (fromOwnerId === toOwnerId) {
       throw new AppError('same owner: use move instead', 'INVALID_INPUT', 400);
     }
@@ -944,7 +934,7 @@ export class NoteService {
       .values(
         segments.map((_, i) => ({
           path: this.toPhysical(ownerId, segments.slice(0, i + 1).join('/')),
-          ownerId: this.hosted ? ownerId : null,
+          ownerId,
           createdAt: now,
         })),
       )
@@ -1286,11 +1276,6 @@ export class NoteService {
   }
 
   // -- Internals -------------------------------------------------------------
-
-  /** Where this user's notes start, as a stored-path prefix. */
-  private scopeRoot(ownerId: string): string {
-    return this.hosted ? ownerId : '';
-  }
 
   private toDto(ownerId: string, row: StoredNote): NoteRowDto {
     return {

@@ -5,7 +5,7 @@
 // pointing at where a note used to be. Ordinary writes keep the index right on
 // their own; this is only for rows written before they did.
 //
-//   DATABASE_URL=... BRAINSTACK_DEPLOYMENT=hosted pnpm --filter @brainstack/server reindex
+//   DATABASE_URL=... pnpm --filter @brainstack/server reindex
 //
 // Owners are claimed first, the same way boot does it: links resolve inside
 // the owner's vault, so a note without one would be re-resolved against the
@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const { db, close } = openPgDatabase(cfg.DATABASE_URL);
   try {
     await ensurePgSchema(db);
-    await backfillOwnerId(db, { deployment: cfg.BRAINSTACK_DEPLOYMENT, logger });
+    await backfillOwnerId(db, { logger });
     const count = await new PgNoteStore(db).reindexAll();
     logger.info({ notes: count }, 'reindexed every note');
   } finally {

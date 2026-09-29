@@ -30,7 +30,7 @@ beforeEach(async () => {
       .insert(users)
       .values({ id, email: `${id}@x.com`, createdAt: Date.now(), updatedAt: 0 });
   }
-  notes = new NoteService({ db: database.db, cfg: { deployment: 'hosted' } });
+  notes = new NoteService({ db: database.db });
 });
 
 const pathsOf = async (owner: string): Promise<string[]> =>
@@ -181,10 +181,9 @@ describe('moveAcrossVaults y los shares que quedaban atrás', () => {
   let sharing: SharingService;
 
   beforeEach(() => {
-    sharing = new SharingService({ db: database.db, deployment: 'hosted' });
+    sharing = new SharingService({ db: database.db });
     notes = new NoteService({
       db: database.db,
-      cfg: { deployment: 'hosted' },
       onFolderGone: async (ownerId, folderPath) => {
         await sharing.revokeUnder({ ownerId, folderPath });
       },

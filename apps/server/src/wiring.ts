@@ -7,8 +7,6 @@
 import { openPgDatabase, PgNoteStore, PgSearchService, type PgDb } from '@brainstack/core/pg';
 import type { Logger } from 'pino';
 
-import type { VaultConfig } from './lib/vault.js';
-
 import { ApiKeyService, type ApiKey } from './services/ApiKeyService.js';
 import { AuthService, type User } from './services/AuthService.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
@@ -23,7 +21,6 @@ import { TotpService } from './services/TotpService.js';
 
 export interface Services {
   db: PgDb;
-  cfg: VaultConfig;
   notes: NoteService;
   search: SearchService;
   auth: AuthService;
@@ -47,8 +44,6 @@ export interface BuildServicesOptions {
   authorizedEmails: Set<string>;
   /** Must match the `basePath` given to `buildApp`. */
   apiBasePath?: string;
-  /** Defaults to self-host, where there is one user and no sharing. */
-  deployment?: 'self-host' | 'hosted';
   /** Resend or SMTP. Leave it out and the instance sends no email at all. */
   email?: EmailConfig;
   /** Let anyone create an account. See AuthService's sign-up policy. */
@@ -59,16 +54,13 @@ export interface BuildServicesOptions {
 }
 
 export function buildServices(opts: BuildServicesOptions): Services {
-  const cfg: VaultConfig = { deployment: opts.deployment ?? 'self-host' };
-
   const emailSender = createEmailSender(opts.email ?? {});
 
   // Before NoteService, which needs it to clean up after a folder it removes.
-  const sharing = new SharingService({ db: opts.db, deployment: cfg.deployment });
+  const sharing = new SharingService({ db: opts.db });
 
   const notes = new NoteService({
     db: opts.db,
-    cfg,
     store: new PgNoteStore(opts.db),
     onFolderGone: async (ownerId, folderPath) => {
       await sharing.revokeUnder({ ownerId, folderPath });
@@ -77,7 +69,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
       await sharing.reparentUnder({ ownerId, from, to });
     },
   });
-  const search = new SearchService({ db: opts.db, cfg, search: new PgSearchService(opts.db) });
+  const search = new SearchService({ db: opts.db, search: new PgSearchService(opts.db) });
 
   const totp = new TotpService({ db: opts.db, issuer: 'BrainStack' });
   const oauthProvider = new OAuthProviderService({ db: opts.db });
@@ -105,7 +97,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     ...(opts.apiBasePath ? { apiBasePath: opts.apiBasePath } : {}),
   });
 
-  const crossOwner = new CrossOwnerReader({ db: opts.db, sharing, vaultCfg: cfg });
+  const crossOwner = new CrossOwnerReader({ db: opts.db, sharing });
 
   // Optional: without credentials the Google routes simply are not mounted.
   const google =
@@ -120,7 +112,6 @@ export function buildServices(opts: BuildServicesOptions): Services {
 
   return {
     db: opts.db,
-    cfg,
     notes,
     search,
     auth,

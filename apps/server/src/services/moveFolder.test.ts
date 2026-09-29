@@ -29,7 +29,7 @@ beforeEach(async () => {
   await database.db
     .insert(users)
     .values({ id: 'u1', email: 'u1@x.com', createdAt: Date.now(), updatedAt: 0 });
-  notes = new NoteService({ db: database.db, cfg: { deployment: 'hosted' } });
+  notes = new NoteService({ db: database.db });
 });
 
 const paths = async (): Promise<string[]> => (await notes.list('u1', {})).map((n) => n.path).sort();
@@ -100,7 +100,7 @@ describe('NoteService.move — carpetas', () => {
   });
 
   it('reescribe el link de path completo al mover una nota entre carpetas', async () => {
-    // Roto antes de esto en hosted: el rewriter recibía el path físico
+    // Roto antes de esto: el rewriter recibía el path físico
     // (`u1/A/nota.md`), que nunca coincide con lo que dice un wikilink. Solo
     // acertaba de rebote cuando cambiaba el basename.
     await notes.create('u1', 'A/nota.md', 'contenido');
@@ -128,10 +128,9 @@ describe('NoteService.move — los shares siguen a la carpeta', () => {
   let sharing: SharingService;
 
   beforeEach(async () => {
-    sharing = new SharingService({ db: database.db, deployment: 'hosted' });
+    sharing = new SharingService({ db: database.db });
     notes = new NoteService({
       db: database.db,
-      cfg: { deployment: 'hosted' },
       onFolderMoved: async (ownerId, from, to) => {
         await sharing.reparentUnder({ ownerId, from, to });
       },
