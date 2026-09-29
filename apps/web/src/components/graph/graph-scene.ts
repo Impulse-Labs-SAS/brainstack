@@ -12,7 +12,7 @@ import { makeBrainMesh } from '@/lib/graph-brain';
 import { FOV_DEG, TAN_HALF_FOV, basis, nearPlane, type Camera, type Viewport } from '@/lib/graph-camera';
 import type { MapLand } from '@/lib/graph-map';
 import { BRIDGE_COLOR } from '@/lib/graph-palette';
-import { activity, colorOf, isActive, type GraphEdge, type GraphModel, type GraphNode, type GraphView } from '@/lib/graph-model';
+import { LIFT_POP, activity, colorOf, isActive, type GraphEdge, type GraphModel, type GraphNode, type GraphView } from '@/lib/graph-model';
 
 /** Everything one frame of the scene depends on. */
 export interface SceneFrame {
@@ -56,8 +56,8 @@ const DEPTH_GLSL = /* glsl */ `
 
 const NODE_VS = /* glsl */ `
   attribute vec3 aColor; attribute float aSize; attribute float aShape;
-  attribute float aGlow; attribute float aCore; attribute float aFlash;
-  uniform float uPxPerUnit; uniform float uMinPx; uniform float uMaxPx;
+  attribute float aGlow; attribute float aCore; attribute float aFlash; attribute float aLift;
+  uniform float uPxPerUnit; uniform float uMinPx; uniform float uMaxPx; uniform float uLiftPop;
   ${DEPTH_GLSL}
   varying vec3 vColor; varying float vShape; varying float vGlow; varying float vCore;
   varying float vCoreR; varying float vAA; varying float vFade;
@@ -65,13 +65,14 @@ const NODE_VS = /* glsl */ `
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
     float depth = max(-mv.z, 1.0);
-    float rPx = clamp(aSize * uPxPerUnit / depth, uMinPx, uMaxPx);
+    float rPx = clamp(aSize * uPxPerUnit / depth, uMinPx, uMaxPx) * (1.0 + uLiftPop * aLift);
     float spriteR = rPx * (3.4 + aFlash * 5.0) + 3.0;
     gl_PointSize = spriteR * 2.0;
     vCoreR = rPx / spriteR;
     vAA = 1.5 / spriteR;
     vColor = aColor; vShape = aShape; vGlow = aGlow; vCore = aCore;
-    vFade = depthFade(depth);
+    // A search match that sprang out is in front of everything: depth no longer dims it.
+    vFade = max(depthFade(depth), min(aLift, 1.0));
   }`;
 
 // Shapes: 0 circle (note), 1 rounded square (index), 2 hollow hexagon (topic);
@@ -137,20 +138,23 @@ const NEBULA_FS = /* glsl */ `
     gl_FragColor = vec4(vColor * exp(-d2 * 3.2) * (1.0 - d2) * vFade, 1.0);
   }`;
 
+// `aLit` marks the countries a search found notes in; `uSearch` turns on
+// the dimming of every other one.
 const LAND_VS = /* glsl */ `
-  attribute vec3 aColor; attribute float aCountry;
-  uniform float uHot;
-  varying vec3 vColor; varying float vHot;
+  attribute vec3 aColor; attribute float aCountry; attribute float aLit;
+  uniform float uHot; uniform float uSearch;
+  varying vec3 vColor; varying float vHot; varying float vDim;
   void main() {
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     vColor = aColor;
-    vHot = abs(aCountry - uHot) < 0.5 ? 1.0 : 0.0;
+    vHot = abs(aCountry - uHot) < 0.5 || (uSearch > 0.5 && aLit > 0.5) ? 1.0 : 0.0;
+    vDim = uSearch > 0.5 && aLit < 0.5 ? 0.3 : 1.0;
   }`;
 const LAND_FS = /* glsl */ `
   uniform float uAlpha;
-  varying vec3 vColor; varying float vHot;
+  varying vec3 vColor; varying float vHot; varying float vDim;
   void main() {
-    gl_FragColor = vec4(vColor, uAlpha * mix(0.19, 0.36, vHot));
+    gl_FragColor = vec4(vColor, uAlpha * mix(0.19, 0.36, vHot) * vDim);
   }`;
 
 const MESH_POINT_VS = /* glsl */ `
@@ -227,6 +231,7 @@ interface Buffers {
   glow: Float32Array;
   core: Float32Array;
   flash: Float32Array;
+  lift: Float32Array;
   nebulaPos: Float32Array;
   nebulaCol: Float32Array;
   nebulaSize: Float32Array;
@@ -242,7 +247,13 @@ export class GraphScene {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(FOV_DEG, 1, 1, 100000);
-  private readonly nodeMat = material(NODE_VS, NODE_FS, { uPxPerUnit: { value: 1 }, uMinPx: { value: 1.8 }, uMaxPx: { value: 12 }, uRing: { value: 1 } });
+  private readonly nodeMat = material(NODE_VS, NODE_FS, {
+    uPxPerUnit: { value: 1 },
+    uMinPx: { value: 1.8 },
+    uMaxPx: { value: 12 },
+    uRing: { value: 1 },
+    uLiftPop: { value: LIFT_POP },
+  });
   private readonly nebulaMat = material(NEBULA_VS, NEBULA_FS, { uPxPerUnit: { value: 1 }, uMaxPx: { value: 400 } });
   private readonly solidMat = material(LINE_VS, LINE_FS, { uDash: { value: 0 }, uAlpha: { value: 1 } });
   private readonly dashMat = material(LINE_VS, LINE_FS, { uDash: { value: 6 }, uAlpha: { value: 1 } });
@@ -251,7 +262,7 @@ export class GraphScene {
   private readonly solid = new THREE.LineSegments(new THREE.BufferGeometry(), this.solidMat);
   private readonly dashed = new THREE.LineSegments(new THREE.BufferGeometry(), this.dashMat);
   private readonly landMat = new THREE.ShaderMaterial({
-    uniforms: { uAlpha: { value: 0 }, uHot: { value: -1 } },
+    uniforms: { uAlpha: { value: 0 }, uHot: { value: -1 }, uSearch: { value: 0 } },
     vertexShader: LAND_VS,
     fragmentShader: LAND_FS,
     transparent: true,
@@ -262,6 +273,9 @@ export class GraphScene {
   private readonly land = new THREE.Mesh(new THREE.BufferGeometry(), this.landMat);
   /** Project id → the index its land's vertices carry, for lighting the country under the pointer. */
   private countryIndex = new Map<string, number>();
+  /** Each land vertex's country index, and the projects a search found notes in. */
+  private landCountries: Float32Array | null = null;
+  private litCountries: ReadonlySet<string> | null = null;
   private brain: { group: THREE.Group; points: THREE.ShaderMaterial; lines: THREE.ShaderMaterial } | null = null;
   private brainAlpha = 0;
   private buffers: Buffers | null = null;
@@ -312,9 +326,26 @@ export class GraphScene {
       geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       geometry.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
       geometry.setAttribute('aCountry', new THREE.BufferAttribute(country, 1));
+      geometry.setAttribute('aLit', new THREE.BufferAttribute(new Float32Array(vertices), 1));
+      this.landCountries = country;
+    } else {
+      this.landCountries = null;
     }
     this.land.geometry.dispose();
     this.land.geometry = geometry;
+    this.lightCountries(this.litCountries);
+  }
+
+  /** Territories while searching: the countries with matches stay lit, the rest dim. Null ends it. */
+  lightCountries(projects: ReadonlySet<string> | null): void {
+    this.litCountries = projects;
+    this.landMat.uniforms.uSearch!.value = projects ? 1 : 0;
+    const lit = this.land.geometry.getAttribute('aLit') as THREE.BufferAttribute | undefined;
+    if (!projects || !lit || !this.landCountries) return;
+    const indexes = new Set([...projects].map((p) => this.countryIndex.get(p)).filter((i): i is number => i !== undefined));
+    const array = lit.array as Float32Array;
+    for (let v = 0; v < array.length; v++) array[v] = indexes.has(this.landCountries[v]!) ? 1 : 0;
+    lit.needsUpdate = true;
   }
 
   resize(vp: Viewport, dpr: number): void {
@@ -347,6 +378,7 @@ export class GraphScene {
       glow: dynamic(nodeGeo, 'aGlow', 1, n),
       core: dynamic(nodeGeo, 'aCore', 1, n),
       flash: dynamic(nodeGeo, 'aFlash', 1, n),
+      lift: dynamic(nodeGeo, 'aLift', 1, n),
       nebulaPos: dynamic(nebulaGeo, 'position', 3, n),
       nebulaCol: dynamic(nebulaGeo, 'aColor', 3, n),
       nebulaSize: dynamic(nebulaGeo, 'aSize', 1, n),
@@ -414,8 +446,10 @@ export class GraphScene {
       const { group, points, lines } = this.brain;
       group.visible = this.brainAlpha > 0.01;
       group.scale.setScalar(frame.brainScale);
-      lines.uniforms.uAlpha!.value = 0.1 * this.brainAlpha;
-      points.uniforms.uAlpha!.value = 0.55 * this.brainAlpha;
+      // While searching the brain steps back, so what it found stands out.
+      const recede = frame.matched ? 0.4 : 1;
+      lines.uniforms.uAlpha!.value = 0.1 * this.brainAlpha * recede;
+      points.uniforms.uAlpha!.value = 0.55 * this.brainAlpha * recede;
       points.uniforms.uSize!.value = 1.6 * frame.dpr;
       materials.push(points, lines);
     }
@@ -480,19 +514,24 @@ export class GraphScene {
   }
 
   private uploadPositions(b: Buffers): void {
+    // A lifted match is drawn where it sprang to; its nebula stays home and
+    // marks the zone it came from.
     b.model.nodes.forEach((n, i) => {
-      b.pos[i * 3] = b.nebulaPos[i * 3] = finite(n.x);
-      b.pos[i * 3 + 1] = b.nebulaPos[i * 3 + 1] = finite(n.y);
-      b.pos[i * 3 + 2] = b.nebulaPos[i * 3 + 2] = finite(n.z);
+      b.nebulaPos[i * 3] = finite(n.x);
+      b.nebulaPos[i * 3 + 1] = finite(n.y);
+      b.nebulaPos[i * 3 + 2] = finite(n.z);
+      b.pos[i * 3] = finite(n.x + n.ox);
+      b.pos[i * 3 + 1] = finite(n.y + n.oy);
+      b.pos[i * 3 + 2] = finite(n.z + n.oz);
     });
     for (const e of b.model.edges) {
       const o = b.edgeIndex.get(e)!;
-      const sx = finite(e.source.x);
-      const sy = finite(e.source.y);
-      const sz = finite(e.source.z);
-      const tx = finite(e.target.x);
-      const ty = finite(e.target.y);
-      const tz = finite(e.target.z);
+      const sx = finite(e.source.x + e.source.ox);
+      const sy = finite(e.source.y + e.source.oy);
+      const sz = finite(e.source.z + e.source.oz);
+      const tx = finite(e.target.x + e.target.ox);
+      const ty = finite(e.target.y + e.target.oy);
+      const tz = finite(e.target.z + e.target.oz);
       if (isSolid(e)) {
         // A gentle curve, like an axon; the control point bends in the x-y plane.
         const dx = tx - sx;
@@ -541,6 +580,7 @@ export class GraphScene {
     b.model.nodes.forEach((n, i) => {
       b.size[i] = n.drawRadius;
       const ap = f.appear(n);
+      b.lift[i] = n.lift;
       if (ap <= 0 || !Number.isFinite(n.x)) {
         b.glow[i] = b.core[i] = b.flash[i] = b.nebulaSize[i] = 0;
         b.nebulaCol.fill(0, i * 3, i * 3 + 3);
@@ -554,7 +594,8 @@ export class GraphScene {
         level *= h === 0 ? 1.6 : h === 1 ? 1.2 : h === 2 ? 0.6 : 0.1;
       }
       if (f.pathNodes) level = f.pathNodes.has(n) ? Math.max(level, 1.4) : level * (f.hops ? 1 : 0.2);
-      if (f.matched && !f.matched.has(n)) level *= 0.12;
+      const match = !!f.matched?.has(n);
+      if (f.matched) level = match ? Math.max(level, 1) * 1.5 : level * 0.12;
       const fl = f.flash(n);
       // On the map a note is a city: only the ones edited this week keep their glow.
       const city = 1 - f.mapBlend * (isActive(n.updatedAt, f.wallClock) ? 0 : 0.72);
@@ -575,7 +616,9 @@ export class GraphScene {
           glow += 0.11 * f.cloud * scaleMul;
           radius = Math.max(radius, 26 + n.radius * 2.4, 20 / ppu);
         }
-        if (f.matched && !f.matched.has(n)) glow *= 0.2;
+        // A match lights its zone; on the map the lit country does that instead.
+        if (f.matched) glow = match ? glow + 0.07 * (1 - f.mapBlend) : glow * 0.2;
+        if (match) radius = Math.max(radius, 34 + n.radius * 2.6);
         if (focused) glow *= 0.5;
       }
       glow *= ap;
@@ -584,7 +627,7 @@ export class GraphScene {
       b.nebulaCol[i * 3 + 2] = b.col[i * 3 + 2]! * glow;
       b.nebulaSize[i] = radius;
     });
-    this.touch(this.nodes.geometry, 'aSize', 'aGlow', 'aCore', 'aFlash');
+    this.touch(this.nodes.geometry, 'aSize', 'aGlow', 'aCore', 'aFlash', 'aLift');
     this.touch(this.nebula.geometry, 'aColor', 'aSize');
   }
 

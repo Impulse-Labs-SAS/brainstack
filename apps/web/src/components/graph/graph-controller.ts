@@ -15,6 +15,7 @@ import {
   fitBrain,
   interpolate,
   orbitBy,
+  outward,
   panBy,
   pixelsPerUnit,
   zoomFlatAt,
@@ -88,6 +89,22 @@ const CLICK_SLOP = 4;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
 const PREVIEW_OFFSET = 160;
 const SPIN_PER_MS = 0.00008;
+/** How far a search match springs out of the brain, as a share of its size. */
+const LIFT_REACH = 0.13;
+/** Past this many matches the rest only glow: a hundred notes flying out is a cloud, not an answer. */
+const MAX_LIFTED = 150;
+const LIFT_MS = 720;
+const LIFT_STAGGER_MS = 30;
+const DROP_MS = 380;
+
+type LiftTween = { from: number; to: number; t0: number };
+
+/** Out past the target and back: the spring of a note leaving the brain. */
+function easeOutBack(t: number): number {
+  const c = 1.9;
+  return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2;
+}
+const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 export class GraphController {
@@ -115,6 +132,15 @@ export class GraphController {
   private focusT0 = 0;
   private hops: Map<GraphNode, number> | null = null;
   private matched: Set<GraphNode> | null = null;
+  private matches: GraphNode[] | null = null;
+  private searchT0 = 0;
+  /** A result under the pointer in the results list: lit like a hovered note. */
+  private previewed: GraphNode | null = null;
+  // Search lift: which matches are sprung out, and the tweens still running.
+  private lifted = new Set<GraphNode>();
+  private liftTweens = new Map<GraphNode, LiftTween>();
+  /** How far lifted notes may go: 1 in the brain, 0 in the flat views, eased between. */
+  private liftReach = 0;
   private edgesDirty = true;
   /** When edge brightness was last recomputed. */
   private edgesLitAt = 0;
@@ -191,10 +217,18 @@ export class GraphController {
       this.setSpin(this.engine.is3D);
     }
     const keep = (n: GraphNode | null) => (n && model.nodes.includes(n) ? n : null);
+    // A note that left the model lands at once: nothing would finish its tween.
+    const present = new Set(model.nodes);
+    for (const n of this.liftTweens.keys()) {
+      if (present.has(n)) continue;
+      this.liftTweens.delete(n);
+      n.lift = n.ox = n.oy = n.oz = 0;
+    }
     this.setHotCountry(null);
     if (this.selected && !keep(this.selected)) this.clearSelection();
     if (this.path && !this.path.nodes.every((n) => model.nodes.includes(n))) this.clearSelection();
     this.hover = keep(this.hover);
+    this.previewed = keep(this.previewed);
     this.focus = null;
     this.userMoved = false;
     this.edgesDirty = true;
@@ -233,15 +267,51 @@ export class GraphController {
     this.routesLayer = on;
   }
 
-  setMatched(matched: Set<GraphNode> | null): void {
-    this.matched = matched;
+  /**
+   * What a search found, best first; null when there is no search. The
+   * matches spring out of the brain (in the flat views they only grow) and
+   * send a ping; whatever stopped matching drops back into place.
+   */
+  setMatches(matches: GraphNode[] | null): void {
+    this.matches = matches;
+    this.matched = matches ? new Set(matches) : null;
+    this.searchT0 = performance.now();
     this.edgesDirty = true;
+    this.scene?.lightCountries(matches ? new Set(matches.map((n) => n.project?.id).filter((id): id is string => !!id)) : null);
+
+    const now = this.searchT0;
+    const lift = this.reduceMotion ? [] : (matches ?? []).slice(0, MAX_LIFTED);
+    this.lifted = new Set(lift);
+    const rank = new Map(lift.map((n, i) => [n, i]));
+    for (const n of this.model?.nodes ?? []) {
+      const to = rank.has(n) ? 1 : 0;
+      const current = this.liftTweens.get(n)?.to ?? n.lift;
+      if (current === to) continue;
+      const delay = to ? Math.min(rank.get(n)!, 24) * LIFT_STAGGER_MS : 0;
+      this.liftTweens.set(n, { from: n.lift, to, t0: now + delay });
+    }
   }
 
-  /** Fly to the best match of a search, if there is one. */
-  selectFirstMatch(): void {
-    const best = this.model?.labelOrder.find((n) => this.matched?.has(n));
-    if (best) this.select(best);
+  /** A result under the pointer in the results list, or null when it leaves. */
+  preview(node: GraphNode | null): void {
+    this.previewed = node;
+  }
+
+  /** Bring every match into view. */
+  frameMatches(): void {
+    const nodes = this.matches?.filter((n) => Number.isFinite(n.x));
+    if (!nodes?.length) return;
+    if (nodes.length === 1) {
+      this.flyTo(nodes[0]!);
+      return;
+    }
+    this.setSpin(false);
+    // Where they are drawn, sprung out of the brain, not where they live.
+    const b = boundsOf(nodes.map((n) => ({ x: n.x + n.ox, y: n.y + n.oy, z: (n.z || 0) + n.oz, radius: n.radius })));
+    // In the brain, as close as a click on one note would go; flat, the usual cap.
+    const maxScale = this.engine.is3D ? this.vp.height / 2 / (TAN_HALF_FOV * this.engine.brainScale * 1.9) : 1.6;
+    if (b) this.animateTo({ ...this.cam, ...fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D }) });
+    this.userMoved = true;
   }
 
   select(node: GraphNode): void {
@@ -554,7 +624,8 @@ export class GraphController {
     const dist = this.engine.is3D
       ? Math.min(this.cam.dist, this.engine.brainScale * 1.9)
       : Math.min(this.cam.dist, this.vp.height / 2 / (TAN_HALF_FOV * 1.35));
-    this.animateTo(this.withPreviewOffset({ ...this.cam, tx: node.x, ty: node.y, tz: node.z || 0, dist }));
+    // Where it is drawn: a search match may have sprung out of its place.
+    this.animateTo(this.withPreviewOffset({ ...this.cam, tx: node.x + node.ox, ty: node.y + node.oy, tz: (node.z || 0) + node.oz, dist }));
     this.userMoved = true;
   }
 
@@ -643,6 +714,56 @@ export class GraphController {
     return dirty;
   }
 
+  /**
+   * Advance the lift tweens, then turn each note's lift into a draw offset
+   * for this camera: out of the brain as seen from where you look, so it
+   * follows as you orbit. Returns whether the offsets changed this frame, so
+   * positions need uploading: at rest, with the camera still, they do not.
+   */
+  private liftMatches(now: number, dt: number): boolean {
+    for (const [n, t] of this.liftTweens) {
+      const p = clamp((now - t.t0) / (t.to ? LIFT_MS : DROP_MS), 0, 1);
+      n.lift = t.from + (t.to - t.from) * (t.to ? easeOutBack(p) : easeInOut(p));
+      if (p >= 1) {
+        n.lift = t.to;
+        this.liftTweens.delete(n);
+      }
+    }
+    const tweening = this.liftTweens.size > 0;
+    const target = this.engine.is3D ? 1 : 0;
+    const reachBefore = this.liftReach;
+    this.liftReach = Math.abs(target - this.liftReach) < 0.004 ? target : this.liftReach + (target - this.liftReach) * (1 - Math.exp(-dt / 220));
+    const active = this.lifted.size > 0 || tweening;
+    const c = this.cam;
+    const camKey = `${c.tx},${c.ty},${c.tz},${c.yaw},${c.pitch},${c.dist},${this.engine.brainScale}`;
+    const camMoved = camKey !== this.liftCam;
+    this.liftCam = camKey;
+    // One more frame after the last drop, to upload the notes back in place.
+    const settling = this.hadLift && !active;
+    this.hadLift = active;
+    // Offsets depend on the lift, the reach and the camera: if none changed, neither did they.
+    const reachMoving = reachBefore !== this.liftReach;
+    if (!settling && !(active && (tweening || reachMoving || (camMoved && this.liftReach > 0)))) return false;
+    // Fewer matches go further: one note should leap out, fifty should not become a cloud.
+    const reach = this.engine.brainScale * LIFT_REACH * clamp(1.15 - this.lifted.size / 80, 0.35, 1) * this.liftReach;
+    const center: [number, number, number] = [0, -0.05 * this.engine.brainScale, 0];
+    const axes = basis(this.cam);
+    for (const n of this.model?.nodes ?? []) {
+      if (!n.lift || !reach || !Number.isFinite(n.x)) {
+        n.ox = n.oy = n.oz = 0;
+        continue;
+      }
+      const d = outward([n.x, n.y, n.z || 0], center, axes);
+      const k = reach * n.lift;
+      n.ox = d[0] * k;
+      n.oy = d[1] * k;
+      n.oz = d[2] * k;
+    }
+    return true;
+  }
+  private hadLift = false;
+  private liftCam = '';
+
   private finishGrowth(): void {
     this.growing = false;
     this.events.onGrowth(false);
@@ -679,11 +800,12 @@ export class GraphController {
         dist: this.cam.dist + (t.dist - this.cam.dist) * 0.08,
       };
     }
-    if (this.spin && !this.tween && !this.hover && !this.selected && !this.path && !this.drag) {
+    // A search pauses the spin: what it found should stay where you saw it.
+    if (this.spin && !this.tween && !this.hover && !this.selected && !this.path && !this.drag && !this.matches) {
       this.cam = { ...this.cam, yaw: this.cam.yaw + dt * SPIN_PER_MS };
     }
 
-    const focus = this.hover ?? this.selected;
+    const focus = this.hover ?? this.previewed ?? this.selected;
     if (focus !== this.focus) {
       this.focus = focus;
       this.focusT0 = now;
@@ -705,6 +827,7 @@ export class GraphController {
     const cloud = this.cloud();
     const visibleVaults = model.vaults.filter((v) => !v.hidden).length;
     const edgesFading = this.easeViews(dt);
+    const lifting = this.liftMatches(now, dt);
     projectNodes(model, this.cam, this.vp, is3D, this.engine.brainScale, this.mapBlend);
     const appear = (n: GraphNode) => this.engine.appear(n, now);
     const pathNodes = this.path ? new Set(this.path.nodes) : null;
@@ -727,7 +850,7 @@ export class GraphController {
       pathNodes,
       pathEdges: this.path ? new Set(this.path.edges) : null,
       matched: this.matched,
-      moved: moved || !!this.drag,
+      moved: moved || !!this.drag || lifting,
       edgesDirty: this.relightEdges(now, !!growth) || edgesFading,
       appear,
       flash: (n) => this.engine.flash(n, now),
@@ -752,7 +875,7 @@ export class GraphController {
       hotCountry: this.hotCountry,
       countryRoutes: this.countryRoutes,
       ring: this.engine.ring,
-      hover: this.hover,
+      hover: this.hover ?? this.previewed,
       selected: this.selected,
       pathFrom: this.pathFrom,
       path: this.path,
@@ -761,6 +884,8 @@ export class GraphController {
       focusT0: this.focusT0,
       hops: this.hops,
       matched: this.matched,
+      matches: this.matches,
+      searchT0: this.searchT0,
       vaultLabels: is3D && visibleVaults > 1,
       fallback: !this.webgl,
       appear,

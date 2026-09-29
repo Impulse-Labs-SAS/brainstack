@@ -10,7 +10,7 @@
 // graph-engine the layout, graph-scene the WebGL, graph-overlay the text.
 // This file owns what React is good at: the toolbar, panels and preferences.
 
-import { Brain, Map as MapIcon, Network, Play, Search, Square, X } from 'lucide-react';
+import { Brain, Map as MapIcon, Network, Play, Square } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import {
   useCallback,
@@ -22,15 +22,13 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Button, Input, SearchField, ToggleButton, ToggleButtonGroup } from 'react-aria-components';
+import { Button, ToggleButton, ToggleButtonGroup } from 'react-aria-components';
 
-import { Kbd } from '@/components/ui/kbd';
 import type { AnglePreset } from '@/lib/graph-camera';
 import {
   DEFAULT_LAYERS,
   GRAPH_VIEWS,
   buildGraphModel,
-  fold,
   noteHref,
   type AffinityInput,
   type GraphLayers,
@@ -40,12 +38,14 @@ import {
   type InputNode,
   type SharedVaultName,
 } from '@/lib/graph-model';
+import { DEFAULT_FILTERS, searchGraph, type SearchFilters } from '@/lib/graph-search';
 import { BRIDGE_COLOR, LABEL_COLORS, OWN_VAULT_COLOR, SHARED_VAULT_COLORS, TOPIC_COLOR } from '@/lib/graph-palette';
 import { cn } from '@/lib/utils';
 
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
 import { GraphLayersMenu } from './graph-layers';
 import { GLASS, GraphPreview, edited } from './graph-preview';
+import { FilterChips, GraphSearch } from './graph-search';
 
 interface GraphViewProps {
   nodes: InputNode[];
@@ -137,6 +137,8 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
   const [spinning, setSpinning] = useState(false);
   const [angle, setAngle] = useState<AnglePreset | null>(null);
   const [query, setQuery] = useState('');
+  // Not remembered between visits: a filter left on yesterday would hide what you look for today.
+  const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
 
   const open = useCallback(
     (node: GraphNode) => {
@@ -246,12 +248,12 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     controllerRef.current?.setRoutes(layers.routes);
   }, [layers, ready]);
 
+  // "Edited this week" is measured from when the search last changed, which is close enough for a filter.
+  const matches = useMemo(() => (model ? searchGraph(model.nodes, query, filters, Date.now()) : null), [model, query, filters]);
   useEffect(() => {
-    const c = controllerRef.current;
-    if (!c || !model) return;
-    const q = fold(query.trim());
-    c.setMatched(q ? new Set(model.nodes.filter((n) => fold(n.title).includes(q) || fold(n.project?.label ?? '').includes(q))) : null);
-  }, [query, model]);
+    controllerRef.current?.setMatches(matches);
+  }, [matches]);
+  const currentMatch = selection?.kind === 'note' && matches?.includes(selection.node) ? selection.node : null;
 
   useEffect(() => {
     if (!toast) return;
@@ -274,7 +276,8 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
-    if (/^(INPUT|TEXTAREA)$/.test(t.tagName)) return;
+    // Popovers render through a portal but their key events still bubble here.
+    if (/^(INPUT|TEXTAREA)$/.test(t.tagName) || t.closest('[role=dialog]')) return;
     const index = ['1', '2', '3'].indexOf(e.key);
     if (index >= 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       const next = GRAPH_VIEWS[index]!;
@@ -356,27 +359,21 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
           ))}
         </ToggleButtonGroup>
 
-        <SearchField
-          aria-label="Search notes"
-          value={query}
-          onChange={setQuery}
-          onSubmit={() => c()?.selectFirstMatch()}
-          className={cn(GLASS, 'pointer-events-auto flex h-9 items-center gap-1.5 rounded-lg px-2.5')}
-        >
-          <Search size={14} aria-hidden className="shrink-0 text-fg-muted" />
-          <Input
-            ref={searchRef}
-            placeholder="Search notes…"
-            className="w-28 bg-transparent text-sm text-fg-primary outline-none placeholder:text-fg-muted md:w-44 [&::-webkit-search-cancel-button]:hidden"
+        {model && (
+          <GraphSearch
+            model={model}
+            query={query}
+            onQueryChange={setQuery}
+            filters={filters}
+            onFiltersChange={setFilters}
+            matches={matches}
+            current={currentMatch}
+            onGo={(n) => c()?.select(n)}
+            onPreview={(n) => c()?.preview(n)}
+            onFrame={() => c()?.frameMatches()}
+            inputRef={searchRef}
           />
-          {query ? (
-            <Button aria-label="Clear search" className="rounded p-0.5 text-fg-muted outline-none hover:text-fg-primary">
-              <X size={12} />
-            </Button>
-          ) : (
-            <Kbd className="hidden md:inline-flex">/</Kbd>
-          )}
-        </SearchField>
+        )}
 
         <span className="flex-1" />
 
@@ -392,6 +389,8 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
           {growing ? <Square size={12} aria-hidden /> : <Play size={12} aria-hidden />}
           {growing ? 'Stop' : 'Replay growth'}
         </Button>
+
+        {model && <FilterChips model={model} filters={filters} onChange={setFilters} />}
       </div>
 
       {selection && model && (
