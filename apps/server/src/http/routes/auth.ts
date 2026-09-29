@@ -76,7 +76,9 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
         parsed.data.password,
         parsed.data.displayName ?? null,
       );
-      return c.json({ user: result.user }, 201);
+      // The first account on an instance is verified already; the page then
+      // offers sign-in instead of "check your email".
+      return c.json({ user: result.user, verificationSent: result.verification !== null }, 201);
     } catch (err) {
       return jsonError(c, err);
     }

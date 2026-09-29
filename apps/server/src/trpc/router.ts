@@ -49,7 +49,9 @@ const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
                 ? 'FORBIDDEN'
                 : err.code === 'INVALID_INPUT'
                   ? 'BAD_REQUEST'
-                  : 'INTERNAL_SERVER_ERROR';
+                  : err.code === 'UNAVAILABLE'
+                    ? 'PRECONDITION_FAILED'
+                    : 'INTERNAL_SERVER_ERROR';
       throw new TRPCError({ code: trpcCode, message: err.message, cause: err });
     }
     throw err;

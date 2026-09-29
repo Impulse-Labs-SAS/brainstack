@@ -11,6 +11,8 @@ export class AppError extends Error {
       | 'UNAUTHORIZED'
       | 'FORBIDDEN'
       | 'RATE_LIMITED'
+      /** The instance lacks something the request needs, such as email. */
+      | 'UNAVAILABLE'
       | 'INTERNAL',
     public readonly status = 500,
   ) {

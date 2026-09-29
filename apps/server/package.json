@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/serve.ts",
     "start": "node dist/serve.js",
-    "reindex": "tsx src/reindex.ts"
+    "reindex": "tsx src/reindex.ts",
+    "cli": "tsx src/cli.ts"
   },
   "dependencies": {
     "@brainstack/core": "workspace:*",
@@ -28,6 +29,7 @@
     "hono": "^4.12.18",
     "nanoid": "^5.1.11",
     "node-cron": "^4.2.1",
+    "nodemailer": "^10.0.12",
     "pino": "^10.3.1",
     "qrcode": "^1.5.4",
     "resend": "^6.12.3",

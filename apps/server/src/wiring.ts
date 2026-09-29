@@ -12,7 +12,7 @@ import type { VaultConfig } from './lib/vault.js';
 import { ApiKeyService, type ApiKey } from './services/ApiKeyService.js';
 import { AuthService, type User } from './services/AuthService.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
-import { ConsoleEmailSender, ResendEmailSender } from './services/EmailSender.js';
+import { createEmailSender, type EmailConfig } from './services/EmailSender.js';
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
@@ -49,8 +49,10 @@ export interface BuildServicesOptions {
   apiBasePath?: string;
   /** Defaults to self-host, where there is one user and no sharing. */
   deployment?: 'self-host' | 'hosted';
-  resendApiKey?: string | undefined;
-  emailFrom?: string | undefined;
+  /** Resend or SMTP. Leave it out and the instance sends no email at all. */
+  email?: EmailConfig;
+  /** Let anyone create an account. See AuthService's sign-up policy. */
+  openSignup?: boolean;
   googleClientId?: string | undefined;
   googleClientSecret?: string | undefined;
   googleRedirectUri?: string | undefined;
@@ -59,10 +61,7 @@ export interface BuildServicesOptions {
 export function buildServices(opts: BuildServicesOptions): Services {
   const cfg: VaultConfig = { deployment: opts.deployment ?? 'self-host' };
 
-  const emailSender =
-    opts.resendApiKey && opts.emailFrom
-      ? new ResendEmailSender(opts.resendApiKey, opts.emailFrom)
-      : new ConsoleEmailSender(opts.logger);
+  const emailSender = createEmailSender(opts.email ?? {});
 
   // Before NoteService, which needs it to clean up after a folder it removes.
   const sharing = new SharingService({ db: opts.db, deployment: cfg.deployment });
@@ -90,6 +89,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     publicOrigin: opts.publicOrigin,
     ...(opts.appOrigin ? { appOrigin: opts.appOrigin } : {}),
     authorizedEmails: opts.authorizedEmails,
+    openSignup: opts.openSignup ?? false,
     ...(opts.apiBasePath ? { apiBasePath: opts.apiBasePath } : {}),
     totp,
   });

@@ -35,9 +35,12 @@ beforeEach(async () => {
     logger: pino({ level: 'silent' }),
     publicOrigin: 'https://brain.test',
     authorizedEmails: new Set(),
+    openSignup: true,
     totp,
     now: () => now,
   });
+  // The first account skips verification; the one under test is the next.
+  await auth.signup('owner@brain.test', STRONG);
 });
 
 function codeFor(secret: string): string {
@@ -79,7 +82,7 @@ describe('TotpService enrollment', () => {
 describe('TotpService verifyForUser', () => {
   it('accepts the current code', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification.token);
+    await auth.consumeEmailVerification(verification!.token);
     const { secret } = totp.beginEnrollment('user@brain.test');
     const seeded = await auth.ensureUser('user@brain.test');
     const user = (await auth.findUserById(seeded.id))!;
@@ -108,7 +111,7 @@ describe('TotpService verifyForUser', () => {
 describe('AuthService.login with TOTP', () => {
   it('refuses login without a code when totp is enabled', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification.token);
+    await auth.consumeEmailVerification(verification!.token);
     const me = (await auth.findUserById((await auth.ensureUser('user@brain.test')).id))!;
     const { secret } = totp.beginEnrollment('user@brain.test');
     await totp.confirmEnrollment(me.id, secret, codeFor(secret));

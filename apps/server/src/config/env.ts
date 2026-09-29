@@ -4,6 +4,8 @@
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
+import type { EmailConfig } from '../services/EmailSender.js';
+
 const trueish = new Set(['1', 'true', 'yes', 'on']);
 
 const Env = z.object({
@@ -35,9 +37,25 @@ const Env = z.object({
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
     .default('info'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(60),
+  // Email. Resend's API or any SMTP server; either needs AUTH_EMAIL_FROM.
   RESEND_API_KEY: z.string().optional(),
+  SMTP_HOST: z.string().optional(),
+  // An empty value in .env means "not set", not port 0.
+  SMTP_PORT: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().positive().default(587),
+  ),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  /** TLS from the first byte. Defaults to on for port 465, off otherwise (STARTTLS). */
+  SMTP_SECURE: z.string().optional(),
   AUTH_EMAIL_FROM: z.string().optional(),
+  // Who may create an account once the first one exists. See AuthService.signup.
   AUTHORIZED_EMAILS: z.string().optional(),
+  OPEN_SIGNUP: z
+    .string()
+    .default('false')
+    .transform((v) => trueish.has(v.toLowerCase())),
   /** Comma-separated origins allowed by CORS. Default: localhost dev web. */
   CORS_ORIGINS: z.string().default('http://localhost:3001'),
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
@@ -56,6 +74,7 @@ export interface AppConfig extends AppEnv {
   /** Parsed authorized emails as a normalised set, empty if none configured. */
   authorizedEmails: Set<string>;
   corsOrigins: string[];
+  email: EmailConfig;
 }
 
 let cached: AppConfig | null = null;
@@ -71,7 +90,22 @@ export function loadConfig(): AppConfig {
       .filter(Boolean),
   );
   const corsOrigins = parsed.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
-  cached = { ...parsed, authorizedEmails, corsOrigins };
+  const email: EmailConfig = {
+    resendApiKey: parsed.RESEND_API_KEY || undefined,
+    smtp: parsed.SMTP_HOST
+      ? {
+          host: parsed.SMTP_HOST,
+          port: parsed.SMTP_PORT,
+          secure: parsed.SMTP_SECURE
+            ? trueish.has(parsed.SMTP_SECURE.toLowerCase())
+            : parsed.SMTP_PORT === 465,
+          user: parsed.SMTP_USER || undefined,
+          password: parsed.SMTP_PASSWORD || undefined,
+        }
+      : undefined,
+    from: parsed.AUTH_EMAIL_FROM || undefined,
+  };
+  cached = { ...parsed, authorizedEmails, corsOrigins, email };
   return cached;
 }
 

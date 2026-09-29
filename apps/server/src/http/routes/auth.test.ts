@@ -119,7 +119,11 @@ describe('auth links', () => {
       logger: capturing,
       publicOrigin: 'http://localhost',
       authorizedEmails: new Set(),
+      openSignup: true,
     });
+    // The first account is verified without an email; the links under test
+    // belong to the accounts after it.
+    await service.signup('owner@brain.test', 'Passw0rd!xyz');
     const r = createAuthRouter({
       auth: service,
       apiKeys: new ApiKeyService({ db: database.db }),

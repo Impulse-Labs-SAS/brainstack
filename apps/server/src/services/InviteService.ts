@@ -28,7 +28,8 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface InviteServiceOptions {
   db: PgDb;
-  email: EmailSender;
+  /** Null when the instance has no email: link invites still work. */
+  email: EmailSender | null;
   sharing: SharingService;
   /**
    * Where this server answers. The accept link is an endpoint on it, not a
@@ -90,7 +91,16 @@ export class InviteService {
       throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
     if (params.mode === 'email' && !params.inviteeEmail) {
-      throw new AppError('email mode requiere inviteeEmail', 'INVALID_INPUT', 400);
+      throw new AppError('an email invitation needs the address to send it to', 'INVALID_INPUT', 400);
+    }
+    // Refused before the invite exists, so there is no pending invitation
+    // nobody will ever receive.
+    if (params.mode === 'email' && !this.opts.email) {
+      throw new AppError(
+        'this instance has no email configured; share a link invitation instead',
+        'UNAVAILABLE',
+        503,
+      );
     }
 
     const token = generateToken(32);
@@ -111,19 +121,19 @@ export class InviteService {
     });
 
     const acceptUrl = `${this.endpointBase()}/invite/accept/${token}`;
-    if (params.mode === 'email' && params.inviteeEmail) {
+    if (params.mode === 'email' && params.inviteeEmail && this.opts.email) {
       await this.opts.email.send({
         to: params.inviteeEmail,
-        subject: 'Te compartieron una carpeta en BrainStack',
+        subject: 'A folder was shared with you on BrainStack',
         text:
-          `Hola,\n\nTe compartieron acceso a la carpeta "${folderPath}" en BrainStack.\n` +
-          `Aceptá la invitación abriendo este link:\n\n${acceptUrl}\n\n` +
-          `El link expira en 7 días.`,
+          `Hi,\n\nYou were given access to the folder "${folderPath}" on BrainStack.\n` +
+          `Accept the invitation by opening this link:\n\n${acceptUrl}\n\n` +
+          `The link expires in 7 days.`,
         html:
-          `<p>Hola,</p>` +
-          `<p>Te compartieron acceso a la carpeta <strong>${escapeHtml(folderPath)}</strong> en BrainStack.</p>` +
-          `<p><a href="${acceptUrl}">Aceptar invitación</a></p>` +
-          `<p>El link expira en 7 días.</p>`,
+          `<p>Hi,</p>` +
+          `<p>You were given access to the folder <strong>${escapeHtml(folderPath)}</strong> on BrainStack.</p>` +
+          `<p><a href="${acceptUrl}">Accept the invitation</a></p>` +
+          `<p>The link expires in 7 days.</p>`,
       });
     }
 
