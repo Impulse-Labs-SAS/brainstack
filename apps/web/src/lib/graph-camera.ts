@@ -87,6 +87,32 @@ export function projector(cam: Camera, vp: Viewport): (x: number, y: number, z: 
   };
 }
 
+/**
+ * Which way is out for a point, as the camera sees it: away from `center`
+ * across the screen, and part of the way towards the viewer. Straight out
+ * from the centre would push a note at the back of the brain further back,
+ * where it is hardest to see. `axes` is the camera's `basis`, computed once
+ * per frame by the caller. A unit vector.
+ */
+export function outward(point: Vec3, center: Vec3, axes: Pick<ReturnType<typeof basis>, 'right' | 'up' | 'forward'>, towardViewer = 0.5): Vec3 {
+  const { right, up, forward } = axes;
+  const d = [point[0] - center[0], point[1] - center[1], point[2] - center[2]];
+  let sx = d[0]! * right[0] + d[1]! * right[1] + d[2]! * right[2];
+  let sy = d[0]! * up[0] + d[1]! * up[1] + d[2]! * up[2];
+  const len = Math.hypot(sx, sy);
+  // Dead centre on screen: up is as good a way out as any.
+  if (len < 1e-6) {
+    sx = 0;
+    sy = 1;
+  } else {
+    sx /= len;
+    sy /= len;
+  }
+  const v: Vec3 = [0, 1, 2].map((i) => right[i]! * sx + up[i]! * sy - forward[i]! * towardViewer) as Vec3;
+  const n = Math.hypot(v[0], v[1], v[2]);
+  return [v[0] / n, v[1] / n, v[2] / n];
+}
+
 export interface Bounds {
   cx: number;
   cy: number;

@@ -9,7 +9,7 @@
 
 import { projector, pixelsPerUnit, type Camera, type Viewport } from '@/lib/graph-camera';
 import { MAP_SPACING, type MapLand, type TerritoryLayout } from '@/lib/graph-map';
-import { cityRadius, colorOf, type GraphEdge, type GraphModel, type GraphNode, type GraphPath, type GraphView } from '@/lib/graph-model';
+import { LIFT_POP, cityRadius, colorOf, type GraphEdge, type GraphModel, type GraphNode, type GraphPath, type GraphView } from '@/lib/graph-model';
 import { LABEL_COLORS } from '@/lib/graph-palette';
 
 import type { LooseRing } from './graph-engine';
@@ -67,6 +67,10 @@ export interface OverlayFrame {
   focusT0: number;
   hops: Map<GraphNode, number> | null;
   matched: Set<GraphNode> | null;
+  /** The same matches, best first: who gets a label when they do not all fit. */
+  matches: GraphNode[] | null;
+  /** When the matches last changed: the sonar pings start from here. */
+  searchT0: number;
   /** Vault chips over each vault's region: Territories and Brain, with more than one vault. */
   vaultLabels: boolean;
   /** No WebGL: the overlay draws notes and edges too. */
@@ -80,7 +84,7 @@ type Rect = { x: number; y: number; w: number; h: number };
 type Curve = [number, number, number, number, number, number];
 
 const MAX_NODE_PX = 11;
-const screenRadius = (n: GraphNode) => Math.min(MAX_NODE_PX, Math.max(1.8, n.drawRadius * n.sScale));
+const screenRadius = (n: GraphNode) => Math.min(MAX_NODE_PX, Math.max(1.8, n.drawRadius * n.sScale)) * (1 + LIFT_POP * n.lift);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 function truncate(text: string, max: number): string {
@@ -142,13 +146,14 @@ export function projectNodes(model: GraphModel, cam: Camera, vp: Viewport, is3D:
     n.drawRadius = n.radius + (cityRadius(n) - n.radius) * mapBlend;
     n.onScreen = false;
     if (!Number.isFinite(n.x)) continue;
-    const p = project(n.x, n.y, Number.isFinite(n.z) ? n.z : 0);
+    const p = project(n.x + n.ox, n.y + n.oy, (Number.isFinite(n.z) ? n.z : 0) + n.oz);
     if (!p) continue;
     n.sx = p.x;
     n.sy = p.y;
     n.sDepth = p.depth;
     n.sScale = p.scale;
-    n.sFade = is3D ? clamp(1 - (p.depth - cam.dist) / (brainScale * 1.4), 0.2, 1) : 1;
+    // A match that sprang out is in front of everything: depth no longer dims it.
+    n.sFade = is3D ? Math.max(clamp(1 - (p.depth - cam.dist) / (brainScale * 1.4), 0.2, 1), Math.min(1, n.lift)) : 1;
     n.onScreen = true;
   }
 }
@@ -174,9 +179,13 @@ function curveOf(e: GraphEdge, project: ReturnType<typeof projector>): Curve | n
   const t = e.target;
   if (!s.onScreen || !t.onScreen) return null;
   if (e.kind === 'affinity') return [s.sx, s.sy, (s.sx + t.sx) / 2, (s.sy + t.sy) / 2, t.sx, t.sy];
-  const dx = t.x - s.x;
-  const dy = t.y - s.y;
-  const c = project((s.x + t.x) / 2 - dy * 0.1, (s.y + t.y) / 2 + dx * 0.1, ((s.z || 0) + (t.z || 0)) / 2);
+  const sx = s.x + s.ox;
+  const sy = s.y + s.oy;
+  const tx = t.x + t.ox;
+  const ty = t.y + t.oy;
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const c = project((sx + tx) / 2 - dy * 0.1, (sy + ty) / 2 + dx * 0.1, ((s.z || 0) + s.oz + (t.z || 0) + t.oz) / 2);
   return c ? [s.sx, s.sy, c.x, c.y, t.sx, t.sy] : null;
 }
 function pointOn(c: Curve, u: number, fromSource: boolean): [number, number] {
@@ -210,6 +219,7 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): voi
   drawSignal(ctx, f, project);
 
   ctx.globalCompositeOperation = 'source-over';
+  drawSearch(ctx, f, project);
   ring(ctx, f.hover, 3.5, f.hover ? colorOf(model, f.hover).core : '#fff', 1.4);
   ring(ctx, f.selected, 5, '#ffffff', 1.6);
   if (f.pathFrom && !f.path) ring(ctx, f.pathFrom, 6, '#ffffff', 1.4, true);
@@ -218,10 +228,13 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): voi
   if (f.landAlpha > 0.01 && f.territory) {
     drawContinentLabels(ctx, f, project, placed);
     drawCountryLabels(ctx, f, project, placed);
+  } else if (f.matches) {
+    drawMatchZones(ctx, f, project, placed);
   } else if (f.vaultLabels) {
     drawVaultLabels(ctx, f, project, placed);
   }
-  if (f.cloud > 0.01) drawProjectLabels(ctx, f, project, placed);
+  // While searching, the zone chips name the projects that matter.
+  if (f.cloud > 0.01 && !f.matches) drawProjectLabels(ctx, f, project, placed);
   drawNoteLabels(ctx, f, placed);
   ctx.globalAlpha = 1;
 }
@@ -481,6 +494,68 @@ function drawSignal(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: Ret
   }
 }
 
+/** How many matches get rings, pings and anchors: past this, they only glow. */
+const MARKED_MATCHES = 150;
+const PING_MS = 1300;
+
+/**
+ * What makes a search's matches findable: in the brain, a dotted anchor from
+ * each lifted note back to where it lives; sonar pings when the matches
+ * change; then a quiet ring in the vault's colour that stays while they do.
+ */
+function drawSearch(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>) {
+  if (!f.matches?.length) return;
+  const marked = f.matches.slice(0, MARKED_MATCHES);
+  ctx.lineCap = 'round';
+  if (f.is3D) {
+    ctx.setLineDash([2, 3]);
+    ctx.lineWidth = 1;
+    for (const n of marked) {
+      if (!n.onScreen || n.lift < 0.05 || f.appear(n) < 0.5) continue;
+      const home = project(n.x, n.y, n.z || 0);
+      if (!home) continue;
+      const color = colorOf(f.model, n);
+      ctx.globalAlpha = 0.5 * Math.min(1, n.lift);
+      ctx.strokeStyle = color.hue;
+      ctx.beginPath();
+      ctx.moveTo(home.x, home.y);
+      ctx.lineTo(n.sx, n.sy);
+      ctx.stroke();
+      ctx.globalAlpha = 0.7 * Math.min(1, n.lift);
+      ctx.fillStyle = color.hue;
+      ctx.beginPath();
+      ctx.arc(home.x, home.y, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.setLineDash([]);
+  }
+  marked.forEach((n, i) => {
+    if (!n.onScreen || f.appear(n) < 0.5) return;
+    const hue = colorOf(f.model, n).hue;
+    const r = screenRadius(n) * (n.isIndex ? 1.3 : 1);
+    ctx.strokeStyle = hue;
+    ctx.globalAlpha = 0.6;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(n.sx, n.sy, r + 4, 0, Math.PI * 2);
+    ctx.stroke();
+    if (f.reduceMotion) return;
+    // Two pings, the best matches first.
+    const t = (f.now - f.searchT0 - Math.min(i, 24) * 35) / PING_MS;
+    for (const k of [0, 0.32]) {
+      const u = t - k;
+      if (u < 0 || u > 1) continue;
+      const eased = 1 - (1 - u) ** 3;
+      ctx.globalAlpha = 0.85 * (1 - u) ** 1.5;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(n.sx, n.sy, r + 4 + eased * 36, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  });
+  ctx.globalAlpha = 1;
+}
+
 function ring(ctx: CanvasRenderingContext2D, n: GraphNode | null, gap: number, color: string, width: number, dashed = false) {
   if (!n?.onScreen) return;
   ctx.globalAlpha = 0.95;
@@ -535,10 +610,7 @@ function drawNoteLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, placed: 
     let c = 0;
     for (const [n, h] of f.hops) if (h === 1 && c++ < 28) special(n, 1);
   }
-  if (f.matched) {
-    let c = 0;
-    for (const n of f.model.labelOrder) if (f.matched.has(n) && c++ < 40) special(n, 1);
-  }
+  for (const n of f.matches?.slice(0, 40) ?? []) special(n, 1);
   if (f.focus || f.matched || f.path || f.cloud >= 0.65) return;
 
   const k = pixelsPerUnit(f.cam, f.vp);
@@ -605,6 +677,45 @@ function drawProjectLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, proje
     ctx.fillText(`${c.count} notes`, c.x, c.y + 15);
   }
   ctx.globalAlpha = 1;
+}
+
+/**
+ * While searching: a chip over each project with matches, saying how many,
+ * so the zone reads before the notes do. Placed over the whole project,
+ * where it lives, not over the matches that sprang out of it.
+ */
+function drawMatchZones(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+  const counts = new Map<string, number>();
+  for (const n of f.matches ?? []) if (n.project) counts.set(n.project.id, (counts.get(n.project.id) ?? 0) + 1);
+  if (!counts.size) return;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `500 11px ${f.fonts.mono}`;
+  const zones = f.model.projects.filter((p) => counts.has(p.id)).sort((a, b) => counts.get(b.id)! - counts.get(a.id)!);
+  for (const p of zones.slice(0, 12)) {
+    const c = centroid(p.nodes, f, project);
+    if (!c) continue;
+    const vault = f.model.vaults.find((v) => v.id === p.vault);
+    const text = `${truncate(p.label, 24).toUpperCase()} · ${counts.get(p.id)}`;
+    const w = measure(ctx, text, ctx.font);
+    const x = clamp(c.x, w / 2 + 16, f.vp.width - w / 2 - 16);
+    const y = clamp(f.is3D ? c.y - 30 : c.top - 26, 70, f.vp.height - 16);
+    const rect = { x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 };
+    if (overlaps(rect, placed)) continue;
+    placed.push(rect);
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = 'rgba(12,12,15,0.85)';
+    ctx.beginPath();
+    roundRect(ctx, rect.x, rect.y, rect.w, rect.h, 11);
+    ctx.fill();
+    ctx.strokeStyle = vault?.color.hue ?? '#fff';
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = vault?.color.core ?? LABEL_COLORS.strong;
+    ctx.fillText(text, x, y + 0.5);
+  }
 }
 
 function drawVaultLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {

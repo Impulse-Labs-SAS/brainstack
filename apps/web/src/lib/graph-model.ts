@@ -126,6 +126,15 @@ export interface GraphNode {
   bornAt: number;
   /** A per-node offset so active notes do not pulse in unison. */
   phase: number;
+  /**
+   * How far a search match has sprung out of its place, 0 at rest (a little
+   * over 1 at the top of the bounce), and the draw offset that follows from it,
+   * in world units. Drawing only: the layout, and what is saved of it, never moves.
+   */
+  lift: number;
+  ox: number;
+  oy: number;
+  oz: number;
   // Screen projection, rewritten every frame by the renderer.
   sx: number;
   sy: number;
@@ -180,6 +189,9 @@ export interface GraphModel {
   /** Biggest first: who gets a label when they do not all fit. */
   labelOrder: GraphNode[];
 }
+
+/** How much bigger a search match is drawn at the top of its bounce: 1 + LIFT_POP × lift. */
+export const LIFT_POP = 0.6;
 
 const SEPARATORS = [' — ', ' – ', ' - '];
 
@@ -283,6 +295,10 @@ function cached(cache: Map<string, GraphNode>, id: string): GraphNode {
     vz: 0,
     bornAt: -Infinity,
     phase: hash01(id) * Math.PI * 2,
+    lift: 0,
+    ox: 0,
+    oy: 0,
+    oz: 0,
     sx: 0,
     sy: 0,
     sDepth: 0,

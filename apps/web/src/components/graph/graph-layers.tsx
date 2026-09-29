@@ -25,7 +25,7 @@ interface GraphLayersMenuProps {
   onIncludeSharedChange(include: boolean): void;
 }
 
-function Row({
+export function Row({
   isSelected,
   isDisabled,
   onChange,
@@ -69,7 +69,7 @@ function Row({
   );
 }
 
-const Heading = ({ children }: { children: ReactNode }) => (
+export const Heading = ({ children }: { children: ReactNode }) => (
   <div className="px-1.5 pb-1 pt-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted first:pt-0.5">{children}</div>
 );
 

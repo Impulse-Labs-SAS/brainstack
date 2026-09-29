@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { basis, boundsOf, fitBounds, interpolate, pixelsPerUnit, projector, zoomFlatAt, type Camera } from './graph-camera';
+import { basis, boundsOf, fitBounds, interpolate, outward, pixelsPerUnit, projector, zoomFlatAt, type Camera } from './graph-camera';
 
 const vp = { width: 1000, height: 600 };
 const flat: Camera = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, dist: 1000 };
@@ -85,5 +85,27 @@ describe('interpolate', () => {
     expect(end.dist).toBeCloseTo(100, 6);
     // -3 is 2π-3 the short way from 3: a small turn, not most of a circle.
     expect(end.yaw).toBeCloseTo(2 * Math.PI - 3, 6);
+  });
+});
+
+describe('outward', () => {
+  const cam: Camera = { tx: 0, ty: 0, tz: 0, yaw: 0.5, pitch: 0.2, dist: 800 };
+  const toScreen = projector(cam, vp);
+
+  it('moves a point away from the centre on screen, and towards the viewer', () => {
+    for (const p of [[120, 40, -60], [-80, -30, 90], [10, 100, 0]] as const) {
+      const d = outward([...p], [0, 0, 0], basis(cam));
+      expect(Math.hypot(...d)).toBeCloseTo(1, 10);
+      const before = toScreen(p[0], p[1], p[2])!;
+      const after = toScreen(p[0] + d[0] * 30, p[1] + d[1] * 30, p[2] + d[2] * 30)!;
+      const centre = toScreen(0, 0, 0)!;
+      expect(Math.hypot(after.x - centre.x, after.y - centre.y)).toBeGreaterThan(Math.hypot(before.x - centre.x, before.y - centre.y));
+      expect(after.depth).toBeLessThan(before.depth);
+    }
+  });
+
+  it('goes up from dead centre', () => {
+    const d = outward([0, 0, 0], [0, 0, 0], basis(flat));
+    expect(d[1]).toBeGreaterThan(0.8);
   });
 });
