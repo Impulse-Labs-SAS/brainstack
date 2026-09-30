@@ -82,7 +82,11 @@ Pull request bodies written with Claude Code end with:
 - **Body:** what changed, why, how it was tested (commands run, and anything verified by hand), and
   what a reviewer should look at first. Note anything only a real deployment can verify.
 - **CI green before merge:** lint, typecheck, test, build, and the Docker images.
-- **Merge commit** when merging (the history uses `Merge pull request #…`).
+- **Closes the issue:** the body says `Closes #N`, so merging closes it.
+- **Same label as its issue** (`bug`, `enhancement`, `documentation`): release notes are grouped by it
+  (`.github/release.yml`).
+- **Squash and merge**: each pull request lands on `main` as one commit, which is also the line the
+  release notes show. Older history uses merge commits.
 - Never force-push a branch someone else has checked out without saying so first. Never push to `main`.
 
 ## Releases
@@ -92,6 +96,18 @@ Semantic versioning, tagged on `main`: `vMAJOR.MINOR.PATCH`.
 - **MAJOR** — a self-hoster must do something beyond pulling the new images.
 - **MINOR** — new functionality; upgrading is pull and restart.
 - **PATCH** — fixes only.
+
+A release does not deploy anything: every merge to `main` already reached production. It tells
+self-hosters there is a version worth upgrading to, so cut one when something worth announcing has
+landed, not per merge. While on `0.x`, every release is marked as a pre-release.
+
+Releases are cut from the web, which creates the tag on publish:
+
+1. **Releases → Draft a new release**.
+2. **Tag:** the new version → *Create new tag on publish*. **Target:** `main`.
+3. **Previous tag:** the last release → **Generate release notes**, then add two or three lines on top
+   with what matters (and, for a MAJOR, what a self-hoster has to do).
+4. **Set as a pre-release** while on `0.x` → **Publish release**.
 
 ## Useful commands
 
