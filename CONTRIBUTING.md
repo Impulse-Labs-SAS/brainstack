@@ -62,15 +62,8 @@ A pull request is ready when:
 - a behaviour change comes with a test, and a bug fix with a test that failed before the fix;
 - `pnpm format` has been run.
 
-## Contributor License Agreement
-
-Before we can merge your first pull request, you will be asked to sign our
-[Contributor License Agreement](CLA.md) (CLA).
-You keep the copyright of what you contribute; the CLA grants Impulse Labs the right to also distribute it under
-terms other than the AGPL — which is what lets us offer BrainStack as a hosted service, or under a commercial
-license, without having to ask every contributor again.
-
 ## License
 
 BrainStack is licensed under the [GNU Affero General Public License v3.0](LICENSE). By contributing, you agree
-that your contribution is licensed under it too, in addition to the rights granted in the CLA.
+that your contribution is licensed under it too. You keep the copyright of what you contribute; there is no
+agreement to sign.
