@@ -43,7 +43,10 @@ export interface StoredNote {
   updatedAt: number;
   createdAt: number;
   checksum: string;
-  /** Whose vault the note is in. NULL in self-host, where there is only one. */
+  /**
+   * Whose vault the note is in, the same id its path starts with. NULL only on
+   * a row written before ownership existed and not yet backfilled.
+   */
   ownerId: string | null;
 }
 
@@ -356,7 +359,7 @@ export class PgNoteStore {
     // target is right there. Found in production after renaming `Ideas/` to
     // `ideas/`: two of three links in a folder pointed at the old spelling.
     // Resolving them again settles each one wherever the ladder now lands.
-    // Owner-scoped by the path itself: in hosted `from` is stored with its
+    // Owner-scoped by the path itself: `from` is stored with its
     // owner's prefix, so no other vault can hold a link naming this string.
     const stranded = await this.db
       .selectDistinct({ sourcePath: links.sourcePath })
@@ -520,7 +523,7 @@ export class PgNoteStore {
     // resolving happens inside the owner's slice — index and source stripped of
     // the prefix on the way in, targets given it back on the way out.
     //
-    // Without this, no link in a hosted database would ever resolve, and every
+    // Without this, no link in the database would ever resolve, and every
     // backlink panel would sit empty for reasons nothing would report.
     const prefix = ownerId && path.startsWith(`${ownerId}/`) ? `${ownerId}/` : '';
     const stored = await this.allNotePaths();

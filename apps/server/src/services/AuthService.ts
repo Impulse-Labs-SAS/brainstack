@@ -28,15 +28,14 @@ import { generateToken, sha256 } from '../lib/tokens.js';
 import type { EmailSender } from './EmailSender.js';
 import type { TotpService } from './TotpService.js';
 
-const { emailVerificationTokens, passwordResetTokens, sessions, users } = pgSchema;
+const { emailVerificationTokens, folderShareInvites, passwordResetTokens, sessions, users } = pgSchema;
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 /*
- * Eight, with the character-class rule below still in force. Short for a
- * password on its own; this one is behind an email allowlist of three people,
- * with TOTP available, so the length is not what is holding the door.
+ * Eight, with the character-class rule below still in force: the NIST floor
+ * for a memorised secret, with TOTP available on top.
  */
 const PASSWORD_MIN = 8;
 
@@ -46,7 +45,8 @@ const MAX_DISPLAY_NAME = 120;
 
 export interface AuthServiceOptions {
   db: PgDb;
-  email: EmailSender;
+  /** Null when the instance has no email configured. */
+  email: EmailSender | null;
   logger: Logger;
   /** Where this server answers. Links to endpoints are built from it. */
   publicOrigin: string;
@@ -59,8 +59,13 @@ export interface AuthServiceOptions {
    * that made the magic link fail on the Netlify line.
    */
   appOrigin?: string;
-  /** Lowercased emails allowed to sign in. Empty set = open (dev only). */
+  /**
+   * Lowercased emails that may create an account once the first one exists.
+   * When set, the first account must be on it too.
+   */
   authorizedEmails: Set<string>;
+  /** Anyone may create an account. Off unless the operator turns it on. */
+  openSignup?: boolean;
   /**
    * Prefix the HTTP API is mounted under, for links that point at an endpoint
    * rather than a page. Empty when the app serves its own routes at the root;
@@ -100,7 +105,11 @@ export interface Session {
 
 export interface SignupResult {
   user: User;
-  verification: { token: string; url: string; expiresAt: number };
+  /**
+   * The verification that was emailed, or null when the account needed none:
+   * the first account on an instance is its owner, and is verified already.
+   */
+  verification: { token: string; url: string; expiresAt: number } | null;
 }
 
 export interface PasswordResetRequestResult {
@@ -172,11 +181,59 @@ export class AuthService {
     return (this.opts.appOrigin ?? this.opts.publicOrigin).replace(/\/+$/, '');
   }
 
-  assertAuthorized(email: string): void {
-    if (this.opts.authorizedEmails.size === 0) return; // open in dev
-    if (!this.opts.authorizedEmails.has(email)) {
-      throw new AppError('email not authorized', 'FORBIDDEN', 403);
+  /** Whether this instance can send email at all. */
+  get canSendEmail(): boolean {
+    return this.opts.email !== null;
+  }
+
+  /**
+   * Who may create an account, closed unless the operator opens it.
+   *
+   * The first account on an instance is its owner and may always be created
+   * (if AUTHORIZED_EMAILS is set, only by an address on it). After that:
+   * anyone when OPEN_SIGNUP is on, an address on AUTHORIZED_EMAILS, or an
+   * address a pending email invitation was sent to. Everyone else is refused,
+   * so an instance nobody configured is not a free account for whoever finds it.
+   *
+   * Returns whether this is the first account.
+   */
+  private async assertMaySignUp(email: string): Promise<{ first: boolean }> {
+    const listed = this.opts.authorizedEmails;
+    const [existing] = await this.opts.db.select({ id: users.id }).from(users).limit(1);
+    if (!existing) {
+      if (listed.size > 0 && !listed.has(email)) {
+        throw new AppError('sign-up is closed on this instance', 'SIGNUP_CLOSED', 403);
+      }
+      return { first: true };
     }
+    if (this.opts.openSignup || listed.has(email)) return { first: false };
+
+    const [invited] = await this.opts.db
+      .select({ id: folderShareInvites.id })
+      .from(folderShareInvites)
+      .where(
+        and(
+          eq(folderShareInvites.mode, 'email'),
+          eq(sql`lower(${folderShareInvites.inviteeEmail})`, email),
+          isNull(folderShareInvites.revokedAt),
+          isNull(folderShareInvites.acceptedAt),
+          gt(folderShareInvites.expiresAt, this.now()),
+        ),
+      )
+      .limit(1);
+    if (invited) return { first: false };
+
+    throw new AppError(
+      'sign-up is closed on this instance; ask its owner for an invitation',
+      'SIGNUP_CLOSED',
+      403,
+    );
+  }
+
+  /** Sends through the configured sender, or refuses when there is none. */
+  private async send(message: Parameters<EmailSender['send']>[0]): Promise<void> {
+    if (!this.opts.email) throw emailUnavailable();
+    await this.opts.email.send(message);
   }
 
   // -- Lookups ---------------------------------------------------------------
@@ -214,10 +271,14 @@ export class AuthService {
   ): Promise<SignupResult> {
     const email = this.normaliseEmail(rawEmail);
     if (!email.includes('@')) throw new AppError('invalid email', 'INVALID_INPUT', 400);
-    this.assertAuthorized(email);
 
     const policyError = validatePassword(password);
     if (policyError) throw new AppError(policyError, 'INVALID_INPUT', 400);
+
+    const { first } = await this.assertMaySignUp(email);
+    // Checked before the row exists: an account whose verification can never
+    // arrive would hold the address and let nobody in.
+    if (!first && !this.opts.email) throw emailUnavailable();
 
     const passwordHash = await hashPassword(password);
     const now = this.now();
@@ -230,7 +291,7 @@ export class AuthService {
         id: nanoid(),
         email,
         displayName: displayName ?? null,
-        emailVerified: false,
+        emailVerified: first,
         passwordHash,
         createdAt: now,
         updatedAt: now,
@@ -241,8 +302,18 @@ export class AuthService {
 
     if (!row) throw new AppError('email already registered', 'ALREADY_EXISTS', 409);
 
-    const verification = await this.issueEmailVerification(row as UserRow, email);
-    return { user: toUser(row as UserRow), verification };
+    if (first) return { user: toUser(row as UserRow), verification: null };
+
+    try {
+      const verification = await this.issueEmailVerification(row as UserRow, email);
+      return { user: toUser(row as UserRow), verification };
+    } catch (err) {
+      // The mail never left. Kept, the row would hold the address unverified
+      // and answer every retry with "already registered"; gone, the person can
+      // simply try again once the mail server is back. Its token goes with it.
+      await this.opts.db.delete(users).where(eq(users.id, (row as UserRow).id));
+      throw err;
+    }
   }
 
   async login(
@@ -267,7 +338,6 @@ export class AuthService {
     if (!row.emailVerified) {
       throw new AppError('email not verified', 'FORBIDDEN', 403);
     }
-    this.assertAuthorized(row.email);
 
     if (row.totpSecret && this.opts.totp) {
       if (!context.totpCode) throw new AppError('totp code required', 'UNAUTHORIZED', 401);
@@ -365,7 +435,7 @@ export class AuthService {
     });
 
     const url = `${this.apiBase()}/auth/verify-email?token=${token}`;
-    await this.opts.email.send({
+    await this.send({
       to: email,
       subject: 'Verify your BrainStack email',
       text: `Click to verify your email: ${url}\nThis link expires in 24 hours.`,
@@ -377,6 +447,10 @@ export class AuthService {
   async resendVerification(rawEmail: string): Promise<{ url: string | null }> {
     const row = await this.rowByEmail(rawEmail);
     if (!row || row.emailVerified) return { url: null };
+    if (!this.opts.email) {
+      this.opts.logger.warn('verification email requested, but this instance has no email configured');
+      return { url: null };
+    }
     const issued = await this.issueEmailVerification(row, row.email);
     return { url: issued.url };
   }
@@ -422,6 +496,12 @@ export class AuthService {
    * controls the address, which is the same proof a reset ever had.
    */
   async requestPasswordReset(rawEmail: string): Promise<PasswordResetRequestResult> {
+    // Refused before the lookup, the same for every address, so it says
+    // something about the instance and nothing about the account. Saying it
+    // beats "check your email" for a message that will never come: the person
+    // learns to ask whoever runs the server for the reset-password command.
+    if (!this.opts.email) throw emailUnavailable();
+
     const row = await this.rowByEmail(rawEmail);
     if (!row) {
       // Do not leak account existence — the caller reports success either way.
@@ -442,7 +522,7 @@ export class AuthService {
     });
 
     const url = `${this.appBase()}/reset-password?token=${token}`;
-    await this.opts.email.send({
+    await this.send({
       to: row.email,
       subject: 'Reset your BrainStack password',
       text: `Reset your password: ${url}\nThis link expires in 1 hour. Ignore this email if you didn't request it.`,
@@ -489,6 +569,25 @@ export class AuthService {
     // Whoever knew the old password loses their sessions with it.
     await this.revokeAllSessionsFor(claimed.userId);
     return toUser(row as UserRow);
+  }
+
+  /**
+   * The operator's way back into an account when the instance cannot send a
+   * reset link: sets a new random password, verifies the address and signs
+   * out every session. Only reachable from the server's command line.
+   */
+  async resetPasswordFromServer(rawEmail: string): Promise<string> {
+    const row = await this.rowByEmail(rawEmail);
+    if (!row) throw new AppError('no account with that email', 'NOT_FOUND', 404);
+
+    const password = generateToken(12);
+    const now = this.now();
+    await this.opts.db
+      .update(users)
+      .set({ passwordHash: await hashPassword(password), emailVerified: true, updatedAt: now })
+      .where(eq(users.id, row.id));
+    await this.revokeAllSessionsFor(row.id);
+    return password;
   }
 
   async changePassword(
@@ -545,13 +644,15 @@ export class AuthService {
     displayName?: string | null;
   }): Promise<User> {
     const email = this.normaliseEmail(input.email);
-    this.assertAuthorized(email);
 
     if (!input.googleEmailVerified) {
       throw new AppError('google email is unverified', 'FORBIDDEN', 403);
     }
 
     const existing = await this.rowByEmail(email);
+    // Signing in with Google creates an account, and the same people may do
+    // that as may sign up with a password.
+    if (!existing) await this.assertMaySignUp(email);
     if (existing && !existing.emailVerified && existing.passwordHash) {
       throw new AppError(
         'local account exists and is not verified; verify it before linking Google',
@@ -684,4 +785,12 @@ export class AuthService {
     if (row.expiresAt < now) return new AppError('token expired', 'UNAUTHORIZED', 401);
     return new AppError('invalid token', 'UNAUTHORIZED', 401);
   }
+}
+
+function emailUnavailable(): AppError {
+  return new AppError(
+    'this instance has no email configured, so it cannot send this message; ask its owner',
+    'UNAVAILABLE',
+    503,
+  );
 }

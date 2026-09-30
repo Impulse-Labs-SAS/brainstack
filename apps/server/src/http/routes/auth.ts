@@ -76,7 +76,9 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
         parsed.data.password,
         parsed.data.displayName ?? null,
       );
-      return c.json({ user: result.user }, 201);
+      // The first account on an instance is verified already; the page then
+      // offers sign-in instead of "check your email".
+      return c.json({ user: result.user, verificationSent: result.verification !== null }, 201);
     } catch (err) {
       return jsonError(c, err);
     }
@@ -148,6 +150,8 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       await options.auth.requestPasswordReset(parsed.data.email);
       return c.json({ ok: true });
     } catch (err) {
+      // About the instance, not the address: every address gets the same answer.
+      if (err instanceof AppError && err.code === 'UNAVAILABLE') return jsonError(c, err);
       options.logger.error({ err }, 'forgot-password failed');
       // Still return ok to avoid enumeration.
       return c.json({ ok: true });
@@ -258,7 +262,7 @@ function jsonError(c: AuthCtx, err: unknown) {
   if (err instanceof AppError) {
     return c.json(
       { error: err.message, code: err.code },
-      err.status as 400 | 401 | 403 | 404 | 409 | 500,
+      err.status as 400 | 401 | 403 | 404 | 409 | 500 | 503,
     );
   }
   const message = err instanceof Error ? err.message : 'failed';

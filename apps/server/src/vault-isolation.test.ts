@@ -8,16 +8,21 @@
 import { pgSchema } from '@brainstack/core/pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import pino from 'pino';
+
 import { listBacklinksSafely } from './lib/backlinks.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { NoteService } from './services/NoteService.js';
 import { SearchService } from './services/SearchService.js';
 import { SharingService } from './services/SharingService.js';
 import { createTestDatabase, type TestDatabase } from './services/testDb.js';
+import type { User } from './services/AuthService.js';
+import { buildContext } from './trpc/context.js';
+import { appRouter } from './trpc/router.js';
+import { buildServices } from './wiring.js';
 
 const { users } = pgSchema;
 
-const hosted = { deployment: 'hosted' as const };
 
 let database: TestDatabase;
 let notes: NoteService;
@@ -43,13 +48,13 @@ beforeEach(async () => {
     await database.db.insert(users).values({ id, email, createdAt: Date.now(), updatedAt: 0 });
   }
 
-  notes = new NoteService({ db: database.db, cfg: hosted });
-  search = new SearchService({ db: database.db, cfg: hosted });
-  sharing = new SharingService({ db: database.db, deployment: 'hosted' });
-  crossOwner = new CrossOwnerReader({ db: database.db, sharing, vaultCfg: hosted });
+  notes = new NoteService({ db: database.db });
+  search = new SearchService({ db: database.db });
+  sharing = new SharingService({ db: database.db });
+  crossOwner = new CrossOwnerReader({ db: database.db, sharing });
 });
 
-describe('hosted multi-user isolation', () => {
+describe('multi-user isolation', () => {
   beforeEach(async () => {
     await notes.create('alice', 'Proyectos/zuno.md', '# Zuno\n\npresupuesto de alice');
     await notes.create('alice', 'Privado/diario.md', '# Diario\n\nsecreto de alice');
@@ -105,7 +110,7 @@ describe('hosted multi-user isolation', () => {
   });
 });
 
-describe('hosted multi-user with a shared folder', () => {
+describe('multi-user with a shared folder', () => {
   beforeEach(async () => {
     await notes.create('alice', 'Proyectos/zuno.md', '# Zuno\n\npresupuesto compartido');
     await notes.create('alice', 'Privado/diario.md', '# Diario\n\npresupuesto privado');
@@ -238,7 +243,7 @@ describe('el id interno no se escapa a las respuestas', () => {
  * salía marcado como no resuelto — no salía en absoluto, porque el destino
  * pendiente se guarda sin prefijo y la búsqueda lo pide con prefijo.
  */
-describe('afinidad en hosted', () => {
+describe('afinidad entre bóvedas', () => {
   it('no une notas de dueños distintos aunque compartan un tema', async () => {
     await notes.create('alice', 'A/uno.md', '# Uno', { technologies: ['gemini-api'] });
     await notes.create('alice', 'A/dos.md', '# Dos', { technologies: ['gemini-api'] });
@@ -252,7 +257,7 @@ describe('afinidad en hosted', () => {
   });
 });
 
-describe('menciones sin enlazar en hosted', () => {
+describe('menciones sin enlazar entre bóvedas', () => {
   it('no lee ni reescribe la bóveda de otro dueño', async () => {
     await notes.create('alice', 'Atlas/_Atlas.md', '# Atlas');
     await notes.create('bob', 'Suyo/nota.md', '# Nota de bob\n\nhabla de Atlas');
@@ -273,7 +278,7 @@ describe('menciones sin enlazar en hosted', () => {
   });
 });
 
-describe('mover dentro de una bóveda hosted', () => {
+describe('mover dentro de una bóveda', () => {
   it('la nota movida conserva su dueño y sus enlaces siguen resueltos', async () => {
     await notes.create('alice', 'Ideas/bot/concepto.md', '# Concepto\n\nver [[prerrequisitos]]');
     await notes.create('alice', 'Ideas/bot/prerrequisitos.md', '# Pre\n\nver [[concepto]]');
@@ -322,5 +327,64 @@ describe('enlaces pendientes con varios dueños', () => {
     const back = await notes.listLinks('alice', 'proyectos/compartida.md');
     expect(back).toHaveLength(1);
     expect(back[0]!.sourcePath).toBe('proyectos/uno.md');
+  });
+});
+
+/**
+ * The bug that removed the single-user mode: an instance built with the default
+ * options stored every note without an owner, so a second account on it read
+ * and edited the first one's vault. Built here exactly as `serve.ts` builds it,
+ * and driven through the tRPC router the web app calls.
+ */
+describe('two accounts on a default instance', () => {
+  const asUser = (id: string, email: string): User => ({
+    id,
+    email,
+    displayName: null,
+    emailVerified: true,
+    hasPassword: true,
+    hasGoogle: false,
+    hasTotp: false,
+    createdAt: 0,
+    lastLoginAt: null,
+  });
+
+  function callerFor(user: User) {
+    const services = buildServices({
+      db: database.db,
+      logger: pino({ level: 'silent' }),
+      publicOrigin: 'http://localhost:3000',
+      authorizedEmails: new Set(),
+    });
+    return appRouter.createCaller(buildContext(services, { kind: 'user', user }));
+  }
+
+  it('cannot read, list, search or overwrite each other’s notes', async () => {
+    const alice = callerFor(asUser('alice', 'alice@brain.test'));
+    const bob = callerFor(asUser('bob', 'bob@brain.test'));
+
+    await alice.notes.create({ path: 'Privado/diario.md', content: '# Diario\n\nsecreto de alice' });
+
+    await expect(bob.notes.get({ path: 'Privado/diario.md' })).rejects.toThrow();
+    expect(await bob.notes.list()).toEqual([]);
+    expect(await bob.search.query({ query: 'secreto' })).toEqual([]);
+
+    // Bob's note at the same path is his own, and leaves alice's untouched.
+    await bob.notes.create({ path: 'Privado/diario.md', content: '# Diario\n\nnotas de bob' });
+    expect((await alice.notes.get({ path: 'Privado/diario.md' })).body).toContain('alice');
+    expect((await bob.notes.get({ path: 'Privado/diario.md' })).body).toContain('bob');
+  });
+
+  it('cannot name the other owner to get around it', async () => {
+    const alice = callerFor(asUser('alice', 'alice@brain.test'));
+    const bob = callerFor(asUser('bob', 'bob@brain.test'));
+
+    await alice.notes.create({ path: 'Privado/diario.md', content: '# Diario\n\nsecreto de alice' });
+
+    await expect(bob.notes.get({ path: 'Privado/diario.md', ownerId: 'alice' })).rejects.toThrow();
+    await expect(
+      bob.notes.update({ path: 'Privado/diario.md', content: '# pwned', ownerId: 'alice' }),
+    ).rejects.toThrow();
+    expect((await alice.notes.get({ path: 'Privado/diario.md' })).body).toContain('secreto de alice');
   });
 });

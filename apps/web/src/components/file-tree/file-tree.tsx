@@ -53,7 +53,6 @@ import { importMarkdownFiles, isMarkdownFile, summarizeImport } from '@/lib/impo
 import { forgetRecent, useRecentNotes } from '@/lib/recent-notes';
 import { groupSharedOwners } from '@/lib/shared-owners';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
-import { useSharingEnabled } from '@/lib/use-deployment';
 
 import { REVEAL_FOLDER_EVENT, type RevealFolderDetail } from '@/components/note/note-header';
 
@@ -204,7 +203,6 @@ interface NodeRowProps {
    * folder from a private one without opening the share dialog.
    */
   sharedWith: Map<string, string[]>;
-  sharingEnabled: boolean;
   /** Your own id, so a note routes to your view or to the shared one. */
   mine: string | undefined;
 }
@@ -228,7 +226,6 @@ function NodeRow(props: NodeRowProps) {
     onFilesDrop,
     busy,
     sharedWith,
-    sharingEnabled,
     mine,
   } = props;
   const router = useRouter();
@@ -392,7 +389,7 @@ function NodeRow(props: NodeRowProps) {
               menuFor === id && 'flex',
             )}
           >
-            {isFolder && own && sharingEnabled && (
+            {isFolder && own && (
               <button
                 type="button"
                 onClick={() => onShare(node.path)}
@@ -504,13 +501,9 @@ export function FileTree() {
   const recent = useRecentNotes();
 
   // What this user has shared, folded into a path -> people map so the tree can
-  // mark it. Only asked for where sharing exists; self-host has nobody to share
-  // with and the procedure returns an empty list there anyway.
-  const sharingEnabled = useSharingEnabled();
-  const mySharesQ = trpc.sharing.listMyShares.useQuery(undefined, { enabled: sharingEnabled });
-  const sharedRootsQ = trpc.sharing.listSharedWithMe.useQuery(undefined, {
-    enabled: sharingEnabled,
-  });
+  // mark it.
+  const mySharesQ = trpc.sharing.listMyShares.useQuery();
+  const sharedRootsQ = trpc.sharing.listSharedWithMe.useQuery();
   const sharedRoots = useMemo(() => sharedRootsQ.data ?? [], [sharedRootsQ.data]);
 
   /**
@@ -1063,7 +1056,6 @@ export function FileTree() {
     onFilesDrop: (ref, files) => void runImport(ref, files),
     busy,
     sharedWith,
-    sharingEnabled,
     mine,
   };
 
@@ -1216,7 +1208,6 @@ export function FileTree() {
           menu={menu}
           menuRef={menuRef}
           mine={mine}
-          sharingEnabled={sharingEnabled}
           onClose={() => setMenu(null)}
           actions={{
             newNote: createNote,
@@ -1327,14 +1318,12 @@ function RowMenu({
   menu,
   menuRef,
   mine,
-  sharingEnabled,
   onClose,
   actions,
 }: {
   menu: MenuState;
   menuRef: React.MutableRefObject<HTMLDivElement | null>;
   mine: string | undefined;
-  sharingEnabled: boolean;
   onClose(): void;
   actions: RowMenuActions;
 }) {
@@ -1370,7 +1359,7 @@ function RowMenu({
     }
     // Re-sharing what somebody shared with you does not exist, so the option
     // only appears on your own folders.
-    if (sharingEnabled && isFolder && !isRoot && ref.ownerId === mine) {
+    if (isFolder && !isRoot && ref.ownerId === mine) {
       entries.push({ label: 'Share…', icon: UserPlus, run: () => actions.share(ref.path) });
     }
     if (!isRoot) {

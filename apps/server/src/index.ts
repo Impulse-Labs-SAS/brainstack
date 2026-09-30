@@ -14,8 +14,6 @@ export {
   ownerIdFromPhysicalPath,
   toLogical,
   toPhysical,
-  type Deployment,
-  type VaultConfig,
 } from './lib/vault.js';
 
 // --- Service graph -----------------------------------------------------------

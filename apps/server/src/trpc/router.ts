@@ -49,7 +49,9 @@ const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
                 ? 'FORBIDDEN'
                 : err.code === 'INVALID_INPUT'
                   ? 'BAD_REQUEST'
-                  : 'INTERNAL_SERVER_ERROR';
+                  : err.code === 'UNAVAILABLE'
+                    ? 'PRECONDITION_FAILED'
+                    : 'INTERNAL_SERVER_ERROR';
       throw new TRPCError({ code: trpcCode, message: err.message, cause: err });
     }
     throw err;
@@ -387,10 +389,10 @@ export const appRouter = t.router({
   }),
   sharing: t.router({
     listSharedWithMe: protectedProcedure.query(({ ctx }) =>
-      ctx.sharing.enabled ? ctx.sharing.listSharedRoots(ctx.user.id) : [],
+      ctx.sharing.listSharedRoots(ctx.user.id),
     ),
     listMyShares: protectedProcedure.query(({ ctx }) =>
-      ctx.sharing.enabled ? ctx.sharing.listMyShares(ctx.user.id) : [],
+      ctx.sharing.listMyShares(ctx.user.id),
     ),
     shareWithUser: protectedProcedure
       .input(
@@ -402,12 +404,9 @@ export const appRouter = t.router({
       )
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
-          if (!ctx.sharing.enabled) {
-            throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
-          }
           const target = await ctx.auth.findUserByEmail(input.email);
           if (!target) {
-            // El flow con invitación por email/link entra en el paso 9.
+            // Somebody without an account is reached through an invitation instead.
             throw new AppError('no user with that email; send an invitation instead', 'NOT_FOUND', 404);
           }
           const id = await ctx.sharing.grant({
@@ -429,9 +428,6 @@ export const appRouter = t.router({
       )
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
-          if (!ctx.sharing.enabled) {
-            throw new AppError('sharing is not available on this instance', 'NOT_FOUND', 404);
-          }
           await ctx.sharing.revoke({
             ownerId: ctx.user.id,
             sharedWithUserId: input.sharedWithUserId,

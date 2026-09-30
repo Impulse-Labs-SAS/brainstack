@@ -102,6 +102,9 @@ importers:
       node-cron:
         specifier: ^4.2.1
         version: 4.2.1
+      nodemailer:
+        specifier: ^10.0.12
+        version: 10.0.12
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -4017,6 +4020,10 @@ packages:
   node-source-walk@7.0.2:
     resolution: {integrity: sha512-71kFFjYaSshDTA8/a2HiTYPLdASWjLJxUyJxGE+ffxU+KhxSBtM9kiLUX+R2yooFdSFKMFpi4n3PFtDy6qXv8A==}
     engines: {node: '>=18'}
+
+  nodemailer@10.0.12:
+    resolution: {integrity: sha512-PQ46oNbNMuH/Sno7B5IWIU9etytwrO0xdTFvWXpIQFRXhBAXtzD48243AS+BCbQQTPD8y3fqUrgLn0tSo77gvg==}
+    engines: {node: '>=20.0.0'}
 
   nopt@8.1.0:
     resolution: {integrity: sha512-ieGu42u/Qsa4TFktmaKEwM6MQH0pOWnaB3htzh0JRtx84+Mebc0cbZYN5bC+6WTZ4+77xrL9Pn5m7CV6VIkV7A==}
@@ -9062,6 +9069,8 @@ snapshots:
   node-source-walk@7.0.2:
     dependencies:
       '@babel/parser': 7.29.8
+
+  nodemailer@10.0.12: {}
 
   nopt@8.1.0:
     dependencies:

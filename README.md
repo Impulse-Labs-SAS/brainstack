@@ -2,73 +2,109 @@
 
 > Shared second brain for humans and AI assistants. Self-hostable. MCP-native.
 
-BrainStack stores your notes on disk as plain Markdown and exposes them to any MCP-compatible AI assistant (Claude Code, Claude Chat, Claude Desktop, Cursor, Codex, Gemini CLI, Antigravity, Continue, Cline, …). Humans edit through a web app that replaces Obsidian — including importing `.md` files you already have, one or many, by picking them from the tree or dropping them onto a folder; AIs read and write through the MCP server, all backed by the same notes.
+BrainStack keeps your notes as Markdown in Postgres. It exposes them to any MCP-compatible AI assistant: Claude Code, Claude Desktop and claude.ai, Cursor, Codex, Gemini CLI, Continue, Cline and others. People use the web app, which covers what Obsidian did: a file tree, a Markdown editor with wikilinks, full-text search, a graph, and import of the `.md` files you already have. Assistants read and write the same notes through the MCP server.
 
-**Status:** pre-alpha. Built by [Impulse Labs](https://impulselabs.dev). Internal use only until M2.
+Every account has its own vault, and any folder can be shared with other people, read-only or with write access.
+
+**Status:** pre-alpha. Built by [Impulse Labs](https://impulselabs.dev).
 
 ## Why
 
-If you work with several AI assistants, you keep retyping the same context everywhere — design docs in the repo, in Claude Projects, in Cursor rules, in Gemini, in your head. BrainStack is the single source of truth: your assistants pull what they need through MCP and write back when you tell them to. One brain, every AI.
+If you work with several AI assistants, you keep retyping the same context everywhere: design docs in the repo, in Claude Projects, in Cursor rules, in Gemini, in your head. BrainStack is the single source of truth. Your assistants pull what they need through MCP and write back when you tell them to. One brain, every AI.
 
 ## What's inside
 
 ```
 apps/
-  server/     Hono + tRPC + MCP server (Node 20+)
-  web/        Next.js 15 web app with Justd UI + CodeMirror 6
+  server/     Hono + tRPC + MCP server (Node 20+), with its own OAuth 2.1 provider for MCP clients
+  web/        Next.js 15 web app: react-aria-components + CodeMirror 6
 packages/
-  core/       Markdown parser, wikilink resolver, sqlite indexer with FTS5
+  core/       Markdown parsing, wikilink resolution, Postgres store and full-text search
   skill/      Canonical AI instructions + adapters for every major client
 ```
 
-Storage: plain `.md` files in `NOTES_DIR` (source of truth) + a regenerable sqlite cache with FTS5 search. Auth: email + password (argon2id) and Google OAuth, plus Bearer API keys for MCP clients. Backups: a cron snapshots the sqlite and pushes the notes directory + snapshot to a private git repo.
+Storage is any Postgres. Sign-in is email and password, with optional Google sign-in and optional TOTP. MCP clients connect through OAuth or with an API key.
 
 ## Quick start (self-host)
 
-Requires Docker. The compose file runs Postgres, the server, the web app and Caddy, which serves them on one origin with automatic TLS.
+You need Docker. The compose file runs Postgres, the server, the web app and Caddy, which serves them all on one origin with automatic TLS.
 
 ```bash
 git clone https://github.com/Impulse-Labs-SAS/brainstack.git
 cd brainstack
 cp .env.example .env
-# edit .env — at least DOMAIN, PUBLIC_ORIGIN, POSTGRES_PASSWORD and AUTHORIZED_EMAILS
+# edit .env: at least DOMAIN, PUBLIC_ORIGIN and POSTGRES_PASSWORD
 docker compose up -d
 ```
 
-Then visit your `PUBLIC_ORIGIN` and sign up. Without `RESEND_API_KEY` no email is sent: the verification link is in `docker compose logs server`. The schema is created on first start, and updated by every new version on its own.
+Then open your `PUBLIC_ORIGIN` and **create your account right away**. The first account on an instance is its owner and needs no email verification. After it, sign-up is closed.
 
-Already have a Postgres? Set `DATABASE_URL` in `.env` and BrainStack uses it instead of the bundled one.
+The schema is created on first start and updated by every new version on its own. Already have a Postgres? Set `DATABASE_URL` in `.env` and BrainStack uses it instead of the bundled one.
+
+### Email: optional for one person, needed to add others
+
+BrainStack sends email for three things: verifying new accounts, password resets, and folder invitations. For a personal instance you can skip it. To bring anyone else in, configure one of these in `.env`, plus `AUTH_EMAIL_FROM`:
+
+- **SMTP**, with any mail server (Gmail with an app password, Outlook, your company's relay, Resend's SMTP): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`.
+- **[Resend](https://resend.com)**'s API: `RESEND_API_KEY`.
+
+Links are only ever sent by email, never written to the log. Without email:
+
+- only the first account can sign up with a password;
+- email invitations are refused, but link invitations still work;
+- a forgotten password is reset on the server:
+
+  ```bash
+  docker compose exec server node dist/cli.js reset-password you@example.com
+  ```
+
+  It prints a new password and signs the account out everywhere.
+
+The server logs a warning at startup when email is not configured.
+
+### Who can sign up
+
+After the first account, sign-up is closed. People get in when one of these applies:
+
+- you invite them to a shared folder by email;
+- their address is in `AUTHORIZED_EMAILS` (comma-separated);
+- `OPEN_SIGNUP=true`, which lets in anyone who can reach the server.
+
+New accounts verify their address by email, so all three need email configured. Any account holder can invite by email, so everyone you let in can bring someone else in, into a folder they share. Keep that in mind before you add people you don't know.
 
 ## Local development
 
 ```bash
 pnpm install
 cp apps/server/.env.example apps/server/.env   # set DATABASE_URL to any Postgres
-pnpm -r lint
-pnpm -r typecheck
-pnpm -r test
-pnpm -r build
-# server on :3000 (HTTP + MCP HTTP/SSE; stdio MCP when MCP_STDIO=true)
+pnpm lint
+pnpm typecheck
+pnpm test        # runs on PGlite, in process; no database needed
+pnpm build
+# server on :3000 (HTTP + MCP; stdio MCP when MCP_STDIO=true)
 pnpm --filter @brainstack/server dev
 # web app on :3001
 pnpm --filter @brainstack/web dev
 ```
 
+To try sign-up with a second account, or password resets, point SMTP at a local mail catcher such as [Mailpit](https://mailpit.axllent.org). `apps/server/.env.example` shows how.
+
 ## Connecting an AI assistant
 
-The web app's sidebar has **Connect AI** and **Skill** dialogs with this instance's MCP URL and copyable setup for each client. To connect by hand, generate an API key in the web app (**Settings → API keys**), then:
+The web app's sidebar has **Connect AI** and **Skill** dialogs with this instance's MCP URL and copyable setup for each client. The MCP endpoint is `https://<your-domain>/api/mcp`.
 
-### Claude Code / Cursor (local stdio)
+### Claude Desktop, claude.ai and other clients that support OAuth
+
+Add `https://<your-domain>/api/mcp` as a connector (in Claude: **Settings → Connectors**). The client sends you to BrainStack to sign in and approve access.
+
+### Claude Code, Cursor and clients that take a token
+
+Generate an API key in the web app (**Settings → API keys**), then:
 
 ```bash
-# Claude Code
 claude mcp add brainstack --transport http https://<your-domain>/api/mcp \
   --header "Authorization: Bearer <api-key>"
 ```
-
-### Claude Chat / Desktop (remote HTTP)
-
-Add `https://<your-domain>/api/mcp` as a connector in **Settings → Connectors** and paste the API key.
 
 ### Loading the skill
 
@@ -79,26 +115,20 @@ pnpm --filter @brainstack/skill build
 # Outputs land in packages/skill/dist/<client>/...
 ```
 
-You can also fetch the same instructions at runtime via the `get_brainstack_guide` MCP tool — handy for clients without a dedicated skill format.
+Assistants can also fetch the same instructions at runtime through the `get_brainstack_guide` MCP tool, which helps clients without a dedicated skill format.
 
 ## Architecture
 
-Design vault lives at `01-Impulse-Labs/BrainStack/` (private). Documents to read before non-trivial changes:
-
-- `Diseño-V1.md` — vision, scope, decisions.
-- `Modelo-de-datos.md` — sqlite schema + wikilink/embed conventions.
-- `Arquitectura-backend.md` — capas, librerías, reglas no negociables.
-- `Arquitectura-frontend.md` — tokens, estructura, anti-patrones.
-- `Skill-design.md` — canonical AI instructions design.
+Start with [CLAUDE.md](CLAUDE.md). It holds the stack, the workspaces, and the non-negotiable rules. It is written for AI assistants, but it binds everyone. Design notes for the larger subsystems (sharing and permissions, the graph, wikilinks and facets) are in [`docs/`](docs/).
 
 ## License
 
-BrainStack is free software, released under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). You can use it, modify it and self-host it — for yourself or for your company, commercially or not. If you run a modified version as a service for other people, you must offer them its source code under the same license.
+BrainStack is free software, released under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). You can use it, modify it and self-host it, for yourself or for your company, commercially or not. If you run a modified version as a service for other people, you must offer them its source code under the same license.
 
 ## Contributing
 
-Issues are open to everyone. Code contributions start with an issue, not a pull request — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues are open to everyone. Code contributions start with an issue, not a pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Built by Impulse Labs
 
-BrainStack is built by [Impulse Labs](https://impulselabs.dev) — a small team building AI-first tools. We use it ourselves every day.
+BrainStack is built by [Impulse Labs](https://impulselabs.dev), a small team building AI-first tools. We use it ourselves every day.

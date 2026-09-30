@@ -2,43 +2,26 @@ name: Deploy
 
 # Publishes to Netlify when something lands on main, after the checks pass.
 #
-# This is the primary deploy path, not a fallback. Netlify's Git integration
-# cannot connect a repository that is both private and organization-owned
-# without a Pro plan — and this one is. Deploying through the CLI sidesteps
-# that: Netlify receives a build and never asks who owns the source. It also
-# buys what the Git integration does not — a failing test stops the deploy
-# instead of shipping past it.
+# Deploying through the CLI rather than Netlify's Git integration means a
+# failing test stops the deploy instead of shipping past it.
 #
 # The deploy itself is `scripts/deploy.sh`, the same script used by hand, rather
-# than a second recipe maintained in YAML. That matters here more than usual:
-# the obvious `netlify deploy --build --prod --filter @brainstack/web` is what
-# an earlier version of this workflow ran, and it is precisely what breaks the
-# site — with a packagePath stamped on the deploy, the Next catch-all shadows
-# the API function and every /api route answers 404. The script's header lists
-# the other four traps. One copy of that knowledge, exercised both ways.
+# than a second recipe maintained in YAML. The obvious
+# `netlify deploy --build --prod --filter @brainstack/web` is what breaks the
+# site: with a packagePath stamped on the deploy, the Next catch-all shadows the
+# API function and every /api route answers 404. The script's header lists the
+# other traps. One copy of that knowledge, exercised both ways.
 #
-# Required secret:
-#   NETLIFY_AUTH_TOKEN   A personal access token belonging to the account that
-#                        owns the-site — the owning team, which has one
-#                        member. Netlify → User settings → Applications.
+# Only the upstream repository deploys; a fork that enables Actions skips the
+# job instead of failing it. Configuration, in the `production` environment:
 #
-# There is history here worth writing down, because the repository is the only
-# place it survives. The site started under admin@example.com; that
-# account ran out of deploy quota, so the live site was rebuilt as
-# the-site under the personal account and stayed there. The two secrets
-# still in this repository are from before that move, which is why a deploy
-# that looks correctly configured fails with "the CLI cannot see the site": the
-# token is valid, for a different account.
+#   secret   NETLIFY_AUTH_TOKEN    a personal access token of the account that
+#                                  owns the site (User settings > Applications)
+#   secret   BRAINSTACK_SITE_ID    the Netlify site id
+#   variable BRAINSTACK_SITE_URL   the production URL, e.g. https://brain.example.com
 #
-# It stays on the personal account deliberately. Moving it back would change
-# the origin, and every MCP connector already pointing at the-site would
-# have to be reconnected — a bigger cost than the one it saves.
-#
-# So the site id is the script's own default rather than the NETLIFY_SITE_ID
-# secret, which almost certainly still holds the id of the-old-site — now
-# answering 502. A deploy pointed at the wrong site does not announce itself.
-# Set BRAINSTACK_SITE_ID to override. Everything else — DATABASE_URL, the OAuth
-# credentials — lives on the site and is pulled in at build time.
+# DATABASE_URL, the OAuth credentials and the email settings live on the site
+# itself and are pulled in at build time.
 
 on:
   push:
@@ -55,9 +38,13 @@ concurrency:
 jobs:
   deploy:
     name: verify · deploy
+    if: github.repository == 'Impulse-Labs-SAS/brainstack'
     runs-on: ubuntu-latest
+    environment: production
     env:
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      BRAINSTACK_SITE_ID: ${{ secrets.BRAINSTACK_SITE_ID }}
+      BRAINSTACK_SITE_URL: ${{ vars.BRAINSTACK_SITE_URL }}
       # The script defaults to $HOME/brainstack, which is the WSL clone.
       BRAINSTACK_CLONE: ${{ github.workspace }}
     steps:
@@ -94,10 +81,14 @@ jobs:
 
       - name: Deploy to Netlify
         run: |
-          if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
-            echo "::error::Set NETLIFY_AUTH_TOKEN as a repository secret"
-            exit 1
-          fi
+          set -euo pipefail
+          # A missing secret is an empty string, not an error.
+          for name in NETLIFY_AUTH_TOKEN BRAINSTACK_SITE_ID BRAINSTACK_SITE_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is empty or missing in the production environment"
+              exit 1
+            fi
+          done
           # The script builds, checks the function bundles, uploads a draft,
           # verifies the draft answers, and only then promotes it.
           bash scripts/deploy.sh publish
@@ -109,11 +100,9 @@ jobs:
       # workflow this replaces would have checked. And the body is read, not
       # just the status: the platform can answer 401 on its own.
       - name: Smoke test the MCP endpoint
-        env:
-          SITE_URL: https://brain.example.com
         run: |
           set -uo pipefail
-          mcp=$(curl -sS -o /tmp/mcp.txt -w '%{http_code}' -X POST "$SITE_URL/api/mcp" \
+          mcp=$(curl -sS -o /tmp/mcp.txt -w '%{http_code}' -X POST "$BRAINSTACK_SITE_URL/api/mcp" \
             -H 'Content-Type: application/json' \
             -H 'Accept: application/json, text/event-stream' \
             -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' --max-time 30 || echo 000)

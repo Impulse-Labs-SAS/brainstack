@@ -14,7 +14,6 @@ import { SharingService } from './SharingService.js';
 import { createTestDatabase, type TestDatabase } from './testDb.js';
 
 const { users } = pgSchema;
-const hosted = { deployment: 'hosted' as const };
 
 let database: TestDatabase;
 let notes: NoteService;
@@ -32,7 +31,7 @@ beforeEach(async () => {
       .insert(users)
       .values({ id, email: `${id}@x.com`, createdAt: Date.now(), updatedAt: 0 });
   }
-  notes = new NoteService({ db: database.db, cfg: hosted });
+  notes = new NoteService({ db: database.db });
 });
 
 const paths = async (ownerId = 'owner'): Promise<string[]> =>
@@ -101,8 +100,8 @@ describe('a folder name with % or _ matches only itself', () => {
   });
 
   it('a shared tree of `a_b` does not list `aXb`', async () => {
-    const sharing = new SharingService({ db: database.db, deployment: 'hosted' });
-    const reader = new CrossOwnerReader({ sharing, vaultCfg: hosted, db: database.db });
+    const sharing = new SharingService({ db: database.db });
+    const reader = new CrossOwnerReader({ sharing, db: database.db });
     await notes.create('owner', 'a_b/inside.md', 'in');
     await notes.create('owner', 'aXb/outside.md', 'out');
     await sharing.grant({

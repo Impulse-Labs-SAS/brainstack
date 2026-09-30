@@ -11,6 +11,10 @@ export class AppError extends Error {
       | 'UNAUTHORIZED'
       | 'FORBIDDEN'
       | 'RATE_LIMITED'
+      /** A sign-up this instance does not let in. Its own code so the login page can explain it. */
+      | 'SIGNUP_CLOSED'
+      /** The instance lacks something the request needs, such as email. */
+      | 'UNAVAILABLE'
       | 'INTERNAL',
     public readonly status = 500,
   ) {

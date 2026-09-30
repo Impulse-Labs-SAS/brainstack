@@ -51,57 +51,7 @@ beforeEach(async () => {
   await database.reset();
 });
 
-describe('backfillOwnerId in self-host', () => {
-  it('does nothing when there are no nulls', async () => {
-    await seedUser('u1', 'u1@x.com');
-    await seedNote('a.md', 'u1');
-
-    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
-    expect(res).toMatchObject({ skipped: true, reason: 'no-nulls' });
-  });
-
-  it('assigns unowned notes to the only user', async () => {
-    await seedUser('u1', 'u1@x.com');
-    await seedNote('a.md');
-    await seedNote('b.md');
-    await seedNote('c.md', 'u1');
-
-    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
-    expect(res.notesUpdated).toBe(2);
-    expect(res.skipped).toBe(false);
-
-    for (const path of ['a.md', 'b.md', 'c.md']) {
-      expect(await ownerOf(path)).toBe('u1');
-    }
-  });
-
-  it('defers when there is no user yet', async () => {
-    await seedNote('a.md');
-    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
-    expect(res).toMatchObject({ skipped: true, reason: 'no-users' });
-  });
-
-  it('refuses to guess when self-host somehow has two users', async () => {
-    await seedUser('u1', 'u1@x.com');
-    await seedUser('u2', 'u2@x.com');
-    await seedNote('a.md');
-
-    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
-    expect(res).toMatchObject({ skipped: true, reason: 'multiple-users-in-self-host' });
-    expect(await ownerOf('a.md')).toBeNull();
-  });
-
-  it('is idempotent', async () => {
-    await seedUser('u1', 'u1@x.com');
-    await seedNote('a.md');
-
-    await backfillOwnerId(database.db, { deployment: 'self-host', logger });
-    const res = await backfillOwnerId(database.db, { deployment: 'self-host', logger });
-    expect(res).toMatchObject({ skipped: true, reason: 'no-nulls' });
-  });
-});
-
-describe('backfillOwnerId in hosted', () => {
+describe('backfillOwnerId', () => {
   // The sqlite line left these alone for an admin to sort out, because the
   // owner lived in a directory the database could not see. Here the stored path
   // starts with the owner, so an unowned row names its own owner.
@@ -109,7 +59,7 @@ describe('backfillOwnerId in hosted', () => {
     await seedUser('u1', 'u1@x.com');
     await seedNote('u1/a.md');
 
-    const res = await backfillOwnerId(database.db, { deployment: 'hosted', logger });
+    const res = await backfillOwnerId(database.db, { logger });
     expect(res.notesUpdated).toBe(1);
     expect(await ownerOf('u1/a.md')).toBe('u1');
   });
@@ -118,7 +68,43 @@ describe('backfillOwnerId in hosted', () => {
     await seedUser('u1', 'u1@x.com');
     await seedNote('u1/a.md', 'u1');
 
-    const res = await backfillOwnerId(database.db, { deployment: 'hosted', logger });
+    const res = await backfillOwnerId(database.db, { logger });
     expect(res).toMatchObject({ skipped: true, reason: 'no-nulls' });
+  });
+
+  it('is idempotent', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('u1/a.md');
+
+    await backfillOwnerId(database.db, { logger });
+    const res = await backfillOwnerId(database.db, { logger });
+    expect(res).toMatchObject({ skipped: true, reason: 'no-nulls', unattributed: 0 });
+  });
+
+  // An unprefixed path names no account. Claiming it would break the foreign
+  // key and fail the boot; guessing would hand it to the wrong person.
+  it('leaves a note whose first segment is not a user alone, and reports it', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('u1/a.md');
+    await seedNote('Inbox/orphan.md');
+
+    const errors: unknown[] = [];
+    const spy = pino({ level: 'error' }, { write: (line: string) => errors.push(JSON.parse(line)) });
+
+    const res = await backfillOwnerId(database.db, { logger: spy });
+    expect(res.notesUpdated).toBe(1);
+    expect(res.unattributed).toBe(1);
+    expect(await ownerOf('u1/a.md')).toBe('u1');
+    expect(await ownerOf('Inbox/orphan.md')).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ count: 1, sample: ['Inbox/orphan.md'] });
+  });
+
+  it('reports a note whose owner does not match its path', async () => {
+    await seedUser('u1', 'u1@x.com');
+    await seedNote('a.md', 'u1');
+
+    const res = await backfillOwnerId(database.db, { logger });
+    expect(res).toMatchObject({ skipped: true, unattributed: 1 });
   });
 });

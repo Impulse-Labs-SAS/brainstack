@@ -93,7 +93,7 @@ describe('resolveLink', () => {
 });
 
 describe('resolveLink — allowedOwners (cross-border masking)', () => {
-  // Convención hosted: paths empiezan con <userId>/.
+  // Stored paths start with <userId>/.
   const hostedNoteIndex = new Set([
     'alice/proyectos/foo.md',
     'alice/privado/secreto.md',

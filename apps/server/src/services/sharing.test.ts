@@ -1,7 +1,6 @@
 import { pgSchema } from '@brainstack/core/pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { AppError } from '../lib/errors.js';
 
 import { SharingService, normalizeFolderPath, pathFallsUnder } from './SharingService.js';
 import { createTestDatabase, type TestDatabase } from './testDb.js';
@@ -27,7 +26,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await database.reset();
   t = 1_000_000;
-  svc = new SharingService({ db: database.db, deployment: 'hosted', now: () => ++t });
+  svc = new SharingService({ db: database.db, now: () => ++t });
   await seedUser('owner', 'o@x.com');
   await seedUser('alice', 'a@x.com');
   await seedUser('bob', 'b@x.com');
@@ -48,29 +47,7 @@ describe('normalizeFolderPath / pathFallsUnder', () => {
   });
 });
 
-describe('SharingService — self-host', () => {
-  it('canRead/canWrite siempre true; listSharedRoots vacío', async () => {
-    const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
-    expect(await selfHost.canRead('alice', 'owner', 'anything')).toBe(true);
-    expect(await selfHost.canWrite('alice', 'owner', 'anything')).toBe(true);
-    expect(await selfHost.listSharedRoots('alice')).toEqual([]);
-    expect(await selfHost.listMyShares('owner')).toEqual([]);
-  });
-
-  it('grant tira FORBIDDEN en self-host', async () => {
-    const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
-    await expect(
-      selfHost.grant({
-        ownerId: 'owner',
-        sharedWithUserId: 'alice',
-        folderPath: 'x',
-        grantedBy: 'owner',
-      }),
-    ).rejects.toThrow(AppError);
-  });
-});
-
-describe('SharingService — hosted: canRead/canWrite', () => {
+describe('SharingService — canRead/canWrite', () => {
   it('dueño siempre puede leer/escribir', async () => {
     expect(await svc.canRead('owner', 'owner', 'cualquiera/x.md')).toBe(true);
     expect(await svc.canWrite('owner', 'owner', 'cualquiera/x.md')).toBe(true);
@@ -247,13 +224,6 @@ describe("SharingService — writes that name somebody else's shared folder", ()
     expect(await svc.findShadowedShare('bob', 'impulse-labs/nota.md')).toBeNull();
   });
 
-  it('en self-host no aplica: no hay con quién confundirse', async () => {
-    const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
-    expect(await selfHost.findShadowedShare('alice', 'impulse-labs/nota.md')).toBeNull();
-    await expect(
-      selfHost.assertNotShadowingShare('alice', 'impulse-labs/nota.md'),
-    ).resolves.toBeUndefined();
-  });
 });
 
 describe('SharingService — grant / revoke', () => {
@@ -406,8 +376,4 @@ describe('SharingService.revokeUnder', () => {
     expect(invite?.revokedAt).not.toBeNull();
   });
 
-  it('en self-host no hace nada', async () => {
-    const selfHost = new SharingService({ db: database.db, deployment: 'self-host' });
-    expect(await selfHost.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' })).toBe(0);
-  });
 });

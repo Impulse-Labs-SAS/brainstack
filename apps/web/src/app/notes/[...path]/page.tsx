@@ -20,7 +20,6 @@ import { trpc } from '@/lib/trpc';
 import { extractOutline, type OutlineHeading } from '@/lib/outline';
 import { readFlag, writeFlag } from '@/lib/local-flag';
 import { forgetRecent, pushRecent } from '@/lib/recent-notes';
-import { useSharingEnabled } from '@/lib/use-deployment';
 import { usePersistedViewMode } from '@/lib/use-view-mode';
 import {
   attachmentPathToRoute,
@@ -98,8 +97,7 @@ export default function NotePage() {
     { path },
     { enabled: !!urlPath, placeholderData: keepPreviousData },
   );
-  const sharingEnabled = useSharingEnabled();
-  const myShares = trpc.sharing.listMyShares.useQuery(undefined, { enabled: sharingEnabled });
+  const myShares = trpc.sharing.listMyShares.useQuery();
   const update = trpc.notes.update.useMutation();
   const linkMentions = trpc.notes.linkMentions.useMutation();
   const createM = trpc.notes.create.useMutation();
@@ -423,7 +421,7 @@ export default function NotePage() {
     },
     { label: 'Rename', icon: Pencil, run: () => setPrompt('rename') },
     { label: 'Move to…', icon: FolderInput, run: () => setPrompt('move') },
-    ...(sharingEnabled && folder
+    ...(folder
       ? [
           {
             label: `Share folder “${folder.split('/').pop()}”…`,

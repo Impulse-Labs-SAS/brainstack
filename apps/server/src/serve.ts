@@ -36,18 +36,24 @@ async function main(): Promise<void> {
     authorizedEmails: cfg.authorizedEmails,
     // Verification and reset links point at endpoints, which sit behind it.
     apiBasePath: API_BASE_PATH,
-    deployment: cfg.BRAINSTACK_DEPLOYMENT,
-    resendApiKey: cfg.RESEND_API_KEY,
-    emailFrom: cfg.AUTH_EMAIL_FROM,
+    email: cfg.email,
+    openSignup: cfg.OPEN_SIGNUP,
     googleClientId: cfg.GOOGLE_OAUTH_CLIENT_ID,
     googleClientSecret: cfg.GOOGLE_OAUTH_CLIENT_SECRET,
     googleRedirectUri: cfg.GOOGLE_OAUTH_REDIRECT_URI,
   });
 
-  const backfill = await backfillOwnerId(db, {
-    deployment: cfg.BRAINSTACK_DEPLOYMENT,
-    logger,
-  });
+  // Said once, at boot, so whoever runs the instance knows what it cannot do.
+  if (!services.auth.canSendEmail) {
+    logger.warn(
+      'no email configured (RESEND_API_KEY or SMTP_HOST, plus AUTH_EMAIL_FROM): ' +
+        'the first account is created without verification, but nobody else can sign up with a password ' +
+        'and password resets need the reset-password command',
+    );
+  }
+  if (cfg.OPEN_SIGNUP) logger.info('OPEN_SIGNUP is on: anyone who reaches this server can sign up');
+
+  const backfill = await backfillOwnerId(db, { logger });
   if (!backfill.skipped) {
     logger.info({ notesUpdated: backfill.notesUpdated }, 'claimed notes that had no owner');
   }
@@ -71,11 +77,6 @@ async function main(): Promise<void> {
     appHome: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
     // Same OAuth provider as production, so the whole flow is testable locally.
     oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
-    publicConfig: {
-      deployment: cfg.BRAINSTACK_DEPLOYMENT,
-      features: { sharing: cfg.BRAINSTACK_DEPLOYMENT === 'hosted' },
-    },
-    vaultCfg: { deployment: cfg.BRAINSTACK_DEPLOYMENT },
     // Same prefix as production, so a URL that works here works deployed.
     basePath: API_BASE_PATH,
     buildMcpServer: (principal) =>
@@ -92,10 +93,7 @@ async function main(): Promise<void> {
   });
 
   const server = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
-    logger.info(
-      { port: info.port, deployment: cfg.BRAINSTACK_DEPLOYMENT },
-      'BrainStack server listening',
-    );
+    logger.info({ port: info.port }, 'BrainStack server listening');
   });
 
   /*

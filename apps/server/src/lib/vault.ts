@@ -9,23 +9,15 @@
 // So `Inbox/idea.md` for user u_42 is stored as `u_42/Inbox/idea.md`, and the
 // web app, the MCP client and the agent all keep speaking in logical paths.
 // `notes.owner_id` holds the same owner as a column, because a prefix is not
-// something you can index or join on.
-//
-// Self-host has one user and no prefix: both functions are the identity there.
-
-export type Deployment = 'self-host' | 'hosted';
-
-export interface VaultConfig {
-  deployment: Deployment;
-}
+// something you can index or join on. Every instance works this way, whether it
+// has one account or thousands: a vault is always somebody's.
 
 /**
  * Logical to physical. Idempotent: a path that already carries the prefix is
  * returned unchanged, so passing a stored path back through is harmless.
  */
-export function toPhysical(userId: string, logicalPath: string, cfg: VaultConfig): string {
-  if (cfg.deployment === 'self-host') return logicalPath;
-  if (!userId) throw new Error('toPhysical: userId required in hosted');
+export function toPhysical(userId: string, logicalPath: string): string {
+  if (!userId) throw new Error('toPhysical: userId required');
   const norm = logicalPath.replace(/^[\\/]+/, '');
   if (norm === userId || norm.startsWith(`${userId}/`)) return norm;
   return `${userId}/${norm}`;
@@ -38,9 +30,8 @@ export function toPhysical(userId: string, logicalPath: string, cfg: VaultConfig
  * the last line of defence for a query that forgot to filter by owner. A leak
  * shows up as an error rather than as another user's note on screen.
  */
-export function toLogical(userId: string, physicalPath: string, cfg: VaultConfig): string {
-  if (cfg.deployment === 'self-host') return physicalPath;
-  if (!userId) throw new Error('toLogical: userId required in hosted');
+export function toLogical(userId: string, physicalPath: string): string {
+  if (!userId) throw new Error('toLogical: userId required');
   const norm = physicalPath.replace(/^[\\/]+/, '');
   if (norm === userId) return '';
   const prefix = `${userId}/`;
@@ -50,9 +41,8 @@ export function toLogical(userId: string, physicalPath: string, cfg: VaultConfig
   return norm.slice(prefix.length);
 }
 
-/** The owner a stored path belongs to, by convention. Null in self-host. */
-export function ownerIdFromPhysicalPath(physicalPath: string, cfg: VaultConfig): string | null {
-  if (cfg.deployment === 'self-host') return null;
+/** The owner a stored path belongs to, by convention: its first segment. */
+export function ownerIdFromPhysicalPath(physicalPath: string): string | null {
   const segs = physicalPath.replace(/^[\\/]+/, '').split('/');
   return segs[0] || null;
 }

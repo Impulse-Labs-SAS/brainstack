@@ -56,8 +56,8 @@ interface GraphViewProps {
   viewerId: string | null;
   /** Owner id → how to name their vault. */
   vaultNames: ReadonlyMap<string, SharedVaultName>;
-  /** Whether shared vaults are fetched at all; null when sharing is off on this deployment. */
-  includeShared: boolean | null;
+  /** Whether shared vaults are fetched at all. */
+  includeShared: boolean;
   onIncludeSharedChange(include: boolean): void;
 }
 

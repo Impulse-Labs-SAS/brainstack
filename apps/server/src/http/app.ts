@@ -29,7 +29,7 @@ import {
 import { createTotpRouter } from './routes/totp.js';
 import { createTrpcRouter } from './routes/trpc.js';
 import { healthRouter } from './routes/health.js';
-import { createConfigRouter, type PublicConfig } from './routes/config.js';
+import { createConfigRouter } from './routes/config.js';
 import { createInviteRouter } from './routes/invite.js';
 import { buildOptionalAuthMiddleware } from './middleware/auth.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
@@ -39,7 +39,6 @@ import type { SearchService } from '../services/SearchService.js';
 import type { SharingService } from '../services/SharingService.js';
 
 import type { McpPrincipal } from '../mcp/server.js';
-import type { VaultConfig } from '../lib/vault.js';
 
 export interface BuildAppOptions {
   buildMcpServer(principal: McpPrincipal | null): McpServer;
@@ -72,10 +71,6 @@ export interface BuildAppOptions {
   oauth?: { service: OAuthProviderService; issuer: string };
   /** TOTP service. When omitted, /auth/totp/* routes are disabled. */
   totp?: TotpService;
-  /** Public deployment config exposed at GET /api/config. */
-  publicConfig: PublicConfig;
-  /** Deployment mode: decides whether paths carry an owner prefix. */
-  vaultCfg: VaultConfig;
   /**
    * Prefix every route sits behind, e.g. `/api`.
    *
@@ -129,7 +124,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const loginLimiter = opts.loginLimiter ?? createLoginRateLimiter();
 
   app.route('/health', healthRouter);
-  app.route('/config', createConfigRouter(opts.publicConfig));
+  app.route('/config', createConfigRouter());
 
   // /invite/accept/:token corre con optional-auth: el handler maneja
   // los casos logueado/no-logueado y redirige al frontend acorde.

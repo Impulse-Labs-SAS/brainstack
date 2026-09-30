@@ -18,14 +18,14 @@ export interface ResolutionInputs {
   /** All known attachment paths in the brain (posix, relative). */
   attachmentIndex: ReadonlySet<string>;
   /**
-   * Owner_id por cada path conocido (note o attachment). NULL en self-host
-   * para todos. Necesario sólo cuando `allowedOwners` está presente.
+   * Owner id of every known path (note or attachment). NULL only for a row
+   * written before ownership existed. Needed only when `allowedOwners` is set.
    */
   ownerByPath?: ReadonlyMap<string, string | null>;
   /**
-   * Si está, sólo se aceptan resoluciones cuyo owner caiga acá. Targets
-   * fuera del set se degradan a `unresolved` — esto enmascara wikilinks
-   * cross-border en hosted. Si no se pasa, el resolver opera como siempre.
+   * When set, only resolutions whose owner is in it are accepted. Targets
+   * outside it degrade to `unresolved`, which masks wikilinks that cross into
+   * a vault the reader cannot see. When absent, every owner is accepted.
    */
   allowedOwners?: ReadonlySet<string>;
 }

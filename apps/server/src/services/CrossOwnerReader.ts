@@ -11,7 +11,7 @@ import { escapeLike, pgSchema, type PgDb } from '@brainstack/core/pg';
 import { asc, eq, like, or } from 'drizzle-orm';
 
 import { AppError } from '../lib/errors.js';
-import { toPhysical, type VaultConfig } from '../lib/vault.js';
+import { toPhysical } from '../lib/vault.js';
 
 import { buildTree, type NoteRowDto, type TreeNode } from './NoteService.js';
 import type { SharingService } from './SharingService.js';
@@ -29,7 +29,6 @@ export interface CrossOwnerLink {
 
 export interface CrossOwnerReaderOptions {
   sharing: SharingService;
-  vaultCfg: VaultConfig;
   db: PgDb;
 }
 
@@ -38,22 +37,10 @@ const DEFAULT_TREE_DEPTH = 4;
 export class CrossOwnerReader {
   constructor(private readonly opts: CrossOwnerReaderOptions) {}
 
-  /** False in self-host, where there is nobody to read across from. */
-  get enabled(): boolean {
-    return this.opts.vaultCfg.deployment === 'hosted';
-  }
-
-  private requireEnabled(): void {
-    if (!this.enabled) {
-      throw new AppError('reading another vault is not available in a self-hosted instance', 'FORBIDDEN', 403);
-    }
-  }
-
   async getNote(viewerId: string, ownerId: string, path: string): Promise<NoteRowDto> {
-    this.requireEnabled();
     await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
 
-    const physical = toPhysical(ownerId, path, this.opts.vaultCfg);
+    const physical = toPhysical(ownerId, path);
     const [row] = await this.opts.db.select().from(notes).where(eq(notes.path, physical)).limit(1);
 
     if (!row) throw new AppError(`note not found: ${path}`, 'NOT_FOUND', 404);
@@ -74,14 +61,13 @@ export class CrossOwnerReader {
     scopePath: string,
     depth?: number,
   ): Promise<TreeNode> {
-    this.requireEnabled();
     if (!scopePath || scopePath.trim() === '') {
-      throw new AppError('scopePath requerido', 'INVALID_INPUT', 400);
+      throw new AppError('scopePath is required', 'INVALID_INPUT', 400);
     }
     await this.opts.sharing.assertCanRead(viewerId, ownerId, scopePath);
 
     const scope = scopePath.replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
-    const prefix = toPhysical(ownerId, scope, this.opts.vaultCfg);
+    const prefix = toPhysical(ownerId, scope);
 
     // Only inside the shared folder: a grant on one folder must not reveal the
     // shape of the rest of the owner's brain.
@@ -122,10 +108,9 @@ export class CrossOwnerReader {
    * would leak a path out of a folder nobody shared.
    */
   async linksForOwner(viewerId: string, ownerId: string, path: string): Promise<CrossOwnerLink[]> {
-    this.requireEnabled();
     await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
 
-    const sourcePhysical = toPhysical(ownerId, path, this.opts.vaultCfg);
+    const sourcePhysical = toPhysical(ownerId, path);
     const rows = await this.opts.db
       .select({
         sourcePath: links.sourcePath,
@@ -186,10 +171,9 @@ export class CrossOwnerReader {
     ownerId: string,
     path: string,
   ): Promise<CrossOwnerLink[]> {
-    this.requireEnabled();
     await this.opts.sharing.assertCanRead(viewerId, ownerId, path);
 
-    const targetPhysical = toPhysical(ownerId, path, this.opts.vaultCfg);
+    const targetPhysical = toPhysical(ownerId, path);
     const rows = await this.opts.db
       .select({
         sourcePath: links.sourcePath,

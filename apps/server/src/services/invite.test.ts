@@ -29,7 +29,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await database.reset();
   now = 1_000_000;
-  sharing = new SharingService({ db: database.db, deployment: 'hosted', now: () => ++now });
+  sharing = new SharingService({ db: database.db, now: () => ++now });
   email = new CapturingEmailSender();
   svc = new InviteService({
     db: database.db,
