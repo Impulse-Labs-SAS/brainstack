@@ -99,7 +99,8 @@ Semantic versioning, tagged on `main`: `vMAJOR.MINOR.PATCH`.
 
 A release does not deploy anything: every merge to `main` already reached production. It tells
 self-hosters there is a version worth upgrading to, so cut one when something worth announcing has
-landed, not per merge. While on `0.x`, every release is marked as a pre-release.
+landed, not per merge. The version number already says how early it is: `0.x` releases are published
+as normal releases, not pre-releases, so the latest one shows on the repository's front page.
 
 Releases are cut from the web, which creates the tag on publish:
 
@@ -107,7 +108,7 @@ Releases are cut from the web, which creates the tag on publish:
 2. **Tag:** the new version → *Create new tag on publish*. **Target:** `main`.
 3. **Previous tag:** the last release → **Generate release notes**, then add two or three lines on top
    with what matters (and, for a MAJOR, what a self-hoster has to do).
-4. **Set as a pre-release** while on `0.x` → **Publish release**.
+4. Leave **Set as a pre-release** unticked → **Publish release**.
 
 ## Useful commands
 
