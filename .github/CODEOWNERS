@@ -1,0 +1,3 @@
+# Changes under .github/ need a maintainer's approval: the workflows run with
+# the production deploy secrets, and the main ruleset enforces this file.
+/.github/ @flinardelli @DarthBates
