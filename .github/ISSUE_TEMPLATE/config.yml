@@ -1,0 +1,6 @@
+# Blank issues stay open for questions and anything the two forms do not fit.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Impulse-Labs-SAS/brainstack/security/advisories/new
+    about: Report it privately. Only the maintainers see it.

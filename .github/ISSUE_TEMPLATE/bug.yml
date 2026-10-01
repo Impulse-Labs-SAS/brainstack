@@ -1,0 +1,40 @@
+name: Bug
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a security vulnerability? Do not open an issue: use **Report a vulnerability** under the
+        repository's Security tab, where only the maintainers see it.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The steps that reproduce it, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release or commit you are running.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How you run it
+      options:
+        - Docker Compose
+        - Local development
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant server or browser logs, with tokens, keys and email addresses removed.
+      render: text
