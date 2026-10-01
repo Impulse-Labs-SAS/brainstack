@@ -1,4 +1,9 @@
-# BrainStack
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/brainstack-horizontal-dark.svg">
+    <img alt="BrainStack" src="docs/brand/brainstack-horizontal-light.svg" height="48">
+  </picture>
+</h1>
 
 > Shared second brain for humans and AI assistants. Self-hostable. MCP-native.
 

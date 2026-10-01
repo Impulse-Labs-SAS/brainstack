@@ -31,6 +31,7 @@ import { CommandPalette } from '@/components/search/command-palette';
 import { BugReportDialog } from '@/components/support/bug-report-dialog';
 import { ConnectMcpDialog } from '@/components/support/connect-mcp-dialog';
 import { SkillDialog } from '@/components/support/skill-dialog';
+import { BrandMark } from '@/components/ui/brand-mark';
 
 const links = [
   { href: '/notes', label: 'Notes', icon: FileText },
@@ -136,12 +137,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         >
           <div className="flex h-12 w-full items-center px-4 md:justify-center md:px-0">
-            <span
-              aria-hidden
-              className="grid h-7 w-7 place-items-center rounded-lg border border-accent/45 bg-accent/15 font-mono text-[13px] font-bold text-accent-hover"
-            >
-              B
-            </span>
+            <BrandMark size={32} className="shrink-0 text-fg-primary" />
             <span className="ml-2.5 font-mono text-sm font-medium text-fg-primary md:sr-only">
               BrainStack
             </span>
