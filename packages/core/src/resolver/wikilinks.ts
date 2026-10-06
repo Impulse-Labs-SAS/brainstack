@@ -1,6 +1,6 @@
 // Resolve a wikilink target string to an actual note path.
 // Rules (from Modelo-de-datos.md):
-//   1. Match exact path if the wikilink already includes one (e.g. `Zuno/Pricing`).
+//   1. Match exact path if the wikilink already includes one (e.g. `Erebor/Pricing`).
 //   2. Match in the same folder as the source note.
 //   3. Match in any descendant folder of the source's folder.
 //   4. Unique match anywhere in the brain.

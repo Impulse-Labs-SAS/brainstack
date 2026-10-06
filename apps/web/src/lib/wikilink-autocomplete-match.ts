@@ -4,7 +4,7 @@
 // detection and the insert; this owns "what counts as a match, in what order".
 
 export interface WikilinkCandidate {
-  /** Logical path, e.g. `Proyectos/zuno.md`. */
+  /** Logical path, e.g. `Proyectos/erebor.md`. */
   path: string;
   title: string;
 }

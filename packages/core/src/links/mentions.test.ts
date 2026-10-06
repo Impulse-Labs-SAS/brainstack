@@ -8,9 +8,9 @@ describe('mentionTerms', () => {
   it('takes titles and aliases, skipping short ones', () => {
     expect(
       mentionTerms([
-        { target: 'zuno.md', title: 'Zuno ERP', aliases: ['Zuno', 'ERP'] },
+        { target: 'erebor.md', title: 'Erebor ERP', aliases: ['Erebor', 'ERP'] },
       ]).map((t) => t.term),
-    ).toEqual(['Zuno ERP', 'Zuno']);
+    ).toEqual(['Erebor ERP', 'Erebor']);
   });
 
   it('drops a title two notes share, since it cannot say which one is meant', () => {
@@ -18,9 +18,9 @@ describe('mentionTerms', () => {
       mentionTerms([
         { target: 'atlas/arquitectura.md', title: 'Arquitectura' },
         { target: 'nimbus/arquitectura.md', title: 'arquitectura' },
-        { target: 'x.md', title: 'Seek & Destroy' },
+        { target: 'x.md', title: 'There & Back Again' },
       ]),
-    ).toEqual([{ target: 'x.md', term: 'Seek & Destroy' }]);
+    ).toEqual([{ target: 'x.md', term: 'There & Back Again' }]);
   });
 
   it('ignores non-string aliases', () => {
@@ -38,8 +38,8 @@ describe('findMentions', () => {
   });
 
   it('matches whole words only', () => {
-    expect(findMentions('la zunoteca y el prezuno', terms(['z.md', 'zuno']))).toEqual([]);
-    expect(findMentions('usa zuno.', terms(['z.md', 'zuno']))).toHaveLength(1);
+    expect(findMentions('la ereborteca y el preerebor', terms(['z.md', 'erebor']))).toEqual([]);
+    expect(findMentions('usa erebor.', terms(['z.md', 'erebor']))).toHaveLength(1);
   });
 
   it('never matches inside code, links or URLs', () => {
@@ -55,8 +55,8 @@ describe('findMentions', () => {
   });
 
   it('lets the longer term win where two overlap', () => {
-    const found = findMentions('uso Seek & Destroy hoy', terms(['d.md', 'Destroy'], ['sd.md', 'Seek & Destroy']));
-    expect(found.map((m) => m.target)).toEqual(['sd.md']);
+    const found = findMentions('uso There & Back Again hoy', terms(['d.md', 'Again'], ['tba.md', 'There & Back Again']));
+    expect(found.map((m) => m.target)).toEqual(['tba.md']);
   });
 
   it('reports offsets into the original body', () => {

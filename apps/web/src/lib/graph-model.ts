@@ -200,8 +200,8 @@ export function fold(text: string): string {
 }
 
 /**
- * "Arquitectura — Seek & Destroy" reads "Arquitectura" when the node already
- * sits in Seek & Destroy's region. Only a trailing part that names the
+ * "Arquitectura — There & Back Again" reads "Arquitectura" when the node already
+ * sits in There & Back Again's region. Only a trailing part that names the
  * project goes; anything else after a dash is part of the title.
  */
 export function shortLabel(title: string, projectLabel: string | null): string {

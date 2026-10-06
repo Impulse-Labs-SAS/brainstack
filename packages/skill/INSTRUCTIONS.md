@@ -43,9 +43,9 @@ You interact with BrainStack via these MCP tools:
 
 Trigger BrainStack whenever the user's question or action involves their own knowledge, projects, decisions, or people. Examples:
 
-- "What did we decide about pricing for Zuno?"
-- "Tell me what's open in BRUTUS."
-- "Remind me what Pablo said about the August retro."
+- "What did we decide about pricing for Erebor?"
+- "Tell me what's open in GONDOR."
+- "Remind me what Frodo said about the August retro."
 - "Save this idea."
 - The user references a wikilink, tag, or folder by name.
 
@@ -74,9 +74,9 @@ Always verify with the brain before claiming a fact about the user's domain. Nev
 
 Rules:
 
-- Cite the source path of every fact you pulled from the brain (e.g. `Zuno/decisiones/pricing-tiered.md`). Paths give the user something to click on.
+- Cite the source path of every fact you pulled from the brain (e.g. `Erebor/decisiones/pricing-tiered.md`). Paths give the user something to click on.
 - If a tool returns nothing, say so. Don't fabricate a plausible-looking path or summary.
-- If a query is scoped to a folder by intent ("what's in BRUTUS?"), prefer `list_notes(folder="BRUTUS")` over `search_brain`.
+- If a query is scoped to a folder by intent ("what's in GONDOR?"), prefer `list_notes(folder="GONDOR")` over `search_brain`.
 
 ## Shared folders
 
@@ -132,7 +132,7 @@ user — they are the part of the move that needs a human decision.
 
 Sharing hands another person access to everything under a folder, including notes created later. It reaches a real person by email, so it is never a routine action.
 
-- **Always ask first, and echo the exact folder and email back** before calling `share_folder`. "Share `Zuno/` with pablo@example.com — that covers every note under it, now and in the future. Confirm?"
+- **Always ask first, and echo the exact folder and email back** before calling `share_folder`. "Share `Erebor/` with frodo@example.com — that covers every note under it, now and in the future. Confirm?"
 - `permission` is `read` (default) or `write`. **`write`** lets them create and edit inside the folder (they pass your `ownerId` on writes). Re-sharing with the same person **updates** their permission rather than adding a second grant.
 - Someone with a BrainStack account gets access immediately. Anyone else receives an email invitation that **expires in 7 days**.
 - `unshare(path, email)` revokes access and kills pending invitations that would hand it straight back. It is a no-op when the person had no access.
@@ -155,7 +155,7 @@ The "ask before save" pattern:
    - What frontmatter and wikilinks you'd attach.
 4. **Wait for an explicit yes / no / "tweak this first".**
 5. **Execute** the matching MCP tool.
-6. **Confirm where it landed.** "Saved to `Zuno/decisiones/pricing-tiered.md`, tagged `decisión`, links to [[Pablo]]."
+6. **Confirm where it landed.** "Saved to `Erebor/decisiones/pricing-tiered.md`, tagged `decisión`, links to [[Frodo]]."
 
 The only exception: if the user already said "save this to `<path>`" with a destination, skip the proposal and execute. **Never write without asking** for any move, delete, rename, or anything touching more than one note at a time.
 
@@ -257,14 +257,14 @@ title: ... # optional, overrides H1 / filename for the title
 Rules:
 
 - `created` is always present.
-- `tags` is always an array, never a single string. Hierarchical tags use `/`: `proyecto/zuno`, `tipo/decisión`.
+- `tags` is always an array, never a single string. Hierarchical tags use `/`: `proyecto/erebor`, `tipo/decisión`.
 - For decisions: tag it `decisión` AND set `status: decidido`. `list_decisions` matches either, but using both is the convention and surfaces the note in every view.
 - Don't invent decorative fields. If `status` adds no information, leave it out.
 
 ## Tag conventions
 
 - Lowercase, hyphen-joined: `pricing-tiered`, not `PricingTiered`.
-- Hierarchical when useful: `proyecto/zuno`, `tipo/decisión`, `persona/pablo`.
+- Hierarchical when useful: `proyecto/erebor`, `tipo/decisión`, `persona/frodo`.
 - Reuse existing tags before inventing new ones. `list_notes(tag="…")`, `list_notes(facetKey=…, facetValue=…)`, and `search_brain` can show what's in use.
 - ~5 tags max per note. More is noise.
 
@@ -274,7 +274,7 @@ Any frontmatter field other than `tags` becomes a queryable **facet**, automatic
 
 ```yaml
 ---
-tags: [proyecto/zuno]
+tags: [proyecto/erebor]
 technologies: [nextjs, drizzle]
 resources:
   - { value: 'RFC 9111', url: 'https://...' }
@@ -297,7 +297,7 @@ status: decidido
 
 BrainStack follows a PARA + Johnny-Decimal-lite layout:
 
-- Top-level semantic folders (defined by the user) such as `Zuno/`, `BRUTUS/`, `General/`.
+- Top-level semantic folders (defined by the user) such as `Erebor/`, `GONDOR/`, `General/`.
 - Subfolders inside each top-level group items by type: `decisiones/`, `ideas/`, `reuniones/`, `referencias/`.
 - `Attachments/` — all binaries, organised by date (`Attachments/YYYY/MM/`).
 - `Templates/` — note templates, optional.

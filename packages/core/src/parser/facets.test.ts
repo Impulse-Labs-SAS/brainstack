@@ -5,7 +5,7 @@ import { extractFacets, FACET_SKIP_KEYS } from './facets.js';
 describe('extractFacets', () => {
   it('skips tags — it has its own pipeline', () => {
     expect(FACET_SKIP_KEYS.has('tags')).toBe(true);
-    expect(extractFacets({ tags: ['proyecto/zuno'] })).toEqual([]);
+    expect(extractFacets({ tags: ['proyecto/erebor'] })).toEqual([]);
   });
 
   it('indexes a Date as the day, not as its quoted JSON', () => {

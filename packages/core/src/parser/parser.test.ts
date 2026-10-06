@@ -54,7 +54,7 @@ describe('extractLinks', () => {
   }
 
   it('extracts plain wikilinks', () => {
-    const result = links('See [[Pricing]] and [[Zuno/Pricing|the doc]].');
+    const result = links('See [[Pricing]] and [[Erebor/Pricing|the doc]].');
     expect(result).toHaveLength(2);
     expect(result[0]).toMatchObject({
       rawTarget: 'Pricing',
@@ -63,7 +63,7 @@ describe('extractLinks', () => {
       isEmbed: false,
     });
     expect(result[1]).toMatchObject({
-      rawTarget: 'Zuno/Pricing',
+      rawTarget: 'Erebor/Pricing',
       alias: 'the doc',
       kind: 'wikilink',
     });
@@ -119,7 +119,7 @@ describe('extractTags', () => {
   }
 
   it('extracts flat and nested tags', () => {
-    expect(tags('Some #zuno and #proyecto/zuno tags.')).toEqual(['zuno', 'proyecto/zuno']);
+    expect(tags('Some #erebor and #proyecto/erebor tags.')).toEqual(['erebor', 'proyecto/erebor']);
   });
 
   it('does not treat headings as tags', () => {
@@ -144,11 +144,11 @@ describe('parseNote', () => {
   });
 
   it('produces a stable checksum and merges frontmatter tags with body tags', () => {
-    const raw = '---\ntags: [persona/pablo]\n---\n#zuno body\n';
+    const raw = '---\ntags: [persona/frodo]\n---\n#erebor body\n';
     const a = parseNote(raw);
     const b = parseNote(raw);
     expect(a.checksum).toBe(b.checksum);
-    expect(a.tags).toEqual(['persona/pablo', 'zuno']);
+    expect(a.tags).toEqual(['persona/frodo', 'erebor']);
   });
 
   it('changes the checksum when only the frontmatter changes', () => {

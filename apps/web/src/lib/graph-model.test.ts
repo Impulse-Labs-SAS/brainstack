@@ -133,12 +133,12 @@ describe('buildGraphModel', () => {
 });
 
 describe('vaults', () => {
-  const shared = [...nodes, note('Zuno/arquitectura.md', { ownerId: 'ana' }), note('Zuno/pricing.md', { ownerId: 'ana' }), note('Brutus/ux.md', { ownerId: 'bruno' })];
+  const shared = [...nodes, note('Erebor/arquitectura.md', { ownerId: 'ana' }), note('Erebor/pricing.md', { ownerId: 'ana' }), note('Gondor/ux.md', { ownerId: 'bruno' })];
 
   it('puts your notes in your vault and each owner in theirs, with a ring for others', () => {
     const model = build({}, { nodes: shared });
     expect(byId(model, 'Atlas/lector.md')).toMatchObject({ vault: OWN_VAULT, foreign: false });
-    expect(byId(model, 'Zuno/pricing.md')).toMatchObject({ vault: 'ana', foreign: true });
+    expect(byId(model, 'Erebor/pricing.md')).toMatchObject({ vault: 'ana', foreign: true });
   });
 
   it('treats a note without an owner as yours', () => {
@@ -170,8 +170,8 @@ describe('vaults', () => {
       ownerDisplayName,
       ownerEmail: `${ownerId}.smith@example.com`,
     });
-    const names = sharedVaultNames([root('fede', 'Kora'), root('fede', 'Brutus/App'), root('ana', 'Research', 'Ana')]);
-    expect(names.get('fede')).toEqual({ label: 'App, Kora', owner: 'fede.smith' });
+    const names = sharedVaultNames([root('sam', 'Kora'), root('sam', 'Gondor/App'), root('ana', 'Research', 'Ana')]);
+    expect(names.get('sam')).toEqual({ label: 'App, Kora', owner: 'sam.smith' });
     expect(names.get('ana')).toEqual({ label: 'Research', owner: 'Ana' });
   });
 
@@ -279,6 +279,6 @@ describe('noteHref', () => {
   });
 
   it("opens somebody else's note under the shared route, with its owner", () => {
-    expect(noteHref({ path: 'Zuno/Planes y pricing.md', foreign: true, ownerId: 'ana' })).toBe('/notes/shared/ana/Zuno/Planes%20y%20pricing');
+    expect(noteHref({ path: 'Erebor/Planes y pricing.md', foreign: true, ownerId: 'ana' })).toBe('/notes/shared/ana/Erebor/Planes%20y%20pricing');
   });
 });

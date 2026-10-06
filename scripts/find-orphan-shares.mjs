@@ -6,9 +6,9 @@
 // shared with kept a root in their tree that was permanently empty, because
 // nothing could ever be under a folder that is gone.
 //
-// The move across vaults is where it showed. Fede moved a folder Pablo had
-// shared with him into one of his own, which empties the source; Pablo's
-// `Brutus` disappeared from Pablo's vault and stayed in Fede's tree.
+// The move across vaults is where it showed. Sam moved a folder Frodo had
+// shared with him into one of his own, which empties the source; Frodo's
+// `Gondor` disappeared from Frodo's vault and stayed in Sam's tree.
 //
 //   DATABASE_URL=... node scripts/find-orphan-shares.mjs
 //   DATABASE_URL=... node scripts/find-orphan-shares.mjs --fix

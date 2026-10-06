@@ -1,7 +1,7 @@
 // Two users in one database, and what each of them can see.
 //
 // This is the suite that matters most for sharing: isolation here is the only
-// thing between "Pablo's folder" and "everything Pablo wrote". It asserts the
+// thing between "Frodo's folder" and "everything Frodo wrote". It asserts the
 // negative cases — that a listing, a tree, a search and a graph all stop at the
 // owner's boundary — because those are the ones that fail quietly.
 
@@ -56,7 +56,7 @@ beforeEach(async () => {
 
 describe('multi-user isolation', () => {
   beforeEach(async () => {
-    await notes.create('alice', 'Proyectos/zuno.md', '# Zuno\n\npresupuesto de alice');
+    await notes.create('alice', 'Proyectos/erebor.md', '# Erebor\n\npresupuesto de alice');
     await notes.create('alice', 'Privado/diario.md', '# Diario\n\nsecreto de alice');
     await notes.create('bob', 'Proyectos/otro.md', '# Otro\n\npresupuesto de bob');
   });
@@ -65,7 +65,7 @@ describe('multi-user isolation', () => {
     const mine = await notes.list('alice');
     const paths = mine.map((n) => n.path).sort();
 
-    expect(paths).toEqual(['Privado/diario.md', 'Proyectos/zuno.md']);
+    expect(paths).toEqual(['Privado/diario.md', 'Proyectos/erebor.md']);
     // Same logical path as alice's, different owner: it must not appear.
     expect(paths).not.toContain('Proyectos/otro.md');
   });
@@ -91,7 +91,7 @@ describe('multi-user isolation', () => {
     const hits = await search.search('alice', 'presupuesto');
 
     expect(hits).toHaveLength(1);
-    expect(hits[0]?.path).toBe('Proyectos/zuno.md');
+    expect(hits[0]?.path).toBe('Proyectos/erebor.md');
     expect(hits[0]?.ownerId).toBe('alice');
   });
 
@@ -112,7 +112,7 @@ describe('multi-user isolation', () => {
 
 describe('multi-user with a shared folder', () => {
   beforeEach(async () => {
-    await notes.create('alice', 'Proyectos/zuno.md', '# Zuno\n\npresupuesto compartido');
+    await notes.create('alice', 'Proyectos/erebor.md', '# Erebor\n\npresupuesto compartido');
     await notes.create('alice', 'Privado/diario.md', '# Diario\n\npresupuesto privado');
     await sharing.grant({
       ownerId: 'alice',
@@ -133,7 +133,7 @@ describe('multi-user with a shared folder', () => {
       sharedScopes: scopes,
     });
 
-    expect(hits.map((h) => h.path)).toEqual(['Proyectos/zuno.md']);
+    expect(hits.map((h) => h.path)).toEqual(['Proyectos/erebor.md']);
     expect(hits[0]?.ownerId).toBe('alice');
     // The private note matches the query and must still not surface.
     expect(JSON.stringify(hits)).not.toContain('diario');
@@ -145,7 +145,7 @@ describe('multi-user with a shared folder', () => {
   });
 
   it('bob can read a shared note and not a private one', async () => {
-    const note = await crossOwner.getNote('bob', 'alice', 'Proyectos/zuno.md');
+    const note = await crossOwner.getNote('bob', 'alice', 'Proyectos/erebor.md');
     expect(note.body).toContain('compartido');
 
     await expect(
@@ -156,15 +156,15 @@ describe('multi-user with a shared folder', () => {
   it('a backlink from an unshared sibling folder does not leak to bob', async () => {
     // Privado/ is not shared, and this note (distinct from the beforeEach's
     // diario.md) links into the folder that is.
-    await notes.create('alice', 'Privado/secreto.md', '# Secreto\n\nVer [[Proyectos/zuno]].');
+    await notes.create('alice', 'Privado/secreto.md', '# Secreto\n\nVer [[Proyectos/erebor]].');
 
-    const asOwner = await listBacklinksSafely('alice', 'alice', 'Proyectos/zuno.md', {
+    const asOwner = await listBacklinksSafely('alice', 'alice', 'Proyectos/erebor.md', {
       notes,
       crossOwner,
     });
     expect(asOwner.map((b) => b.sourcePath)).toContain('Privado/secreto.md');
 
-    const asBob = await listBacklinksSafely('bob', 'alice', 'Proyectos/zuno.md', {
+    const asBob = await listBacklinksSafely('bob', 'alice', 'Proyectos/erebor.md', {
       notes,
       crossOwner,
     });
@@ -180,7 +180,7 @@ describe('multi-user with a shared folder', () => {
     });
 
     await expect(
-      crossOwner.getNote('bob', 'alice', 'Proyectos/zuno.md'),
+      crossOwner.getNote('bob', 'alice', 'Proyectos/erebor.md'),
     ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
   });
 });

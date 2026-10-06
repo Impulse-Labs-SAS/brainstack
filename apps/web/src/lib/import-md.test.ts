@@ -31,7 +31,7 @@ describe('importMarkdownFiles', () => {
   it('crea una nota con el contenido literal del archivo', async () => {
     // El front-matter viaja tal cual: reescribirlo aquí sería adivinar por
     // encima del parser de packages/core.
-    const content = '---\ntags: [reunión]\n---\n\nVer [[Brutus]]\n';
+    const content = '---\ntags: [reunión]\n---\n\nVer [[Gondor]]\n';
     const rec = recorder();
 
     const summary = await importMarkdownFiles([file('Reunión.md', content)], 'Inbox', rec.createNote);

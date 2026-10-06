@@ -646,8 +646,8 @@ export class NoteService {
 
     if (asNote) {
       const saved = await this.asCaller(ownerId, () => this.store.move(from, to));
-      // Logical, not physical: a wikilink says `[[Brutus/nota]]`, never
-      // `[[u_42/Brutus/nota]]`. Passing the stored path meant only a changed
+      // Logical, not physical: a wikilink says `[[Gondor/nota]]`, never
+      // `[[u_42/Gondor/nota]]`. Passing the stored path meant only a changed
       // basename ever matched, and moving a note between folders left every
       // full-path link pointing at where it used to be.
       await rewriteLinkTargets(this.bodySource(ownerId), [
@@ -758,7 +758,7 @@ export class NoteService {
    * `move` cannot do this and should not: it resolves both ends against one
    * owner, which is what makes an ordinary move safe. Crossing is a different
    * operation with a cost `move` does not have, and the cost is links. A
-   * wikilink says `[[Brutus/nota]]`; it has no way to say whose Brutus. So a
+   * wikilink says `[[Gondor/nota]]`; it has no way to say whose Gondor. So a
    * link that used to cross what is now a vault boundary cannot be rewritten
    * into something correct — it can only be reported. Both directions are:
    * links inside what moved that pointed at notes left behind, and notes left

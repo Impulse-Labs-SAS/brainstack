@@ -326,7 +326,7 @@ export class SharingService {
    * name.
    *
    * Grants nested inside come along, keeping their depth — a share on
-   * `Brutus/App` becomes one on `Archivo/Brutus/App`.
+   * `Gondor/App` becomes one on `Archivo/Gondor/App`.
    *
    * Nobody gains access here. Every grant keeps its owner, its recipient and
    * its permission, and only the path it names changes.

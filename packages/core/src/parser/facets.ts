@@ -2,7 +2,7 @@
 // lifted from a frontmatter field other than `tags`, which already has its
 // own pipeline (parser/tags.ts). There is no allowlist of recognised keys —
 // `technologies: [nextjs, drizzle]`, `resources: [{url, label}]`,
-// `status: decidido`, `aliases: [Zuno]` all fall out of the same rule, which
+// `status: decidido`, `aliases: [Erebor]` all fall out of the same rule, which
 // is what lets faceted browsing and "notes related by shared technology"
 // work on whatever fields a vault actually uses, with nothing to register
 // first.
