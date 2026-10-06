@@ -21,21 +21,23 @@ problem is what we can weigh; there is often more than one way to solve it.
 Do not report a vulnerability in a public issue. Use **Report a vulnerability** under the repository's
 [Security tab](https://github.com/Impulse-Labs-SAS/brainstack/security) instead — only the maintainers see it.
 
-## Code starts with an issue, not a pull request
+## Code is written by the team
 
-Review time is the scarcest thing this project has. So:
+BrainStack is open source, but not open to code contributions. Every line in this repository is written by the
+Impulse Labs team, so the copyright of the whole codebase stays in one place and the project's licensing stays
+ours to decide.
 
-1. Open an issue describing the change, or comment on an existing one saying you would like to take it.
-2. Wait for a maintainer to agree on the approach.
-3. Then open the pull request, linking the issue.
+That is why we do not accept pull requests from outside the team. One opened anyway is closed with a pointer
+back here. It is not that your work is unwelcome. A merged pull request would make you a copyright holder of
+BrainStack, and we would rather not ask anyone to sign their rights away.
 
-Pull requests that skip the first two steps may be closed without review. It is not that they are unwelcome —
-it is that a change nobody agreed on is the most expensive kind to review, and the likeliest to be declined
-after you have done the work.
+Your ideas are welcome, though, and they are how the project moves. If you have found a bug or know how to fix
+it, open an issue and describe the problem and the fix you have in mind. We weigh it, and if we take it on, we
+write the code ourselves. Please do not paste code meant for the repository into an issue; describe it instead.
 
-Typo and documentation fixes are the exception: send those straight away.
+You are free to fork BrainStack and change it under the terms of the license.
 
-## Working on the code
+## Running it from source
 
 You need Node 20.10+ and pnpm 10.
 
@@ -47,23 +49,14 @@ pnpm test
 pnpm build
 ```
 
-Those four are exactly what CI runs, so a pull request that passes them locally will pass there. The tests need
-no database: they run on PGlite, a real Postgres running in process. To run the app itself you need a
-`DATABASE_URL` — see [`.env.example`](.env.example).
+Those four are exactly what CI runs. The tests need no database: they run on PGlite, a real Postgres running
+in process. To run the app itself you need a `DATABASE_URL` — see [`.env.example`](.env.example).
 
-Before you write code, read the **Non-negotiable rules** in [CLAUDE.md](CLAUDE.md). They are written for AI
-assistants, but they bind everyone: most of them exist because breaking them once gave someone access they should
-not have had, or took it away from someone who should.
-
-A pull request is ready when:
-
-- it does one thing, and its commits follow [Conventional Commits](https://www.conventionalcommits.org/)
-  (`feat:`, `fix:`, `docs:`, `test:`, `chore:`);
-- a behaviour change comes with a test, and a bug fix with a test that failed before the fix;
-- `pnpm format` has been run.
+Before you change the code in your fork, read the **Non-negotiable rules** in [CLAUDE.md](CLAUDE.md). Most of
+them exist because breaking them once gave someone access they should not have had, or took it away from
+someone who should.
 
 ## License
 
-BrainStack is licensed under the [GNU Affero General Public License v3.0](LICENSE). By contributing, you agree
-that your contribution is licensed under it too. You keep the copyright of what you contribute; there is no
-agreement to sign.
+BrainStack is copyright Impulse Labs SAS and licensed under the
+[GNU Affero General Public License v3.0](LICENSE).

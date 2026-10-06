@@ -123,11 +123,11 @@ Start with [CLAUDE.md](CLAUDE.md). It holds the stack, the workspaces, and the n
 
 ## License
 
-BrainStack is free software, released under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). You can use it, modify it and self-host it, for yourself or for your company, commercially or not. If you run a modified version as a service for other people, you must offer them its source code under the same license.
+BrainStack is copyright Impulse Labs SAS. It is free software, released under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). You can use it, modify it and self-host it, for yourself or for your company, commercially or not. If you run a modified version as a service for other people, you must offer them its source code under the same license.
 
 ## Contributing
 
-Issues are open to everyone. Code contributions start with an issue, not a pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
+BrainStack is open source, but not open to code contributions: all of its code is written by the Impulse Labs team, and pull requests from outside it are not accepted. Issues are open to everyone, and they are how the project moves: bugs, ideas and fixes you have in mind are all welcome there. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Built by Impulse Labs
 

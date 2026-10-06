@@ -26,9 +26,10 @@ description: "Git conventions for BrainStack: branch names, Conventional Commits
 `claude/*` branches are created by Claude Code sessions automatically. Before the first edit on any
 branch, check it is based on current `main` — see `.claude/rules/branching.md`.
 
-**Contributors without write access** fork the repository, branch in the fork, and open the pull
-request against `Impulse-Labs-SAS/brainstack:main`. Code changes start with an agreed issue — see
-`CONTRIBUTING.md`.
+**Only the Impulse Labs team writes code here.** Pull requests from outside the team are closed with a
+pointer to `CONTRIBUTING.md` (`.github/workflows/close-outside-prs.yml` does it on open), never
+merged: the copyright of the whole codebase stays with Impulse Labs SAS. An idea or a fix proposed
+in an issue is reimplemented by the team, never copied from it.
 
 ## Commits — Conventional Commits, in English
 
@@ -81,6 +82,8 @@ Pull request bodies written with Claude Code end with:
 - **Title:** same format as a commit subject.
 - **Body:** what changed, why, how it was tested (commands run, and anything verified by hand), and
   what a reviewer should look at first. Note anything only a real deployment can verify.
+- **Ready when** it does one thing, a behaviour change comes with a test (a bug fix with a test that
+  failed before the fix), and `pnpm format` has been run.
 - **CI green before merge:** lint, typecheck, test, build, and the Docker images.
 - **Closes the issue:** the body says `Closes #N`, so merging closes it.
 - **Same label as its issue** (`bug`, `enhancement`, `documentation`): release notes are grouped by it
