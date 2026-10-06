@@ -38,10 +38,12 @@ export { linkSnippet } from './links/snippet.js';
 export {
   findMentions,
   foldForMatch,
+  indexMentionTerms,
   linkMentions,
   mentionSnippet,
   mentionTerms,
   MIN_MENTION_LENGTH,
+  type AmbiguousTerm,
   type Mention,
   type MentionCandidate,
   type MentionTerm,

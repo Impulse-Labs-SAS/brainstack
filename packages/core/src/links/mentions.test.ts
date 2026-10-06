@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { findMentions, linkMentions, mentionSnippet, mentionTerms } from './mentions.js';
+import {
+  findMentions,
+  indexMentionTerms,
+  linkMentions,
+  mentionSnippet,
+  mentionTerms,
+} from './mentions.js';
 
 const terms = (...pairs: Array<[string, string]>) => pairs.map(([target, term]) => ({ target, term }));
 
@@ -25,6 +31,28 @@ describe('mentionTerms', () => {
 
   it('ignores non-string aliases', () => {
     expect(mentionTerms([{ target: 'a.md', title: 'Atlas', aliases: [42, null] }])).toHaveLength(1);
+  });
+});
+
+describe('indexMentionTerms', () => {
+  it('reports a shared title with every note it names, instead of dropping it', () => {
+    const { terms, ambiguous } = indexMentionTerms([
+      { target: 'nimbus/arquitectura.md', title: 'arquitectura' },
+      { target: 'atlas/arquitectura.md', title: 'Arquitectura' },
+      { target: 'x.md', title: 'There & Back Again' },
+    ]);
+    expect(terms).toEqual([{ target: 'x.md', term: 'There & Back Again' }]);
+    expect(ambiguous).toEqual([
+      { term: 'arquitectura', targets: ['atlas/arquitectura.md', 'nimbus/arquitectura.md'] },
+    ]);
+  });
+
+  it('never reports a short title as ambiguous either', () => {
+    const { ambiguous } = indexMentionTerms([
+      { target: 'a.md', title: 'ERP' },
+      { target: 'b.md', title: 'ERP' },
+    ]);
+    expect(ambiguous).toEqual([]);
   });
 });
 

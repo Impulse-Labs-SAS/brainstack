@@ -82,6 +82,26 @@ function blockedMask(body: string): Uint8Array {
  * so it is left out rather than guessed.
  */
 export function mentionTerms(candidates: readonly MentionCandidate[]): MentionTerm[] {
+  return indexMentionTerms(candidates).terms;
+}
+
+/** A title or alias that names more than one note, with every note it names. */
+export interface AmbiguousTerm {
+  term: string;
+  targets: string[];
+}
+
+/**
+ * `mentionTerms`, plus the terms it leaves out for naming several notes.
+ *
+ * Linking never wants those, but a reader of free text does: "Arquitectura"
+ * in a prompt is a reference the vault cannot settle on its own, and saying
+ * so — with the candidates — is better than not seeing it at all.
+ */
+export function indexMentionTerms(candidates: readonly MentionCandidate[]): {
+  terms: MentionTerm[];
+  ambiguous: AmbiguousTerm[];
+} {
   const byFolded = new Map<string, { term: string; targets: Set<string> }>();
   for (const c of candidates) {
     const names = [c.title, ...(c.aliases ?? [])].filter((n): n is string => typeof n === 'string');
@@ -94,11 +114,13 @@ export function mentionTerms(candidates: readonly MentionCandidate[]): MentionTe
       byFolded.set(key, entry);
     }
   }
-  const out: MentionTerm[] = [];
+  const terms: MentionTerm[] = [];
+  const ambiguous: AmbiguousTerm[] = [];
   for (const { term, targets } of byFolded.values()) {
-    if (targets.size === 1) out.push({ target: [...targets][0]!, term });
+    if (targets.size === 1) terms.push({ target: [...targets][0]!, term });
+    else ambiguous.push({ term, targets: [...targets].sort() });
   }
-  return out;
+  return { terms, ambiguous };
 }
 
 /** Every unlinked mention of any of `terms` in `body`, in body order. */
