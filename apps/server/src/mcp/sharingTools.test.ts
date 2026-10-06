@@ -416,6 +416,28 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(value).toMatchObject({ incoming: [{ path: 'otra.md', text: 'Atlas', count: 1 }] });
   });
 
+  it('gather_context resolves a text against the caller’s own vault only', async () => {
+    const owner = await clientFor(OWNER.id);
+    const frodo = await clientFor(FRODO.id);
+    await call(owner, 'create_note', { path: 'Erebor.md', content: '# Erebor\n\nnot frodo’s' });
+    await call(frodo, 'create_note', { path: 'Atlas.md', content: '# Atlas\n\nsee [[otra]]' });
+    await call(frodo, 'create_note', { path: 'otra.md', content: '# Otra' });
+
+    const { value, error } = await call(frodo, 'gather_context', {
+      text: 'Compare Atlas with Erebor.',
+      terms: ['quarterly'],
+    });
+    expect(error).toBeUndefined();
+    expect(value).toMatchObject({
+      notes: [
+        { path: 'Atlas.md', reason: 'the text says "Atlas"' },
+        { path: 'otra.md', reason: 'linked from Atlas' },
+      ],
+      unresolved: [{ term: 'quarterly', reason: 'no-match' }],
+      coverage: { resolved: 1, total: 2 },
+    });
+  });
+
   it('list_facets returns one note’s facets, or browses every value when path is omitted', async () => {
     const frodo = await clientFor(FRODO.id);
     await call(frodo, 'create_note', {

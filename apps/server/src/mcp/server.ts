@@ -14,6 +14,13 @@ import { AppError } from '../lib/errors.js';
 
 import type { AuthService } from '../services/AuthService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
+import {
+  gatherContext,
+  MAX_DEPTH,
+  MAX_TERMS,
+  MAX_TEXT_CHARS,
+} from '../services/gatherContext.js';
+import { MAX_MAX_CHARS } from '../services/contextCrawl.js';
 import type { InviteService } from '../services/InviteService.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
@@ -573,6 +580,29 @@ export function buildMcpServer({
       try {
         const userId = requireUserId();
         return JSON_TEXT(await notes.unlinkedMentions(userId, path));
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gather_context',
+    {
+      title: 'Gather context for a text',
+      description:
+        'Resolve a prompt, brief or spec against the vault in one call, instead of searching piece by piece. Pass the text, and in `terms` the phrases in it that are vague (no clear note behind them). Returns `notes`: the notes the text names by title or alias, the best full-text hits for each term, and the notes those link to or from (`depth` hops, default 1), ranked — named > search hit > linked, decisions weigh extra — each with `reason`, `isDecision` and an `excerpt`, all within `maxChars`. Returns `unresolved`: terms that matched nothing, and titles the text uses that several notes share (with their `candidates`). Never guess those: ask the user. `coverage` is how many references were settled. Read-only. Own vault only; does not take `ownerId`.',
+      inputSchema: {
+        text: z.string().min(1).max(MAX_TEXT_CHARS),
+        terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),
+        depth: z.number().int().min(0).max(MAX_DEPTH).optional(),
+        maxChars: z.number().int().min(500).max(MAX_MAX_CHARS).optional(),
+      },
+    },
+    async (input) => {
+      try {
+        const userId = requireUserId();
+        return JSON_TEXT(await gatherContext({ notes, search }, userId, input));
       } catch (err) {
         return toMcpError(err);
       }
