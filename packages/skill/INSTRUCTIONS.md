@@ -21,6 +21,7 @@ You interact with BrainStack via these MCP tools:
 - `list_facets(path?, key?, ownerId?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
 - `list_unlinked_mentions(path)` — where a note is named without a wikilink: `incoming` (other notes whose text says its title or an alias) and `outgoing` (titles its own text says); **own vault only** (no `ownerId`)
 - `list_decisions(folder?, limit?, ownerId?)` — notes tagged `decisión`/`decision` or with frontmatter `status: decidido` (via facets)
+- `gather_context(text, terms?, depth?, maxChars?)` — the vault context a prompt, brief or spec refers to, in one call: the notes it names or links, the best hits for its vague `terms`, what those link to, and what it could not resolve; **own vault only** (no `ownerId`). See **Grounding a prompt or brief**
 - `list_shared_with_me()` — folders other people shared with you (`ownerId`, permission per row)
 - `get_brainstack_guide()` — returns this document at runtime
 
@@ -77,6 +78,18 @@ Rules:
 - Cite the source path of every fact you pulled from the brain (e.g. `Erebor/decisiones/pricing-tiered.md`). Paths give the user something to click on.
 - If a tool returns nothing, say so. Don't fabricate a plausible-looking path or summary.
 - If a query is scoped to a folder by intent ("what's in GONDOR?"), prefer `list_notes(folder="GONDOR")` over `search_brain`.
+
+## Grounding a prompt or brief
+
+When the user hands you a prompt, brief, spec or task description to work from — "write the Q4 memo from this", "here's the ticket, implement it" — the context it relies on is usually already in the vault. Gather it in one call instead of searching piece by piece, and ask about what is missing instead of filling it in.
+
+1. **Classify** the text as you read it. Each phrase is a *claim* (something stated as fact), an *owner* (a person or team), a *file* (a note, doc or path), an *approval* (something decided or still to decide), or *vague* (it points at something without saying what: "the usual escalation", "like last time", "the pricing thing").
+2. **Call `gather_context` once**, with the full text and the vague phrases as `terms`. Leave `depth` at 1 unless the user wants the wider picture; raise `maxChars` only if the answer needs long excerpts.
+3. **Use what came back.** `notes` is ranked: named in the text first, then search hits for your terms, then what they link to; decisions weigh extra (`isDecision`). Each has a `reason`. Rely on those notes and cite them by path, like any other fact from the brain. An `excerpt` with `truncated: true` is a start, not the note: `get_note` it before quoting the rest.
+4. **Ask only about `unresolved`**, as one short list of questions. A `no-match` is a gap — ask what it is, or offer to create the note. An `ambiguous` comes with `candidates` — ask which one; never pick for the user. This is the same rule as wikilink discipline: a reference you could not settle is reported, not guessed.
+5. **Report coverage** in one line before you start the work: "resolved 9 of 11 references from your notes; 2 need you". `coverage` gives both numbers.
+
+Don't use it for a single question with one obvious target — `search_brain` or `get_note` is enough there. It reads your own vault only; for a folder shared with you, search with `scope="shared"` as usual.
 
 ## Shared folders
 
