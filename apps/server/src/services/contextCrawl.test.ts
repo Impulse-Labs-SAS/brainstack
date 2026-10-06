@@ -93,6 +93,11 @@ describe('excerpt', () => {
     });
   });
 
+  it('never splits an emoji in two', () => {
+    const { text } = excerpt('a😀bcdefghijklmnop', 3);
+    expect(text).toBe('a…');
+  });
+
   it('cuts a long body at a word boundary and says so', () => {
     const { text, truncated } = excerpt('alpha beta gamma delta epsilon', 18);
     expect(truncated).toBe(true);

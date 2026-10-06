@@ -11,7 +11,15 @@
 // Own vault only, like `unlinkedMentions` and `listRelated`. Scoring lives in
 // contextCrawl.ts; this file only reads.
 
-import { findMentions, foldForMatch, indexMentionTerms, type MentionTerm } from '@brainstack/core';
+import {
+  buildCodeMask,
+  extractLinks,
+  findMentions,
+  foldForMatch,
+  indexMentionTerms,
+  resolveLink,
+  type MentionTerm,
+} from '@brainstack/core';
 
 import type { NoteService } from './NoteService.js';
 import type { SearchService } from './SearchService.js';
@@ -19,6 +27,7 @@ import {
   CandidateSet,
   DEFAULT_MAX_CHARS,
   MAX_MAX_CHARS,
+  DIGEST_BODY_CHARS,
   MAX_NOTES,
   NAMED_SCORE,
   SEARCH_HITS_PER_TERM,
@@ -35,6 +44,10 @@ export const MAX_TERMS = 30;
 export const MAX_DEPTH = 2;
 /** Bodies read before packing: enough for the budget, with room for decisions to move up. */
 const DIGEST_LIMIT = MAX_NOTES * 2;
+/** Hits asked of search per term before keeping the caller's own. */
+const SEARCH_CANDIDATES = 25;
+/** Terms searched at the same time. */
+const SEARCH_BATCH = 4;
 
 export interface GatherContextInput {
   text: string;
@@ -85,6 +98,49 @@ export async function gatherContext(
   const titleOf = new Map(index.map((n) => [n.path, n.title]));
   const title = (path: string) => titleOf.get(path) ?? path;
 
+  // -- Seeds: what the text links to ----------------------------------------
+  // `[[Note]]` is the plainest way a prompt can point at a note, and the one
+  // mention matching skips on purpose (it never looks inside a link). So links
+  // are resolved the way the vault resolves them, from the root.
+  const set = new CandidateSet();
+  const named = new Map<string, { text: string; count: number }>();
+  const unresolved: UnresolvedReference[] = [];
+  const settledTerms = new Set<string>();
+  const nameSeed = (path: string, said: string) => {
+    const entry = named.get(path) ?? { text: said, count: 0 };
+    entry.count += 1;
+    named.set(path, entry);
+    settledTerms.add(foldForMatch(said));
+  };
+
+  const noteIndex = new Set(index.map((n) => n.path));
+  const linkCtx = { sourcePath: 'prompt.md', noteIndex, attachmentIndex: new Set<string>() };
+  const linkSeen = new Set<string>();
+  for (const link of extractLinks(text, buildCodeMask(text))) {
+    const said = link.alias ?? link.rawTarget;
+    const resolved = resolveLink(link, linkCtx);
+    if (resolved.targetType === 'note' && !resolved.ambiguous) {
+      nameSeed(resolved.targetPath, said);
+      continue;
+    }
+    if (resolved.targetType === 'attachment') continue;
+    const key = foldForMatch(link.rawTarget);
+    if (linkSeen.has(key)) continue;
+    linkSeen.add(key);
+    settledTerms.add(foldForMatch(said));
+    unresolved.push(
+      resolved.ambiguous
+        ? {
+            term: said,
+            reason: 'ambiguous',
+            candidates: resolved.candidates
+              .filter((p) => noteIndex.has(p))
+              .map((path) => ({ path, title: title(path) })),
+          }
+        : { term: said, reason: 'no-match' },
+    );
+  }
+
   // -- Seeds: what the text names --------------------------------------------
   const { terms: mentionTerms, ambiguous } = indexMentionTerms(
     index.map((n) => ({ target: n.path, title: n.title, aliases: n.aliases })),
@@ -95,51 +151,37 @@ export async function gatherContext(
     ...mentionTerms,
     ...ambiguous.map((a, i) => ({ target: `${AMBIGUOUS}${i}`, term: a.term })),
   ];
-
-  const set = new CandidateSet();
-  const named = new Map<string, { text: string; count: number }>();
-  const unresolved: UnresolvedReference[] = [];
   const ambiguousSeen = new Set<number>();
-  for (const m of findMentions(text, searchable)) {
-    if (m.target.startsWith(AMBIGUOUS)) {
-      const i = Number(m.target.slice(AMBIGUOUS.length));
-      if (ambiguousSeen.has(i)) continue;
-      ambiguousSeen.add(i);
-      unresolved.push({
-        term: m.text,
-        reason: 'ambiguous',
-        candidates: ambiguous[i]!.targets.map((path) => ({ path, title: title(path) })),
-      });
+  for (const m of findMentions(withoutCodeMarkers(text), searchable)) {
+    if (!m.target.startsWith(AMBIGUOUS)) {
+      nameSeed(m.target, m.text);
       continue;
     }
-    const entry = named.get(m.target) ?? { text: m.text, count: 0 };
-    entry.count += 1;
-    named.set(m.target, entry);
+    const i = Number(m.target.slice(AMBIGUOUS.length));
+    if (ambiguousSeen.has(i)) continue;
+    ambiguousSeen.add(i);
+    settledTerms.add(foldForMatch(m.text));
+    unresolved.push({
+      term: m.text,
+      reason: 'ambiguous',
+      candidates: ambiguous[i]!.targets.map((path) => ({ path, title: title(path) })),
+    });
   }
   for (const [path, { text: said, count }] of named) {
     set.offer({ path, score: NAMED_SCORE, via: { kind: 'named', text: said, count } });
   }
 
   // -- Seeds: what the vague phrases find ------------------------------------
-  const searched = await Promise.all(
-    terms.map(async (term) => ({
-      term,
-      hits: await deps.search.search(ownerId, term, {
-        limit: SEARCH_HITS_PER_TERM,
-        includeMine: true,
-        sharedScopes: [],
-      }),
-    })),
-  );
+  // A term the text already named or linked is not a second reference.
+  const vague = terms.filter((t) => !settledTerms.has(foldForMatch(t)));
   let termsResolved = 0;
-  for (const { term, hits } of searched) {
-    const own = hits.filter((h) => h.ownerId === ownerId);
-    if (own.length === 0) {
+  for (const { term, hits } of await searchTerms(deps.search, ownerId, vague)) {
+    if (hits.length === 0) {
       unresolved.push({ term, reason: 'no-match' });
       continue;
     }
     termsResolved += 1;
-    own.forEach((hit, rank) => {
+    hits.forEach((hit, rank) => {
       set.offer({ path: hit.path, score: searchScore(rank), via: { kind: 'search', term, rank } });
     });
   }
@@ -157,13 +199,14 @@ export async function gatherContext(
   // -- Read the strongest, then pack ----------------------------------------
   const strongest = set
     .all()
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, DIGEST_LIMIT);
   const digests = new Map<string, Digest>(
     (
       await deps.notes.contextDigests(
         ownerId,
         strongest.map((c) => c.path),
+        DIGEST_BODY_CHARS,
       )
     ).map((d) => [d.path, d]),
   );
@@ -174,7 +217,7 @@ export async function gatherContext(
     unresolved,
     coverage: {
       resolved: named.size + termsResolved,
-      total: named.size + ambiguousSeen.size + terms.length,
+      total: named.size + unresolved.length + termsResolved,
     },
     budget: {
       maxChars,
@@ -182,6 +225,51 @@ export async function gatherContext(
       notesLeftOut: packed.dropped + Math.max(0, set.all().length - strongest.length),
     },
   };
+}
+
+/**
+ * Full-text hits for each term, own notes only, a few terms at a time.
+ *
+ * Search ranks across every vault and filters by owner afterwards, so a term
+ * asked for three hits can come back empty on a busy instance while the
+ * caller's notes do match. Asking for more and trimming here is what keeps
+ * "no-match" honest. Batched, not all at once: each query highlights every row
+ * it matches, and thirty of those together would hold the pool for everyone.
+ */
+async function searchTerms(
+  search: SearchService,
+  ownerId: string,
+  terms: readonly string[],
+): Promise<Array<{ term: string; hits: Array<{ path: string }> }>> {
+  const out: Array<{ term: string; hits: Array<{ path: string }> }> = [];
+  for (let i = 0; i < terms.length; i += SEARCH_BATCH) {
+    const batch = terms.slice(i, i + SEARCH_BATCH);
+    out.push(
+      ...(await Promise.all(
+        batch.map(async (term) => {
+          const hits = await search.search(ownerId, term, {
+            limit: SEARCH_CANDIDATES,
+            includeMine: true,
+            sharedScopes: [],
+          });
+          return {
+            term,
+            hits: hits.filter((h) => h.ownerId === ownerId).slice(0, SEARCH_HITS_PER_TERM),
+          };
+        }),
+      )),
+    );
+  }
+  return out;
+}
+
+/**
+ * The text with backticks and fence lines removed. A prompt that writes
+ * `Billing service` in code is still naming the note; mention matching would
+ * skip it, because in a note body code is where a name must never be linked.
+ */
+function withoutCodeMarkers(text: string): string {
+  return text.replace(/^[ \t]*(`{3,}|~{3,}).*$/gm, '').replace(/`/g, ' ');
 }
 
 /** Trimmed, non-empty, and each phrase once however it was cased or accented. */

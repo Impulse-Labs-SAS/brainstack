@@ -49,6 +49,12 @@ export const MAX_NOTES = 40;
 /** A seed gets a longer excerpt than a note reached by a link. */
 export const SEED_EXCERPT_CHARS = 1_500;
 export const LINKED_EXCERPT_CHARS = 500;
+/**
+ * Characters of each body read from the store: more than any excerpt uses, so
+ * `truncated` stays true for a body longer than its excerpt, and no more, so a
+ * vault with a few huge imported notes does not ship them whole on every call.
+ */
+export const DIGEST_BODY_CHARS = SEED_EXCERPT_CHARS + 500;
 /** Below this, a truncated excerpt says too little to be worth its place. */
 export const MIN_EXCERPT_CHARS = 120;
 
@@ -166,7 +172,9 @@ export function excerpt(body: string, max: number): { text: string; truncated: b
   const trimmed = body.trim();
   if (trimmed.length <= max) return { text: trimmed, truncated: false };
   // One character is kept for the ellipsis, so `max` is a ceiling, not a target.
-  const cut = trimmed.slice(0, Math.max(0, max - 1));
+  let cut = trimmed.slice(0, Math.max(0, max - 1));
+  // Never split a surrogate pair: half an emoji is not valid text to hand on.
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
   const lastSpace = cut.search(/\s\S*$/);
   const text = (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd();
   return { text: `${text}…`, truncated: true };

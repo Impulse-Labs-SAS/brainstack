@@ -141,6 +141,41 @@ describe('gatherContext', () => {
     expect(result.notes[0]!.truncated).toBe(true);
   });
 
+  it('resolves wikilinks in the text, and names in code', async () => {
+    await notes.create(ME, 'specs/atlas.md', '# Project Atlas');
+    await notes.create(ME, 'billing.md', '# Billing service');
+
+    const result = await gather(
+      'Compare [[atlas|the Atlas spec]] with `Billing service`, then [[nowhere]].\n\n```\nBilling service\n```',
+      { depth: 0 },
+    );
+    expect(result.notes.map((n) => n.path).sort()).toEqual(['billing.md', 'specs/atlas.md']);
+    expect(result.notes.find((n) => n.path === 'specs/atlas.md')?.reason).toBe(
+      'the text says "the Atlas spec"',
+    );
+    expect(result.notes.find((n) => n.path === 'billing.md')?.via).toMatchObject({ count: 2 });
+    expect(result.unresolved).toEqual([{ term: 'nowhere', reason: 'no-match' }]);
+    expect(result.coverage).toEqual({ resolved: 2, total: 3 });
+  });
+
+  it('does not count a term twice when the text already names it', async () => {
+    await notes.create(ME, 'billing.md', '# Billing service');
+
+    const result = await gather('Check the Billing service.', { terms: ['billing service'] });
+    expect(result.coverage).toEqual({ resolved: 1, total: 1 });
+  });
+
+  it('finds the caller’s match even when other vaults crowd the ranking', async () => {
+    for (let i = 0; i < 30; i++) {
+      await notes.create(SOMEONE_ELSE, `r${i}.md`, `# Refunds ${i}\n\nrefunds refunds refunds`);
+    }
+    await notes.create(ME, 'policy.md', '# Customer policy\n\nWe handle refunds by email.');
+
+    const result = await gather('Answer like we usually do.', { terms: ['refunds'] });
+    expect(result.notes.map((n) => n.path)).toEqual(['policy.md']);
+    expect(result.unresolved).toEqual([]);
+  });
+
   it('never returns another user’s notes, however plainly the text names them', async () => {
     await notes.create(SOMEONE_ELSE, 'secret.md', '# Secret project\n\nHidden.');
     await notes.create(ME, 'mine.md', '# My project');

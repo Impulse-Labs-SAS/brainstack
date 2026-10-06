@@ -1147,19 +1147,25 @@ export class NoteService {
   }
 
   /**
-   * Title, body and decision flag for each of `paths` that exists — the same
-   * test `listDecisions` applies: a `decisión`/`decision` tag or
-   * `status: decidido`.
+   * Title, the first `bodyChars` of the body, and decision flag for each of
+   * `paths` that exists — the same test `listDecisions` applies: a
+   * `decisión`/`decision` tag or `status: decidido`.
    */
   async contextDigests(
     ownerId: string,
     paths: readonly string[],
+    bodyChars: number,
   ): Promise<Array<{ path: string; title: string; body: string; isDecision: boolean }>> {
     if (paths.length === 0) return [];
     const physical = paths.map((p) => this.toPhysical(ownerId, p));
     const [rows, decisionRows] = await Promise.all([
       this.opts.db
-        .select({ path: notes.path, title: notes.title, body: notes.body })
+        .select({
+          path: notes.path,
+          title: notes.title,
+          // Only the start: an excerpt never needs more.
+          body: sql<string>`substring(${notes.body} from 1 for ${bodyChars})`,
+        })
         .from(notes)
         .where(inArray(notes.path, physical)),
       this.opts.db

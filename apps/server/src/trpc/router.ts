@@ -190,7 +190,10 @@ export const appRouter = t.router({
           maxChars: z.number().int().min(500).max(MAX_MAX_CHARS).optional(),
         }),
       )
-      .query(({ ctx, input }) =>
+      // A mutation although it writes nothing: a query travels as a GET with
+      // its input in the URL, and a long brief would hit the header limit
+      // (414/431) before ever reaching the handler.
+      .mutation(({ ctx, input }) =>
         wrap(() => gatherContext({ notes: ctx.notes, search: ctx.search }, ctx.user.id, input)),
       ),
     linkMentions: protectedProcedure
