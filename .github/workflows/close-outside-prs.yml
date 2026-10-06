@@ -1,0 +1,44 @@
+name: Close outside pull requests
+
+# BrainStack is open source but not open to code contributions (see
+# CONTRIBUTING.md): only the Impulse Labs team writes its code, so the copyright
+# of the whole codebase stays with Impulse Labs SAS. A pull request opened from
+# a fork by someone outside the team is closed with a pointer to
+# CONTRIBUTING.md, so nobody waits on a review that will not come.
+#
+# pull_request_target, because a plain pull_request run from a fork gets a
+# read-only token and could not comment or close. That event runs with the base
+# repository's write token, which is safe here only because this job never
+# checks out, builds or runs anything from the pull request. Keep it that way:
+# no checkout step, ever.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    # A branch in this repository needs write access to push, so only forks are
+    # candidates. Among those, the owner, organisation members and collaborators
+    # are the team and are let through.
+    if: >-
+      github.repository == 'Impulse-Labs-SAS/brainstack' &&
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and close
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          CONTRIBUTING_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/CONTRIBUTING.md
+        run: |
+          set -euo pipefail
+          gh pr close "$PR_URL" --comment "Thanks for taking the time to open this.
+
+          BrainStack is open source, but not open to code contributions: all of its code is written by the Impulse Labs team, so we close pull requests from outside it without merging them. It is not that your work is unwelcome. [CONTRIBUTING.md]($CONTRIBUTING_URL) explains why.
+
+          Your idea is welcome as an issue, though. Describe the problem and the fix you have in mind there, and if we take it on, we will write the code ourselves. You are also free to keep your change in your fork under the terms of the license."

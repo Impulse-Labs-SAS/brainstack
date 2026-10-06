@@ -27,8 +27,9 @@ description: "Git conventions for BrainStack: branch names, Conventional Commits
 branch, check it is based on current `main` — see `.claude/rules/branching.md`.
 
 **Only the Impulse Labs team writes code here.** Pull requests from outside the team are closed with a
-pointer to `CONTRIBUTING.md`, never merged: the copyright of the whole codebase stays with Impulse
-Labs SAS. An idea or a fix proposed in an issue is reimplemented by the team, never copied from it.
+pointer to `CONTRIBUTING.md` (`.github/workflows/close-outside-prs.yml` does it on open), never
+merged: the copyright of the whole codebase stays with Impulse Labs SAS. An idea or a fix proposed
+in an issue is reimplemented by the team, never copied from it.
 
 ## Commits — Conventional Commits, in English
 
