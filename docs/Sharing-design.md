@@ -440,8 +440,8 @@ desaparecerían de la carpeta compartida para todos los demás.
 esa bóveda, no una lectura. Así que hace falta `write` en el origen y `write`
 en el destino, y son dos grants distintos.
 
-**El costo son los links, y se informa.** Un wikilink dice `[[Brutus/nota]]`; no
-tiene forma de decir de quién es ese Brutus. Entonces un link que antes cruzaba
+**El costo son los links, y se informa.** Un wikilink dice `[[Gondor/nota]]`; no
+tiene forma de decir de quién es ese Gondor. Entonces un link que antes cruzaba
 lo que ahora es un borde entre bóvedas no se puede reescribir a algo correcto
 — solo se puede reportar. El resultado trae las dos direcciones:
 

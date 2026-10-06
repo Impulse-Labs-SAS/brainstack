@@ -24,21 +24,21 @@ describe('projectTagOf', () => {
 describe('resolveProjects', () => {
   it('prefers the project tag, labelled by the MOC that carries it', () => {
     const projects = resolveProjects([
-      n('Pablo/proyectos/sd/_sd.md', ['proyecto/seek-and-destroy', 'tipo/moc'], 'Seek & Destroy'),
-      n('Pablo/proyectos/sd/arquitectura.md', ['proyecto/seek-and-destroy']),
+      n('Frodo/proyectos/tba/_tba.md', ['proyecto/there-and-back-again', 'tipo/moc'], 'There & Back Again'),
+      n('Frodo/proyectos/tba/arquitectura.md', ['proyecto/there-and-back-again']),
     ]);
-    expect(projects.get('Pablo/proyectos/sd/arquitectura.md')).toEqual({
-      id: 'tag:|proyecto/seek-and-destroy',
-      label: 'Seek & Destroy',
+    expect(projects.get('Frodo/proyectos/tba/arquitectura.md')).toEqual({
+      id: 'tag:|proyecto/there-and-back-again',
+      label: 'There & Back Again',
     });
   });
 
   it('puts an untagged note with its tagged MOC’s project', () => {
     const projects = resolveProjects([
-      n('Pablo/proyectos/sd/_sd.md', ['proyecto/seek-and-destroy'], 'Seek & Destroy'),
-      n('Pablo/proyectos/sd/suelta.md'),
+      n('Frodo/proyectos/tba/_tba.md', ['proyecto/there-and-back-again'], 'There & Back Again'),
+      n('Frodo/proyectos/tba/suelta.md'),
     ]);
-    expect(projects.get('Pablo/proyectos/sd/suelta.md')!.id).toBe('tag:|proyecto/seek-and-destroy');
+    expect(projects.get('Frodo/proyectos/tba/suelta.md')!.id).toBe('tag:|proyecto/there-and-back-again');
   });
 
   it('falls back to the nearest MOC folder, walking up', () => {
@@ -60,16 +60,16 @@ describe('resolveProjects', () => {
 
   it('does not assign a note with several project tags to any of them', () => {
     const projects = resolveProjects([
-      n('Pablo/life/perfil.md', ['proyecto/uncuyo', 'proyecto/dmyte']),
+      n('Frodo/life/perfil.md', ['proyecto/uncuyo', 'proyecto/dmyte']),
     ]);
-    expect(projects.get('Pablo/life/perfil.md')!.id).toBe('folder:|Pablo');
+    expect(projects.get('Frodo/life/perfil.md')!.id).toBe('folder:|Frodo');
   });
 
   it('keeps same-named folders of different owners apart', () => {
     const projects = resolveProjects([
-      { ...n('Zuno/a.md'), id: 'alice/Zuno/a.md', ownerId: 'alice' },
-      { ...n('Zuno/a.md'), id: 'bob/Zuno/a.md', ownerId: 'bob' },
+      { ...n('Erebor/a.md'), id: 'alice/Erebor/a.md', ownerId: 'alice' },
+      { ...n('Erebor/a.md'), id: 'bob/Erebor/a.md', ownerId: 'bob' },
     ]);
-    expect(projects.get('alice/Zuno/a.md')!.id).not.toBe(projects.get('bob/Zuno/a.md')!.id);
+    expect(projects.get('alice/Erebor/a.md')!.id).not.toBe(projects.get('bob/Erebor/a.md')!.id);
   });
 });

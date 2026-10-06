@@ -16,10 +16,10 @@ function link(partial: Partial<ParsedLink> & { rawTarget: string }): ParsedLink 
 }
 
 const noteIndex = new Set([
-  'Zuno/decisiones/pricing-tiered.md',
-  'Zuno/Pricing.md',
-  'BRUTUS/Pricing.md',
-  'Zuno/Competitive landscape Zuno.md',
+  'Erebor/decisiones/pricing-tiered.md',
+  'Erebor/Pricing.md',
+  'GONDOR/Pricing.md',
+  'Erebor/Competitive landscape Erebor.md',
   'Inbox/Solo.md',
 ]);
 
@@ -30,32 +30,32 @@ const attachmentIndex = new Set([
 
 describe('resolveLink', () => {
   it('resolves an explicit path wikilink', () => {
-    const result = resolveLink(link({ rawTarget: 'Zuno/Pricing' }), {
+    const result = resolveLink(link({ rawTarget: 'Erebor/Pricing' }), {
       sourcePath: 'Inbox/Solo.md',
       noteIndex,
       attachmentIndex,
     });
-    expect(result.targetPath).toBe('Zuno/Pricing.md');
+    expect(result.targetPath).toBe('Erebor/Pricing.md');
     expect(result.targetType).toBe('note');
   });
 
   it('prefers same-folder match for ambiguous bare wikilinks', () => {
     const result = resolveLink(link({ rawTarget: 'Pricing' }), {
-      sourcePath: 'BRUTUS/note.md',
+      sourcePath: 'GONDOR/note.md',
       noteIndex,
       attachmentIndex,
     });
-    expect(result.targetPath).toBe('BRUTUS/Pricing.md');
+    expect(result.targetPath).toBe('GONDOR/Pricing.md');
     expect(result.ambiguous).toBe(false);
   });
 
   it('falls back to descendant folder match', () => {
     const result = resolveLink(link({ rawTarget: 'pricing-tiered' }), {
-      sourcePath: 'Zuno/index.md',
+      sourcePath: 'Erebor/index.md',
       noteIndex,
       attachmentIndex,
     });
-    expect(result.targetPath).toBe('Zuno/decisiones/pricing-tiered.md');
+    expect(result.targetPath).toBe('Erebor/decisiones/pricing-tiered.md');
   });
 
   it('marks ambiguous when multiple candidates exist globally', () => {
@@ -66,7 +66,7 @@ describe('resolveLink', () => {
     });
     expect(result.targetType).toBe('unresolved');
     expect(result.ambiguous).toBe(true);
-    expect(result.candidates.sort()).toEqual(['BRUTUS/Pricing.md', 'Zuno/Pricing.md']);
+    expect(result.candidates.sort()).toEqual(['Erebor/Pricing.md', 'GONDOR/Pricing.md']);
   });
 
   it('resolves an embed of an attachment by exact path', () => {
@@ -76,7 +76,7 @@ describe('resolveLink', () => {
         kind: 'embed',
         isEmbed: true,
       }),
-      { sourcePath: 'Zuno/decisiones/pricing-tiered.md', noteIndex, attachmentIndex },
+      { sourcePath: 'Erebor/decisiones/pricing-tiered.md', noteIndex, attachmentIndex },
     );
     expect(result.targetType).toBe('attachment');
   });

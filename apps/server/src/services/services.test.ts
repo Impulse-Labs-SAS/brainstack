@@ -68,9 +68,9 @@ describe('NoteService', () => {
   });
 
   it('does not list a new MOC among its own affected MOCs', async () => {
-    await notes.create(USER, 'Pablo/_Pablo.md', '# Pablo');
-    const { affectedMocs } = await notes.create(USER, 'Pablo/ideas/_ideas.md', '# Ideas');
-    expect(affectedMocs).toEqual(['Pablo/_Pablo.md']);
+    await notes.create(USER, 'Frodo/_Frodo.md', '# Frodo');
+    const { affectedMocs } = await notes.create(USER, 'Frodo/ideas/_ideas.md', '# Ideas');
+    expect(affectedMocs).toEqual(['Frodo/_Frodo.md']);
   });
 
   it('preserves frontmatter across an update that carries none', async () => {
@@ -83,13 +83,13 @@ describe('NoteService', () => {
   });
 
   it('filters the list by folder and by tag', async () => {
-    await notes.create(USER, 'Proyectos/a.md', '# A\n\n#zuno');
+    await notes.create(USER, 'Proyectos/a.md', '# A\n\n#erebor');
     await notes.create(USER, 'Inbox/b.md', '# B');
 
     const byFolder = await notes.list(USER, { folder: 'Proyectos' });
     expect(byFolder.map((n) => n.path)).toEqual(['Proyectos/a.md']);
 
-    const byTag = await notes.list(USER, { tag: 'zuno' });
+    const byTag = await notes.list(USER, { tag: 'erebor' });
     expect(byTag.map((n) => n.path)).toEqual(['Proyectos/a.md']);
   });
 
@@ -147,9 +147,9 @@ describe('NoteService — outbound links, facets and related notes', () => {
   });
 
   it('listRelated combines shared tags and shared facets', async () => {
-    await notes.create(USER, 'A.md', '# A', { tags: ['zuno'], technologies: ['nextjs'] });
-    await notes.create(USER, 'B.md', '# B', { tags: ['zuno'], technologies: ['nextjs'] });
-    await notes.create(USER, 'C.md', '# C', { tags: ['zuno'] });
+    await notes.create(USER, 'A.md', '# A', { tags: ['erebor'], technologies: ['nextjs'] });
+    await notes.create(USER, 'B.md', '# B', { tags: ['erebor'], technologies: ['nextjs'] });
+    await notes.create(USER, 'C.md', '# C', { tags: ['erebor'] });
 
     const related = await notes.listRelated(USER, 'A.md');
     const b = related.find((r) => r.path === 'B.md')!;
@@ -179,17 +179,17 @@ describe('NoteService — outbound links, facets and related notes', () => {
 
 describe('NoteService.graph projects', () => {
   it('gives each node its project: tag, then nearest MOC, then top-level folder', async () => {
-    await notes.create(USER, 'Pablo/proyectos/sd/_sd.md', '# Seek & Destroy', {
-      tags: ['proyecto/seek-and-destroy'],
+    await notes.create(USER, 'Frodo/proyectos/tba/_tba.md', '# There & Back Again', {
+      tags: ['proyecto/there-and-back-again'],
     });
-    await notes.create(USER, 'Pablo/proyectos/sd/suelta.md', '# Suelta');
-    await notes.create(USER, 'Pablo/life/perfil.md', '# Perfil');
+    await notes.create(USER, 'Frodo/proyectos/tba/suelta.md', '# Suelta');
+    await notes.create(USER, 'Frodo/life/perfil.md', '# Perfil');
 
     const { nodes } = await notes.graph(USER);
     const projectOf = (path: string) => nodes.find((n) => n.path === path)!.project.label;
-    expect(projectOf('Pablo/proyectos/sd/suelta.md')).toBe('Seek & Destroy');
-    expect(projectOf('Pablo/proyectos/sd/_sd.md')).toBe('Seek & Destroy');
-    expect(projectOf('Pablo/life/perfil.md')).toBe('Pablo');
+    expect(projectOf('Frodo/proyectos/tba/suelta.md')).toBe('There & Back Again');
+    expect(projectOf('Frodo/proyectos/tba/_tba.md')).toBe('There & Back Again');
+    expect(projectOf('Frodo/life/perfil.md')).toBe('Frodo');
   });
 
   it('carries when each note was created and last edited, as epoch numbers', async () => {
@@ -225,8 +225,8 @@ describe('NoteService.affinity', () => {
   });
 
   it('does not treat type or authorship tags as topics', async () => {
-    await notes.create(USER, 'A/_A.md', '# A', { tags: ['tipo/moc', 'persona/pablo'], status: 'idea' });
-    await notes.create(USER, 'B/_B.md', '# B', { tags: ['tipo/moc', 'persona/pablo'], status: 'idea' });
+    await notes.create(USER, 'A/_A.md', '# A', { tags: ['tipo/moc', 'persona/frodo'], status: 'idea' });
+    await notes.create(USER, 'B/_B.md', '# B', { tags: ['tipo/moc', 'persona/frodo'], status: 'idea' });
 
     expect(await notes.affinity(USER)).toEqual({ topics: [], edges: [] });
   });
@@ -309,15 +309,15 @@ describe('NoteService.listDecisions', () => {
 
 describe('NoteService.move', () => {
   it('renames a note and rewrites the wikilinks pointing at it', async () => {
-    await notes.create(USER, 'Zuno/Pricing.md', '# Pricing');
-    await notes.create(USER, 'Inbox/ref.md', '# Ref\n\nver [[Zuno/Pricing]]');
+    await notes.create(USER, 'Erebor/Pricing.md', '# Pricing');
+    await notes.create(USER, 'Inbox/ref.md', '# Ref\n\nver [[Erebor/Pricing]]');
 
-    await notes.move(USER, 'Zuno/Pricing.md', 'Zuno/decisiones/Pricing.md');
+    await notes.move(USER, 'Erebor/Pricing.md', 'Erebor/decisiones/Pricing.md');
 
     // The reference followed the note rather than going stale.
     const ref = await notes.get(USER, 'Inbox/ref.md');
-    expect(ref.body).toContain('[[Zuno/decisiones/Pricing]]');
-    expect(ref.body).not.toContain('[[Zuno/Pricing]]');
+    expect(ref.body).toContain('[[Erebor/decisiones/Pricing]]');
+    expect(ref.body).not.toContain('[[Erebor/Pricing]]');
   });
 
   it('refuses to overwrite an existing destination', async () => {

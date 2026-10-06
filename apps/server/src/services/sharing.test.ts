@@ -313,7 +313,7 @@ describe('SharingService — listing', () => {
 
 describe('SharingService.revokeUnder', () => {
   it('borra el grant sobre la carpeta y los de adentro', async () => {
-    for (const folderPath of ['Brutus', 'Brutus/App']) {
+    for (const folderPath of ['Gondor', 'Gondor/App']) {
       await svc.grant({
         ownerId: 'owner',
         sharedWithUserId: 'alice',
@@ -322,12 +322,12 @@ describe('SharingService.revokeUnder', () => {
       });
     }
 
-    expect(await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' })).toBe(2);
+    expect(await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Gondor' })).toBe(2);
     expect(await svc.listSharedRoots('alice')).toEqual([]);
   });
 
   it('no toca una carpeta que apenas comparte el prefijo del nombre', async () => {
-    for (const folderPath of ['Brutus', 'Brutus2', 'Brutus-viejo']) {
+    for (const folderPath of ['Gondor', 'Gondor2', 'Gondor-viejo']) {
       await svc.grant({
         ownerId: 'owner',
         sharedWithUserId: 'alice',
@@ -336,11 +336,11 @@ describe('SharingService.revokeUnder', () => {
       });
     }
 
-    await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' });
+    await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Gondor' });
 
     expect((await svc.listSharedRoots('alice')).map((r) => r.folderPath).sort()).toEqual([
-      'Brutus-viejo',
-      'Brutus2',
+      'Gondor-viejo',
+      'Gondor2',
     ]);
   });
 
@@ -349,11 +349,11 @@ describe('SharingService.revokeUnder', () => {
     await svc.grant({
       ownerId: 'otro',
       sharedWithUserId: 'alice',
-      folderPath: 'Brutus',
+      folderPath: 'Gondor',
       grantedBy: 'otro',
     });
 
-    expect(await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' })).toBe(0);
+    expect(await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Gondor' })).toBe(0);
     expect(await svc.listSharedRoots('alice')).toHaveLength(1);
   });
 
@@ -361,7 +361,7 @@ describe('SharingService.revokeUnder', () => {
     const { folderShareInvites } = pgSchema;
     await database.db.insert(folderShareInvites).values({
       id: 'inv1',
-      folderPath: 'Brutus/App',
+      folderPath: 'Gondor/App',
       ownerId: 'owner',
       mode: 'link',
       permission: 'write',
@@ -370,7 +370,7 @@ describe('SharingService.revokeUnder', () => {
       createdAt: Date.now(),
     });
 
-    await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Brutus' });
+    await svc.revokeUnder({ ownerId: 'owner', folderPath: 'Gondor' });
 
     const [invite] = await database.db.select().from(folderShareInvites);
     expect(invite?.revokedAt).not.toBeNull();

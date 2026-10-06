@@ -19,7 +19,7 @@ describe('isTopicRow', () => {
 
   it('drops tags that classify a note instead of describing it', () => {
     expect(isTopicRow(tag('a.md', 'tipo/moc'))).toBe(false);
-    expect(isTopicRow(tag('a.md', 'persona/pablo'))).toBe(false);
+    expect(isTopicRow(tag('a.md', 'persona/frodo'))).toBe(false);
     expect(isTopicRow(tag('a.md', 'decisión'))).toBe(false);
   });
 

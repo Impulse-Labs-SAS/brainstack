@@ -99,9 +99,9 @@ describe('every account after the first', () => {
   });
 
   it('is let in by AUTHORIZED_EMAILS', async () => {
-    const auth = authWith({ authorizedEmails: new Set(['owner@brain.test', 'pablo@brain.test']) });
+    const auth = authWith({ authorizedEmails: new Set(['owner@brain.test', 'frodo@brain.test']) });
     await auth.signup('owner@brain.test', STRONG);
-    await auth.signup('Pablo@Brain.test', STRONG);
+    await auth.signup('Frodo@Brain.test', STRONG);
     expect(await userCount()).toBe(2);
   });
 

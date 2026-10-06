@@ -95,7 +95,7 @@ export function buildMcpServer({
    *
    * `ownerOf` alone answers the first half with "yours" whenever no owner was
    * named, which is right for nearly every call and wrong for the one that
-   * matters: a path like "impulse-labs/zuno/nota.md" names a folder somebody
+   * matters: a path like "impulse-labs/erebor/nota.md" names a folder somebody
    * shared just as well as it names one of yours. Read against your own vault
    * in silence, a note that plainly exists comes back as "no existe" — the
    * server knew the path fell under a share and kept it to itself.

@@ -4,7 +4,7 @@ import { isInside, nodeId, parseNodeId, sameNode } from './tree-node-id';
 
 describe('nodeId / parseNodeId', () => {
   it('va y vuelve', () => {
-    const ref = { ownerId: 'u_pablo', path: '01 Impulse Labs/Brutus' };
+    const ref = { ownerId: 'u_frodo', path: '01 Impulse Labs/Gondor' };
     expect(parseNodeId(nodeId(ref))).toEqual(ref);
   });
 
@@ -15,7 +15,7 @@ describe('nodeId / parseNodeId', () => {
 
   it('distingue el mismo path en dos bóvedas', () => {
     const mio = { ownerId: 'u_yo', path: 'impulse-labs' };
-    const suyo = { ownerId: 'u_pablo', path: 'impulse-labs' };
+    const suyo = { ownerId: 'u_frodo', path: 'impulse-labs' };
     expect(nodeId(mio)).not.toBe(nodeId(suyo));
     expect(sameNode(mio, suyo)).toBe(false);
   });

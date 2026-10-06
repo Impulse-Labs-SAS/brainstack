@@ -59,7 +59,7 @@ describe('validatePassword', () => {
 
 describe('AuthService signup + email verification', () => {
   it('creates an unverified user and emails a verification link', async () => {
-    const result = await auth.signup('user@brain.test', STRONG, 'Fede');
+    const result = await auth.signup('user@brain.test', STRONG, 'Sam');
     expect(result.user.emailVerified).toBe(false);
     expect(result.user.hasPassword).toBe(true);
     expect(mailer.sent).toHaveLength(1);
@@ -183,7 +183,7 @@ describe('AuthService Google OAuth linking', () => {
       googleId: 'g-1',
       email: 'user@brain.test',
       googleEmailVerified: true,
-      displayName: 'Fede',
+      displayName: 'Sam',
     });
     expect(user.emailVerified).toBe(true);
     expect(user.hasGoogle).toBe(true);
@@ -362,14 +362,14 @@ describe('AuthService.updateProfile', () => {
 
   it('sets the display name', async () => {
     const id = await verifiedUser();
-    const updated = await auth.updateProfile(id, { displayName: 'Federico Linardelli' });
-    expect(updated.displayName).toBe('Federico Linardelli');
-    expect((await auth.findUserById(id))?.displayName).toBe('Federico Linardelli');
+    const updated = await auth.updateProfile(id, { displayName: 'Samwise Linardelli' });
+    expect(updated.displayName).toBe('Samwise Linardelli');
+    expect((await auth.findUserById(id))?.displayName).toBe('Samwise Linardelli');
   });
 
   it('trims, and stores a blank name as unset rather than as an empty string', async () => {
     const id = await verifiedUser();
-    expect((await auth.updateProfile(id, { displayName: '  Fede  ' })).displayName).toBe('Fede');
+    expect((await auth.updateProfile(id, { displayName: '  Sam  ' })).displayName).toBe('Sam');
     expect((await auth.updateProfile(id, { displayName: '   ' })).displayName).toBeNull();
   });
 
@@ -382,8 +382,8 @@ describe('AuthService.updateProfile', () => {
 
   it('leaves the name alone when the field is not part of the patch', async () => {
     const id = await verifiedUser();
-    await auth.updateProfile(id, { displayName: 'Fede' });
-    expect((await auth.updateProfile(id, {})).displayName).toBe('Fede');
+    await auth.updateProfile(id, { displayName: 'Sam' });
+    expect((await auth.updateProfile(id, {})).displayName).toBe('Sam');
   });
 
   it('fails on an unknown user', async () => {

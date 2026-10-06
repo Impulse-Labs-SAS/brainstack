@@ -7,7 +7,7 @@
 // edges say where a note is filed, not what it is about, and drawn at full
 // strength they were the whole picture.
 
-/** A MOC index note: its filename starts with `_`, e.g. `Pablo/ideas/_ideas.md`. */
+/** A MOC index note: its filename starts with `_`, e.g. `Frodo/ideas/_ideas.md`. */
 export function isIndexNote(path: string): boolean {
   const name = path.slice(path.lastIndexOf('/') + 1);
   return name.startsWith('_') && name.toLowerCase().endsWith('.md');

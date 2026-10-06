@@ -52,7 +52,7 @@ beforeEach(async () => {
   const db = database.db;
 
   await db.insert(users).values({
-    id: 'fede',
+    id: 'sam',
     email: 'user@brain.test',
     emailVerified: true,
     createdAt: Date.now(),
@@ -102,7 +102,7 @@ beforeEach(async () => {
       buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, logger, principal }),
   });
 
-  const session = await auth.createSession('fede');
+  const session = await auth.createSession('sam');
   sessionCookie = `bs_session=${session.token}`;
 });
 

@@ -53,7 +53,7 @@ function isNoteMapping(m: LinkRewriteMapping): boolean {
  * Returns the new target text, or `null` if the mapping doesn't apply.
  *
  * Note moves match when the wikilink references the note by:
- *  - exact full path (`Zuno/Pricing` or `Zuno/Pricing.md`), or
+ *  - exact full path (`Erebor/Pricing` or `Erebor/Pricing.md`), or
  *  - bare basename (`Pricing`) — only when the basename actually changed,
  *    since Obsidian resolves the bare form by stem; if only the folder moved,
  *    the link still resolves and we leave it alone.

@@ -2,7 +2,7 @@
 // NoteService.graph hands it every visible note with its tags.
 //
 // "Top-level folder" was the first answer and it was wrong for real vaults: a
-// personal `Pablo/` holds `proyectos/seek-and-destroy`, `ideas/bot-trading`
+// personal `Frodo/` holds `proyectos/there-and-back-again`, `ideas/palantir`
 // and `life`, and all of it read as one project. So, in order:
 //
 //  1. A `proyecto/<name>` tag — the most explicit signal, and the one the
@@ -10,10 +10,10 @@
 //     profile tagged with three projects belongs to none of them in particular.
 //  2. The nearest MOC above the note (`_<Folder>.md`). If that MOC carries a
 //     project tag itself, the folder is that project, so an untagged note in
-//     `seek-and-destroy/` lands with its tagged siblings instead of beside them.
+//     `there-and-back-again/` lands with its tagged siblings instead of beside them.
 //  3. The top-level folder, or the vault root.
 //
-// Projects never cross owners: two vaults with a `Zuno/` are two projects.
+// Projects never cross owners: two vaults with an `Erebor/` are two projects.
 
 export interface ProjectNote {
   /** Stored path, the node id. */
@@ -54,7 +54,7 @@ export function resolveProjects(notesIn: readonly ProjectNote[]): Map<string, Pr
   const scope = (ownerId: string | null, key: string) => `${ownerId ?? ''}|${key}`;
 
   // Every MOC, by the folder it indexes, and the label a tagged project takes
-  // from its MOC: "Seek & Destroy" reads better than "seek-and-destroy".
+  // from its MOC: "There & Back Again" reads better than "there-and-back-again".
   const mocs = new Map<string, { title: string; tag: string | null }>();
   const tagLabel = new Map<string, string>();
   for (const note of notesIn) {

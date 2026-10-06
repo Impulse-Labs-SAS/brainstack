@@ -4,7 +4,7 @@
 //
 // Two decisions carry the whole feature:
 //
-//  - Only content counts. A tag like `tipo/moc` or `persona/pablo`, or a facet
+//  - Only content counts. A tag like `tipo/moc` or `persona/frodo`, or a facet
 //    like `status: en-progreso`, says what kind of note it is or who wrote it,
 //    not what it is about. Counted as topics they joined everything to
 //    everything and the graph said nothing.

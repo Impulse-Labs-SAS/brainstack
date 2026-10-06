@@ -36,14 +36,14 @@ const paths = async (): Promise<string[]> => (await notes.list('u1', {})).map((n
 
 describe('NoteService.move — carpetas', () => {
   it('mueve la carpeta con todo lo que cuelga, a cualquier profundidad', async () => {
-    await notes.create('u1', 'Brutus/nota.md', 'a');
-    await notes.create('u1', 'Brutus/sub/hondo.md', 'b');
+    await notes.create('u1', 'Gondor/nota.md', 'a');
+    await notes.create('u1', 'Gondor/sub/hondo.md', 'b');
     await notes.createFolder('u1', 'Destino');
 
-    const result = await notes.move('u1', 'Brutus', 'Destino/Brutus');
+    const result = await notes.move('u1', 'Gondor', 'Destino/Gondor');
 
-    expect(result.path).toBe('Destino/Brutus');
-    expect(await paths()).toEqual(['Destino/Brutus/nota.md', 'Destino/Brutus/sub/hondo.md']);
+    expect(result.path).toBe('Destino/Gondor');
+    expect(await paths()).toEqual(['Destino/Gondor/nota.md', 'Destino/Gondor/sub/hondo.md']);
   });
 
   it('renombra una carpeta en su lugar', async () => {
@@ -62,33 +62,33 @@ describe('NoteService.move — carpetas', () => {
   });
 
   it('reescribe los wikilinks que apuntaban adentro', async () => {
-    await notes.create('u1', 'Brutus/nota.md', 'contenido');
-    await notes.create('u1', 'afuera.md', 'ver [[Brutus/nota]]');
+    await notes.create('u1', 'Gondor/nota.md', 'contenido');
+    await notes.create('u1', 'afuera.md', 'ver [[Gondor/nota]]');
 
-    await notes.move('u1', 'Brutus', 'Proyectos/Brutus');
+    await notes.move('u1', 'Gondor', 'Proyectos/Gondor');
 
     const after = await notes.get('u1', 'afuera.md');
-    expect(after.body).toContain('[[Proyectos/Brutus/nota]]');
-    expect(after.body).not.toContain('[[Brutus/nota]]');
+    expect(after.body).toContain('[[Proyectos/Gondor/nota]]');
+    expect(after.body).not.toContain('[[Gondor/nota]]');
   });
 
   it('no deja nada movido si algo del destino ya existe', async () => {
-    await notes.create('u1', 'Brutus/a.md', '1');
-    await notes.create('u1', 'Brutus/b.md', '2');
-    await notes.create('u1', 'Destino/Brutus/b.md', 'ocupado');
+    await notes.create('u1', 'Gondor/a.md', '1');
+    await notes.create('u1', 'Gondor/b.md', '2');
+    await notes.create('u1', 'Destino/Gondor/b.md', 'ocupado');
 
-    await expect(notes.move('u1', 'Brutus', 'Destino/Brutus')).rejects.toThrow(
+    await expect(notes.move('u1', 'Gondor', 'Destino/Gondor')).rejects.toThrow(
       expect.objectContaining({ code: 'ALREADY_EXISTS' }),
     );
 
     // Ni siquiera `a.md`, que no chocaba con nada: la colisión se detecta antes
     // de mover, porque el store no tiene transacción que revertir.
-    expect(await paths()).toEqual(['Brutus/a.md', 'Brutus/b.md', 'Destino/Brutus/b.md']);
+    expect(await paths()).toEqual(['Destino/Gondor/b.md', 'Gondor/a.md', 'Gondor/b.md']);
   });
 
   it('rechaza mover una carpeta dentro de sí misma', async () => {
-    await notes.create('u1', 'Brutus/a.md', '1');
-    await expect(notes.move('u1', 'Brutus', 'Brutus/adentro')).rejects.toThrow(
+    await notes.create('u1', 'Gondor/a.md', '1');
+    await expect(notes.move('u1', 'Gondor', 'Gondor/adentro')).rejects.toThrow(
       expect.objectContaining({ code: 'INVALID_INPUT' }),
     );
   });
@@ -154,73 +154,73 @@ describe('NoteService.move — los shares siguen a la carpeta', () => {
   };
 
   it('el invitado conserva el acceso y ve el nombre nuevo', async () => {
-    await notes.create('u1', 'Brutus/nota.md', 'a');
-    await grant('Brutus');
+    await notes.create('u1', 'Gondor/nota.md', 'a');
+    await grant('Gondor');
 
-    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+    await notes.move('u1', 'Gondor', 'Archivo/Gondor');
 
     expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath)).toEqual([
-      'Archivo/Brutus',
+      'Archivo/Gondor',
     ]);
-    expect(await sharing.canWrite('invitado', 'u1', 'Archivo/Brutus/nota.md')).toBe(true);
-    expect(await sharing.canRead('invitado', 'u1', 'Brutus/nota.md')).toBe(false);
+    expect(await sharing.canWrite('invitado', 'u1', 'Archivo/Gondor/nota.md')).toBe(true);
+    expect(await sharing.canRead('invitado', 'u1', 'Gondor/nota.md')).toBe(false);
   });
 
   it('un grant sobre una subcarpeta conserva su profundidad', async () => {
-    await notes.create('u1', 'Brutus/App/x.md', 'a');
-    await grant('Brutus/App');
+    await notes.create('u1', 'Gondor/App/x.md', 'a');
+    await grant('Gondor/App');
 
-    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+    await notes.move('u1', 'Gondor', 'Archivo/Gondor');
 
     expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath)).toEqual([
-      'Archivo/Brutus/App',
+      'Archivo/Gondor/App',
     ]);
   });
 
   it('no arrastra la carpeta que apenas comparte el prefijo del nombre', async () => {
-    await notes.create('u1', 'Brutus/x.md', 'a');
-    await notes.create('u1', 'Brutus2/y.md', 'b');
-    await grant('Brutus');
-    await grant('Brutus2');
+    await notes.create('u1', 'Gondor/x.md', 'a');
+    await notes.create('u1', 'Gondor2/y.md', 'b');
+    await grant('Gondor');
+    await grant('Gondor2');
 
-    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+    await notes.move('u1', 'Gondor', 'Archivo/Gondor');
 
     expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath).sort()).toEqual([
-      'Archivo/Brutus',
-      'Brutus2',
+      'Archivo/Gondor',
+      'Gondor2',
     ]);
   });
 
   it('si el destino ya estaba compartido con la misma persona, queda un grant con el permiso más amplio', async () => {
-    await notes.create('u1', 'Brutus/x.md', 'a');
-    await notes.create('u1', 'Archivo/Brutus/y.md', 'b');
-    await grant('Brutus', 'write');
-    await grant('Archivo/Brutus', 'read');
+    await notes.create('u1', 'Gondor/x.md', 'a');
+    await notes.create('u1', 'Archivo/Gondor/y.md', 'b');
+    await grant('Gondor', 'write');
+    await grant('Archivo/Gondor', 'read');
 
-    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+    await notes.move('u1', 'Gondor', 'Archivo/Gondor');
 
     const roots = await sharing.listSharedRoots('invitado');
     expect(roots).toHaveLength(1);
-    expect(roots[0]).toMatchObject({ folderPath: 'Archivo/Brutus', permission: 'write' });
+    expect(roots[0]).toMatchObject({ folderPath: 'Archivo/Gondor', permission: 'write' });
   });
 
   it('mover una nota sola no toca ningún grant', async () => {
-    await notes.create('u1', 'Brutus/x.md', 'a');
-    await grant('Brutus');
+    await notes.create('u1', 'Gondor/x.md', 'a');
+    await grant('Gondor');
 
-    await notes.move('u1', 'Brutus/x.md', 'Brutus/y.md');
+    await notes.move('u1', 'Gondor/x.md', 'Gondor/y.md');
 
     expect((await sharing.listSharedRoots('invitado')).map((r) => r.folderPath)).toEqual([
-      'Brutus',
+      'Gondor',
     ]);
   });
 
   it('la invitación pendiente apunta a donde la carpeta terminó', async () => {
     const { folderShareInvites } = pgSchema;
-    await notes.create('u1', 'Brutus/x.md', 'a');
+    await notes.create('u1', 'Gondor/x.md', 'a');
     await database.db.insert(folderShareInvites).values({
       id: 'inv1',
-      folderPath: 'Brutus',
+      folderPath: 'Gondor',
       ownerId: 'u1',
       mode: 'link',
       permission: 'write',
@@ -229,9 +229,9 @@ describe('NoteService.move — los shares siguen a la carpeta', () => {
       createdAt: Date.now(),
     });
 
-    await notes.move('u1', 'Brutus', 'Archivo/Brutus');
+    await notes.move('u1', 'Gondor', 'Archivo/Gondor');
 
     const [invite] = await database.db.select().from(folderShareInvites);
-    expect(invite?.folderPath).toBe('Archivo/Brutus');
+    expect(invite?.folderPath).toBe('Archivo/Gondor');
   });
 });

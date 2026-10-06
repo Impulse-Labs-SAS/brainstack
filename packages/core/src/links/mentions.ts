@@ -5,9 +5,9 @@
 // same and becomes an edge.
 //
 // Matching is on folded text (lower case, no diacritics): "vision" finds
-// "Visión". It is whole-word — "zuno" does not match inside "zunoteca" — and
+// "Visión". It is whole-word — "erebor" does not match inside "ereborteca" — and
 // it never looks inside code, inside an existing link, or inside a bare URL.
-// When two terms overlap, the longer wins: "Seek & Destroy" over "Destroy".
+// When two terms overlap, the longer wins: "There & Back Again" over "Again".
 //
 // Pure string logic, like paths.ts: no store, no disk.
 

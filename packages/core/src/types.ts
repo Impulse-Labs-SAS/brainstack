@@ -9,7 +9,7 @@ export interface Frontmatter {
 
 /** A parsed link as extracted from a markdown body. */
 export interface ParsedLink {
-  /** Raw target as written (`Pricing`, `Zuno/Pricing`, `img.png`, etc.). */
+  /** Raw target as written (`Pricing`, `Erebor/Pricing`, `img.png`, etc.). */
   rawTarget: string;
   /** Optional section heading (`Nota#Sección`). */
   section: string | null;

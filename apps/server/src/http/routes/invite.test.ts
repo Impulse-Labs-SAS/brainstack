@@ -37,34 +37,34 @@ function routerFor(
   return outer;
 }
 
-const PABLO = { user: { id: 'u_pablo', email: 'pablo@x.com' } };
+const FRODO = { user: { id: 'u_frodo', email: 'frodo@x.com' } };
 
 describe('GET /invite/accept/:token', () => {
   it('manda a la vista compartida del dueño, no a la bóveda propia', async () => {
-    const router = routerFor(PABLO, async () => ({
+    const router = routerFor(FRODO, async () => ({
       shareId: 's1',
       folderPath: '01 Impulse Labs',
-      ownerId: 'u_fede',
+      ownerId: 'u_sam',
     }));
 
     const res = await router.request('/accept/tok');
 
     expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe(`${APP}/notes/shared/u_fede/01%20Impulse%20Labs`);
+    expect(res.headers.get('location')).toBe(`${APP}/notes/shared/u_sam/01%20Impulse%20Labs`);
   });
 
   it('codifica cada segmento, sin convertir las barras en %2F', async () => {
-    const router = routerFor(PABLO, async () => ({
+    const router = routerFor(FRODO, async () => ({
       shareId: 's1',
-      folderPath: '01 Impulse Labs/Brutus',
-      ownerId: 'u_fede',
+      folderPath: '01 Impulse Labs/Gondor',
+      ownerId: 'u_sam',
     }));
 
     const location = (await router.request('/accept/tok')).headers.get('location');
 
     // Con el path entero pasado por encodeURIComponent esto era un solo
     // segmento, y la ruta no resolvía.
-    expect(location).toBe(`${APP}/notes/shared/u_fede/01%20Impulse%20Labs/Brutus`);
+    expect(location).toBe(`${APP}/notes/shared/u_sam/01%20Impulse%20Labs/Gondor`);
     expect(location).not.toContain('%2F');
   });
 
@@ -81,7 +81,7 @@ describe('GET /invite/accept/:token', () => {
   });
 
   it('un error de aceptación va a la pantalla de error con su motivo', async () => {
-    const router = routerFor(PABLO, async () => {
+    const router = routerFor(FRODO, async () => {
       throw new AppError('this invitation was already accepted', 'FORBIDDEN', 403);
     });
 

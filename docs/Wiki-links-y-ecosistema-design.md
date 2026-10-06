@@ -239,7 +239,7 @@ is already linked gets no affinity edge.
 **What a project is** (`services/projects.ts`, carried on every node of `notes.graph`): the
 `proyecto/*` tag when the note has exactly one; otherwise the nearest index above it (and that
 index's project tag, if it has one); otherwise the top-level folder, or the root. The top-level
-folder alone was wrong: `Pablo/` holds several projects.
+folder alone was wrong: `Frodo/` holds several projects.
 
 **No colour per project.** Colouring the three largest folders was tried and dropped: with
 well-defined projects there are dozens, and three colours among fifty confuse. The graph colours
@@ -255,7 +255,7 @@ mención sin enlazar es texto que dice el **título** de otra nota o uno de sus
 
 **Qué cuenta** (`packages/core/src/links/mentions.ts`, puro): comparación sobre texto
 plegado (minúsculas, sin acentos: "vision" encuentra "Visión"), palabra completa
-("zuno" no matchea dentro de "zunoteca"), nunca dentro de código, de un link existente
+("erebor" no matchea dentro de "ereborteca"), nunca dentro de código, de un link existente
 ni de una URL. Si dos términos se pisan gana el más largo. Se ignoran los títulos de
 menos de 4 letras y los que comparten dos notas: no hay forma de saber a cuál apunta.
 
