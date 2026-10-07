@@ -9,10 +9,10 @@ import { z } from 'zod';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError } from '../lib/errors.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
-import { MAX_MAX_CHARS } from '../services/contextCrawl.js';
 import {
   gatherContext,
   MAX_DEPTH,
+  MAX_MAX_CHARS,
   MAX_TERMS,
   MAX_TEXT_CHARS,
 } from '../services/gatherContext.js';

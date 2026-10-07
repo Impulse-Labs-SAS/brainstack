@@ -20,6 +20,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@brainstack/core/pg': resolve(CORE, 'pg/index.ts'),
+      '@brainstack/core/sentinel': resolve(CORE, 'sentinel/index.ts'),
       '@brainstack/core': resolve(CORE, 'index.ts'),
     },
   },

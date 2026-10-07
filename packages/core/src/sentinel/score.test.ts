@@ -13,7 +13,7 @@ import {
   searchScore,
   topFrontier,
   type Digest,
-} from './contextCrawl.js';
+} from './score.js';
 
 const named = (path: string) => ({
   path,

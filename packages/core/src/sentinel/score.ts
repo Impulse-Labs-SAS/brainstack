@@ -1,6 +1,5 @@
-// The scoring half of `gather_context` — pure and DB-free, tested directly in
-// Node like relatedNotes.ts. gatherContext.ts does the reading and hands the
-// rows here.
+// Sentinel's scoring — pure and DB-free. crawl.ts does the reading, through a
+// ContextSource, and hands the rows here.
 //
 // A crawl starts from seeds — notes the text names, and the best search hits
 // for the phrases the caller found vague — and follows wikilinks out from

@@ -17,10 +17,10 @@ import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import {
   gatherContext,
   MAX_DEPTH,
+  MAX_MAX_CHARS,
   MAX_TERMS,
   MAX_TEXT_CHARS,
 } from '../services/gatherContext.js';
-import { MAX_MAX_CHARS } from '../services/contextCrawl.js';
 import type { InviteService } from '../services/InviteService.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
