@@ -185,8 +185,23 @@ export async function crawlContext(
   }
 
   // -- Seeds: what the vague phrases find ------------------------------------
-  // A term the text already named or linked is not a second reference.
-  const vague = terms.filter((t) => !settledTerms.has(foldForMatch(t)));
+  // A word the text already resolved to a note is left out of every search
+  // below. That note is in the result, and its neighbourhood comes with it
+  // along the links; searched again, the word only finds everything else about
+  // the same subject — in a vault about one product, every note says its name
+  // — and full-text ranking, which cannot tell a word that is everywhere from
+  // one that is rare, puts those first. So a term made only of such words is
+  // not a second reference, and "planes Zuno" is searched as "planes".
+  const namedWords = new Set([...named.values()].flatMap(({ text: said }) => foldedWords(said)));
+  const withoutNamed = (phrase: string) => {
+    const words = phrase.split(WORD_BREAK).filter(Boolean);
+    const kept = words.filter((w) => !namedWords.has(foldForMatch(w)));
+    return kept.length === words.length ? phrase : kept.join(' ');
+  };
+  const vague = terms
+    .filter((t) => !settledTerms.has(foldForMatch(t)))
+    .map((term) => ({ term, query: withoutNamed(term) }))
+    .filter((t) => t.query !== '');
   let termsResolved = 0;
   for (const { term, hits } of await searchTerms(source, vague)) {
     if (hits.length === 0) {
@@ -204,7 +219,7 @@ export async function crawlContext(
   // annual pricing?" — so the text itself is searched too, with the words that
   // carry meaning. It ranks under a link from a named note: a link someone
   // wrote says more than a shared word.
-  const words = meaningfulWords(text);
+  const words = meaningfulWords(text).filter((w) => !namedWords.has(foldForMatch(w)));
   if (words.length > 0) {
     const hits = await source.search(words.join(' '), PROMPT_HITS);
     hits
@@ -261,21 +276,28 @@ export async function crawlContext(
  */
 async function searchTerms(
   source: ContextSource,
-  terms: readonly string[],
+  terms: ReadonlyArray<{ term: string; query: string }>,
 ): Promise<Array<{ term: string; hits: Array<{ path: string }> }>> {
   const out: Array<{ term: string; hits: Array<{ path: string }> }> = [];
   for (let i = 0; i < terms.length; i += SEARCH_BATCH) {
     const batch = terms.slice(i, i + SEARCH_BATCH);
     out.push(
       ...(await Promise.all(
-        batch.map(async (term) => ({
+        batch.map(async ({ term, query }) => ({
           term,
-          hits: await source.search(term, SEARCH_HITS_PER_TERM),
+          hits: await source.search(query, SEARCH_HITS_PER_TERM),
         })),
       )),
     );
   }
   return out;
+}
+
+const WORD_BREAK = /[^\p{L}\p{N}]+/u;
+
+/** The words of a phrase, folded. */
+function foldedWords(phrase: string): string[] {
+  return phrase.split(WORD_BREAK).map(foldForMatch).filter(Boolean);
 }
 
 /**
@@ -311,7 +333,7 @@ const MAX_PROMPT_WORDS = 16;
 function meaningfulWords(text: string): string[] {
   const seen = new Set<string>();
   const words: string[] = [];
-  for (const raw of text.split(/[^\p{L}\p{N}]+/u)) {
+  for (const raw of text.split(WORD_BREAK)) {
     const key = foldForMatch(raw);
     if (key.length < 4 || STOPWORDS.has(key) || seen.has(key)) continue;
     seen.add(key);

@@ -6,6 +6,7 @@ import {
   HOP_DECAY,
   MIN_EXCERPT_CHARS,
   NAMED_SCORE,
+  describeCandidate,
   describeVia,
   excerpt,
   expandHop,
@@ -35,6 +36,48 @@ describe('CandidateSet', () => {
     set.offer(named('a.md'));
     set.offer({ path: 'a.md', score: 0.5, via: { kind: 'search', term: 'y', rank: 2 } });
     expect(set.get('a.md')?.via.kind).toBe('named');
+    expect(set.get('a.md')?.score).toBe(NAMED_SCORE);
+  });
+
+  it('ranks a note several searches find above one a single search finds first', () => {
+    const set = new CandidateSet();
+    set.offer({
+      path: 'first.md',
+      score: searchScore(0),
+      via: { kind: 'search', term: 'x', rank: 0 },
+    });
+    for (const term of ['x', 'y', 'z']) {
+      set.offer({
+        path: 'every.md',
+        score: searchScore(2),
+        via: { kind: 'search', term, rank: 2 },
+      });
+    }
+    expect(set.get('every.md')!.score).toBeGreaterThan(set.get('first.md')!.score);
+    expect(set.get('every.md')!.score).toBeLessThan(NAMED_SCORE);
+    expect(set.get('every.md')).toMatchObject({ via: { term: 'x' }, also: ['y', 'z'] });
+  });
+
+  it('counts the same search once, however often it is offered', () => {
+    const set = new CandidateSet();
+    const hit = { path: 'a.md', score: 0.5, via: { kind: 'search' as const, term: 'x', rank: 2 } };
+    set.offer(hit);
+    set.offer(hit);
+    expect(set.get('a.md')!.score).toBe(0.5);
+  });
+
+  it('adds a search to a link: a written link and a shared word are two reasons', () => {
+    const set = new CandidateSet();
+    const linked = {
+      kind: 'linked' as const,
+      from: 'hub.md',
+      fromTitle: 'Hub',
+      direction: 'out' as const,
+      hop: 1,
+    };
+    set.offer({ path: 'a.md', score: 0.5, via: linked });
+    set.offer({ path: 'a.md', score: 0.4, via: { kind: 'search', term: 'x', rank: 3 } });
+    expect(set.get('a.md')).toMatchObject({ score: 0.7, via: linked, also: ['x'] });
   });
 });
 
@@ -114,6 +157,15 @@ describe('describeVia', () => {
       'the text says "Roadmap" (3×)',
     );
     expect(describeVia({ kind: 'search', term: 'pricing', rank: 0 })).toBe('matches "pricing"');
+    expect(
+      describeCandidate({ kind: 'search', term: 'pricing', rank: 0 }, ['tiers', 'plans']),
+    ).toBe('matches "pricing", "tiers" and "plans"');
+    expect(
+      describeCandidate(
+        { kind: 'linked', from: 'b.md', fromTitle: 'Billing', direction: 'out', hop: 1 },
+        ['tiers'],
+      ),
+    ).toBe('linked from Billing; also matches "tiers"');
     expect(
       describeVia({ kind: 'linked', from: 'b.md', fromTitle: 'Billing', direction: 'out', hop: 1 }),
     ).toBe('linked from Billing');

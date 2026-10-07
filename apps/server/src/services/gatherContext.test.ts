@@ -208,6 +208,65 @@ describe('gatherContext', () => {
     expect(result.notes[0]!.excerpt.length).toBeGreaterThan(2_500);
   });
 
+  it('finds the note a question is about in a vault where every note shares its subject', async () => {
+    // Every note here mentions Zuno, most of them many times, and full-text
+    // ranking has no notion of a word being everywhere. The note the question
+    // is about names it once — but its title says "Planes", and it is the one
+    // note each of the caller's terms finds.
+    const filler = (topic: string) =>
+      `Zuno ${topic}: zuno-api, zuno-web y zuno-worker. `.repeat(60) +
+      'Más detalle técnico. '.repeat(80);
+    const projects = [
+      'Arquitectura',
+      'Infraestructura',
+      'Webhooks',
+      'Frontend',
+      'Seguridad',
+      'Datos',
+    ];
+    for (const p of projects) {
+      await notes.create(ME, `zuno/${p.toLowerCase()}.md`, `# ${p} — Zuno ERP\n\n${filler(p)}`);
+    }
+    await notes.create(
+      ME,
+      'zuno/comercial/economia-de-la-ia.md',
+      `# Economía de la IA en Zuno\n\nEl router elige entre dos tiers de costo. Los precios del proveedor quedan afuera.\n\n${filler('IA')}`,
+    );
+    await notes.create(
+      ME,
+      'zuno/ideas/precio-mayorista.md',
+      `# Idea — Precio mayorista por cantidad\n\nEl modelo de precios de Zuno ya soporta precios por cliente; una tabla item_price_tiers.\n\n${filler('precios')}`,
+    );
+    await notes.create(
+      ME,
+      'zuno/comercial/planes-y-pricing.md',
+      '# Planes y pricing\n\nCómo cobra Zuno a sus clientes: estructura de planes, eje de valor y modelo comercial.\n\n' +
+        '- 3 tiers como ancla: Crecimiento es el target.\n- La banda de precios del mercado.\n\n' +
+        'Detalle de cada plan y sus límites. '.repeat(40),
+    );
+    const all = [
+      ...projects.map((p) => `zuno/${p.toLowerCase()}`),
+      'zuno/comercial/economia-de-la-ia',
+      'zuno/ideas/precio-mayorista',
+      'zuno/comercial/planes-y-pricing',
+    ];
+    await notes.create(
+      ME,
+      'zuno/_zuno.md',
+      `# Zuno\n\nERP SaaS multi-tenant.\n\n${all.map((p) => `- [[${p}]] — ${'descripción de la nota '.repeat(12)}`).join('\n')}`,
+    );
+
+    const result = await gather('¿Cuáles son los planes de Zuno y sus precios?', {
+      terms: ['planes Zuno', 'tiers', 'precios'],
+    });
+    expect(result.notes.map((n) => n.path).slice(0, 2)).toEqual([
+      'zuno/_zuno.md',
+      'zuno/comercial/planes-y-pricing.md',
+    ]);
+    expect(result.notes[1]!.reason).toBe('matches "planes Zuno", "tiers" and "precios"');
+    expect(result.coverage).toEqual({ resolved: 4, total: 4 });
+  });
+
   it('never returns another user’s notes, however plainly the text names them', async () => {
     await notes.create(SOMEONE_ELSE, 'secret.md', '# Secret project\n\nHidden.');
     await notes.create(ME, 'mine.md', '# My project');
