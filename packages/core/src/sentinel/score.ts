@@ -67,6 +67,13 @@ export const DECISION_BONUS = 0.25;
  * Smaller than one step of the lead-link bonus, so link order still decides.
  */
 export const LINKED_DECISION_BONUS = 0.01;
+/**
+ * Kept by a hit for the question that never says what the text named. "A
+ * general overview of Zuno" also finds every other project's "general
+ * overview"; it is still the question's word, so it stays, under the notes
+ * the named one links to.
+ */
+export const OFF_TOPIC_FACTOR = 0.5;
 /** Notes that did not fit, listed by title so the caller knows they exist. */
 export const LEFT_OUT_LISTED = 20;
 
@@ -232,6 +239,42 @@ function outgoingRanks<E extends { source: string; position?: number }>(
     list.sort((a, b) => a.position! - b.position!).forEach((e, i) => ranks.set(e, i));
   }
   return ranks;
+}
+
+/**
+ * When the text named notes, a candidate the question's search brought in
+ * that never mentions anything the text named is about something else: its
+ * score is cut by OFF_TOPIC_FACTOR. So is a note reached only from one of
+ * those, unless it mentions a named term itself. Notes the text names, a
+ * term's search hits and anything linked from a named note are left alone.
+ * `fold` folds text for matching, as mentions are matched.
+ */
+export function demoteOffTopic(
+  candidates: readonly Candidate[],
+  digests: ReadonlyMap<string, Digest>,
+  namedTexts: readonly string[],
+  fold: (text: string) => string,
+): Candidate[] {
+  const needles = namedTexts.map(fold).filter(Boolean);
+  if (needles.length === 0) return [...candidates];
+  const mentions = (path: string) => {
+    const d = digests.get(path);
+    if (!d) return true; // unread: nothing to judge it by
+    const hay = fold(`${d.title}\n${d.body}`);
+    return needles.some((n) => hay.includes(n));
+  };
+  const offTopic = new Set<string>();
+  for (const c of candidates) {
+    if (c.via.kind === 'prompt' && !mentions(c.path)) offTopic.add(c.path);
+  }
+  for (const c of candidates) {
+    if (c.via.kind === 'linked' && offTopic.has(c.via.from) && !mentions(c.path)) {
+      offTopic.add(c.path);
+    }
+  }
+  return candidates.map((c) =>
+    offTopic.has(c.path) ? { ...c, score: c.score * OFF_TOPIC_FACTOR } : c,
+  );
 }
 
 /** The strongest `limit` of `paths`, by their current score. */

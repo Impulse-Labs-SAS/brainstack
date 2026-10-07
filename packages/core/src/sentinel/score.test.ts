@@ -11,6 +11,7 @@ import {
   OUT_DECAY,
   hopDecay,
   describeCandidate,
+  demoteOffTopic,
   describeVia,
   excerpt,
   expandHop,
@@ -150,6 +151,54 @@ describe('expandHop', () => {
     const reached = expandHop(set, ['a.md'], [{ source: 'a.md', target: 'b.md' }], 1, (p) => p);
     expect(reached).toEqual([]);
     expect(set.get('b.md')?.via.kind).toBe('named');
+  });
+});
+
+describe('demoteOffTopic', () => {
+  const fold = (s: string) => s.toLowerCase();
+  const prompt = (path: string) => ({
+    path,
+    score: 0.6,
+    via: { kind: 'prompt' as const, rank: 0 },
+  });
+  const linkedFrom = (path: string, from: string) => ({
+    path,
+    score: 0.3,
+    via: { kind: 'linked' as const, from, fromTitle: from, direction: 'out' as const, hop: 1 },
+  });
+  const digests = new Map([
+    ['other.md', digest('other.md', 'Visión general de otro producto')],
+    ['near.md', digest('near.md', 'Cómo Zuno factura')],
+    ['child.md', digest('child.md', 'Detalle del otro producto')],
+    ['zuno-child.md', digest('zuno-child.md', 'Un módulo de Zuno')],
+  ]);
+
+  it('halves a question hit that never says what the text named', () => {
+    const out = demoteOffTopic([prompt('other.md'), prompt('near.md')], digests, ['Zuno'], fold);
+    expect(out.map((c) => c.score)).toEqual([0.3, 0.6]);
+  });
+
+  it('halves what only an off-topic hit led to, unless it mentions the named term', () => {
+    const out = demoteOffTopic(
+      [prompt('other.md'), linkedFrom('child.md', 'other.md'), linkedFrom('zuno-child.md', 'other.md')],
+      digests,
+      ['Zuno'],
+      fold,
+    );
+    expect(out.map((c) => c.score)).toEqual([0.3, 0.15, 0.3]);
+  });
+
+  it('leaves everything alone when the text named nothing', () => {
+    const out = demoteOffTopic([prompt('other.md')], digests, [], fold);
+    expect(out[0]!.score).toBe(0.6);
+  });
+
+  it('leaves a note the text named, or a term found, alone', () => {
+    const term = { path: 'other.md', score: 0.7, via: { kind: 'search' as const, term: 'x', rank: 0 } };
+    expect(demoteOffTopic([named('other.md'), term], digests, ['Zuno'], fold).map((c) => c.score)).toEqual([
+      NAMED_SCORE,
+      0.7,
+    ]);
   });
 });
 

@@ -35,6 +35,7 @@ import {
   LEFT_OUT_LISTED,
   MAX_NOTES,
   NAMED_SCORE,
+  demoteOffTopic,
   describeCandidate,
   SEARCH_HITS_PER_TERM,
   expandHop,
@@ -267,7 +268,15 @@ export async function crawlContext(
       )
     ).map((d) => [d.path, d]),
   );
-  const packed = packContext(strongest, digests, maxChars);
+  // A word of the question can find another subject's note; once the text has
+  // named what it is about, those weigh less than what the named note links to.
+  const onTopic = demoteOffTopic(
+    strongest,
+    digests,
+    [...named.values()].map((n) => n.text),
+    foldForMatch,
+  );
+  const packed = packContext(onTopic, digests, maxChars);
   // Past the notes read, the ranking goes on: the next ones by score, named
   // by the title the index already gave.
   const unread = set
