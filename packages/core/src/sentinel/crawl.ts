@@ -32,8 +32,10 @@ import {
   DEFAULT_MAX_CHARS,
   MAX_MAX_CHARS,
   DIGEST_BODY_CHARS,
+  LEFT_OUT_LISTED,
   MAX_NOTES,
   NAMED_SCORE,
+  describeCandidate,
   SEARCH_HITS_PER_TERM,
   expandHop,
   packContext,
@@ -42,6 +44,7 @@ import {
   topFrontier,
   type ContextNote,
   type Digest,
+  type LeftOutNote,
 } from './score.js';
 
 export const MAX_TEXT_CHARS = 50_000;
@@ -75,14 +78,26 @@ export interface GatherContextResult {
   /** References found in the text or passed as terms, and how many were settled. */
   coverage: { resolved: number; total: number };
   budget: { maxChars: number; usedChars: number; notesLeftOut: number };
+  /**
+   * The strongest notes that did not fit, best first, without bodies: what the
+   * caller should open with get_note if the answer needs it. Without it, a
+   * caller only learns that *something* was left out.
+   */
+  leftOut: LeftOutNote[];
 }
 
 /** Where the engine reads from. Paths are whatever the source uses to name a note. */
 export interface ContextSource {
   /** Every note the reader may see: path, title and aliases. No bodies. */
   titles(): Promise<Array<{ path: string; title: string; aliases: unknown[] }>>;
-  /** Note-to-note links touching any of `paths`, in either direction. */
-  links(paths: readonly string[]): Promise<Array<{ source: string; target: string }>>;
+  /**
+   * Note-to-note links touching any of `paths`, in either direction. `position`
+   * — where in its source the link is written — is optional; with it, a
+   * note's first links weigh a little more.
+   */
+  links(
+    paths: readonly string[],
+  ): Promise<Array<{ source: string; target: string; position?: number }>>;
   /** Title, the first `bodyChars` of the body and whether it is a decision, for each path that exists. */
   digests(paths: readonly string[], bodyChars: number): Promise<Digest[]>;
   /** Full-text hits for a query, best first, at most `limit`. */
@@ -253,6 +268,14 @@ export async function crawlContext(
     ).map((d) => [d.path, d]),
   );
   const packed = packContext(strongest, digests, maxChars);
+  // Past the notes read, the ranking goes on: the next ones by score, named
+  // by the title the index already gave.
+  const unread = set
+    .all()
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+    .slice(DIGEST_LIMIT, DIGEST_LIMIT + LEFT_OUT_LISTED)
+    .map((c) => ({ path: c.path, title: title(c.path), reason: describeCandidate(c.via, c.also) }));
+  const leftOut = [...packed.leftOut, ...unread].slice(0, LEFT_OUT_LISTED);
 
   return {
     notes: packed.notes,
@@ -266,6 +289,7 @@ export async function crawlContext(
       usedChars: packed.chars,
       notesLeftOut: packed.dropped + Math.max(0, set.all().length - strongest.length),
     },
+    leftOut,
   };
 }
 

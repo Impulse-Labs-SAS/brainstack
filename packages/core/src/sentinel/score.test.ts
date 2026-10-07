@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   CandidateSet,
   DECISION_BONUS,
-  HOP_DECAY,
+  IN_DECAY,
+  LEAD_LINK_BONUS,
+  LINKED_DECISION_BONUS,
   MIN_EXCERPT_CHARS,
   NAMED_SCORE,
+  OUT_DECAY,
+  hopDecay,
   describeCandidate,
   describeVia,
   excerpt,
@@ -90,7 +94,7 @@ describe('searchScore', () => {
 });
 
 describe('expandHop', () => {
-  it('follows links both ways and halves the score per hop', () => {
+  it('follows links both ways, keeping more of the score along a link the note wrote', () => {
     const set = new CandidateSet();
     set.offer(named('seed.md'));
     const edges = [
@@ -102,11 +106,41 @@ describe('expandHop', () => {
 
     expect(reached.sort()).toEqual(['in.md', 'out.md']);
     expect(set.get('out.md')).toMatchObject({
-      score: NAMED_SCORE * HOP_DECAY,
+      score: NAMED_SCORE * OUT_DECAY,
       via: { kind: 'linked', from: 'seed.md', fromTitle: 'SEED.MD', direction: 'out', hop: 1 },
     });
+    expect(set.get('in.md')?.score).toBeCloseTo(NAMED_SCORE * IN_DECAY);
     expect(set.get('in.md')?.via).toMatchObject({ direction: 'in' });
     expect(set.has('far.md')).toBe(false);
+  });
+
+  it('weighs a note’s first links above its later ones', () => {
+    const set = new CandidateSet();
+    set.offer(named('index.md'));
+    const edges = [
+      { source: 'index.md', target: 'third.md', position: 300 },
+      { source: 'index.md', target: 'first.md', position: 10 },
+      { source: 'index.md', target: 'second.md', position: 120 },
+      { source: 'index.md', target: 'unplaced.md' },
+    ];
+    expandHop(set, ['index.md'], edges, 1, (p) => p);
+    const score = (p: string) => set.get(p)!.score;
+    expect(score('first.md')).toBeCloseTo(OUT_DECAY + LEAD_LINK_BONUS);
+    expect(score('first.md')).toBeGreaterThan(score('second.md'));
+    expect(score('second.md')).toBeGreaterThan(score('third.md'));
+    expect(score('unplaced.md')).toBe(OUT_DECAY);
+  });
+
+  it('keeps a decision that only links in under any note the seed links out to', () => {
+    // The case that prompted the split: an index's overview lost to decisions
+    // that merely mention the product.
+    expect(hopDecay('in') + LINKED_DECISION_BONUS).toBeLessThan(hopDecay('out'));
+  });
+
+  it('lets a decision break a tie between links, never jump the link order', () => {
+    const step = hopDecay('out', 0) - hopDecay('out', 1);
+    expect(LINKED_DECISION_BONUS).toBeGreaterThan(0);
+    expect(LINKED_DECISION_BONUS).toBeLessThan(step);
   });
 
   it('does not demote a seed that a neighbour links back to', () => {
@@ -201,6 +235,25 @@ describe('packContext', () => {
     expect(chars).toBeLessThanOrEqual(budget);
     expect(notes.every((n) => n.truncated)).toBe(true);
     expect(dropped).toBeGreaterThan(0);
+  });
+
+  it('names the notes that did not fit, best first, without their bodies', () => {
+    const candidates = [
+      named('big.md'),
+      { path: 'next.md', score: 0.7, via: { kind: 'search' as const, term: 'x', rank: 0 } },
+      { path: 'last.md', score: 0.2, via: { kind: 'search' as const, term: 'x', rank: 5 } },
+    ];
+    const digests = new Map(
+      candidates.map((c) => [c.path, digest(c.path, 'word '.repeat(400))]),
+    );
+    // Room for the first body whole (1,999 characters once trimmed), and then
+    // less than an excerpt worth reading.
+    const { notes, leftOut } = packContext(candidates, digests, 1_999 + MIN_EXCERPT_CHARS - 1);
+    expect(notes.map((n) => n.path)).toEqual(['big.md']);
+    expect(leftOut).toEqual([
+      { path: 'next.md', title: 'next', reason: 'matches "x"' },
+      { path: 'last.md', title: 'last', reason: 'matches "x"' },
+    ]);
   });
 
   it('stops once what is left is too little to read', () => {
