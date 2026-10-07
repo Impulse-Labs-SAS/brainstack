@@ -121,7 +121,9 @@ describe('gatherContext', () => {
     // Both link to the hub, so nothing in the link order tells them apart.
     await notes.create(ME, 'hub.md', '# Launch plan');
     await notes.create(ME, 'notes.md', '# Meeting notes\n\nFor [[hub]].');
-    await notes.create(ME, 'decided.md', '# Go with plan B\n\nFor [[hub]].', { tags: ['decision'] });
+    await notes.create(ME, 'decided.md', '# Go with plan B\n\nFor [[hub]].', {
+      tags: ['decision'],
+    });
 
     const result = await gather('Launch plan');
     const linked = result.notes.filter((n) => n.via.kind === 'linked');
@@ -210,12 +212,12 @@ describe('gatherContext', () => {
   });
 
   it('finds the note a question is about in a vault where every note shares its subject', async () => {
-    // Every note here mentions Zuno, most of them many times, and full-text
+    // Every note here mentions Orbit, most of them many times, and full-text
     // ranking has no notion of a word being everywhere. The note the question
     // is about names it once — but its title says "Planes", and it is the one
     // note each of the caller's terms finds.
     const filler = (topic: string) =>
-      `Zuno ${topic}: zuno-api, zuno-web y zuno-worker. `.repeat(60) +
+      `Orbit ${topic}: orbit-api, orbit-web y orbit-worker. `.repeat(60) +
       'Más detalle técnico. '.repeat(80);
     const projects = [
       'Arquitectura',
@@ -226,110 +228,129 @@ describe('gatherContext', () => {
       'Datos',
     ];
     for (const p of projects) {
-      await notes.create(ME, `zuno/${p.toLowerCase()}.md`, `# ${p} — Zuno ERP\n\n${filler(p)}`);
+      await notes.create(ME, `orbit/${p.toLowerCase()}.md`, `# ${p} — Orbit\n\n${filler(p)}`);
     }
     await notes.create(
       ME,
-      'zuno/comercial/economia-de-la-ia.md',
-      `# Economía de la IA en Zuno\n\nEl router elige entre dos tiers de costo. Los precios del proveedor quedan afuera.\n\n${filler('IA')}`,
+      'orbit/comercial/costos-de-proveedores.md',
+      `# Costos de proveedores en Orbit\n\nDos tiers de costo. Los precios de cada proveedor.\n\n${filler('IA')}`,
     );
     await notes.create(
       ME,
-      'zuno/ideas/precio-mayorista.md',
-      `# Idea — Precio mayorista por cantidad\n\nEl modelo de precios de Zuno ya soporta precios por cliente; una tabla item_price_tiers.\n\n${filler('precios')}`,
+      'orbit/ideas/descuentos-por-volumen.md',
+      `# Idea — Descuentos por volumen\n\nLos precios de Orbit por cliente; una tabla price_tiers.\n\n${filler('precios')}`,
     );
     await notes.create(
       ME,
-      'zuno/comercial/planes-y-pricing.md',
-      '# Planes y pricing\n\nCómo cobra Zuno a sus clientes: estructura de planes, eje de valor y modelo comercial.\n\n' +
-        '- 3 tiers como ancla: Crecimiento es el target.\n- La banda de precios del mercado.\n\n' +
+      'orbit/comercial/planes-y-pricing.md',
+      '# Planes y pricing\n\nCómo cobra Orbit a sus clientes: estructura de planes.\n\n' +
+        '- Tres tiers.\n- Precios por mes.\n\n' +
         'Detalle de cada plan y sus límites. '.repeat(40),
     );
     const all = [
-      ...projects.map((p) => `zuno/${p.toLowerCase()}`),
-      'zuno/comercial/economia-de-la-ia',
-      'zuno/ideas/precio-mayorista',
-      'zuno/comercial/planes-y-pricing',
+      ...projects.map((p) => `orbit/${p.toLowerCase()}`),
+      'orbit/comercial/costos-de-proveedores',
+      'orbit/ideas/descuentos-por-volumen',
+      'orbit/comercial/planes-y-pricing',
     ];
     await notes.create(
       ME,
-      'zuno/_zuno.md',
-      `# Zuno\n\nERP SaaS multi-tenant.\n\n${all.map((p) => `- [[${p}]] — ${'descripción de la nota '.repeat(12)}`).join('\n')}`,
+      'orbit/_orbit.md',
+      `# Orbit\n\nUn producto.\n\n${all.map((p) => `- [[${p}]] — ${'descripción de la nota '.repeat(12)}`).join('\n')}`,
     );
 
-    const result = await gather('¿Cuáles son los planes de Zuno y sus precios?', {
-      terms: ['planes Zuno', 'tiers', 'precios'],
+    const result = await gather('¿Cuáles son los planes de Orbit y sus precios?', {
+      terms: ['planes Orbit', 'tiers', 'precios'],
     });
     expect(result.notes.map((n) => n.path).slice(0, 2)).toEqual([
-      'zuno/_zuno.md',
-      'zuno/comercial/planes-y-pricing.md',
+      'orbit/_orbit.md',
+      'orbit/comercial/planes-y-pricing.md',
     ]);
-    expect(result.notes[1]!.reason).toBe('matches "planes Zuno", "tiers" and "precios"');
+    expect(result.notes[1]!.reason).toBe(
+      'matches "planes Orbit", "tiers" and "precios"; also linked from Orbit',
+    );
     expect(result.coverage).toEqual({ resolved: 4, total: 4 });
   });
 
   it('puts the overview an index links to first above decisions that only mention it', async () => {
-    // The case from production: "¿Qué es Zuno?" filled the budget with four
-    // decisions that link *to* Zuno, and left out the overview its own index
+    // "What is <product>?" could fill the budget with decisions that link *to*
+    // the product, and leave out the overview its own index
     // puts first under "start here".
     const long = (what: string) => `${what}. ${'Detalle del producto y su contexto. '.repeat(60)}`;
     const areas = ['area-1', 'area-2', 'area-3', 'area-4', 'area-5', 'area-6', 'area-7'];
-    await notes.create(ME, 'zuno/vision-general.md', `# Visión general\n\n${long('Qué es Zuno')}`);
+    await notes.create(
+      ME,
+      'orbit/vision-general.md',
+      `# Visión general\n\n${long('Qué es Orbit')}`,
+    );
     for (const a of areas) {
-      await notes.create(ME, `zuno/${a}.md`, `# Área ${a.slice(-1)}\n\n${long(a)}`);
+      await notes.create(ME, `orbit/${a}.md`, `# Área ${a.slice(-1)}\n\n${long(a)}`);
     }
     for (const d of ['convenciones', 'design-system', 'lecciones', 'subscription']) {
       await notes.create(
         ME,
-        `zuno/decisiones/${d}.md`,
-        `# Decisión ${d}\n\nAplica a [[zuno/_zuno]]. ${long(d)}`,
+        `orbit/decisiones/${d}.md`,
+        `# Decisión ${d}\n\nAplica a [[orbit/_orbit]]. ${long(d)}`,
         { tags: ['decision'] },
       );
     }
-    // As in production, the index also links out to most of its decisions.
+    // As a real index does, it also links out to most of its decisions.
     await notes.create(
       ME,
-      'zuno/_zuno.md',
-      `# Zuno\n\nPor dónde empezar: [[zuno/vision-general]].\n\n${[
-        ...['convenciones', 'design-system', 'lecciones', 'subscription'].map((d) => `zuno/decisiones/${d}`),
-        ...areas.map((a) => `zuno/${a}`),
+      'orbit/_orbit.md',
+      `# Orbit\n\nPor dónde empezar: [[orbit/vision-general]].\n\n${[
+        ...['convenciones', 'design-system', 'lecciones', 'subscription'].map(
+          (d) => `orbit/decisiones/${d}`,
+        ),
+        ...areas.map((a) => `orbit/${a}`),
       ]
         .map((p) => `- [[${p}]]`)
         .join('\n')}`,
     );
 
-    const result = await gather('¿Qué es Zuno?');
+    const result = await gather('¿Qué es Orbit?');
     const order = result.notes.map((n) => n.path);
-    expect(order[0]).toBe('zuno/_zuno.md');
-    expect(order[1]).toBe('zuno/vision-general.md');
-    const decisions = order.filter((p) => p.startsWith('zuno/decisiones/'));
+    expect(order[0]).toBe('orbit/_orbit.md');
+    expect(order[1]).toBe('orbit/vision-general.md');
+    const decisions = order.filter((p) => p.startsWith('orbit/decisiones/'));
     for (const d of decisions) expect(order.indexOf(d)).toBeGreaterThan(1);
 
     // What did not fit is named, so the assistant can open it.
     expect(result.budget.notesLeftOut).toBeGreaterThan(0);
     expect(result.leftOut).toHaveLength(result.budget.notesLeftOut);
-    expect(result.leftOut[0]).toMatchObject({ path: expect.any(String), title: expect.any(String) });
+    expect(result.leftOut[0]).toMatchObject({
+      path: expect.any(String),
+      title: expect.any(String),
+    });
   });
 
   it('keeps another subject’s notes that share a word of the question under what the named note links to', async () => {
-    // From production: "a general concept of Zuno" also brought BrainStack's
-    // overview, which says "general" but never "Zuno", ahead of Zuno's notes.
+    // "A general concept of <product>" could also bring another project's
+    // overview, which says "general" but never the product, ahead of its notes.
     // A small index, so the budget has room and the other subject's notes come
     // back: what is tested is the weight they come back with.
     const long = (what: string) => `${what}. ${'Detalle del módulo y su contexto. '.repeat(20)}`;
-    const areas = Array.from({ length: 2 }, (_, i) => `zuno/area-${i}`);
+    const areas = Array.from({ length: 2 }, (_, i) => `orbit/area-${i}`);
     for (const a of areas) await notes.create(ME, `${a}.md`, `# Área ${a.slice(-1)}\n\n${long(a)}`);
-    await notes.create(ME, 'zuno/vision-general.md', `# Zuno ERP — Visión general\n\n${long('Qué es')}`);
     await notes.create(
       ME,
-      'zuno/_zuno.md',
-      `# Zuno\n\n${['zuno/vision-general', ...areas].map((p) => `- [[${p}]]`).join('\n')}`,
+      'orbit/vision-general.md',
+      `# Orbit — Visión general\n\n${long('Qué es')}`,
+    );
+    await notes.create(
+      ME,
+      'orbit/_orbit.md',
+      `# Orbit\n\n${['orbit/vision-general', ...areas].map((p) => `- [[${p}]]`).join('\n')}`,
     );
     // The other subject is linked too, as a vault is: its index says the words
     // and puts its overview first, and its notes link back to the index. That
-    // is how its overview scored over Zuno's links in production (0.637).
+    // is how its overview could score over the product's links.
     const general = 'Concepto general, visión general, concepto general del producto. ';
-    await notes.create(ME, 'brainstack/vision-general.md', `# Visión general\n\n${general.repeat(20)}`);
+    await notes.create(
+      ME,
+      'brainstack/vision-general.md',
+      `# Visión general\n\n${general.repeat(20)}`,
+    );
     await notes.create(
       ME,
       'brainstack/_brainstack.md',
@@ -343,20 +364,82 @@ describe('gatherContext', () => {
       );
     }
 
-    const result = await gather('Dame un concepto general de Zuno');
-    const zuno = result.notes.filter((n) => n.path.startsWith('zuno/'));
+    const result = await gather('Dame un concepto general de Orbit');
+    const orbit = result.notes.filter((n) => n.path.startsWith('orbit/'));
     const other = result.notes.filter((n) => n.path.startsWith('brainstack/'));
-    expect(zuno.map((n) => n.path)).toEqual(
-      expect.arrayContaining(['zuno/_zuno.md', 'zuno/vision-general.md', ...areas.map((a) => `${a}.md`)]),
+    expect(orbit.map((n) => n.path)).toEqual(
+      expect.arrayContaining([
+        'orbit/_orbit.md',
+        'orbit/vision-general.md',
+        ...areas.map((a) => `${a}.md`),
+      ]),
     );
     // They still come back — the question did say "general" — but halved:
-    // under every Zuno note, and at most half of the most a question hit,
-    // reinforced by a link, can reach.
+    // under every Orbit note, and at most half of what any note the text does
+    // not name can reach, however many reasons add up for it.
     expect(other.length).toBeGreaterThan(0);
-    const weakestZuno = Math.min(...zuno.map((n) => n.score));
+    const weakestOrbit = Math.min(...orbit.map((n) => n.score));
     for (const n of other) {
-      expect(n.score).toBeLessThan(weakestZuno);
-      expect(n.score).toBeLessThanOrEqual(0.3);
+      expect(n.score).toBeLessThan(weakestOrbit);
+      expect(n.score).toBeLessThanOrEqual(0.5);
+    }
+  });
+
+  it('brings the note several results link to, ahead of the indexes that named it', async () => {
+    // A question that spans two projects names both their indexes. Read as
+    // seeds, their lists of links filled the budget and left out the one note
+    // all three results link to — the contract between the two.
+    const long = (what: string) => `${what}. ${'Detalle y contexto de la nota. '.repeat(150)}`;
+    const orbitAreas = Array.from({ length: 20 }, (_, i) => `orbit/area-${i}`);
+    const ledgerAreas = Array.from({ length: 20 }, (_, i) => `ledger/area-${i}`);
+    for (const a of [...orbitAreas, ...ledgerAreas]) {
+      await notes.create(ME, `${a}.md`, `# Área ${a}\n\n${long(a)}`);
+    }
+    await notes.create(
+      ME,
+      'ledger/integracion-con-orbit.md',
+      `# Integración con Orbit — el contrato entre los dos servicios\n\n${long('El contrato')}`,
+    );
+    await notes.create(
+      ME,
+      'orbit/ventas-y-facturacion.md',
+      `# Ventas y facturación\n\nEmitir una factura electrónica llama a Ledger, que la registra; ` +
+        `ver [[ledger/integracion-con-orbit]]. ${long('Facturación electrónica')}`,
+      { tags: ['decision'] },
+    );
+    const index = (title: string, paths: string[]) =>
+      `# ${title}\n\n${paths.map((p) => `- [[${p}]] — ${'qué cubre esta nota y por qué. '.repeat(9)}`).join('\n')}`;
+    await notes.create(
+      ME,
+      'orbit/_orbit.md',
+      index('Orbit', ['orbit/ventas-y-facturacion', ...orbitAreas, 'ledger/integracion-con-orbit']),
+    );
+    await notes.create(
+      ME,
+      'ledger/_billing.md',
+      index('Ledger', [...ledgerAreas, 'ledger/integracion-con-orbit']),
+    );
+
+    const result = await gather(
+      '¿Cómo se integra Orbit con el Ledger para la facturación electrónica?',
+    );
+    const order = result.notes.map((n) => n.path);
+    expect(order).toContain('ledger/integracion-con-orbit.md');
+    const contract = result.notes.find((n) => n.path === 'ledger/integracion-con-orbit.md')!;
+    expect(contract.reason).toMatch(/^linked from /);
+    for (const from of ['Orbit', 'Ledger', 'Ventas y facturación']) {
+      expect(contract.reason).toContain(from);
+    }
+    // Linked from three results, it outranks every note only one of them links to.
+    for (const a of [...orbitAreas, ...ledgerAreas]) {
+      const area = result.notes.find((n) => n.path === `${a}.md`);
+      if (area) expect(area.score).toBeLessThan(contract.score);
+    }
+    // An index is read for its links, which the crawl has already followed:
+    // it costs the budget what a linked note does, not what a seed does.
+    for (const p of ['orbit/_orbit.md', 'ledger/_billing.md']) {
+      const hub = result.notes.find((n) => n.path === p)!;
+      expect(hub.excerpt.length).toBeLessThanOrEqual(1_500);
     }
   });
 

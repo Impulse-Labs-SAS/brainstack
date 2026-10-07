@@ -15,6 +15,7 @@ import {
   describeVia,
   excerpt,
   expandHop,
+  isIndex,
   packContext,
   searchScore,
   topFrontier,
@@ -83,6 +84,45 @@ describe('CandidateSet', () => {
     set.offer({ path: 'a.md', score: 0.5, via: linked });
     set.offer({ path: 'a.md', score: 0.4, via: { kind: 'search', term: 'x', rank: 3 } });
     expect(set.get('a.md')).toMatchObject({ score: 0.7, via: linked, also: ['x'] });
+  });
+
+  it('adds up the notes that link to a note, but not the ones it links to', () => {
+    const set = new CandidateSet();
+    const link = (from: string, direction: 'out' | 'in') => ({
+      kind: 'linked' as const,
+      from,
+      fromTitle: from.toUpperCase(),
+      direction,
+      hop: 1,
+    });
+    // A hinge: three results link to it.
+    for (const from of ['a.md', 'b.md', 'c.md']) {
+      set.offer({ path: 'hinge.md', score: 0.5, via: link(from, 'out') });
+    }
+    // An index: it links to three results.
+    for (const from of ['a.md', 'b.md', 'c.md']) {
+      set.offer({ path: 'index.md', score: 0.5, via: link(from, 'in') });
+    }
+    expect(set.get('hinge.md')).toMatchObject({
+      score: 1 - 0.5 ** 3,
+      via: { from: 'a.md' },
+      alsoFrom: ['B.MD', 'C.MD'],
+    });
+    expect(set.get('index.md')!.score).toBe(0.5);
+  });
+});
+
+describe('isIndex', () => {
+  it('reads a note that is mostly a list of links as an index', () => {
+    const list = Array.from({ length: 6 }, (_, i) => `- [[note-${i}]] — what it covers`).join('\n');
+    expect(isIndex(`# Project\n\nWhere to start.\n\n${list}`)).toBe(true);
+  });
+
+  it('does not read prose that links as it goes as one', () => {
+    const prose = Array.from({ length: 6 }, (_, i) => `Paragraph ${i}, see [[note-${i}]].`);
+    const filler = Array.from({ length: 8 }, (_, i) => `More prose, line ${i}.`);
+    expect(isIndex([...prose, ...filler].join('\n'))).toBe(false);
+    expect(isIndex('- [[a]]\n- [[b]]')).toBe(false);
   });
 });
 
@@ -168,21 +208,25 @@ describe('demoteOffTopic', () => {
   });
   const digests = new Map([
     ['other.md', digest('other.md', 'Visión general de otro producto')],
-    ['near.md', digest('near.md', 'Cómo Zuno factura')],
+    ['near.md', digest('near.md', 'Cómo Orbit factura')],
     ['child.md', digest('child.md', 'Detalle del otro producto')],
-    ['zuno-child.md', digest('zuno-child.md', 'Un módulo de Zuno')],
+    ['orbit-child.md', digest('orbit-child.md', 'Un módulo de Orbit')],
   ]);
 
   it('halves a question hit that never says what the text named', () => {
-    const out = demoteOffTopic([prompt('other.md'), prompt('near.md')], digests, ['Zuno'], fold);
+    const out = demoteOffTopic([prompt('other.md'), prompt('near.md')], digests, ['Orbit'], fold);
     expect(out.map((c) => c.score)).toEqual([0.3, 0.6]);
   });
 
   it('halves what only an off-topic hit led to, unless it mentions the named term', () => {
     const out = demoteOffTopic(
-      [prompt('other.md'), linkedFrom('child.md', 'other.md'), linkedFrom('zuno-child.md', 'other.md')],
+      [
+        prompt('other.md'),
+        linkedFrom('child.md', 'other.md'),
+        linkedFrom('orbit-child.md', 'other.md'),
+      ],
       digests,
-      ['Zuno'],
+      ['Orbit'],
       fold,
     );
     expect(out.map((c) => c.score)).toEqual([0.3, 0.15, 0.3]);
@@ -194,11 +238,14 @@ describe('demoteOffTopic', () => {
   });
 
   it('leaves a note the text named, or a term found, alone', () => {
-    const term = { path: 'other.md', score: 0.7, via: { kind: 'search' as const, term: 'x', rank: 0 } };
-    expect(demoteOffTopic([named('other.md'), term], digests, ['Zuno'], fold).map((c) => c.score)).toEqual([
-      NAMED_SCORE,
-      0.7,
-    ]);
+    const term = {
+      path: 'other.md',
+      score: 0.7,
+      via: { kind: 'search' as const, term: 'x', rank: 0 },
+    };
+    expect(
+      demoteOffTopic([named('other.md'), term], digests, ['Orbit'], fold).map((c) => c.score),
+    ).toEqual([NAMED_SCORE, 0.7]);
   });
 });
 
@@ -240,15 +287,28 @@ describe('describeVia', () => {
       'the text says "Roadmap" (3×)',
     );
     expect(describeVia({ kind: 'search', term: 'pricing', rank: 0 })).toBe('matches "pricing"');
+    const billing = {
+      kind: 'linked' as const,
+      from: 'b.md',
+      fromTitle: 'Billing',
+      direction: 'out' as const,
+      hop: 1,
+    };
     expect(
-      describeCandidate({ kind: 'search', term: 'pricing', rank: 0 }, ['tiers', 'plans']),
+      describeCandidate({
+        via: { kind: 'search', term: 'pricing', rank: 0 },
+        also: ['tiers', 'plans'],
+      }),
     ).toBe('matches "pricing", "tiers" and "plans"');
+    expect(describeCandidate({ via: billing, also: ['tiers'] })).toBe(
+      'linked from Billing; also matches "tiers"',
+    );
     expect(
-      describeCandidate(
-        { kind: 'linked', from: 'b.md', fromTitle: 'Billing', direction: 'out', hop: 1 },
-        ['tiers'],
-      ),
-    ).toBe('linked from Billing; also matches "tiers"');
+      describeCandidate({ via: billing, alsoFrom: ['Orbit', 'Ventas'], also: ['tiers'] }),
+    ).toBe('linked from Billing, Orbit and Ventas; also matches "tiers"');
+    expect(
+      describeCandidate({ via: { kind: 'search', term: 'invoice', rank: 0 }, alsoFrom: ['Billing'] }),
+    ).toBe('matches "invoice"; also linked from Billing');
     expect(
       describeVia({ kind: 'linked', from: 'b.md', fromTitle: 'Billing', direction: 'out', hop: 1 }),
     ).toBe('linked from Billing');
@@ -292,9 +352,7 @@ describe('packContext', () => {
       { path: 'next.md', score: 0.7, via: { kind: 'search' as const, term: 'x', rank: 0 } },
       { path: 'last.md', score: 0.2, via: { kind: 'search' as const, term: 'x', rank: 5 } },
     ];
-    const digests = new Map(
-      candidates.map((c) => [c.path, digest(c.path, 'word '.repeat(400))]),
-    );
+    const digests = new Map(candidates.map((c) => [c.path, digest(c.path, 'word '.repeat(400))]));
     // Room for the first body whole (1,999 characters once trimmed), and then
     // less than an excerpt worth reading.
     const { notes, leftOut } = packContext(candidates, digests, 1_999 + MIN_EXCERPT_CHARS - 1);
