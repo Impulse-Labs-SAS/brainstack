@@ -10,7 +10,7 @@
 // graph-engine the layout, graph-scene the WebGL, graph-overlay the text.
 // This file owns what React is good at: the toolbar, panels and preferences.
 
-import { Brain, Map as MapIcon, Network, Play, Square } from 'lucide-react';
+import { Brain, Bug, Map as MapIcon, Network, Play, Square } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import {
   useCallback,
@@ -42,6 +42,7 @@ import { DEFAULT_FILTERS, searchGraph, type SearchFilters } from '@/lib/graph-se
 import { BRIDGE_COLOR, LABEL_COLORS, OWN_VAULT_COLOR, SHARED_VAULT_COLORS, TOPIC_COLOR } from '@/lib/graph-palette';
 import { cn } from '@/lib/utils';
 
+import { CrawlPanel } from './crawl/crawl-panel';
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
 import { GraphLayersMenu } from './graph-layers';
 import { GLASS, GraphPreview, edited } from './graph-preview';
@@ -80,6 +81,10 @@ const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }
     hint: 'Each project is a country, sized by its notes, and each vault a continent. Point at a note or a country to see its routes; click a country to zoom in.',
   },
 ];
+
+// Crawl is not a fourth layout: it is the Brain view with a crawl replayed on
+// top (components/graph/crawl). The engine never hears of it.
+const CRAWL_HINT = 'The brain, with a crawl replayed on it: the spider walks the links to every note a prompt refers to, and lights each thread it steps on. Drag to look around.';
 
 // Preferences are per-browser conveniences: a blocked or private store just
 // means starting from the defaults.
@@ -127,6 +132,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>('brain');
+  const [crawl, setCrawl] = useState(false);
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_LAYERS);
   const [webgl, setWebgl] = useState(true);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -190,6 +196,10 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     const fromHash = GRAPH_VIEWS.find((v) => `#${v}` === window.location.hash);
     let initial: View = fromHash ?? readPref<View>(VIEW_KEY) ?? 'brain';
     if (!GRAPH_VIEWS.includes(initial) || (initial === 'brain' && !controller.webgl)) initial = controller.webgl ? 'brain' : 'network';
+    if (window.location.hash === '#crawl' && controller.webgl) {
+      initial = 'brain';
+      setCrawl(true);
+    }
     controller.initView(initial);
     setView(initial);
     const storedLayers = readPref<GraphLayers>(LAYERS_KEY);
@@ -237,11 +247,11 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     controllerRef.current?.setView(view);
     writePref(VIEW_KEY, view);
     try {
-      history.replaceState(null, '', `#${view}`);
+      history.replaceState(null, '', `#${crawl ? 'crawl' : view}`);
     } catch {
       // a sandboxed frame may refuse; the preference still holds
     }
-  }, [view, ready]);
+  }, [view, crawl, ready]);
 
   useEffect(() => {
     if (ready) writePref(LAYERS_KEY, layers);
@@ -278,10 +288,21 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     const t = e.target as HTMLElement;
     // Popovers render through a portal but their key events still bubble here.
     if (/^(INPUT|TEXTAREA)$/.test(t.tagName) || t.closest('[role=dialog]')) return;
+    if (e.key === '4' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (webgl) {
+        setCrawl(true);
+        setView('brain');
+      }
+      e.preventDefault();
+      return;
+    }
     const index = ['1', '2', '3'].indexOf(e.key);
     if (index >= 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       const next = GRAPH_VIEWS[index]!;
-      if (next !== 'brain' || webgl) setView(next);
+      if (next !== 'brain' || webgl) {
+        setCrawl(false);
+        setView(next);
+      }
       e.preventDefault();
       return;
     }
@@ -291,7 +312,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
   const c = () => controllerRef.current;
   const is3D = view === 'brain';
   const visibleVaults = model?.vaults.filter((v) => !v.hidden) ?? [];
-  const hint = VIEWS.find((v) => v.id === view)!.hint;
+  const hint = crawl ? CRAWL_HINT : VIEWS.find((v) => v.id === view)!.hint;
 
   return (
     <div
@@ -335,10 +356,12 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
           aria-label="View"
           selectionMode="single"
           disallowEmptySelection
-          selectedKeys={[view]}
+          selectedKeys={[crawl ? 'crawl' : view]}
           onSelectionChange={(keys) => {
-            const next = [...keys][0] as View | undefined;
-            if (next) setView(next);
+            const next = [...keys][0] as View | 'crawl' | undefined;
+            if (!next) return;
+            setCrawl(next === 'crawl');
+            setView(next === 'crawl' ? 'brain' : next);
           }}
           className={cn(GLASS, 'pointer-events-auto flex gap-0.5 rounded-lg p-[3px]')}
         >
@@ -357,6 +380,18 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
               {v.label}
             </ToggleButton>
           ))}
+          <ToggleButton
+            id="crawl"
+            isDisabled={!webgl}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
+              'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
+              'selected:bg-bg-elevated selected:text-fg-primary selected:shadow-[inset_0_0_0_1px_var(--border-strong)]',
+            )}
+          >
+            <Bug size={14} aria-hidden />
+            Crawl
+          </ToggleButton>
         </ToggleButtonGroup>
 
         {model && (
@@ -392,6 +427,8 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
         {model && <FilterChips model={model} filters={filters} onChange={setFilters} />}
       </div>
+
+      {crawl && model && <CrawlPanel controller={controllerRef.current} model={model} reduceMotion={reduceMotion} />}
 
       {selection && model && (
         <GraphPreview

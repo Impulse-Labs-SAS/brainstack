@@ -61,6 +61,14 @@ const Env = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().optional(),
+  /**
+   * Days the Crawl view keeps what `gather_context` gave each user. 0 turns the
+   * history off and deletes what was kept. An empty value means the default.
+   */
+  CRAWL_HISTORY_DAYS: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().min(0).max(3650).default(30),
+  ),
 });
 
 export type AppEnv = z.infer<typeof Env>;

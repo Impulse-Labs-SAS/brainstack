@@ -415,6 +415,28 @@ const facets: PgMigration = {
   ],
 };
 
+/**
+ * What `gather_context` gave each user, for the Crawl view to list and replay.
+ * Pruned on every write, so the table stays a window rather than a log.
+ */
+const crawlHistory: PgMigration = {
+  name: '0010_pg_crawl_history',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS crawl_history (
+       id         TEXT PRIMARY KEY,
+       user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       source     TEXT NOT NULL CHECK (source IN ('assistant', 'web')),
+       client_ref TEXT,
+       prompt     TEXT NOT NULL,
+       result     JSONB NOT NULL,
+       created_at BIGINT NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_crawl_history_user_created
+       ON crawl_history (user_id, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_crawl_history_created ON crawl_history (created_at)`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -425,4 +447,5 @@ export const pgMigrations: readonly PgMigration[] = [
   sharePermission,
   invitePermission,
   facets,
+  crawlHistory,
 ];

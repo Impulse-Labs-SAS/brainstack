@@ -32,6 +32,7 @@ import { healthRouter } from './routes/health.js';
 import { createConfigRouter } from './routes/config.js';
 import { createInviteRouter } from './routes/invite.js';
 import { buildOptionalAuthMiddleware } from './middleware/auth.js';
+import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import type { InviteService } from '../services/InviteService.js';
 import type { NoteService } from '../services/NoteService.js';
@@ -50,6 +51,7 @@ export interface BuildAppOptions {
   sharing: SharingService;
   invites: InviteService;
   crossOwner: CrossOwnerReader;
+  crawls: CrawlHistoryService;
   resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
   rateLimitPerMinute: number;
   secureCookies: boolean;
@@ -207,6 +209,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       sharing: opts.sharing,
       invites: opts.invites,
       crossOwner: opts.crossOwner,
+      crawls: opts.crawls,
       resolveUserForApiKey: opts.resolveUserForApiKey,
       endpoint: `${opts.basePath ?? ''}/trpc`,
     }),

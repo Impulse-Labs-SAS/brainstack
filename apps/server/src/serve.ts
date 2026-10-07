@@ -41,6 +41,7 @@ async function main(): Promise<void> {
     googleClientId: cfg.GOOGLE_OAUTH_CLIENT_ID,
     googleClientSecret: cfg.GOOGLE_OAUTH_CLIENT_SECRET,
     googleRedirectUri: cfg.GOOGLE_OAUTH_REDIRECT_URI,
+    crawlHistoryDays: cfg.CRAWL_HISTORY_DAYS,
   });
 
   // Said once, at boot, so whoever runs the instance knows what it cannot do.
@@ -52,6 +53,11 @@ async function main(): Promise<void> {
     );
   }
   if (cfg.OPEN_SIGNUP) logger.info('OPEN_SIGNUP is on: anyone who reaches this server can sign up');
+
+  // Turning the history off, or shortening it, takes effect now rather than
+  // at the next crawl.
+  await services.crawls.applyRetention();
+  if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Crawl view');
 
   const backfill = await backfillOwnerId(db, { logger });
   if (!backfill.skipped) {
@@ -67,6 +73,7 @@ async function main(): Promise<void> {
     sharing: services.sharing,
     invites: services.invites,
     crossOwner: services.crossOwner,
+    crawls: services.crawls,
     totp: services.totp,
     ...(services.google ? { google: services.google } : {}),
     resolveUserForApiKey: services.resolveUserForApiKey,
@@ -87,6 +94,7 @@ async function main(): Promise<void> {
         crossOwner: services.crossOwner,
         auth: services.auth,
         invites: services.invites,
+        crawls: services.crawls,
         logger,
         principal,
       }),

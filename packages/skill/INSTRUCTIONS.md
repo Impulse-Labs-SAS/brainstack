@@ -21,6 +21,7 @@ You interact with BrainStack via these MCP tools:
 - `list_facets(path?, key?, ownerId?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
 - `list_unlinked_mentions(path)` — where a note is named without a wikilink: `incoming` (other notes whose text says its title or an alias) and `outgoing` (titles its own text says); **own vault only** (no `ownerId`)
 - `list_decisions(folder?, limit?, ownerId?)` — notes tagged `decisión`/`decision` or with frontmatter `status: decidido` (via facets)
+- `gather_context(text, terms?, depth?, maxChars?)` — **start here**: everything the vault holds about a question or a prompt, in one call — the notes it names or links, the best hits for the question itself and for its vague `terms`, what those link to, with their bodies, and what it could not resolve; **own vault only** (no `ownerId`). See **Answering from the brain in one call**
 - `list_shared_with_me()` — folders other people shared with you (`ownerId`, permission per row)
 - `get_brainstack_guide()` — returns this document at runtime
 
@@ -55,7 +56,8 @@ Don't use BrainStack for generic knowledge questions or for things the user didn
 
 Always verify with the brain before claiming a fact about the user's domain. Never invent content.
 
-- `search_brain(query, scope?)` — primary tool. Full-text search with snippets and a path for every hit.
+- `gather_context(text)` — **first**, for anything about the user's own notes: one call brings the notes, their links and their bodies. See **Answering from the brain in one call** below.
+- `search_brain(query, scope?)` — full-text search with snippets and a path for every hit. For shared folders, or when `gather_context` plainly did not find it.
   Default `scope` is **`all`** (own notes and folders shared with the user). Use `scope="mine"` only
   when the user asked for their own vault specifically, or `scope="shared"` for shared-only.
 - `get_note(path)` — when you already know the path (from a wikilink, a previous search, or a list).
@@ -77,6 +79,19 @@ Rules:
 - Cite the source path of every fact you pulled from the brain (e.g. `Erebor/decisiones/pricing-tiered.md`). Paths give the user something to click on.
 - If a tool returns nothing, say so. Don't fabricate a plausible-looking path or summary.
 - If a query is scoped to a folder by intent ("what's in GONDOR?"), prefer `list_notes(folder="GONDOR")` over `search_brain`.
+
+## Answering from the brain in one call
+
+For any question or task about the user's own notes, call `gather_context` **first**, with the user's message as `text`. One call replaces the chain of `search_brain` → `list_notes` → `get_note` per hit: it returns the notes the message names or links, the best full-text hits for the message itself, the notes those link to (decisions weigh extra), and each note's body — whole when it fits. Answer from that.
+
+1. **Pass the message as it is.** For a prompt, brief or spec, also pass as `terms` the phrases in it that point at something without saying what ("the usual escalation", "like last time"). Leave `depth` at 1 unless the user wants the wider picture.
+2. **Use what came back.** `notes` is ranked, each with a `reason`; cite them by path, like any other fact from the brain. Reach for `get_note` only when an `excerpt` says `truncated: true` and you need the rest, and for `search_brain` only when the answer is plainly not there.
+3. **Ask only about `unresolved`**, as one short list of questions. A `no-match` is a gap — ask what it is, or offer to create the note. An `ambiguous` comes with `candidates` — ask which one; never pick for the user. This is the same rule as wikilink discipline: a reference you could not settle is reported, not guessed.
+4. **For a prompt or brief, report coverage** in one line before you start the work: "resolved 9 of 11 references from your notes; 2 need you".
+
+It reads the user's own vault only. For a folder somebody shared with them, use `search_brain` with `scope="shared"` as usual.
+
+Each call is kept in the user's crawl history, so they can replay it in the web app: the start of `text` and which notes it reached, never their contents. Pass the user's request, not secrets you happen to hold.
 
 ## Shared folders
 

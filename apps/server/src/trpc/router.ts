@@ -9,6 +9,13 @@ import { z } from 'zod';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError } from '../lib/errors.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
+import {
+  gatherContext,
+  MAX_DEPTH,
+  MAX_MAX_CHARS,
+  MAX_TERMS,
+  MAX_TEXT_CHARS,
+} from '../services/gatherContext.js';
 
 import type { TrpcContext } from './context.js';
 
@@ -172,6 +179,38 @@ export const appRouter = t.router({
     unlinkedMentions: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .query(({ ctx, input }) => wrap(() => ctx.notes.unlinkedMentions(ctx.user.id, input.path))),
+    // Own vault only, like `unlinkedMentions`: a crawl that followed a link
+    // into a share would hand over bodies the grant was never checked against.
+    gatherContext: protectedProcedure
+      .input(
+        z.object({
+          text: z.string().min(1).max(MAX_TEXT_CHARS),
+          terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),
+          depth: z.number().int().min(0).max(MAX_DEPTH).optional(),
+          maxChars: z.number().int().min(500).max(MAX_MAX_CHARS).optional(),
+        }),
+      )
+      // A mutation although it writes nothing: a query travels as a GET with
+      // its input in the URL, and a long brief would hit the header limit
+      // (414/431) before ever reaching the handler.
+      .mutation(({ ctx, input }) =>
+        wrap(async () => {
+          const result = await gatherContext(
+            { notes: ctx.notes, search: ctx.search },
+            ctx.user.id,
+            input,
+          );
+          const key = ctx.principal?.kind === 'apiKey' ? ctx.principal.apiKey : null;
+          const crawlId = await ctx.crawls.record(ctx.user.id, {
+            source: key ? 'assistant' : 'web',
+            clientRef: key?.id ?? null,
+            text: input.text,
+            result,
+          });
+          // The id lets the Crawl view mark this crawl as the one playing.
+          return { ...result, crawlId };
+        }),
+      ),
     linkMentions: protectedProcedure
       .input(z.object({ sourcePath: z.string().min(1), targetPath: z.string().min(1) }))
       .mutation(({ ctx, input }) =>
@@ -499,6 +538,21 @@ export const appRouter = t.router({
         await wrap(() => ctx.apiKeys.revoke(input.id, ctx.user.id));
         return { ok: true };
       }),
+  }),
+  // The caller's own crawls only: whoever shared a folder with them never sees
+  // what they asked.
+  crawls: t.router({
+    list: protectedProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(50).optional() }).optional())
+      .query(async ({ ctx, input }) => ({
+        enabled: ctx.crawls.enabled,
+        // Ages are told against the server's clock, the one `createdAt` comes from.
+        now: Date.now(),
+        items: await ctx.crawls.list(ctx.user.id, input?.limit),
+      })),
+    get: protectedProcedure
+      .input(z.object({ id: z.string().min(1).max(64) }))
+      .query(({ ctx, input }) => wrap(() => ctx.crawls.get(ctx.user.id, input.id))),
   }),
 });
 

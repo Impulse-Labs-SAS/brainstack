@@ -14,6 +14,10 @@
     "./pg": {
       "types": "./dist/pg/index.d.ts",
       "default": "./dist/pg/index.js"
+    },
+    "./sentinel": {
+      "types": "./dist/sentinel/index.d.ts",
+      "default": "./dist/sentinel/index.js"
     }
   },
   "scripts": {

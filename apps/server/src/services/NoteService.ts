@@ -1094,6 +1094,107 @@ export class NoteService {
       .where(this.ownedBy(ownerId));
   }
 
+  // -- Context crawl ---------------------------------------------------------
+  //
+  // The reads `gatherContext` is built from. Own vault only, like
+  // `unlinkedMentions`: a crawl that followed a link into a shared folder
+  // would hand over bodies the grant was never checked against.
+
+  /**
+   * Every note's title and aliases, without the bodies — all a crawl needs to
+   * find the notes a piece of text names, and cheap however large notes get.
+   */
+  async mentionIndex(
+    ownerId: string,
+  ): Promise<Array<{ path: string; title: string; aliases: unknown[] }>> {
+    const rows = await this.opts.db
+      .select({ path: notes.path, title: notes.title, frontmatter: notes.frontmatter })
+      .from(notes)
+      .where(this.ownedBy(ownerId));
+    return rows.map((r) => {
+      const c = mentionCandidate(r);
+      return { path: this.toLogical(ownerId, c.target), title: c.title, aliases: c.aliases };
+    });
+  }
+
+  /**
+   * Every note-to-note link touching any of `paths`, in either direction.
+   * Links into another vault cannot exist, but both ends are checked anyway:
+   * a crawl must never be the thing that reveals one.
+   */
+  async linksTouching(
+    ownerId: string,
+    paths: readonly string[],
+  ): Promise<Array<{ source: string; target: string }>> {
+    if (paths.length === 0) return [];
+    const physical = paths.map((p) => this.toPhysical(ownerId, p));
+    const rows = await this.opts.db
+      .selectDistinct({ source: links.sourcePath, target: links.targetPath })
+      .from(links)
+      .where(
+        and(
+          eq(links.targetType, 'note'),
+          or(inArray(links.sourcePath, physical), inArray(links.targetPath, physical)),
+        ),
+      );
+    const mine = this.inScope(ownerId);
+    return rows
+      .filter((r) => mine(r.source) && mine(r.target) && r.source !== r.target)
+      .map((r) => ({
+        source: this.toLogical(ownerId, r.source),
+        target: this.toLogical(ownerId, r.target),
+      }));
+  }
+
+  /**
+   * Title, the first `bodyChars` of the body, and decision flag for each of
+   * `paths` that exists — the same test `listDecisions` applies: a
+   * `decisión`/`decision` tag or `status: decidido`.
+   */
+  async contextDigests(
+    ownerId: string,
+    paths: readonly string[],
+    bodyChars: number,
+  ): Promise<Array<{ path: string; title: string; body: string; isDecision: boolean }>> {
+    if (paths.length === 0) return [];
+    const physical = paths.map((p) => this.toPhysical(ownerId, p));
+    const [rows, decisionRows] = await Promise.all([
+      this.opts.db
+        .select({
+          path: notes.path,
+          title: notes.title,
+          // Only the start: an excerpt never needs more.
+          body: sql<string>`substring(${notes.body} from 1 for ${bodyChars})`,
+        })
+        .from(notes)
+        .where(inArray(notes.path, physical)),
+      this.opts.db
+        .selectDistinct({ path: notes.path })
+        .from(notes)
+        .leftJoin(tags, eq(tags.notePath, notes.path))
+        .leftJoin(
+          facets,
+          and(eq(facets.notePath, notes.path), eq(facets.key, 'status'), eq(facets.value, 'decidido')),
+        )
+        .where(
+          and(
+            inArray(notes.path, physical),
+            or(inArray(tags.tag, ['decisión', 'decision']), sql`${facets.value} IS NOT NULL`),
+          ),
+        ),
+    ]);
+    const decisions = new Set(decisionRows.map((r) => r.path));
+    const mine = this.inScope(ownerId);
+    return rows
+      .filter((r) => mine(r.path))
+      .map((r) => ({
+        path: this.toLogical(ownerId, r.path),
+        title: r.title,
+        body: r.body,
+        isDecision: decisions.has(r.path),
+      }));
+  }
+
   // -- Graph -----------------------------------------------------------------
 
   /**

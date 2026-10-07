@@ -475,3 +475,32 @@ export const oauthTokens = pgTable(
     familyIdx: index('idx_oauth_tokens_family').on(t.familyId),
   }),
 );
+
+/**
+ * The crawls `gather_context` made for a user — by an assistant over MCP or by
+ * hand in the Crawl view — so the view can list and replay them.
+ *
+ * `result` is the replay, not the answer: paths, titles and why each note was
+ * reached, never the excerpts the assistant was handed. Rows are pruned by age
+ * and by count on every write (`CrawlHistoryService`).
+ */
+export const crawlHistory = pgTable(
+  'crawl_history',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    source: text('source').notNull().$type<'assistant' | 'web'>(),
+    /** The API key or OAuth client an assistant called with (`oauth:<clientId>`), if any. */
+    clientRef: text('client_ref'),
+    prompt: text('prompt').notNull(),
+    result: jsonb('result').notNull().$type<unknown>(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({
+    sourceValues: check('crawl_history_source_check', sql`source IN ('assistant', 'web')`),
+    userCreatedIdx: index('idx_crawl_history_user_created').on(t.userId, t.createdAt),
+    createdIdx: index('idx_crawl_history_created').on(t.createdAt),
+  }),
+);

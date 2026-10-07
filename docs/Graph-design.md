@@ -8,7 +8,7 @@ shows, how it behaves, how it is built, and the decisions worth not undoing.
 Two independent choices, kept apart on purpose.
 
 **A view is the shape of the map, and each one answers its own question.** A segmented
-control in the toolbar, each tab an icon and a name; the keys `1` `2` `3` switch views too,
+control in the toolbar, each tab an icon and a name; the keys `1` to `4` switch views too,
 without a number printed on the tabs to say so:
 
 | View | Question | Shape |
@@ -16,6 +16,7 @@ without a number printed on the tabs to say so:
 | Brain | — | 3D. Notes live inside a brain; each visible vault settles in its own lobe, yours in the frontal one. |
 | Network | How does it connect? | Flat. Links alone decide where notes sit. |
 | Territories | What is there, and where is it filed? | Flat. A map: each project a country, each vault a continent. Links move nothing. |
+| Crawl | What did the vault give an assistant? | The Brain, with a `gather_context` crawl replayed on it (see [Crawl](#crawl)). Needs WebGL. |
 
 Network and Territories used to be one layout with a pull per vault on top, so with a single
 vault — anyone who uses BrainStack alone — they were the same picture. They are now built on
@@ -25,7 +26,7 @@ and nothing else.
 Switching views never jumps: the same notes flow to their new places. Entering Brain rescales
 the flat layout into the brain's side view and lets the forces inflate it into the volume.
 The chosen view is remembered per browser and written to the URL hash (`#brain`, `#network`,
-`#territories`). The first visit opens in Brain; without WebGL, in Network.
+`#territories`, `#crawl`). The first visit opens in Brain; without WebGL, in Network.
 
 ### Network
 
@@ -76,6 +77,34 @@ on the button that says the layers were changed counts only what the current vie
 
 This replaced the four old connection modes (links, affinity, topics, projects). The projects
 mode is gone because zooming out now shows projects (below).
+
+### Crawl
+
+Not a fourth layout: the Brain view with a crawl replayed on it. The engine never hears of it —
+`graph-view` shows the Brain and mounts `components/graph/crawl/`, which plugs into the
+controller as a `GraphPlugin` (draws over the overlay, may ask the camera to follow a point).
+Removing that folder and the tab leaves the graph exactly as it was.
+
+- A prompt goes to `notes.gatherContext`; the answer says why each note is there (`via`), and
+  that is enough to replay it: the notes the text names, then what could not be resolved, then
+  out along the links from each note in turn (`crawl-plan.ts`, tested).
+- **The spider only walks threads the graph draws** — links and structure edges — along the same
+  curve the scene draws them with. Its feet hold the threads around the note it stands on; each
+  thread it steps on lights up and stays lit, so the path remains on the brain. Where no thread
+  joins two notes it spins a strand of silk rather than walking through the void.
+- It is sized from the vault's median link, so it reads the same at ten notes or ten thousand.
+  Body and legs are computed in 3D and drawn by the 2D overlay, for the same reason labels are:
+  WebGL lines are one pixel wide.
+- **Spider off** (a switch, remembered per browser) replays the same walk as a trail of light.
+- The camera follows the replay until the user drags, zooms or clicks; *Follow* re-attaches it.
+- With `prefers-reduced-motion` the replay jumps to its end state.
+- **Recent crawls.** Every `gather_context` call — an assistant's over MCP or one tried in the
+  panel — is kept per user in `crawl_history` (`CrawlHistoryService`): the start of the prompt and
+  the replay (paths, titles, `via`), never the excerpts. The panel polls `crawls.list` every few
+  seconds, so an assistant's crawl shows up without a reload and plays by itself unless another
+  replay is under way; clicking one replays it. Pruned on every write, by age
+  (`CRAWL_HISTORY_DAYS`, default 30, 0 = off) and to the newest 50 per user. Only the user who
+  crawled lists them; a folder share never reaches them.
 
 ## Behaviour in every view
 
@@ -136,6 +165,10 @@ All of it is client-side. The server adds `createdAt` and `updatedAt` to each no
 | `components/graph/graph-overlay.ts` | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap. |
 | `components/graph/graph-controller.ts` | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates. |
 | `components/graph/graph-view.tsx` | React chrome: toolbar, layers, preview, legend; preferences. |
+| `components/graph/crawl/crawl-plan.ts` | Pure: a `gather_context` answer turned into replay steps, and the walk along threads between two notes. Tested. |
+| `components/graph/crawl/crawl-history.ts` | Pure: which recent crawl plays by itself, and how its age reads. Tested. |
+| `components/graph/crawl/crawl-layer.ts` | The Crawl view's `GraphPlugin`: the spider, lit threads, silk, labels; asks the camera to follow. |
+| `components/graph/crawl/crawl-panel.tsx` | React chrome for Crawl: try a prompt, the spider switch, recent crawls, what was found. |
 
 **The brain** is generated, not loaded: eleven ellipsoids blended smoothly (hemispheres,
 frontal, temporal and occipital lobes, cerebellum, brainstem), a shallow groove between the

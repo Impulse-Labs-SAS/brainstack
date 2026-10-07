@@ -7,6 +7,7 @@
 
 import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
+import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { InviteService } from '../services/InviteService.js';
@@ -23,6 +24,7 @@ export interface ServerServices {
   sharing: SharingService;
   invites: InviteService;
   crossOwner: CrossOwnerReader;
+  crawls: CrawlHistoryService;
 }
 
 export interface TrpcContext extends ServerServices {

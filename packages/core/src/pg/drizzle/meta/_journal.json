@@ -36,6 +36,13 @@
       "when": 1789137510732,
       "tag": "0004_cool_silver_samurai",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791376791374,
+      "tag": "0005_brief_darkhawk",
+      "breakpoints": true
     }
   ]
 }

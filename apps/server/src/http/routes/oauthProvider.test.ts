@@ -14,6 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildMcpServer } from '../../mcp/server.js';
 import { ApiKeyService } from '../../services/ApiKeyService.js';
 import { AuthService, type User } from '../../services/AuthService.js';
+import { CrawlHistoryService } from '../../services/CrawlHistoryService.js';
 import { CrossOwnerReader } from '../../services/CrossOwnerReader.js';
 import { CapturingEmailSender } from '../../services/EmailSender.js';
 import { InviteService } from '../../services/InviteService.js';
@@ -72,6 +73,7 @@ beforeEach(async () => {
   const search = new SearchService({ db });
   const sharing = new SharingService({ db });
   const crossOwner = new CrossOwnerReader({ db, sharing });
+  const crawls = new CrawlHistoryService({ db, retentionDays: 30 });
   const invites = new InviteService({
     db,
     sharing,
@@ -88,6 +90,7 @@ beforeEach(async () => {
     sharing,
     invites,
     crossOwner,
+    crawls,
     resolveUserForApiKey: async (key): Promise<User> => {
       const user = await auth.findUserById(key.userId ?? '');
       if (!user) throw new Error('no user behind key');
@@ -99,7 +102,7 @@ beforeEach(async () => {
     appHome: ISSUER,
     oauth: { service: oauth, issuer: ISSUER },
     buildMcpServer: (principal) =>
-      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, logger, principal }),
+      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, crawls, logger, principal }),
   });
 
   const session = await auth.createSession('sam');
@@ -230,6 +233,7 @@ describe('discovery', () => {
         db: database.db,
         sharing: new SharingService({ db: database.db }),
       }),
+      crawls: new CrawlHistoryService({ db: database.db, retentionDays: 30 }),
       resolveUserForApiKey: async (): Promise<User> => {
         throw new Error('unused');
       },
