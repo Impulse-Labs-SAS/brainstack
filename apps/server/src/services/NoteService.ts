@@ -1125,24 +1125,32 @@ export class NoteService {
   async linksTouching(
     ownerId: string,
     paths: readonly string[],
-  ): Promise<Array<{ source: string; target: string }>> {
+  ): Promise<Array<{ source: string; target: string; position: number }>> {
     if (paths.length === 0) return [];
     const physical = paths.map((p) => this.toPhysical(ownerId, p));
+    // One row per pair, at the first place the source writes the link: a note
+    // that links twice to the same target means it from where it first did.
     const rows = await this.opts.db
-      .selectDistinct({ source: links.sourcePath, target: links.targetPath })
+      .select({
+        source: links.sourcePath,
+        target: links.targetPath,
+        position: sql<number>`min(${links.position})`,
+      })
       .from(links)
       .where(
         and(
           eq(links.targetType, 'note'),
           or(inArray(links.sourcePath, physical), inArray(links.targetPath, physical)),
         ),
-      );
+      )
+      .groupBy(links.sourcePath, links.targetPath);
     const mine = this.inScope(ownerId);
     return rows
       .filter((r) => mine(r.source) && mine(r.target) && r.source !== r.target)
       .map((r) => ({
         source: this.toLogical(ownerId, r.source),
         target: this.toLogical(ownerId, r.target),
+        position: Number(r.position),
       }));
   }
 

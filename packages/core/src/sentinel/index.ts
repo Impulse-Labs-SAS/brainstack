@@ -19,4 +19,5 @@ export {
   type ContextNote,
   type ContextVia,
   type Digest,
+  type LeftOutNote,
 } from './score.js';

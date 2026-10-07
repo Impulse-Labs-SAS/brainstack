@@ -118,9 +118,10 @@ describe('gatherContext', () => {
   });
 
   it('weighs a decision above a note it would otherwise tie with', async () => {
-    await notes.create(ME, 'hub.md', '# Launch plan\n\n[[notes]] and [[decided]].');
-    await notes.create(ME, 'notes.md', '# Meeting notes');
-    await notes.create(ME, 'decided.md', '# Go with plan B', { tags: ['decision'] });
+    // Both link to the hub, so nothing in the link order tells them apart.
+    await notes.create(ME, 'hub.md', '# Launch plan');
+    await notes.create(ME, 'notes.md', '# Meeting notes\n\nFor [[hub]].');
+    await notes.create(ME, 'decided.md', '# Go with plan B\n\nFor [[hub]].', { tags: ['decision'] });
 
     const result = await gather('Launch plan');
     const linked = result.notes.filter((n) => n.via.kind === 'linked');
@@ -265,6 +266,49 @@ describe('gatherContext', () => {
     ]);
     expect(result.notes[1]!.reason).toBe('matches "planes Zuno", "tiers" and "precios"');
     expect(result.coverage).toEqual({ resolved: 4, total: 4 });
+  });
+
+  it('puts the overview an index links to first above decisions that only mention it', async () => {
+    // The case from production: "¿Qué es Zuno?" filled the budget with four
+    // decisions that link *to* Zuno, and left out the overview its own index
+    // puts first under "start here".
+    const long = (what: string) => `${what}. ${'Detalle del producto y su contexto. '.repeat(60)}`;
+    const areas = ['area-1', 'area-2', 'area-3', 'area-4', 'area-5', 'area-6', 'area-7'];
+    await notes.create(ME, 'zuno/vision-general.md', `# Visión general\n\n${long('Qué es Zuno')}`);
+    for (const a of areas) {
+      await notes.create(ME, `zuno/${a}.md`, `# Área ${a.slice(-1)}\n\n${long(a)}`);
+    }
+    for (const d of ['convenciones', 'design-system', 'lecciones', 'subscription']) {
+      await notes.create(
+        ME,
+        `zuno/decisiones/${d}.md`,
+        `# Decisión ${d}\n\nAplica a [[zuno/_zuno]]. ${long(d)}`,
+        { tags: ['decision'] },
+      );
+    }
+    // As in production, the index also links out to most of its decisions.
+    await notes.create(
+      ME,
+      'zuno/_zuno.md',
+      `# Zuno\n\nPor dónde empezar: [[zuno/vision-general]].\n\n${[
+        ...['convenciones', 'design-system', 'lecciones', 'subscription'].map((d) => `zuno/decisiones/${d}`),
+        ...areas.map((a) => `zuno/${a}`),
+      ]
+        .map((p) => `- [[${p}]]`)
+        .join('\n')}`,
+    );
+
+    const result = await gather('¿Qué es Zuno?');
+    const order = result.notes.map((n) => n.path);
+    expect(order[0]).toBe('zuno/_zuno.md');
+    expect(order[1]).toBe('zuno/vision-general.md');
+    const decisions = order.filter((p) => p.startsWith('zuno/decisiones/'));
+    for (const d of decisions) expect(order.indexOf(d)).toBeGreaterThan(1);
+
+    // What did not fit is named, so the assistant can open it.
+    expect(result.budget.notesLeftOut).toBeGreaterThan(0);
+    expect(result.leftOut).toHaveLength(result.budget.notesLeftOut);
+    expect(result.leftOut[0]).toMatchObject({ path: expect.any(String), title: expect.any(String) });
   });
 
   it('never returns another user’s notes, however plainly the text names them', async () => {

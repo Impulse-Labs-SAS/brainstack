@@ -7,12 +7,19 @@
 //
 //  - Naming beats searching, and both beat being linked. A note the text names
 //    by its title is what the author meant; a search hit is a good guess; a
-//    neighbour is context around either. Each hop halves the score.
+//    neighbour is context around either, and each hop costs score.
+//  - What a note links to says what it is about; what links to it only
+//    mentions it. So a hop out keeps more of the score than a hop in, and the
+//    first links a note writes — a MOC's "start here" — keep a little more.
+//    Without that, every decision that merely mentions a product outranked the
+//    overview its own index puts first.
 //  - Evidence adds up. A note three of the caller's terms find is likelier to
 //    be the answer than one a single term finds first — taking the best reason
 //    alone would tie them, and the budget would settle the tie by title.
-//  - A decision weighs extra. "What did we already decide" is the question a
-//    prompt most often leaves implicit, and the one a guess gets most wrong.
+//  - A decision weighs extra when the text or a search reached it. "What did
+//    we already decide" is the question a prompt most often leaves implicit,
+//    and the one a guess gets most wrong. Reached along a link, it only breaks
+//    ties: the link order the author chose decides what to read first.
 //  - The budget is in characters, not notes. The caller is an assistant with a
 //    context window; ten long notes and forty short ones are not the same cost.
 
@@ -40,10 +47,35 @@ export const SEARCH_RANK_STEP = 0.1;
 export const SEARCH_HITS_PER_TERM = 3;
 /** Search hits kept for the question as a whole. */
 export const PROMPT_HITS = 5;
-/** Each hop away from a seed multiplies the score by this. */
-export const HOP_DECAY = 0.5;
-/** Added to a decision's score once, whatever brought it in. */
+/** A hop along a link the note itself wrote multiplies the score by this. */
+export const OUT_DECAY = 0.6;
+/**
+ * A hop back along a link another note wrote to this one. Low enough that a
+ * decision reached this way (IN_DECAY + DECISION_BONUS) stays under any note
+ * the named one links to.
+ */
+export const IN_DECAY = 0.3;
+/** Extra decay kept by a note's first outgoing link; it fades to nothing by the LEAD_LINKS-th. */
+export const LEAD_LINK_BONUS = 0.1;
+export const LEAD_LINKS = 5;
+/** Added to a decision the text names or a search finds. */
 export const DECISION_BONUS = 0.25;
+/**
+ * Added to a decision reached along a link: only enough to break a tie. An
+ * index lists what to read first, and its decisions — which in a product's
+ * index is most of them — must not jump over the overview it puts first.
+ * Smaller than one step of the lead-link bonus, so link order still decides.
+ */
+export const LINKED_DECISION_BONUS = 0.01;
+/** Notes that did not fit, listed by title so the caller knows they exist. */
+export const LEFT_OUT_LISTED = 20;
+
+/** The decay of the `rank`-th outgoing link of a note (0 = first written), or of an incoming one. */
+export function hopDecay(direction: 'out' | 'in', rank?: number): number {
+  if (direction === 'in') return IN_DECAY;
+  if (rank === undefined || rank >= LEAD_LINKS) return OUT_DECAY;
+  return OUT_DECAY + LEAD_LINK_BONUS * (1 - rank / LEAD_LINKS);
+}
 /**
  * Notes carried from one hop to the next. A hub — a MOC links to everything in
  * its folder — would otherwise turn the second hop into the whole vault.
@@ -130,7 +162,7 @@ export class CandidateSet {
 
 /**
  * A hit for the question as a whole ranks under a note linked from a named one
- * (NAMED_SCORE × HOP_DECAY): a link someone wrote says more than a shared word.
+ * (NAMED_SCORE × OUT_DECAY): a link someone wrote says more than a shared word.
  */
 export function promptScore(rank: number): number {
   return Math.max(0.15, 0.45 - rank * 0.05);
@@ -148,13 +180,15 @@ export function searchScore(rank: number): number {
 export function expandHop(
   set: CandidateSet,
   frontier: readonly string[],
-  edges: ReadonlyArray<{ source: string; target: string }>,
+  edges: ReadonlyArray<{ source: string; target: string; position?: number }>,
   hop: number,
   titleOf: (path: string) => string,
 ): string[] {
   const inFrontier = new Set(frontier);
   const reached = new Set<string>();
-  for (const { source, target } of edges) {
+  const leadRank = outgoingRanks(edges);
+  for (const edge of edges) {
+    const { source, target } = edge;
     for (const [from, to, direction] of [
       [source, target, 'out'],
       [target, source, 'in'],
@@ -165,7 +199,7 @@ export function expandHop(
       if (!inFrontier.has(from) || from === to) continue;
       const parent = set.get(from);
       if (!parent) continue;
-      const score = parent.score * HOP_DECAY;
+      const score = parent.score * hopDecay(direction, leadRank.get(edge));
       const before = set.get(to);
       set.offer({
         path: to,
@@ -176,6 +210,28 @@ export function expandHop(
     }
   }
   return [...reached];
+}
+
+/**
+ * For each edge that says where in its source it is written, its order among
+ * that source's outgoing links: 0 for the first. An edge without a position
+ * gets no rank, and so no lead bonus.
+ */
+function outgoingRanks<E extends { source: string; position?: number }>(
+  edges: readonly E[],
+): Map<E, number> {
+  const bySource = new Map<string, E[]>();
+  for (const e of edges) {
+    if (e.position === undefined) continue;
+    const list = bySource.get(e.source) ?? [];
+    list.push(e);
+    bySource.set(e.source, list);
+  }
+  const ranks = new Map<E, number>();
+  for (const list of bySource.values()) {
+    list.sort((a, b) => a.position! - b.position!).forEach((e, i) => ranks.set(e, i));
+  }
+  return ranks;
 }
 
 /** The strongest `limit` of `paths`, by their current score. */
@@ -266,12 +322,17 @@ export function packContext(
   digests: ReadonlyMap<string, Digest>,
   maxChars: number,
   maxNotes = MAX_NOTES,
-): { notes: ContextNote[]; chars: number; dropped: number } {
+): { notes: ContextNote[]; chars: number; dropped: number; leftOut: LeftOutNote[] } {
   const ranked = candidates
     .filter((c) => digests.has(c.path))
     .map((c) => {
       const d = digests.get(c.path)!;
-      return { c, d, score: c.score + (d.isDecision ? DECISION_BONUS : 0) };
+      const bonus = !d.isDecision
+        ? 0
+        : c.via.kind === 'linked'
+          ? LINKED_DECISION_BONUS
+          : DECISION_BONUS;
+      return { c, d, score: c.score + bonus };
     })
     .sort((a, b) => b.score - a.score || a.d.title.localeCompare(b.d.title));
 
@@ -295,5 +356,17 @@ export function packContext(
     });
     chars += text.length;
   }
-  return { notes, chars, dropped: ranked.length - notes.length };
+  const leftOut = ranked.slice(notes.length, notes.length + LEFT_OUT_LISTED).map(({ c, d }) => ({
+    path: c.path,
+    title: d.title,
+    reason: describeCandidate(c.via, c.also),
+  }));
+  return { notes, chars, dropped: ranked.length - notes.length, leftOut };
+}
+
+/** A note that ranked but did not fit: enough to know it exists and open it. */
+export interface LeftOutNote {
+  path: string;
+  title: string;
+  reason: string;
 }
