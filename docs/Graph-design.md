@@ -77,6 +77,27 @@ on the button that says the layers were changed counts only what the current vie
 This replaced the four old connection modes (links, affinity, topics, projects). The projects
 mode is gone because zooming out now shows projects (below).
 
+### Crawl
+
+Not a fourth layout: the Brain view with a crawl replayed on it. The engine never hears of it —
+`graph-view` shows the Brain and mounts `components/graph/crawl/`, which plugs into the
+controller as a `GraphPlugin` (draws over the overlay, may ask the camera to follow a point).
+Removing that folder and the tab leaves the graph exactly as it was.
+
+- A prompt goes to `notes.gatherContext`; the answer says why each note is there (`via`), and
+  that is enough to replay it: the notes the text names, then what could not be resolved, then
+  out along the links from each note in turn (`crawl-plan.ts`, tested).
+- **The spider only walks threads the graph draws** — links and structure edges — along the same
+  curve the scene draws them with. Its feet hold the threads around the note it stands on; each
+  thread it steps on lights up and stays lit, so the path remains on the brain. Where no thread
+  joins two notes it spins a strand of silk rather than walking through the void.
+- It is sized from the vault's median link, so it reads the same at ten notes or ten thousand.
+  Body and legs are computed in 3D and drawn by the 2D overlay, for the same reason labels are:
+  WebGL lines are one pixel wide.
+- **Spider off** (a switch, remembered per browser) replays the same walk as a trail of light.
+- The camera follows the replay until the user drags, zooms or clicks; *Follow* re-attaches it.
+- With `prefers-reduced-motion` the replay jumps to its end state.
+
 ## Behaviour in every view
 
 | Gesture | Effect |

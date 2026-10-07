@@ -38,6 +38,31 @@ import {
 } from './graph-overlay';
 import { GraphScene } from './graph-scene';
 
+/**
+ * Something drawn on top of a view by a feature built over it — the Crawl view. It sees
+ * the frame, never the controller: it draws over the overlay and may ask the camera to keep
+ * a point in view. The views themselves know nothing about it, so removing one leaves the
+ * graph exactly as it was.
+ */
+export interface GraphPlugin {
+  /** Every frame, after the overlay. */
+  draw(ctx: CanvasRenderingContext2D, frame: PluginFrame): void;
+  /** A point to keep in view and how close to stay, or null to leave the camera alone. */
+  follow(): { x: number; y: number; z: number; dist: number } | null;
+  /** The user took the camera: dragged, zoomed or clicked. */
+  onUserCamera(): void;
+}
+export interface PluginFrame {
+  now: number;
+  /** Milliseconds since the last frame. */
+  dt: number;
+  cam: Camera;
+  vp: Viewport;
+  dpr: number;
+  model: GraphModel;
+  reduceMotion: boolean;
+}
+
 export type Selection = { kind: 'note'; node: GraphNode } | { kind: 'path'; path: GraphPath };
 
 /** Territories: the country under the pointer, for its tooltip. */
@@ -162,6 +187,7 @@ export class GraphController {
   private wasMoving = false;
   private growing = false;
   private chipTimer = 0;
+  private plugin: GraphPlugin | null = null;
 
   constructor(
     private readonly el: Elements,
@@ -190,6 +216,10 @@ export class GraphController {
     this.resizeObserver.observe(el.stage);
     this.resize();
     this.raf = requestAnimationFrame(this.frame);
+  }
+
+  setPlugin(plugin: GraphPlugin | null): void {
+    this.plugin = plugin;
   }
 
   dispose(): void {
@@ -391,6 +421,7 @@ export class GraphController {
     const { x, y } = this.local(e);
     const node = pickNode(model, x, y, (n) => this.engine.appear(n, performance.now()));
     const kind = node ? 'node' : this.engine.is3D && !e.shiftKey && e.button === 0 ? 'orbit' : 'pan';
+    this.plugin?.onUserCamera();
     this.drag = { kind, node, startX: x, startY: y, lastX: x, lastY: y, travel: 0, shift: e.shiftKey, origin: node ? { x: node.x, y: node.y, z: node.z } : null };
   }
 
@@ -481,6 +512,7 @@ export class GraphController {
   wheel(e: WheelEvent): void {
     e.preventDefault();
     this.setSpin(false);
+    this.plugin?.onUserCamera();
     const { x, y } = this.local(e);
     this.zoomAt(x, y, e.deltaY < 0 ? 1.12 : 1 / 1.12);
   }
@@ -805,6 +837,19 @@ export class GraphController {
       this.cam = { ...this.cam, yaw: this.cam.yaw + dt * SPIN_PER_MS };
     }
 
+    const follow = this.plugin?.follow() ?? null;
+    if (follow && !this.drag && !this.tween) {
+      const k = 1 - Math.exp(-dt / 450);
+      this.userMoved = true;
+      this.cam = {
+        ...this.cam,
+        tx: this.cam.tx + (follow.x - this.cam.tx) * k,
+        ty: this.cam.ty + (follow.y - this.cam.ty) * k,
+        tz: this.cam.tz + (follow.z - this.cam.tz) * k,
+        dist: this.cam.dist + (follow.dist - this.cam.dist) * k,
+      };
+    }
+
     const focus = this.hover ?? this.previewed ?? this.selected;
     if (focus !== this.focus) {
       this.focus = focus;
@@ -892,6 +937,7 @@ export class GraphController {
       reduceMotion: this.reduceMotion,
       fonts: this.fonts,
     });
+    this.plugin?.draw(this.ctx, { now, dt, cam: this.cam, vp: this.vp, dpr: this.dpr, model, reduceMotion: this.reduceMotion });
 
     if (!is3D && this.frameNo % 3 === 0 && !this.el.minimap.hidden) {
       const dpr = this.dpr;
