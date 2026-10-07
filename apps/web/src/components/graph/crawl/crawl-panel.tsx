@@ -58,6 +58,8 @@ export function CrawlPanel({
   const [playing, setPlaying] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  /** What the assistant was handed, as the panel last saw it. */
+  const [response, setResponse] = useState<{ json: unknown; whole: boolean } | null>(null);
   const layerRef = useRef<CrawlLayer | null>(null);
   const gather = trpc.notes.gatherContext.useMutation();
   const utils = trpc.useUtils();
@@ -94,6 +96,9 @@ export function CrawlPanel({
     if (!prompt || !model) return;
     const result = await gather.mutateAsync({ text: prompt, depth: 1 });
     setOpenError(null);
+    // The id is the panel's, not part of what an assistant receives.
+    const { crawlId: _crawlId, ...handedOver } = result;
+    setResponse({ json: handedOver, whole: true });
     setActiveId(result.crawlId);
     if (result.crawlId) seenRef.current?.add(result.crawlId);
     play(result);
@@ -104,7 +109,9 @@ export function CrawlPanel({
     setActiveId(id);
     setOpenError(null);
     try {
-      play((await utils.crawls.get.fetch({ id })).replay);
+      const { replay } = await utils.crawls.get.fetch({ id });
+      setResponse({ json: replay, whole: false });
+      play(replay);
     } catch {
       setOpenError('That crawl is no longer kept.');
     }
@@ -340,6 +347,23 @@ export function CrawlPanel({
             </ol>
           </div>
         </>
+      )}
+
+      {response && (
+        <details className="group grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 border-t border-border-subtle pt-3">
+          <summary className="cursor-pointer list-none font-mono text-[10.5px] uppercase tracking-wider text-fg-muted outline-none hover:text-fg-secondary focus-visible:text-fg-primary">
+            <span className="mr-1 inline-block transition-transform group-open:rotate-90">›</span>
+            Response
+          </summary>
+          <p className="text-[11.5px] leading-4 text-fg-muted">
+            {response.whole
+              ? 'What gather_context returns to the assistant, as it receives it.'
+              : 'From the history: the note bodies (excerpt) are not kept, so they are missing here.'}
+          </p>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-base p-2 font-mono text-[10.5px] leading-[15px] text-fg-secondary">
+            {JSON.stringify(response.json, null, 2)}
+          </pre>
+        </details>
       )}
     </aside>
   );
