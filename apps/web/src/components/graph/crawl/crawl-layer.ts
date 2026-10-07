@@ -273,6 +273,7 @@ export class CrawlLayer implements GraphPlugin {
     if (plan && this.model) {
       this.lit.clear();
       this.silk = [];
+      this.flashes = [];
       this.labels = [];
       this.tentacles = [];
       this.found.clear();
@@ -715,7 +716,9 @@ export class CrawlLayer implements GraphPlugin {
     // Where a foot came down, a small flash on the thread.
     for (const fl of this.flashes) {
       const age = this.clock - fl.t0;
-      if (age > 0.6) continue;
+      // A flash from before a replay restarted the clock has a negative age,
+      // and a negative radius throws.
+      if (age < 0 || age > 0.6) continue;
       const p = P(fl.p);
       if (!p) continue;
       ctx.strokeStyle = hexA(CRAWL_COLORS.linked, 0.9 * (1 - age / 0.6));
