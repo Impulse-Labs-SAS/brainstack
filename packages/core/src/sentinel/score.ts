@@ -8,6 +8,9 @@
 //  - Naming beats searching, and both beat being linked. A note the text names
 //    by its title is what the author meant; a search hit is a good guess; a
 //    neighbour is context around either. Each hop halves the score.
+//  - Evidence adds up. A note three of the caller's terms find is likelier to
+//    be the answer than one a single term finds first — taking the best reason
+//    alone would tie them, and the budget would settle the tie by title.
 //  - A decision weighs extra. "What did we already decide" is the question a
 //    prompt most often leaves implicit, and the one a guess gets most wrong.
 //  - The budget is in characters, not notes. The caller is an assistant with a
@@ -24,6 +27,8 @@ export interface Candidate {
   path: string;
   score: number;
   via: ContextVia;
+  /** Other terms that found the note, besides the one `via` names. */
+  also?: string[];
 }
 
 /** Score of a note the text names by title or alias. */
@@ -62,13 +67,35 @@ export const DIGEST_BODY_CHARS = SEED_EXCERPT_CHARS + 500;
 /** Below this, a truncated excerpt says too little to be worth its place. */
 export const MIN_EXCERPT_CHARS = 120;
 
-/** The candidates found so far, keeping the strongest reason for each note. */
+/**
+ * The candidates found so far. Each note keeps every search that found it and
+ * the strongest other reason — named, or linked — and scores them together as
+ * independent evidence: 1 − ∏(1 − sᵢ). One reason alone scores what it always
+ * did; a named note stays at NAMED_SCORE, and searches only approach it.
+ * The reason shown is the strongest single one.
+ */
 export class CandidateSet {
   private readonly byPath = new Map<string, Candidate>();
+  /** Per note, the best a named or linked reason gave it. */
+  private readonly reached = new Map<string, Candidate>();
+  /** Per note, the best each search gave it, by search: a term, or the question. */
+  private readonly matched = new Map<string, Map<string, Candidate>>();
 
   offer(candidate: Candidate): void {
-    const current = this.byPath.get(candidate.path);
-    if (!current || candidate.score > current.score) this.byPath.set(candidate.path, candidate);
+    const { path, via } = candidate;
+    if (via.kind === 'search' || via.kind === 'prompt') {
+      const byQuery = this.matched.get(path) ?? new Map<string, Candidate>();
+      const key = via.kind === 'search' ? `term:${via.term}` : 'prompt';
+      const current = byQuery.get(key);
+      if (current && candidate.score <= current.score) return;
+      byQuery.set(key, candidate);
+      this.matched.set(path, byQuery);
+    } else {
+      const current = this.reached.get(path);
+      if (current && candidate.score <= current.score) return;
+      this.reached.set(path, candidate);
+    }
+    this.byPath.set(path, this.combine(path));
   }
 
   has(path: string): boolean {
@@ -81,6 +108,23 @@ export class CandidateSet {
 
   all(): Candidate[] {
     return [...this.byPath.values()];
+  }
+
+  private combine(path: string): Candidate {
+    const reached = this.reached.get(path);
+    const matches = [...(this.matched.get(path)?.values() ?? [])];
+    const reasons = reached ? [reached, ...matches] : matches;
+    const strongest = reasons.reduce((best, r) => (r.score > best.score ? r : best));
+    const score = 1 - reasons.reduce((miss, r) => miss * (1 - r.score), 1);
+    const also = matches.flatMap((m) =>
+      m !== strongest && m.via.kind === 'search' ? [m.via.term] : [],
+    );
+    return {
+      path,
+      score,
+      via: strongest.via,
+      ...(also.length > 0 ? { also } : {}),
+    };
   }
 }
 
@@ -165,6 +209,21 @@ export interface ContextNote {
   truncated: boolean;
 }
 
+/** `describeVia`, plus the other terms that found the note. */
+export function describeCandidate(via: ContextVia, also: readonly string[] = []): string {
+  if (also.length === 0) return describeVia(via);
+  if (via.kind === 'search') return `matches ${listTerms([via.term, ...also])}`;
+  return `${describeVia(via)}; also matches ${listTerms(also)}`;
+}
+
+/** `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
+function listTerms(terms: readonly string[]): string {
+  const quoted = terms.map((t) => `"${t}"`);
+  return quoted.length === 1
+    ? quoted[0]!
+    : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+}
+
 export function describeVia(via: ContextVia): string {
   switch (via.kind) {
     case 'named':
@@ -227,7 +286,7 @@ export function packContext(
     notes.push({
       path: c.path,
       title: d.title,
-      reason: describeVia(c.via),
+      reason: describeCandidate(c.via, c.also),
       via: c.via,
       isDecision: d.isDecision,
       score: Math.round(score * 1000) / 1000,
