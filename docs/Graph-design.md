@@ -97,6 +97,13 @@ Removing that folder and the tab leaves the graph exactly as it was.
 - **Spider off** (a switch, remembered per browser) replays the same walk as a trail of light.
 - The camera follows the replay until the user drags, zooms or clicks; *Follow* re-attaches it.
 - With `prefers-reduced-motion` the replay jumps to its end state.
+- **Recent crawls.** Every `gather_context` call — an assistant's over MCP or one tried in the
+  panel — is kept per user in `crawl_history` (`CrawlHistoryService`): the start of the prompt and
+  the replay (paths, titles, `via`), never the excerpts. The panel polls `crawls.list` every few
+  seconds, so an assistant's crawl shows up without a reload and plays by itself unless another
+  replay is under way; clicking one replays it. Pruned on every write, by age
+  (`CRAWL_HISTORY_DAYS`, default 30, 0 = off) and to the newest 50 per user. Only the user who
+  crawled lists them; a folder share never reaches them.
 
 ## Behaviour in every view
 

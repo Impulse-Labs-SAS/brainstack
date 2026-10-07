@@ -1,10 +1,11 @@
 'use client';
 
-// The Crawl view's chrome: a prompt to try, the spider switch, and what the
-// replay found. The replay itself runs in CrawlLayer, outside React; this
-// panel only hears about it when something a person would read changes.
+// The Crawl view's chrome: a prompt to try, the spider switch, the recent
+// crawls, and what the replay found. The replay itself runs in CrawlLayer,
+// outside React; this panel only hears about it when something a person would
+// read changes.
 
-import { Bug, Crosshair, Pause, Play, RotateCcw } from 'lucide-react';
+import { Bot, Bug, Crosshair, Pause, Play, RotateCcw, User } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Switch, TextArea, TextField } from 'react-aria-components';
 
@@ -15,7 +16,13 @@ import { cn } from '@/lib/utils';
 import type { GraphController } from '../graph-controller';
 import { GLASS } from '../graph-preview';
 
+import { ago, madeBy, newAssistantCrawl } from './crawl-history';
 import { CRAWL_COLORS, CrawlLayer, type CrawlSnapshot } from './crawl-layer';
+import type { CrawlResult } from './crawl-plan';
+
+/** How often the recent crawls are asked for while the view is open. */
+const POLL_MS = 4_000;
+const RECENT_SHOWN = 8;
 
 const SPIDER_KEY = 'brainstack.graph.spider';
 
@@ -49,8 +56,16 @@ export function CrawlPanel({
   const [text, setText] = useState('');
   const [spiderOn, setSpiderOn] = useState(true);
   const [playing, setPlaying] = useState(true);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const layerRef = useRef<CrawlLayer | null>(null);
   const gather = trpc.notes.gatherContext.useMutation();
+  const utils = trpc.useUtils();
+  // Polled, so a crawl an assistant makes over MCP shows up without a reload.
+  // React Query pauses the interval while the tab is hidden.
+  const recent = trpc.crawls.list.useQuery(undefined, { refetchInterval: POLL_MS });
+  /** Crawls already on screen when the view opened, or since: only newer ones play by themselves. */
+  const seenRef = useRef<Set<string> | null>(null);
 
   // One layer for as long as the view is open; it leaves the graph when the view does.
   useEffect(() => {
@@ -66,13 +81,53 @@ export function CrawlPanel({
     };
   }, [controller, reduceMotion]);
 
+  const play = (result: CrawlResult) => {
+    const layer = layerRef.current;
+    if (!layer || !model) return;
+    layer.load(result, model);
+    layer.playing = true;
+    setPlaying(true);
+  };
+
   const run = async () => {
     const prompt = text.trim();
     if (!prompt || !model) return;
     const result = await gather.mutateAsync({ text: prompt, depth: 1 });
-    layerRef.current?.load(result, model);
-    setPlaying(true);
+    setOpenError(null);
+    setActiveId(result.crawlId);
+    if (result.crawlId) seenRef.current?.add(result.crawlId);
+    play(result);
+    void utils.crawls.list.invalidate();
   };
+
+  const open = async (id: string) => {
+    setActiveId(id);
+    setOpenError(null);
+    try {
+      play((await utils.crawls.get.fetch({ id })).replay);
+    } catch {
+      setOpenError('That crawl is no longer kept.');
+    }
+  };
+
+  // A crawl an assistant just made plays by itself, but not over a replay
+  // under way: cutting that off loses whatever the person was watching. It
+  // waits instead, and plays as soon as that replay ends.
+  const busy = snap?.state === 'walking' || snap?.state === 'reading';
+  const openRef = useRef(open);
+  openRef.current = open;
+  const items = recent.data?.items;
+  useEffect(() => {
+    if (!items) return;
+    if (!seenRef.current) {
+      seenRef.current = new Set(items.map((c) => c.id));
+      return;
+    }
+    if (busy || !model) return;
+    const fresh = newAssistantCrawl(items, seenRef.current);
+    for (const c of items) seenRef.current.add(c.id);
+    if (fresh) void openRef.current(fresh.id);
+  }, [items, busy, model]);
 
   const toggleSpider = (on: boolean) => {
     setSpiderOn(on);
@@ -161,6 +216,53 @@ export function CrawlPanel({
           <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-fg-primary transition-transform group-selected:translate-x-4" />
         </span>
       </Switch>
+
+      {recent.data && !recent.data.enabled && (
+        <p className="text-[11.5px] leading-4 text-fg-muted">
+          Crawl history is off on this server: assistants’ crawls are not kept.
+        </p>
+      )}
+      {items && items.length > 0 && (
+        <div className="grid gap-1.5 border-t border-border-subtle pt-3">
+          <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
+            Recent
+          </span>
+          <ul className="grid max-h-56 gap-1 overflow-y-auto">
+            {items.slice(0, RECENT_SHOWN).map((c) => (
+              <li key={c.id}>
+                <Button
+                  onPress={() => void open(c.id)}
+                  isDisabled={!model}
+                  aria-current={c.id === activeId ? 'true' : undefined}
+                  className={cn(
+                    'grid w-full gap-0.5 rounded-md border px-2 py-1.5 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40',
+                    c.id === activeId ? 'border-accent/60 bg-accent/10' : 'border-border-subtle',
+                  )}
+                >
+                  <span className="flex items-center gap-1.5 font-mono text-[10.5px] text-fg-muted">
+                    {c.source === 'assistant' ? (
+                      <Bot size={12} aria-hidden />
+                    ) : (
+                      <User size={12} aria-hidden />
+                    )}
+                    <span className="truncate">{madeBy(c)}</span>
+                    <span aria-hidden>·</span>
+                    <span className="shrink-0">{ago(c.createdAt, recent.data?.now ?? c.createdAt)}</span>
+                    <span aria-hidden>·</span>
+                    <span className="shrink-0 tabular-nums">
+                      {c.notes} {c.notes === 1 ? 'note' : 'notes'}
+                    </span>
+                  </span>
+                  <span className="line-clamp-2 text-[12.5px] leading-[17px] text-fg-primary">
+                    {c.prompt}
+                  </span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+          {openError && <p className="text-[12px] text-danger">{openError}</p>}
+        </div>
+      )}
 
       {snap && snap.state !== 'idle' && (
         <>
