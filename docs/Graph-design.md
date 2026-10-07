@@ -8,7 +8,7 @@ shows, how it behaves, how it is built, and the decisions worth not undoing.
 Two independent choices, kept apart on purpose.
 
 **A view is the shape of the map, and each one answers its own question.** A segmented
-control in the toolbar, each tab an icon and a name; the keys `1` `2` `3` switch views too,
+control in the toolbar, each tab an icon and a name; the keys `1` to `4` switch views too,
 without a number printed on the tabs to say so:
 
 | View | Question | Shape |
@@ -16,6 +16,7 @@ without a number printed on the tabs to say so:
 | Brain | — | 3D. Notes live inside a brain; each visible vault settles in its own lobe, yours in the frontal one. |
 | Network | How does it connect? | Flat. Links alone decide where notes sit. |
 | Territories | What is there, and where is it filed? | Flat. A map: each project a country, each vault a continent. Links move nothing. |
+| Crawl | What did the vault give an assistant? | The Brain, with a `gather_context` crawl replayed on it (see [Crawl](#crawl)). Needs WebGL. |
 
 Network and Territories used to be one layout with a pull per vault on top, so with a single
 vault — anyone who uses BrainStack alone — they were the same picture. They are now built on
@@ -25,7 +26,7 @@ and nothing else.
 Switching views never jumps: the same notes flow to their new places. Entering Brain rescales
 the flat layout into the brain's side view and lets the forces inflate it into the volume.
 The chosen view is remembered per browser and written to the URL hash (`#brain`, `#network`,
-`#territories`). The first visit opens in Brain; without WebGL, in Network.
+`#territories`, `#crawl`). The first visit opens in Brain; without WebGL, in Network.
 
 ### Network
 
@@ -164,6 +165,10 @@ All of it is client-side. The server adds `createdAt` and `updatedAt` to each no
 | `components/graph/graph-overlay.ts` | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap. |
 | `components/graph/graph-controller.ts` | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates. |
 | `components/graph/graph-view.tsx` | React chrome: toolbar, layers, preview, legend; preferences. |
+| `components/graph/crawl/crawl-plan.ts` | Pure: a `gather_context` answer turned into replay steps, and the walk along threads between two notes. Tested. |
+| `components/graph/crawl/crawl-history.ts` | Pure: which recent crawl plays by itself, and how its age reads. Tested. |
+| `components/graph/crawl/crawl-layer.ts` | The Crawl view's `GraphPlugin`: the spider, lit threads, silk, labels; asks the camera to follow. |
+| `components/graph/crawl/crawl-panel.tsx` | React chrome for Crawl: try a prompt, the spider switch, recent crawls, what was found. |
 
 **The brain** is generated, not loaded: eleven ellipsoids blended smoothly (hemispheres,
 frontal, temporal and occipital lobes, cerebellum, brainstem), a shallow groove between the
