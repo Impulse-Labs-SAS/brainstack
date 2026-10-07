@@ -311,6 +311,55 @@ describe('gatherContext', () => {
     expect(result.leftOut[0]).toMatchObject({ path: expect.any(String), title: expect.any(String) });
   });
 
+  it('keeps another subject’s notes that share a word of the question under what the named note links to', async () => {
+    // From production: "a general concept of Zuno" also brought BrainStack's
+    // overview, which says "general" but never "Zuno", ahead of Zuno's notes.
+    // A small index, so the budget has room and the other subject's notes come
+    // back: what is tested is the weight they come back with.
+    const long = (what: string) => `${what}. ${'Detalle del módulo y su contexto. '.repeat(20)}`;
+    const areas = Array.from({ length: 2 }, (_, i) => `zuno/area-${i}`);
+    for (const a of areas) await notes.create(ME, `${a}.md`, `# Área ${a.slice(-1)}\n\n${long(a)}`);
+    await notes.create(ME, 'zuno/vision-general.md', `# Zuno ERP — Visión general\n\n${long('Qué es')}`);
+    await notes.create(
+      ME,
+      'zuno/_zuno.md',
+      `# Zuno\n\n${['zuno/vision-general', ...areas].map((p) => `- [[${p}]]`).join('\n')}`,
+    );
+    // The other subject is linked too, as a vault is: its index says the words
+    // and puts its overview first, and its notes link back to the index. That
+    // is how its overview scored over Zuno's links in production (0.637).
+    const general = 'Concepto general, visión general, concepto general del producto. ';
+    await notes.create(ME, 'brainstack/vision-general.md', `# Visión general\n\n${general.repeat(20)}`);
+    await notes.create(
+      ME,
+      'brainstack/_brainstack.md',
+      `# BrainStack\n\n- [[brainstack/vision-general]]\n\n${general.repeat(15)}`,
+    );
+    for (const n of ['apertura', 'lecciones']) {
+      await notes.create(
+        ME,
+        `brainstack/${n}.md`,
+        `# ${n}\n\nVer [[brainstack/_brainstack]]. ${general.repeat(10)}`,
+      );
+    }
+
+    const result = await gather('Dame un concepto general de Zuno');
+    const zuno = result.notes.filter((n) => n.path.startsWith('zuno/'));
+    const other = result.notes.filter((n) => n.path.startsWith('brainstack/'));
+    expect(zuno.map((n) => n.path)).toEqual(
+      expect.arrayContaining(['zuno/_zuno.md', 'zuno/vision-general.md', ...areas.map((a) => `${a}.md`)]),
+    );
+    // They still come back — the question did say "general" — but halved:
+    // under every Zuno note, and at most half of the most a question hit,
+    // reinforced by a link, can reach.
+    expect(other.length).toBeGreaterThan(0);
+    const weakestZuno = Math.min(...zuno.map((n) => n.score));
+    for (const n of other) {
+      expect(n.score).toBeLessThan(weakestZuno);
+      expect(n.score).toBeLessThanOrEqual(0.3);
+    }
+  });
+
   it('never returns another user’s notes, however plainly the text names them', async () => {
     await notes.create(SOMEONE_ELSE, 'secret.md', '# Secret project\n\nHidden.');
     await notes.create(ME, 'mine.md', '# My project');
