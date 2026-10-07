@@ -8,6 +8,7 @@ import pino from 'pino';
 import { ApiKeyService } from './services/ApiKeyService.js';
 import { AuthService } from './services/AuthService.js';
 import { CapturingEmailSender } from './services/EmailSender.js';
+import { CrawlHistoryService } from './services/CrawlHistoryService.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
@@ -46,10 +47,11 @@ function buildHarness(bs: TestDatabase['db'], basePath?: string): Harness {
     publicOrigin: 'http://test',
   });
   const crossOwner = new CrossOwnerReader({ sharing, db: bs });
+  const crawls = new CrawlHistoryService({ db: bs, retentionDays: 30 });
 
   const app = buildApp({
     buildMcpServer: (principal) =>
-      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, logger, principal }),
+      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, crawls, logger, principal }),
     logger,
     auth,
     apiKeys,
@@ -58,6 +60,7 @@ function buildHarness(bs: TestDatabase['db'], basePath?: string): Harness {
     sharing,
     invites,
     crossOwner,
+    crawls,
     resolveUserForApiKey: async (k) => (await auth.findUserById(k.userId ?? ''))!,
     rateLimitPerMinute: 1000,
     secureCookies: false,

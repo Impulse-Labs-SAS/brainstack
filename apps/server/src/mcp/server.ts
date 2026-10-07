@@ -13,6 +13,7 @@ import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError } from '../lib/errors.js';
 
 import type { AuthService } from '../services/AuthService.js';
+import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import {
   gatherContext,
@@ -27,8 +28,13 @@ import type { SearchService } from '../services/SearchService.js';
 import { normalizeFolderPath, type SharingService } from '../services/SharingService.js';
 
 export interface McpPrincipal {
-  /** ID del user autenticado que invoca el MCP. */
+  /** The authenticated user calling the MCP server. */
   userId: string;
+  /**
+   * The API key it called with — `oauth:<clientId>` for a client of this
+   * server's OAuth provider. Only used to name the assistant in the crawl history.
+   */
+  clientRef?: string;
 }
 
 export interface BuildMcpServerOptions {
@@ -41,6 +47,8 @@ export interface BuildMcpServerOptions {
   auth: AuthService;
   /** Used when that email has no account yet. */
   invites: InviteService;
+  /** Where `gather_context` leaves each crawl for the Crawl view to replay. */
+  crawls: CrawlHistoryService;
   logger: Logger;
   /**
    * Who is calling. Every tool that touches a vault refuses to run without
@@ -75,6 +83,7 @@ export function buildMcpServer({
   crossOwner,
   auth,
   invites,
+  crawls,
   logger,
   principal,
 }: BuildMcpServerOptions): McpServer {
@@ -591,7 +600,7 @@ export function buildMcpServer({
     {
       title: 'Gather context for a question or a prompt',
       description:
-        'Start here for any question or task about the user\'s own notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user\'s message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision` and its body in `excerpt`, whole when it fits `maxChars`; open a note with get_note only when `truncated` is true and you need the rest. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Read-only. Own vault only: for folders shared with the user, use search_brain with scope="shared".',
+        'Start here for any question or task about the user\'s own notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user\'s message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision` and its body in `excerpt`, whole when it fits `maxChars`; open a note with get_note only when `truncated` is true and you need the rest. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Writes no note; the call is kept in the user\'s own crawl history, which they can replay in the web app. Own vault only: for folders shared with the user, use search_brain with scope="shared".',
       inputSchema: {
         text: z.string().min(1).max(MAX_TEXT_CHARS),
         terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),
@@ -602,7 +611,14 @@ export function buildMcpServer({
     async (input) => {
       try {
         const userId = requireUserId();
-        return JSON_TEXT(await gatherContext({ notes, search }, userId, input));
+        const result = await gatherContext({ notes, search }, userId, input);
+        await crawls.record(userId, {
+          source: 'assistant',
+          clientRef: principal?.clientRef ?? null,
+          text: input.text,
+          result,
+        });
+        return JSON_TEXT(result);
       } catch (err) {
         return toMcpError(err);
       }

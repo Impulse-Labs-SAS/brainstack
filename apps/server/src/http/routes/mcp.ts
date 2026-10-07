@@ -35,7 +35,10 @@ export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOption
 
     const principal = c.get('principal');
     const mcpPrincipal: McpPrincipal | null = principal
-      ? { userId: principal.user.id }
+      ? {
+          userId: principal.user.id,
+          ...(principal.kind === 'apiKey' ? { clientRef: principal.apiKey.id } : {}),
+        }
       : null;
     const server = buildServer(mcpPrincipal);
 

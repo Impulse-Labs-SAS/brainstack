@@ -91,6 +91,8 @@ For any question or task about the user's own notes, call `gather_context` **fir
 
 It reads the user's own vault only. For a folder somebody shared with them, use `search_brain` with `scope="shared"` as usual.
 
+Each call is kept in the user's crawl history, so they can replay it in the web app: the start of `text` and which notes it reached, never their contents. Pass the user's request, not secrets you happen to hold.
+
 ## Shared folders
 
 A vault is one person's. Someone can share a folder with the user, and that

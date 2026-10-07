@@ -387,4 +387,38 @@ describe('two accounts on a default instance', () => {
     ).rejects.toThrow();
     expect((await alice.notes.get({ path: 'Privado/diario.md' })).body).toContain('secreto de alice');
   });
+
+  it('cannot list or replay each other’s crawls', async () => {
+    const alice = callerFor(asUser('alice', 'alice@brain.test'));
+    const bob = callerFor(asUser('bob', 'bob@brain.test'));
+
+    await alice.notes.create({ path: 'Privado/diario.md', content: '# Diario\n\nsecreto de alice' });
+    const { crawlId } = await alice.notes.gatherContext({ text: 'Diario' });
+    expect(crawlId).toEqual(expect.any(String));
+
+    expect((await alice.crawls.list()).items).toMatchObject([
+      { id: crawlId, source: 'web', prompt: 'Diario', notes: 1 },
+    ]);
+    expect((await bob.crawls.list()).items).toEqual([]);
+    await expect(bob.crawls.get({ id: crawlId! })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('records a crawl made with an API key as an assistant’s', async () => {
+    const user = asUser('alice', 'alice@brain.test');
+    const services = buildServices({
+      db: database.db,
+      logger: pino({ level: 'silent' }),
+      publicOrigin: 'http://localhost:3000',
+      authorizedEmails: new Set(),
+    });
+    const key = await services.apiKeys.create('alice', 'Claude Desktop');
+    const viaKey = appRouter.createCaller(
+      buildContext(services, { kind: 'apiKey', apiKey: key, user }),
+    );
+    await viaKey.notes.gatherContext({ text: 'anything' });
+
+    expect((await callerFor(user).crawls.list()).items).toMatchObject([
+      { source: 'assistant', client: 'Claude Desktop' },
+    ]);
+  });
 });

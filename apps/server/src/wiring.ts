@@ -9,6 +9,7 @@ import type { Logger } from 'pino';
 
 import { ApiKeyService, type ApiKey } from './services/ApiKeyService.js';
 import { AuthService, type User } from './services/AuthService.js';
+import { CrawlHistoryService } from './services/CrawlHistoryService.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { createEmailSender, type EmailConfig } from './services/EmailSender.js';
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
@@ -30,6 +31,8 @@ export interface Services {
   totp: TotpService;
   oauthProvider: OAuthProviderService;
   crossOwner: CrossOwnerReader;
+  /** What `gather_context` gave each user, for the Crawl view. */
+  crawls: CrawlHistoryService;
   /** Present only when Google credentials are configured. */
   google?: GoogleOAuthService;
   resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
@@ -51,6 +54,8 @@ export interface BuildServicesOptions {
   googleClientId?: string | undefined;
   googleClientSecret?: string | undefined;
   googleRedirectUri?: string | undefined;
+  /** Days crawls are kept for the Crawl view; 0 turns the history off. Default 30. */
+  crawlHistoryDays?: number;
 }
 
 export function buildServices(opts: BuildServicesOptions): Services {
@@ -99,6 +104,12 @@ export function buildServices(opts: BuildServicesOptions): Services {
 
   const crossOwner = new CrossOwnerReader({ db: opts.db, sharing });
 
+  const crawls = new CrawlHistoryService({
+    db: opts.db,
+    retentionDays: opts.crawlHistoryDays ?? 30,
+    logger: opts.logger,
+  });
+
   // Optional: without credentials the Google routes simply are not mounted.
   const google =
     opts.googleClientId && opts.googleClientSecret && opts.googleRedirectUri
@@ -121,6 +132,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     totp,
     oauthProvider,
     crossOwner,
+    crawls,
     ...(google ? { google } : {}),
     resolveUserForApiKey: async (apiKey: ApiKey): Promise<User> => {
       const user = await auth.findUserById(apiKey.userId ?? '');

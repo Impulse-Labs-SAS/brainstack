@@ -11,6 +11,7 @@ import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AuthService } from '../services/AuthService.js';
+import { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import { CapturingEmailSender } from '../services/EmailSender.js';
 import { InviteService } from '../services/InviteService.js';
@@ -60,6 +61,7 @@ async function clientFor(userId: string): Promise<Client> {
     crossOwner,
     auth,
     invites,
+    crawls: new CrawlHistoryService({ db: database.db, retentionDays: 30 }),
     logger,
     principal: { userId },
   });
@@ -436,6 +438,13 @@ describe('the listing tools answer with their rows, not with a pending promise',
       unresolved: [{ term: 'quarterly', reason: 'no-match' }],
       coverage: { resolved: 1, total: 2 },
     });
+
+    // And leaves it for the Crawl view: Frodo's history, nobody else's.
+    const crawls = new CrawlHistoryService({ db: database.db, retentionDays: 30 });
+    expect(await crawls.list(FRODO.id)).toMatchObject([
+      { source: 'assistant', prompt: 'Compare Atlas with Erebor.', notes: 2 },
+    ]);
+    expect(await crawls.list(OWNER.id)).toEqual([]);
   });
 
   it('list_facets returns one note’s facets, or browses every value when path is omitted', async () => {

@@ -194,7 +194,22 @@ export const appRouter = t.router({
       // its input in the URL, and a long brief would hit the header limit
       // (414/431) before ever reaching the handler.
       .mutation(({ ctx, input }) =>
-        wrap(() => gatherContext({ notes: ctx.notes, search: ctx.search }, ctx.user.id, input)),
+        wrap(async () => {
+          const result = await gatherContext(
+            { notes: ctx.notes, search: ctx.search },
+            ctx.user.id,
+            input,
+          );
+          const key = ctx.principal?.kind === 'apiKey' ? ctx.principal.apiKey : null;
+          const crawlId = await ctx.crawls.record(ctx.user.id, {
+            source: key ? 'assistant' : 'web',
+            clientRef: key?.id ?? null,
+            text: input.text,
+            result,
+          });
+          // The id lets the Crawl view mark this crawl as the one playing.
+          return { ...result, crawlId };
+        }),
       ),
     linkMentions: protectedProcedure
       .input(z.object({ sourcePath: z.string().min(1), targetPath: z.string().min(1) }))
@@ -523,6 +538,21 @@ export const appRouter = t.router({
         await wrap(() => ctx.apiKeys.revoke(input.id, ctx.user.id));
         return { ok: true };
       }),
+  }),
+  // The caller's own crawls only: whoever shared a folder with them never sees
+  // what they asked.
+  crawls: t.router({
+    list: protectedProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(50).optional() }).optional())
+      .query(async ({ ctx, input }) => ({
+        enabled: ctx.crawls.enabled,
+        // Ages are told against the server's clock, the one `createdAt` comes from.
+        now: Date.now(),
+        items: await ctx.crawls.list(ctx.user.id, input?.limit),
+      })),
+    get: protectedProcedure
+      .input(z.object({ id: z.string().min(1).max(64) }))
+      .query(({ ctx, input }) => wrap(() => ctx.crawls.get(ctx.user.id, input.id))),
   }),
 });
 
