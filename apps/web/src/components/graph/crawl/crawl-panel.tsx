@@ -154,7 +154,7 @@ export function CrawlPanel({
       aria-label="Crawl"
       className={cn(
         GLASS,
-        'pointer-events-auto absolute inset-x-3 top-16 z-10 flex max-h-[45%] flex-col gap-3 overflow-y-auto rounded-lg p-3 text-sm md:inset-x-auto md:left-3 md:max-h-[calc(100%-10rem)] md:w-[320px]',
+        'pointer-events-auto absolute inset-x-3 top-16 z-10 flex max-h-[45%] flex-col gap-3 overflow-y-auto rounded-lg p-3 text-sm md:inset-x-auto md:left-3 md:max-h-[calc(100%-12.5rem)] md:w-[320px]',
       )}
     >
       <TextField value={text} onChange={setText} aria-label="Prompt" className="grid gap-1.5">
@@ -331,17 +331,23 @@ export function CrawlPanel({
 
           {/* Before the log: what the assistant got matters more than how the replay walked it. */}
           {response && (
-            <details className="group grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 border-t border-border-subtle pt-3">
-              <summary className="cursor-pointer list-none font-mono text-[10.5px] uppercase tracking-wider text-fg-muted outline-none hover:text-fg-secondary focus-visible:text-fg-primary">
-                <span className="mr-1 inline-block transition-transform group-open:rotate-90">›</span>
-                Response
+            <details
+              open
+              className="group grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 border-t border-border-subtle pt-3"
+            >
+              <summary className="flex cursor-pointer list-none items-baseline justify-between outline-none focus-visible:text-fg-primary">
+                <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-secondary">
+                  <span className="mr-1 inline-block transition-transform group-open:rotate-90">›</span>
+                  Response
+                </span>
+                <span className="font-mono text-[11px] text-accent">what the assistant got</span>
               </summary>
               <p className="text-[11.5px] leading-4 text-fg-muted">
                 {response.whole
                   ? 'What gather_context returns to the assistant, as it receives it.'
                   : 'From the history: the note bodies (excerpt) are not kept, so they are missing here.'}
               </p>
-              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-base p-2 font-mono text-[10.5px] leading-[15px] text-fg-secondary">
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-accent/30 bg-bg-base p-2 font-mono text-[10.5px] leading-[15px] text-fg-secondary">
                 {JSON.stringify(response.json, null, 2)}
               </pre>
             </details>
