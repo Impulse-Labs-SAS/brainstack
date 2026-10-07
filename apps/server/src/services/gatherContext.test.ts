@@ -176,6 +176,38 @@ describe('gatherContext', () => {
     expect(result.unresolved).toEqual([]);
   });
 
+  it('answers a question that names no note, by what it is about', async () => {
+    await notes.create(
+      ME,
+      'comercial.md',
+      '# Política comercial\n\nEl descuento anual es del 15%.',
+    );
+    await notes.create(ME, 'otra.md', '# Jardín\n\nTomates.');
+
+    const result = await gather('¿Qué decidimos sobre el descuento anual?');
+    expect(result.notes.map((n) => n.path)).toEqual(['comercial.md']);
+    expect(result.notes[0]).toMatchObject({
+      reason: 'matches the question',
+      via: { kind: 'prompt' },
+    });
+  });
+
+  it('does not search a question made only of common words', async () => {
+    await notes.create(ME, 'a.md', '# What this is about\n\nThat and this.');
+
+    const result = await gather('What is this about? ¿Qué es esto?');
+    expect(result.notes).toEqual([]);
+  });
+
+  it('hands over a whole note when it fits, so the assistant need not open it', async () => {
+    const body = 'Una frase sobre la migración. '.repeat(100);
+    await notes.create(ME, 'plan.md', `# Plan de migración\n\n${body}`);
+
+    const result = await gather('Plan de migración');
+    expect(result.notes[0]).toMatchObject({ path: 'plan.md', truncated: false });
+    expect(result.notes[0]!.excerpt.length).toBeGreaterThan(2_500);
+  });
+
   it('never returns another user’s notes, however plainly the text names them', async () => {
     await notes.create(SOMEONE_ELSE, 'secret.md', '# Secret project\n\nHidden.');
     await notes.create(ME, 'mine.md', '# My project');

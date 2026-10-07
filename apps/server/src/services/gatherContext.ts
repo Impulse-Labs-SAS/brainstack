@@ -8,8 +8,16 @@
 // a title two notes share comes back with both candidates, and a phrase that
 // matched nothing comes back as a question for the person.
 //
-// Own vault only, like `unlinkedMentions` and `listRelated`. Scoring lives in
-// contextCrawl.ts; this file only reads.
+// Two layers, so the engine can serve more than this vault:
+//
+//  - `crawlContext` is the engine. It asks a `ContextSource` for titles,
+//    links, bodies and search hits, and knows nothing about who owns what or
+//    where notes are stored. Anything that can answer those four questions can
+//    use it.
+//  - `vaultSource` is BrainStack's source: the caller's own vault, like
+//    `unlinkedMentions` and `listRelated`. `gatherContext` wires the two.
+//
+// Scoring lives in contextCrawl.ts.
 
 import {
   buildCodeMask,
@@ -25,6 +33,7 @@ import type { NoteService } from './NoteService.js';
 import type { SearchService } from './SearchService.js';
 import {
   CandidateSet,
+  PROMPT_HITS,
   DEFAULT_MAX_CHARS,
   MAX_MAX_CHARS,
   DIGEST_BODY_CHARS,
@@ -33,6 +42,7 @@ import {
   SEARCH_HITS_PER_TERM,
   expandHop,
   packContext,
+  promptScore,
   searchScore,
   topFrontier,
   type ContextNote,
@@ -74,16 +84,56 @@ export interface GatherContextResult {
   budget: { maxChars: number; usedChars: number; notesLeftOut: number };
 }
 
+/** Where the engine reads from. Paths are whatever the source uses to name a note. */
+export interface ContextSource {
+  /** Every note the reader may see: path, title and aliases. No bodies. */
+  titles(): Promise<Array<{ path: string; title: string; aliases: unknown[] }>>;
+  /** Note-to-note links touching any of `paths`, in either direction. */
+  links(paths: readonly string[]): Promise<Array<{ source: string; target: string }>>;
+  /** Title, the first `bodyChars` of the body and whether it is a decision, for each path that exists. */
+  digests(paths: readonly string[], bodyChars: number): Promise<Digest[]>;
+  /** Full-text hits for a query, best first, at most `limit`. */
+  search(query: string, limit: number): Promise<Array<{ path: string }>>;
+}
+
 export interface GatherContextDeps {
   notes: NoteService;
   search: SearchService;
 }
 
-const AMBIGUOUS = '\u0000ambiguous:';
+/** BrainStack's source: the caller's own vault. */
+export function vaultSource(deps: GatherContextDeps, ownerId: string): ContextSource {
+  return {
+    titles: () => deps.notes.mentionIndex(ownerId),
+    links: (paths) => deps.notes.linksTouching(ownerId, paths),
+    digests: (paths, bodyChars) => deps.notes.contextDigests(ownerId, paths, bodyChars),
+    // Search ranks across every vault and filters by owner afterwards, so a
+    // query asked for three hits can come back empty on a busy instance while
+    // the caller's notes do match. Asking for more and trimming here is what
+    // keeps "no-match" honest.
+    search: async (query, limit) => {
+      const hits = await deps.search.search(ownerId, query, {
+        limit: SEARCH_CANDIDATES,
+        includeMine: true,
+        sharedScopes: [],
+      });
+      return hits.filter((h) => h.ownerId === ownerId).slice(0, limit);
+    },
+  };
+}
 
-export async function gatherContext(
+export function gatherContext(
   deps: GatherContextDeps,
   ownerId: string,
+  input: GatherContextInput,
+): Promise<GatherContextResult> {
+  return crawlContext(vaultSource(deps, ownerId), input);
+}
+
+const AMBIGUOUS = '\u0000ambiguous:';
+
+export async function crawlContext(
+  source: ContextSource,
   input: GatherContextInput,
 ): Promise<GatherContextResult> {
   const text = input.text.slice(0, MAX_TEXT_CHARS);
@@ -94,7 +144,7 @@ export async function gatherContext(
   );
   const terms = uniqueTerms(input.terms ?? []);
 
-  const index = await deps.notes.mentionIndex(ownerId);
+  const index = await source.titles();
   const titleOf = new Map(index.map((n) => [n.path, n.title]));
   const title = (path: string) => titleOf.get(path) ?? path;
 
@@ -152,6 +202,9 @@ export async function gatherContext(
     ...ambiguous.map((a, i) => ({ target: `${AMBIGUOUS}${i}`, term: a.term })),
   ];
   const ambiguousSeen = new Set<number>();
+  /** Notes a reference could mean but nobody chose: asked about, never handed over as if chosen. */
+  const undecided = new Set<string>();
+  for (const u of unresolved) for (const c of u.candidates ?? []) undecided.add(c.path);
   for (const m of findMentions(withoutCodeMarkers(text), searchable)) {
     if (!m.target.startsWith(AMBIGUOUS)) {
       nameSeed(m.target, m.text);
@@ -161,6 +214,7 @@ export async function gatherContext(
     if (ambiguousSeen.has(i)) continue;
     ambiguousSeen.add(i);
     settledTerms.add(foldForMatch(m.text));
+    ambiguous[i]!.targets.forEach((path) => undecided.add(path));
     unresolved.push({
       term: m.text,
       reason: 'ambiguous',
@@ -175,7 +229,7 @@ export async function gatherContext(
   // A term the text already named or linked is not a second reference.
   const vague = terms.filter((t) => !settledTerms.has(foldForMatch(t)));
   let termsResolved = 0;
-  for (const { term, hits } of await searchTerms(deps.search, ownerId, vague)) {
+  for (const { term, hits } of await searchTerms(source, vague)) {
     if (hits.length === 0) {
       unresolved.push({ term, reason: 'no-match' });
       continue;
@@ -186,13 +240,28 @@ export async function gatherContext(
     });
   }
 
+  // -- Seeds: what the question is about ---------------------------------------
+  // A question rarely names a note by its title — "what did we decide about
+  // annual pricing?" — so the text itself is searched too, with the words that
+  // carry meaning. It ranks under a link from a named note: a link someone
+  // wrote says more than a shared word.
+  const words = meaningfulWords(text);
+  if (words.length > 0) {
+    const hits = await source.search(words.join(' '), PROMPT_HITS);
+    hits
+      .filter((h) => !undecided.has(h.path))
+      .forEach((hit, rank) => {
+        set.offer({ path: hit.path, score: promptScore(rank), via: { kind: 'prompt', rank } });
+      });
+  }
+
   // -- Expand along wikilinks ------------------------------------------------
   let frontier = topFrontier(
     set,
     set.all().map((c) => c.path),
   );
   for (let hop = 1; hop <= depth && frontier.length > 0; hop++) {
-    const edges = await deps.notes.linksTouching(ownerId, frontier);
+    const edges = await source.links(frontier);
     frontier = topFrontier(set, expandHop(set, frontier, edges, hop, title));
   }
 
@@ -203,8 +272,7 @@ export async function gatherContext(
     .slice(0, DIGEST_LIMIT);
   const digests = new Map<string, Digest>(
     (
-      await deps.notes.contextDigests(
-        ownerId,
+      await source.digests(
         strongest.map((c) => c.path),
         DIGEST_BODY_CHARS,
       )
@@ -228,17 +296,12 @@ export async function gatherContext(
 }
 
 /**
- * Full-text hits for each term, own notes only, a few terms at a time.
- *
- * Search ranks across every vault and filters by owner afterwards, so a term
- * asked for three hits can come back empty on a busy instance while the
- * caller's notes do match. Asking for more and trimming here is what keeps
- * "no-match" honest. Batched, not all at once: each query highlights every row
- * it matches, and thirty of those together would hold the pool for everyone.
+ * Full-text hits for each term, a few terms at a time: each query highlights
+ * every row it matches, and thirty of those together would hold the pool for
+ * everyone.
  */
 async function searchTerms(
-  search: SearchService,
-  ownerId: string,
+  source: ContextSource,
   terms: readonly string[],
 ): Promise<Array<{ term: string; hits: Array<{ path: string }> }>> {
   const out: Array<{ term: string; hits: Array<{ path: string }> }> = [];
@@ -246,17 +309,10 @@ async function searchTerms(
     const batch = terms.slice(i, i + SEARCH_BATCH);
     out.push(
       ...(await Promise.all(
-        batch.map(async (term) => {
-          const hits = await search.search(ownerId, term, {
-            limit: SEARCH_CANDIDATES,
-            includeMine: true,
-            sharedScopes: [],
-          });
-          return {
-            term,
-            hits: hits.filter((h) => h.ownerId === ownerId).slice(0, SEARCH_HITS_PER_TERM),
-          };
-        }),
+        batch.map(async (term) => ({
+          term,
+          hits: await source.search(term, SEARCH_HITS_PER_TERM),
+        })),
       )),
     );
   }
@@ -270,6 +326,39 @@ async function searchTerms(
  */
 function withoutCodeMarkers(text: string): string {
   return text.replace(/^[ \t]*(`{3,}|~{3,}).*$/gm, '').replace(/`/g, ' ');
+}
+
+/**
+ * Words too common to say what a question is about, folded. Searched, they
+ * match nearly every note; the ranking would drown in them. Spanish and
+ * English, the languages people here write in — a word missing from the list
+ * only costs a little ranking, never a wrong answer.
+ */
+const STOPWORDS = new Set(
+  (
+    'para como pero este esta esto estos estas todo toda todos todas sobre entre desde hasta cuando donde porque ' +
+    'tiene tienen tenemos hacer hace puede pueden segun solo tambien antes despues luego ahora aqui cual cuales ' +
+    'quien quienes nuestro nuestra nuestros nuestras ellos ellas ustedes usted mismo misma cada otro otra otros ' +
+    'otras mucho mucha muchos muchas poco menos algo nada siempre nunca sigue estar estan fueron sido sera eran ' +
+    'haber habia decime dime quiero queremos necesito podes puedes favor gracias hola todavia sean esas esos ' +
+    'what when where which about from with that this these those have does should would could there their them ' +
+    'they your into than then also just only some more most very been were will please tell need want like'
+  ).split(' '),
+);
+/** Words searched for a question, at most: the longest carry the most meaning. */
+const MAX_PROMPT_WORDS = 16;
+
+/** The words of a text that say what it is about: four letters or more, not too common, each once. */
+function meaningfulWords(text: string): string[] {
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const raw of text.split(/[^\p{L}\p{N}]+/u)) {
+    const key = foldForMatch(raw);
+    if (key.length < 4 || STOPWORDS.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    words.push(raw);
+  }
+  return words.sort((a, b) => b.length - a.length).slice(0, MAX_PROMPT_WORDS);
 }
 
 /** Trimmed, non-empty, and each phrase once however it was cased or accented. */

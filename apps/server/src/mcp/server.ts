@@ -589,9 +589,9 @@ export function buildMcpServer({
   server.registerTool(
     'gather_context',
     {
-      title: 'Gather context for a text',
+      title: 'Gather context for a question or a prompt',
       description:
-        'Resolve a prompt, brief or spec against the vault in one call, instead of searching piece by piece. Pass the text, and in `terms` the phrases in it that are vague (no clear note behind them). Returns `notes`: the notes the text names by title or alias, the best full-text hits for each term, and the notes those link to or from (`depth` hops, default 1), ranked — named > search hit > linked, decisions weigh extra — each with `reason`, `isDecision` and an `excerpt`, all within `maxChars`. Returns `unresolved`: terms that matched nothing, and titles the text uses that several notes share (with their `candidates`). Never guess those: ask the user. `coverage` is how many references were settled. Read-only. Own vault only; does not take `ownerId`.',
+        'Start here for any question or task about the user\'s own notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user\'s message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision` and its body in `excerpt`, whole when it fits `maxChars`; open a note with get_note only when `truncated` is true and you need the rest. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Read-only. Own vault only: for folders shared with the user, use search_brain with scope="shared".',
       inputSchema: {
         text: z.string().min(1).max(MAX_TEXT_CHARS),
         terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),

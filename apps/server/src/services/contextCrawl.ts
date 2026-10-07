@@ -18,6 +18,7 @@
 export type ContextVia =
   | { kind: 'named'; text: string; count: number }
   | { kind: 'search'; term: string; rank: number }
+  | { kind: 'prompt'; rank: number }
   | { kind: 'linked'; from: string; fromTitle: string; direction: 'out' | 'in'; hop: number };
 
 export interface Candidate {
@@ -33,6 +34,8 @@ export const SEARCH_SCORE = 0.7;
 export const SEARCH_RANK_STEP = 0.1;
 /** Search hits kept per term. */
 export const SEARCH_HITS_PER_TERM = 3;
+/** Search hits kept for the question as a whole. */
+export const PROMPT_HITS = 5;
 /** Each hop away from a seed multiplies the score by this. */
 export const HOP_DECAY = 0.5;
 /** Added to a decision's score once, whatever brought it in. */
@@ -43,12 +46,14 @@ export const DECISION_BONUS = 0.25;
  */
 export const FRONTIER_LIMIT = 20;
 
-export const DEFAULT_MAX_CHARS = 12_000;
+export const DEFAULT_MAX_CHARS = 16_000;
 export const MAX_MAX_CHARS = 50_000;
 export const MAX_NOTES = 40;
 /** A seed gets a longer excerpt than a note reached by a link. */
-export const SEED_EXCERPT_CHARS = 1_500;
-export const LINKED_EXCERPT_CHARS = 500;
+// Generous on purpose: the point is that the assistant answers from this one
+// call, without opening each note. `truncated` says when a note was cut.
+export const SEED_EXCERPT_CHARS = 6_000;
+export const LINKED_EXCERPT_CHARS = 1_500;
 /**
  * Characters of each body read from the store: more than any excerpt uses, so
  * `truncated` stays true for a body longer than its excerpt, and no more, so a
@@ -80,6 +85,14 @@ export class CandidateSet {
   }
 }
 
+/**
+ * A hit for the question as a whole ranks under a note linked from a named one
+ * (NAMED_SCORE × HOP_DECAY): a link someone wrote says more than a shared word.
+ */
+export function promptScore(rank: number): number {
+  return Math.max(0.15, 0.45 - rank * 0.05);
+}
+
 export function searchScore(rank: number): number {
   return Math.max(0, SEARCH_SCORE - rank * SEARCH_RANK_STEP);
 }
@@ -103,7 +116,10 @@ export function expandHop(
       [source, target, 'out'],
       [target, source, 'in'],
     ] as const) {
-      if (!inFrontier.has(from) || inFrontier.has(to)) continue;
+      // A note already in the frontier can still be reached more strongly —
+      // a link from a named note outranks a word the question shares with it —
+      // so only the source has to be in the frontier; `offer` keeps the best.
+      if (!inFrontier.has(from) || from === to) continue;
       const parent = set.get(from);
       if (!parent) continue;
       const score = parent.score * HOP_DECAY;
@@ -158,6 +174,8 @@ export function describeVia(via: ContextVia): string {
         : `the text says "${via.text}"`;
     case 'search':
       return `matches "${via.term}"`;
+    case 'prompt':
+      return 'matches the question';
     case 'linked':
       return via.direction === 'out' ? `linked from ${via.fromTitle}` : `links to ${via.fromTitle}`;
   }

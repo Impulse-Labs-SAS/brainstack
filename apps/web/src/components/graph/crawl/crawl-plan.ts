@@ -23,6 +23,7 @@ export interface CrawlResult {
     via:
       | { kind: 'named'; text: string; count: number }
       | { kind: 'search'; term: string; rank: number }
+      | { kind: 'prompt'; rank: number }
       | { kind: 'linked'; from: string; fromTitle: string; direction: 'out' | 'in'; hop: number };
   }>;
   unresolved: Array<{
@@ -79,7 +80,11 @@ export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
     }
     const via = n.via;
     const label =
-      via.kind === 'search' ? `${n.title} · matches “${via.term}”` : `${n.title} · named`;
+      via.kind === 'search'
+        ? `${n.title} · matches “${via.term}”`
+        : via.kind === 'prompt'
+          ? `${n.title} · matches the question`
+          : `${n.title} · named`;
     steps.push({ kind: 'visit', phase: 0, at: node, reach: [{ node, kind: 'named', label }] });
   }
 
