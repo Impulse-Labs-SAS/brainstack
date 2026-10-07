@@ -207,7 +207,7 @@ export async function crawlContext(
   // the same subject — in a vault about one product, every note says its name
   // — and full-text ranking, which cannot tell a word that is everywhere from
   // one that is rare, puts those first. So a term made only of such words is
-  // not a second reference, and "planes Zuno" is searched as "planes".
+  // not a second reference, and "planes Orbit" is searched as "planes".
   const namedWords = new Set([...named.values()].flatMap(({ text: said }) => foldedWords(said)));
   const withoutNamed = (phrase: string) => {
     const words = phrase.split(WORD_BREAK).filter(Boolean);
@@ -283,7 +283,7 @@ export async function crawlContext(
     .all()
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(DIGEST_LIMIT, DIGEST_LIMIT + LEFT_OUT_LISTED)
-    .map((c) => ({ path: c.path, title: title(c.path), reason: describeCandidate(c.via, c.also) }));
+    .map((c) => ({ path: c.path, title: title(c.path), reason: describeCandidate(c) }));
   const leftOut = [...packed.leftOut, ...unread].slice(0, LEFT_OUT_LISTED);
 
   return {

@@ -15,7 +15,14 @@
 //    overview its own index puts first.
 //  - Evidence adds up. A note three of the caller's terms find is likelier to
 //    be the answer than one a single term finds first — taking the best reason
-//    alone would tie them, and the budget would settle the tie by title.
+//    alone would tie them, and the budget would settle the tie by title. So
+//    does a note several results link to: in a question that spans two
+//    subjects, it is the hinge between them. Links *back* do not add up — a
+//    note that links to many results is their index — and an index adds up
+//    nothing at all: every note links up to its own.
+//  - An index is read for its links. A note that is mostly a list of them
+//    gets a linked note's excerpt even when the text names it, so two named
+//    indexes cannot fill the budget with the lists the crawl already followed.
 //  - A decision weighs extra when the text or a search reached it. "What did
 //    we already decide" is the question a prompt most often leaves implicit,
 //    and the one a guess gets most wrong. Reached along a link, it only breaks
@@ -36,6 +43,10 @@ export interface Candidate {
   via: ContextVia;
   /** Other terms that found the note, besides the one `via` names. */
   also?: string[];
+  /** Titles of other notes that link to it, besides the one `via` names. */
+  alsoFrom?: string[];
+  /** The strongest single reason's score, before the others add to it. Absent: `score`. */
+  best?: number;
 }
 
 /** Score of a note the text names by title or alias. */
@@ -69,7 +80,7 @@ export const DECISION_BONUS = 0.25;
 export const LINKED_DECISION_BONUS = 0.01;
 /**
  * Kept by a hit for the question that never says what the text named. "A
- * general overview of Zuno" also finds every other project's "general
+ * general overview of Orbit" also finds every other project's "general
  * overview"; it is still the question's word, so it stays, under the notes
  * the named one links to.
  */
@@ -105,35 +116,49 @@ export const LINKED_EXCERPT_CHARS = 1_500;
 export const DIGEST_BODY_CHARS = SEED_EXCERPT_CHARS + 500;
 /** Below this, a truncated excerpt says too little to be worth its place. */
 export const MIN_EXCERPT_CHARS = 120;
+/** Lines with a wikilink a note needs, at least, to read as an index. */
+export const INDEX_MIN_LINK_LINES = 5;
 
 /**
- * The candidates found so far. Each note keeps every search that found it and
- * the strongest other reason — named, or linked — and scores them together as
- * independent evidence: 1 − ∏(1 − sᵢ). One reason alone scores what it always
- * did; a named note stays at NAMED_SCORE, and searches only approach it.
- * The reason shown is the strongest single one.
+ * A note that is mostly a list of links: a MOC, a project's index. What it
+ * says is where to go, and the crawl has already gone there, so its excerpt is
+ * the size of a linked note's — named or not. Otherwise two indexes a question
+ * names fill the budget with their lists, and push out the notes they list.
+ * Mostly means at least half of its lines of text, headings aside.
+ */
+export function isIndex(body: string): boolean {
+  const lines = body
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('#'));
+  const linking = lines.filter((l) => l.includes('[[')).length;
+  return linking >= INDEX_MIN_LINK_LINES && linking * 2 >= lines.length;
+}
+
+/**
+ * The candidates found so far. Each note keeps every independent reason it
+ * was reached by, and scores them together: 1 − ∏(1 − sᵢ). Independent means
+ * each search that found it, and each note that links to it — a note three
+ * results link to is likelier the hinge between them than one a single result
+ * does. A note counts once whichever way it links. Being named, and being
+ * linked *back* from notes (a note that links to many results is an index of
+ * them, not a hinge), count once: the strongest. One reason alone scores what
+ * it always did; a named note stays at NAMED_SCORE, and the rest only approach
+ * it. The reason shown is the strongest single one, the others listed after.
  */
 export class CandidateSet {
   private readonly byPath = new Map<string, Candidate>();
-  /** Per note, the best a named or linked reason gave it. */
-  private readonly reached = new Map<string, Candidate>();
-  /** Per note, the best each search gave it, by search: a term, or the question. */
-  private readonly matched = new Map<string, Map<string, Candidate>>();
+  /** Per note, the best each reason gave it, by `reasonKey`. */
+  private readonly reasons = new Map<string, Map<string, Candidate>>();
 
   offer(candidate: Candidate): void {
-    const { path, via } = candidate;
-    if (via.kind === 'search' || via.kind === 'prompt') {
-      const byQuery = this.matched.get(path) ?? new Map<string, Candidate>();
-      const key = via.kind === 'search' ? `term:${via.term}` : 'prompt';
-      const current = byQuery.get(key);
-      if (current && candidate.score <= current.score) return;
-      byQuery.set(key, candidate);
-      this.matched.set(path, byQuery);
-    } else {
-      const current = this.reached.get(path);
-      if (current && candidate.score <= current.score) return;
-      this.reached.set(path, candidate);
-    }
+    const { path } = candidate;
+    const byKey = this.reasons.get(path) ?? new Map<string, Candidate>();
+    const key = reasonKey(candidate.via);
+    const current = byKey.get(key);
+    if (current && candidate.score <= current.score) return;
+    byKey.set(key, candidate);
+    this.reasons.set(path, byKey);
     this.byPath.set(path, this.combine(path));
   }
 
@@ -150,20 +175,45 @@ export class CandidateSet {
   }
 
   private combine(path: string): Candidate {
-    const reached = this.reached.get(path);
-    const matches = [...(this.matched.get(path)?.values() ?? [])];
-    const reasons = reached ? [reached, ...matches] : matches;
-    const strongest = reasons.reduce((best, r) => (r.score > best.score ? r : best));
+    const all = [...this.reasons.get(path)!.values()];
+    const linksBack = all.filter((r) => r.via.kind === 'linked' && r.via.direction === 'in');
+    const reasons = [
+      ...all.filter((r) => !linksBack.includes(r)),
+      ...(linksBack.length > 0 ? [strongestOf(linksBack)] : []),
+    ];
+    const strongest = strongestOf(reasons);
     const score = 1 - reasons.reduce((miss, r) => miss * (1 - r.score), 1);
-    const also = matches.flatMap((m) =>
-      m !== strongest && m.via.kind === 'search' ? [m.via.term] : [],
+    const others = reasons.filter((r) => r !== strongest);
+    const also = others.flatMap((r) => (r.via.kind === 'search' ? [r.via.term] : []));
+    const alsoFrom = others.flatMap((r) =>
+      r.via.kind === 'linked' && r.via.direction === 'out' ? [r.via.fromTitle] : [],
     );
     return {
       path,
       score,
+      best: strongest.score,
       via: strongest.via,
       ...(also.length > 0 ? { also } : {}),
+      ...(alsoFrom.length > 0 ? { alsoFrom } : {}),
     };
+  }
+}
+
+function strongestOf(reasons: readonly Candidate[]): Candidate {
+  return reasons.reduce((best, r) => (r.score > best.score ? r : best));
+}
+
+/** One slot per search, one per linking note — whichever way it links — and one for being named. */
+function reasonKey(via: ContextVia): string {
+  switch (via.kind) {
+    case 'search':
+      return `term:${via.term}`;
+    case 'prompt':
+      return 'prompt';
+    case 'linked':
+      return `link:${via.from}`;
+    case 'named':
+      return 'named';
   }
 }
 
@@ -206,14 +256,17 @@ export function expandHop(
       if (!inFrontier.has(from) || from === to) continue;
       const parent = set.get(from);
       if (!parent) continue;
+      // Reasons add up, so a note must not get its own back: the link from
+      // the note `from` was reached through is that note's evidence, echoed.
+      if (parent.via.kind === 'linked' && parent.via.from === to) continue;
       const score = parent.score * hopDecay(direction, leadRank.get(edge));
-      const before = set.get(to);
+      const before = set.get(to)?.score;
       set.offer({
         path: to,
         score,
         via: { kind: 'linked', from, fromTitle: titleOf(from), direction, hop },
       });
-      if (set.get(to) !== before) reached.add(to);
+      if (before === undefined || set.get(to)!.score > before) reached.add(to);
     }
   }
   return [...reached];
@@ -273,7 +326,9 @@ export function demoteOffTopic(
     }
   }
   return candidates.map((c) =>
-    offTopic.has(c.path) ? { ...c, score: c.score * OFF_TOPIC_FACTOR } : c,
+    offTopic.has(c.path)
+      ? { ...c, score: c.score * OFF_TOPIC_FACTOR, best: (c.best ?? c.score) * OFF_TOPIC_FACTOR }
+      : c,
   );
 }
 
@@ -308,19 +363,30 @@ export interface ContextNote {
   truncated: boolean;
 }
 
-/** `describeVia`, plus the other terms that found the note. */
-export function describeCandidate(via: ContextVia, also: readonly string[] = []): string {
-  if (also.length === 0) return describeVia(via);
-  if (via.kind === 'search') return `matches ${listTerms([via.term, ...also])}`;
-  return `${describeVia(via)}; also matches ${listTerms(also)}`;
+/** `describeVia`, plus the other terms that found the note and the other notes that link to it. */
+export function describeCandidate(c: Pick<Candidate, 'via' | 'also' | 'alsoFrom'>): string {
+  const { via, also = [], alsoFrom = [] } = c;
+  const linkedFrom = via.kind === 'linked' && via.direction === 'out';
+  const head =
+    via.kind === 'search'
+      ? `matches ${listWords([via.term, ...also].map(quote))}`
+      : linkedFrom
+        ? `linked from ${listWords([via.fromTitle, ...alsoFrom])}`
+        : describeVia(via);
+  const more = [
+    ...(via.kind !== 'search' && also.length > 0 ? [`matches ${listWords(also.map(quote))}`] : []),
+    ...(!linkedFrom && alsoFrom.length > 0 ? [`linked from ${listWords(alsoFrom)}`] : []),
+  ];
+  return more.length > 0 ? `${head}; also ${more.join(' and ')}` : head;
 }
 
-/** `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
-function listTerms(terms: readonly string[]): string {
-  const quoted = terms.map((t) => `"${t}"`);
-  return quoted.length === 1
-    ? quoted[0]!
-    : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+const quote = (term: string) => `"${term}"`;
+
+/** `a`, `a and b`, `a, b and c`. */
+function listWords(words: readonly string[]): string {
+  return words.length === 1
+    ? words[0]!
+    : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
 
 export function describeVia(via: ContextVia): string {
@@ -370,27 +436,31 @@ export function packContext(
     .filter((c) => digests.has(c.path))
     .map((c) => {
       const d = digests.get(c.path)!;
+      // Notes link up to their index by convention, so many results linking
+      // to one says nothing about it: an index scores its best reason alone.
+      const index = isIndex(d.body);
+      const base = index ? (c.best ?? c.score) : c.score;
       const bonus = !d.isDecision
         ? 0
         : c.via.kind === 'linked'
           ? LINKED_DECISION_BONUS
           : DECISION_BONUS;
-      return { c, d, score: c.score + bonus };
+      return { c, d, index, score: base + bonus };
     })
     .sort((a, b) => b.score - a.score || a.d.title.localeCompare(b.d.title));
 
   const notes: ContextNote[] = [];
   let chars = 0;
-  for (const { c, d, score } of ranked) {
+  for (const { c, d, index, score } of ranked) {
     if (notes.length === maxNotes) break;
     const room = maxChars - chars;
     if (room < MIN_EXCERPT_CHARS) break;
-    const wanted = c.via.kind === 'linked' ? LINKED_EXCERPT_CHARS : SEED_EXCERPT_CHARS;
+    const wanted = c.via.kind === 'linked' || index ? LINKED_EXCERPT_CHARS : SEED_EXCERPT_CHARS;
     const { text, truncated } = excerpt(d.body, Math.min(wanted, room));
     notes.push({
       path: c.path,
       title: d.title,
-      reason: describeCandidate(c.via, c.also),
+      reason: describeCandidate(c),
       via: c.via,
       isDecision: d.isDecision,
       score: Math.round(score * 1000) / 1000,
@@ -402,7 +472,7 @@ export function packContext(
   const leftOut = ranked.slice(notes.length, notes.length + LEFT_OUT_LISTED).map(({ c, d }) => ({
     path: c.path,
     title: d.title,
-    reason: describeCandidate(c.via, c.also),
+    reason: describeCandidate(c),
   }));
   return { notes, chars, dropped: ranked.length - notes.length, leftOut };
 }
