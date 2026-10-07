@@ -450,7 +450,8 @@ export class CrawlLayer implements GraphPlugin {
       this.dwell = 0.2;
       this.mode = 'done';
       this.snapshot = { ...this.snapshot, state: 'done', phase: 2 };
-      this.log('done', 'done', `${this.found.size} notes · ${this.snapshot.asks.length} to ask`);
+      const n = this.found.size;
+      this.log('done', 'done', `${n} ${n === 1 ? 'note' : 'notes'} · ${this.snapshot.asks.length} to ask`);
     }
     this.emit();
   }

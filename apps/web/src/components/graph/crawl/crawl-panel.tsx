@@ -329,6 +329,24 @@ export function CrawlPanel({
             </div>
           )}
 
+          {/* Before the log: what the assistant got matters more than how the replay walked it. */}
+          {response && (
+            <details className="group grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 border-t border-border-subtle pt-3">
+              <summary className="cursor-pointer list-none font-mono text-[10.5px] uppercase tracking-wider text-fg-muted outline-none hover:text-fg-secondary focus-visible:text-fg-primary">
+                <span className="mr-1 inline-block transition-transform group-open:rotate-90">›</span>
+                Response
+              </summary>
+              <p className="text-[11.5px] leading-4 text-fg-muted">
+                {response.whole
+                  ? 'What gather_context returns to the assistant, as it receives it.'
+                  : 'From the history: the note bodies (excerpt) are not kept, so they are missing here.'}
+              </p>
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-base p-2 font-mono text-[10.5px] leading-[15px] text-fg-secondary">
+                {JSON.stringify(response.json, null, 2)}
+              </pre>
+            </details>
+          )}
+
           <div className="grid gap-1 border-t border-border-subtle pt-3">
             <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
               Log
@@ -347,23 +365,6 @@ export function CrawlPanel({
             </ol>
           </div>
         </>
-      )}
-
-      {response && (
-        <details className="group grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 border-t border-border-subtle pt-3">
-          <summary className="cursor-pointer list-none font-mono text-[10.5px] uppercase tracking-wider text-fg-muted outline-none hover:text-fg-secondary focus-visible:text-fg-primary">
-            <span className="mr-1 inline-block transition-transform group-open:rotate-90">›</span>
-            Response
-          </summary>
-          <p className="text-[11.5px] leading-4 text-fg-muted">
-            {response.whole
-              ? 'What gather_context returns to the assistant, as it receives it.'
-              : 'From the history: the note bodies (excerpt) are not kept, so they are missing here.'}
-          </p>
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-base p-2 font-mono text-[10.5px] leading-[15px] text-fg-secondary">
-            {JSON.stringify(response.json, null, 2)}
-          </pre>
-        </details>
       )}
     </aside>
   );
