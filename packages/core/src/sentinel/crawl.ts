@@ -16,16 +16,9 @@
 //
 // Scoring lives in score.ts.
 
-import {
-  findMentions,
-  foldForMatch,
-  indexMentionTerms,
-  type MentionTerm,
-} from '../links/mentions.js';
-import { buildCodeMask } from '../parser/code-mask.js';
-import { extractLinks } from '../parser/wikilinks.js';
-import { resolveLink } from '../resolver/wikilinks.js';
+import { foldForMatch } from '../links/mentions.js';
 
+import { WORD_BREAK, resolveNames, withoutNamed } from './names.js';
 import {
   CandidateSet,
   PROMPT_HITS,
@@ -103,8 +96,11 @@ export interface ContextSource {
   ): Promise<Array<{ source: string; target: string; position?: number }>>;
   /** Title, the first `bodyChars` of the body and whether it is a decision, for each path that exists. */
   digests(paths: readonly string[], bodyChars: number): Promise<Digest[]>;
-  /** Full-text hits for a query, best first, at most `limit`. */
-  search(query: string, limit: number): Promise<Array<{ path: string }>>;
+  /**
+   * Full-text hits for a query, best first, at most `limit`. A `snippet` —
+   * the matching passage — is passed through to a search's results.
+   */
+  search(query: string, limit: number): Promise<Array<{ path: string; snippet?: string }>>;
   /**
    * How many of the reader's notes match each query, with the same matching
    * as `search`, in one call: how rare each term is. Optional; without it
@@ -112,8 +108,6 @@ export interface ContextSource {
    */
   counts?(queries: readonly string[]): Promise<number[]>;
 }
-
-const AMBIGUOUS = '\u0000ambiguous:';
 
 export async function crawlContext(
   source: ContextSource,
@@ -131,79 +125,8 @@ export async function crawlContext(
   const titleOf = new Map(index.map((n) => [n.path, n.title]));
   const title = (path: string) => titleOf.get(path) ?? path;
 
-  // -- Seeds: what the text links to ----------------------------------------
-  // `[[Note]]` is the plainest way a prompt can point at a note, and the one
-  // mention matching skips on purpose (it never looks inside a link). So links
-  // are resolved the way the vault resolves them, from the root.
   const set = new CandidateSet();
-  const named = new Map<string, { text: string; count: number }>();
-  const unresolved: UnresolvedReference[] = [];
-  const settledTerms = new Set<string>();
-  const nameSeed = (path: string, said: string) => {
-    const entry = named.get(path) ?? { text: said, count: 0 };
-    entry.count += 1;
-    named.set(path, entry);
-    settledTerms.add(foldForMatch(said));
-  };
-
-  const noteIndex = new Set(index.map((n) => n.path));
-  const linkCtx = { sourcePath: 'prompt.md', noteIndex, attachmentIndex: new Set<string>() };
-  const linkSeen = new Set<string>();
-  for (const link of extractLinks(text, buildCodeMask(text))) {
-    const said = link.alias ?? link.rawTarget;
-    const resolved = resolveLink(link, linkCtx);
-    if (resolved.targetType === 'note' && !resolved.ambiguous) {
-      nameSeed(resolved.targetPath, said);
-      continue;
-    }
-    if (resolved.targetType === 'attachment') continue;
-    const key = foldForMatch(link.rawTarget);
-    if (linkSeen.has(key)) continue;
-    linkSeen.add(key);
-    settledTerms.add(foldForMatch(said));
-    unresolved.push(
-      resolved.ambiguous
-        ? {
-            term: said,
-            reason: 'ambiguous',
-            candidates: resolved.candidates
-              .filter((p) => noteIndex.has(p))
-              .map((path) => ({ path, title: title(path) })),
-          }
-        : { term: said, reason: 'no-match' },
-    );
-  }
-
-  // -- Seeds: what the text names --------------------------------------------
-  const { terms: mentionTerms, ambiguous } = indexMentionTerms(
-    index.map((n) => ({ target: n.path, title: n.title, aliases: n.aliases })),
-  );
-  // Ambiguous terms are matched alongside the others, not after them, so that
-  // the longer of two overlapping titles still wins whichever kind it is.
-  const searchable: MentionTerm[] = [
-    ...mentionTerms,
-    ...ambiguous.map((a, i) => ({ target: `${AMBIGUOUS}${i}`, term: a.term })),
-  ];
-  const ambiguousSeen = new Set<number>();
-  /** Notes a reference could mean but nobody chose: asked about, never handed over as if chosen. */
-  const undecided = new Set<string>();
-  for (const u of unresolved) for (const c of u.candidates ?? []) undecided.add(c.path);
-  for (const m of findMentions(withoutCodeMarkers(text), searchable)) {
-    if (!m.target.startsWith(AMBIGUOUS)) {
-      nameSeed(m.target, m.text);
-      continue;
-    }
-    const i = Number(m.target.slice(AMBIGUOUS.length));
-    if (ambiguousSeen.has(i)) continue;
-    ambiguousSeen.add(i);
-    settledTerms.add(foldForMatch(m.text));
-    ambiguous[i]!.targets.forEach((path) => undecided.add(path));
-    unresolved.push({
-      term: m.text,
-      reason: 'ambiguous',
-      candidates: ambiguous[i]!.targets.map((path) => ({ path, title: title(path) })),
-    });
-  }
+  const { named, unresolved, settledTerms, undecided, namedWords } = resolveNames(text, index);
   for (const [path, { text: said, count }] of named) {
     set.offer({ path, score: NAMED_SCORE, via: { kind: 'named', text: said, count } });
   }
@@ -216,15 +139,9 @@ export async function crawlContext(
   // — and full-text ranking, which cannot tell a word that is everywhere from
   // one that is rare, puts those first. So a term made only of such words is
   // not a second reference, and "planes Orbit" is searched as "planes".
-  const namedWords = new Set([...named.values()].flatMap(({ text: said }) => foldedWords(said)));
-  const withoutNamed = (phrase: string) => {
-    const words = phrase.split(WORD_BREAK).filter(Boolean);
-    const kept = words.filter((w) => !namedWords.has(foldForMatch(w)));
-    return kept.length === words.length ? phrase : kept.join(' ');
-  };
   const vague = terms
     .filter((t) => !settledTerms.has(foldForMatch(t)))
-    .map((term) => ({ term, query: withoutNamed(term) }))
+    .map((term) => ({ term, query: withoutNamed(term, namedWords) }))
     .filter((t) => t.query !== '');
   let termsResolved = 0;
   const weights = new Map<string, number>();
@@ -358,22 +275,6 @@ async function searchTerms(
     );
   }
   return out;
-}
-
-const WORD_BREAK = /[^\p{L}\p{N}]+/u;
-
-/** The words of a phrase, folded. */
-function foldedWords(phrase: string): string[] {
-  return phrase.split(WORD_BREAK).map(foldForMatch).filter(Boolean);
-}
-
-/**
- * The text with backticks and fence lines removed. A prompt that writes
- * `Ledger service` in code is still naming the note; mention matching would
- * skip it, because in a note body code is where a name must never be linked.
- */
-function withoutCodeMarkers(text: string): string {
-  return text.replace(/^[ \t]*(`{3,}|~{3,}).*$/gm, '').replace(/`/g, ' ');
 }
 
 /**

@@ -22,7 +22,7 @@ Read the relevant ones before making non-trivial changes.
 
 - `apps/server` — Node app: HTTP (tRPC + MCP) and stdio MCP.
 - `apps/web` — Next.js web app, replaces Obsidian for humans.
-- `packages/core` — Markdown parsing, wikilink resolution, Postgres store and search (framework-agnostic). Also **Sentinel** (`@brainstack/core/sentinel`), the context engine behind `gather_context`: it reads through a `ContextSource` and knows nothing about vaults, so it can serve another system or move to its own package.
+- `packages/core` — Markdown parsing, wikilink resolution, Postgres store and search (framework-agnostic). Also **Sentinel** (`@brainstack/core/sentinel`), the engine behind `gather_context` and every search (`search_brain`, the web palette), so all of them rank alike: it reads through a `ContextSource` and knows nothing about vaults, so it can serve another system or move to its own package.
 - `packages/skill` — Canonical AI instructions + multi-client adapters.
 
 ## Non-negotiable rules

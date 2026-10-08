@@ -22,3 +22,10 @@ export {
   type Digest,
   type LeftOutNote,
 } from './score.js';
+export {
+  DEFAULT_SEARCH_HITS,
+  MAX_SEARCH_HITS,
+  searchNotes,
+  type SearchHit,
+  type SearchInput,
+} from './search.js';

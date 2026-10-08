@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { NoteService } from './NoteService.js';
 import { SearchService } from './SearchService.js';
-import { gatherContext } from './gatherContext.js';
+import { gatherContext, searchBrain } from './gatherContext.js';
 import { createTestDatabase, type TestDatabase } from './testDb.js';
 
 const { users } = pgSchema;
@@ -564,6 +564,39 @@ describe('gatherContext', () => {
     const result = await gather('Secret project and My project', { terms: ['Hidden'] });
     expect(result.notes.map((n) => n.path)).toEqual(['mine.md']);
     expect(result.unresolved).toEqual([{ term: 'Hidden', reason: 'no-match' }]);
+  });
+});
+
+describe('searchBrain', () => {
+  it('ranks a query the way gather_context does, so the two agree on what comes first', async () => {
+    // Every note says the product's name, most of them many times; the one
+    // the query is about says it once and has "Planes" in its title.
+    const filler = (topic: string) => `Orbit ${topic}: orbit-api y orbit-web. `.repeat(60);
+    for (const p of ['arquitectura', 'infra', 'webhooks', 'frontend']) {
+      await notes.create(ME, `orbit/${p}.md`, `# ${p} — Orbit\n\n${filler(p)}`);
+    }
+    await notes.create(
+      ME,
+      'orbit/planes.md',
+      '# Planes y precios\n\nCómo cobra Orbit: los planes.',
+    );
+    await notes.create(ME, 'orbit/_orbit.md', '# Orbit\n\nEl producto.');
+
+    const hits = await searchBrain({ notes, search }, ME, { query: 'planes Orbit', scope: 'all' });
+    expect(hits.map((h) => h.path).slice(0, 2)).toEqual(['orbit/_orbit.md', 'orbit/planes.md']);
+    expect(hits.every((h) => h.ownerId === ME)).toBe(true);
+
+    const context = await gatherContext({ notes, search }, ME, { text: 'planes Orbit' });
+    expect(context.notes.map((n) => n.path).slice(0, 2)).toEqual(
+      hits.map((h) => h.path).slice(0, 2),
+    );
+  });
+
+  it('never lists another user’s notes', async () => {
+    await notes.create(SOMEONE_ELSE, 'secret.md', '# Secreto\n\nPlanes ocultos.');
+    await notes.create(ME, 'mine.md', '# Mío\n\nPlanes propios.');
+    const hits = await searchBrain({ notes, search }, ME, { query: 'planes', scope: 'all' });
+    expect(hits.map((h) => h.path)).toEqual(['mine.md']);
   });
 });
 

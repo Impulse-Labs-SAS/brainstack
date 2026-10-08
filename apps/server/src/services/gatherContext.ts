@@ -10,6 +10,7 @@
 
 import {
   crawlContext,
+  searchNotes,
   type ContextNote,
   type ContextSource,
   type GatherContextInput,
@@ -120,12 +121,13 @@ export function vaultSource(
     // keeps "no-match" honest.
     search: async (query, limit) => {
       const hits = await deps.search.search(viewerId, query, {
-        limit: SEARCH_CANDIDATES,
+        limit: Math.max(SEARCH_CANDIDATES, limit),
         includeMine: true,
         sharedScopes: scopes,
       });
       return hits.slice(0, limit).map((h) => ({
         path: h.ownerId === viewerId ? h.path : `${FOREIGN}${h.ownerId}/${h.path}`,
+        snippet: h.snippet,
       }));
     },
     counts: (queries) => deps.search.counts(viewerId, queries, scopes),
@@ -163,4 +165,44 @@ export async function gatherContext(
     ),
     leftOut: result.leftOut.map((n) => ({ ...n, ...place(n.path) })),
   };
+}
+
+export interface BrainSearchHit {
+  path: string;
+  title: string;
+  snippet: string;
+  /** Higher is better. */
+  score: number;
+  /** Owner of the vault the note lives in: the caller's own id for their own notes. */
+  ownerId: string;
+  /** One line for a person: why this note is here. */
+  reason: string;
+}
+
+/**
+ * `search_brain`: the same engine as `gather_context`, in its search mode —
+ * the notes that match a query, ranked as the crawl ranks them, without
+ * following links or reading bodies. `scope` narrows it to the caller's own
+ * notes or to the folders shared with them.
+ */
+export async function searchBrain(
+  deps: GatherContextDeps,
+  viewerId: string,
+  input: { query: string; limit?: number; scope: 'mine' | 'shared' | 'all' },
+  sharedScopes: readonly SharedScope[] = [],
+): Promise<BrainSearchHit[]> {
+  const scopes = input.scope === 'mine' ? [] : sharedScopes;
+  const hits = await searchNotes(vaultSource(deps, viewerId, scopes), input);
+  const { place } = keys(viewerId);
+  const placed = hits.map((h) => ({ hit: h, at: place(h.path) }));
+  return placed
+    .filter(({ at }) => input.scope !== 'shared' || at.ownerId !== undefined)
+    .map(({ hit, at }) => ({
+      path: at.path,
+      title: hit.title,
+      snippet: hit.snippet,
+      score: hit.score,
+      ownerId: at.ownerId ?? viewerId,
+      reason: hit.reason,
+    }));
 }
