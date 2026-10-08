@@ -335,7 +335,7 @@ function foldedWords(phrase: string): string[] {
 
 /**
  * The text with backticks and fence lines removed. A prompt that writes
- * `Billing service` in code is still naming the note; mention matching would
+ * `Ledger service` in code is still naming the note; mention matching would
  * skip it, because in a note body code is where a name must never be linked.
  */
 function withoutCodeMarkers(text: string): string {

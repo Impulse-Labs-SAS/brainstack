@@ -33,7 +33,7 @@ function islands() {
     createdAt: 1_750_000_000_000 + i * MINUTE,
     updatedAt: 1_750_000_000_000,
   });
-  const mine = Array.from({ length: 20 }, (_, i) => make('me', i < 10 ? 'Kora' : 'Lumen', i));
+  const mine = Array.from({ length: 20 }, (_, i) => make('me', i < 10 ? 'Khand' : 'Lumen', i));
   const theirs = Array.from({ length: 12 }, (_, i) => make('ana', 'Research', i));
   const loose = Array.from({ length: 3 }, (_, i) => make('me', 'Inbox', 100 + i));
   const chain = (list: InputNode[]): InputEdge[] => list.slice(1).map((n, i) => ({ source: n.id, target: list[i]!.id, weight: 1 }));

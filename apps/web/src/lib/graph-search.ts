@@ -108,7 +108,7 @@ function termRank(h: Haystack, term: string, fields: readonly SearchField[]): nu
 /**
  * The nodes a search finds, best first; null when there is nothing to search
  * for. Every word of the query has to be found, each in any field searched:
- * "kora plan" finds the plans filed under Kora.
+ * "khand plan" finds the plans filed under Khand.
  */
 export function searchGraph(nodes: readonly GraphNode[], query: string, filters: SearchFilters, now: number): GraphNode[] | null {
   const phrase = fold(query).trim().replace(/\s+/g, ' ');

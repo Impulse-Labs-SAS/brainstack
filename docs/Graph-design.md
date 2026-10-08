@@ -136,7 +136,7 @@ most of its length and then drop everything at once.
   vaults take five fixed hues in order of their owner's name, and a neutral after that — so a
   vault keeps its hue when its owner shares one more folder.
 - **A shared vault is named after the folders shared**, as the file tree names them, with the
-  person who shared them beside it (`Gondor, Kora` · `@samwise`). A vault is still one
+  person who shared them beside it (`Gondor, Khand` · `@samwise`). A vault is still one
   person: every folder they share with you lands in it.
 - **A ring marks somebody else's note**, so identity never rests on hue alone — except on the
   map, where the note's continent says it.

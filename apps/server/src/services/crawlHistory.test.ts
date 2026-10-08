@@ -52,8 +52,8 @@ beforeEach(async () => {
   }
   notes = new NoteService({ db: database.db });
   search = new SearchService({ db: database.db });
-  await notes.create(ME, 'roadmap.md', '# Roadmap Q4\n\nShip [[billing]] first.');
-  await notes.create(ME, 'billing.md', '# Billing service\n\nInvoices and plans.');
+  await notes.create(ME, 'roadmap.md', '# Roadmap Q4\n\nShip [[ledger]] first.');
+  await notes.create(ME, 'ledger.md', '# Ledger service\n\nInvoices and plans.');
 });
 
 describe('CrawlHistoryService', () => {
@@ -63,13 +63,13 @@ describe('CrawlHistoryService', () => {
     clock += 1_000;
     await crawls.record(ME, {
       source: 'assistant',
-      text: 'Billing service, please',
-      result: await crawl('Billing service'),
+      text: 'Ledger service, please',
+      result: await crawl('Ledger service'),
     });
 
     const list = await crawls.list(ME);
     expect(list.map((c) => [c.source, c.prompt, c.notes])).toEqual([
-      ['assistant', 'Billing service, please', 2],
+      ['assistant', 'Ledger service, please', 2],
       ['web', 'What about the Roadmap Q4?', 2],
     ]);
     expect(list[1]!.coverage).toEqual({ resolved: 1, total: 1 });
@@ -77,7 +77,7 @@ describe('CrawlHistoryService', () => {
     const one = await crawls.get(ME, list[1]!.id);
     expect(one.replay.notes).toEqual([
       { path: 'roadmap.md', title: 'Roadmap Q4', isDecision: false, via: expect.objectContaining({ kind: 'named' }) },
-      { path: 'billing.md', title: 'Billing service', isDecision: false, via: expect.objectContaining({ kind: 'linked' }) },
+      { path: 'ledger.md', title: 'Ledger service', isDecision: false, via: expect.objectContaining({ kind: 'linked' }) },
     ]);
     expect(JSON.stringify(one.replay)).not.toContain('Invoices');
   });

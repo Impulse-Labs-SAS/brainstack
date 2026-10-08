@@ -20,17 +20,17 @@ const note = (path: string, extra: Partial<InputNode> = {}): InputNode => {
 };
 
 const nodes = [
-  note('Kora/_Kora.md'),
-  note('Kora/Plan de corte.md', { updatedAt: NOW - 2 * DAY }),
-  note('Kora/decisiones/Replanificación.md'),
+  note('Khand/_Khand.md'),
+  note('Khand/Plan de corte.md', { updatedAt: NOW - 2 * DAY }),
+  note('Khand/decisiones/Replanificación.md'),
   note('Lumen/Planes de ejecución.md', { updatedAt: NOW - 20 * DAY }),
   note('Lumen/Plan.md'),
   note('Lumen/Investigación UX.md'),
   note('Diario/Suelta.md'),
 ];
 const edges: InputEdge[] = [
-  { source: 'Kora/_Kora.md', target: 'Kora/Plan de corte.md', weight: 1 },
-  ...['Lumen/Plan.md', 'Lumen/Investigación UX.md', 'Kora/Plan de corte.md', 'Kora/decisiones/Replanificación.md', 'Diario/Suelta.md'].map(
+  { source: 'Khand/_Khand.md', target: 'Khand/Plan de corte.md', weight: 1 },
+  ...['Lumen/Plan.md', 'Lumen/Investigación UX.md', 'Khand/Plan de corte.md', 'Khand/decisiones/Replanificación.md', 'Diario/Suelta.md'].map(
     (target) => ({ source: 'Lumen/Planes de ejecución.md', target, weight: 1 }),
   ),
 ];
@@ -51,7 +51,7 @@ describe('searchGraph', () => {
   });
 
   it('ranks an exact title, then a title start, then a word, then anywhere in a title', () => {
-    expect(search('plan').slice(0, 4)).toEqual(['Lumen/Plan.md', 'Kora/Plan de corte.md', 'Lumen/Planes de ejecución.md', 'Kora/decisiones/Replanificación.md']);
+    expect(search('plan').slice(0, 4)).toEqual(['Lumen/Plan.md', 'Khand/Plan de corte.md', 'Lumen/Planes de ejecución.md', 'Khand/decisiones/Replanificación.md']);
   });
 
   it('ignores accents and case', () => {
@@ -59,33 +59,33 @@ describe('searchGraph', () => {
   });
 
   it('needs every word, each in any field', () => {
-    expect(search('kora plan')).toEqual(['Kora/Plan de corte.md', 'Kora/decisiones/Replanificación.md']);
+    expect(search('khand plan')).toEqual(['Khand/Plan de corte.md', 'Khand/decisiones/Replanificación.md']);
   });
 
   it('ranks a title match above a match only in the project or the folders', () => {
-    expect(search('decisiones')).toEqual(['Kora/decisiones/Replanificación.md']);
+    expect(search('decisiones')).toEqual(['Khand/decisiones/Replanificación.md']);
     expect(search('lumen', { fields: ['project'] })).toHaveLength(3);
     expect(search('ux')[0]).toBe('Lumen/Investigación UX.md');
   });
 
   it('only looks in the fields asked for', () => {
-    expect(search('kora', { fields: ['title'] })).toEqual(['Kora/_Kora.md']);
+    expect(search('khand', { fields: ['title'] })).toEqual(['Khand/_Khand.md']);
     expect(search('ux', { fields: ['tags'] })).toEqual(['Lumen/Investigación UX.md', 'Lumen/Plan.md']);
   });
 
   it('filters alone find every node that passes, most recently edited first', () => {
-    expect(search('', { edited: 'week' })).toEqual(['Kora/Plan de corte.md']);
-    expect(search('', { edited: 'month' })).toEqual(['Kora/Plan de corte.md', 'Lumen/Planes de ejecución.md']);
+    expect(search('', { edited: 'week' })).toEqual(['Khand/Plan de corte.md']);
+    expect(search('', { edited: 'month' })).toEqual(['Khand/Plan de corte.md', 'Lumen/Planes de ejecución.md']);
   });
 
   it('filters by kind, project and tag', () => {
-    expect(search('', { kinds: ['index'] })).toEqual(['Kora/_Kora.md']);
+    expect(search('', { kinds: ['index'] })).toEqual(['Khand/_Khand.md']);
     expect(search('plan', { projects: ['folder:|Lumen'] })).toEqual(['Lumen/Plan.md', 'Lumen/Planes de ejecución.md']);
     expect(search('', { tags: ['#ux'] }).sort()).toEqual(['Lumen/Investigación UX.md', 'Lumen/Plan.md']);
   });
 
   it('finds notes without links, and hubs', () => {
-    expect(search('', { links: 'orphans' })).not.toContain('Kora/Plan de corte.md');
+    expect(search('', { links: 'orphans' })).not.toContain('Khand/Plan de corte.md');
     expect(search('', { links: 'orphans' })).toContain('Diario/Suelta.md');
     expect(search('', { links: 'hubs' }, hubModel)).toEqual(['Lumen/Planes de ejecución.md']);
   });
@@ -102,7 +102,7 @@ describe('activeFilterCount', () => {
 describe('matchRange', () => {
   it('finds the query in a label, accents and all', () => {
     expect(matchRange('Planes de ejecución', 'EJECUCION')).toEqual([10, 19]);
-    expect(matchRange('Plan de corte', 'kora plan')).toEqual([0, 4]);
+    expect(matchRange('Plan de corte', 'khand plan')).toEqual([0, 4]);
     expect(matchRange('Plan', '')).toBeNull();
   });
 });
@@ -110,7 +110,7 @@ describe('matchRange', () => {
 describe('options', () => {
   it('lists projects and tags by how many notes they have', () => {
     expect(projectOptions(model.nodes).map((o) => [o.label, o.count])).toEqual([
-      ['Kora', 3],
+      ['Khand', 3],
       ['Lumen', 3],
       ['Diario', 1],
     ]);
