@@ -20,8 +20,8 @@ function note(owner: string, path: string, createdAt = 1_000): InputNode {
 
 // Two vaults: yours with three projects of different sizes, one shared with one.
 const NODES: InputNode[] = [
-  note(VIEWER, 'Kora/_Kora.md'),
-  ...Array.from({ length: 14 }, (_, i) => note(VIEWER, `Kora/${i % 3 === 0 ? 'Decisiones/' : ''}nota ${i}.md`, 2_000 + i)),
+  note(VIEWER, 'Khand/_Khand.md'),
+  ...Array.from({ length: 14 }, (_, i) => note(VIEWER, `Khand/${i % 3 === 0 ? 'Decisiones/' : ''}nota ${i}.md`, 2_000 + i)),
   ...Array.from({ length: 6 }, (_, i) => note(VIEWER, `Lumen/idea ${i}.md`, 3_000 + i)),
   note(VIEWER, 'Inbox/suelta.md'),
   ...Array.from({ length: 5 }, (_, i) => note('ana', `Research/entrevista ${i}.md`, 4_000 + i)),
@@ -44,9 +44,9 @@ describe('provincesOf', () => {
     const m = model();
     const provinces = provincesOf(m.nodes);
     const byPath = (p: string) => provinces.get(m.nodes.find((n) => n.path === p)!);
-    expect(byPath('Kora/_Kora.md')).toBe('');
-    expect(byPath('Kora/nota 1.md')).toBe('');
-    expect(byPath('Kora/Decisiones/nota 0.md')).toBe('Decisiones');
+    expect(byPath('Khand/_Khand.md')).toBe('');
+    expect(byPath('Khand/nota 1.md')).toBe('');
+    expect(byPath('Khand/Decisiones/nota 0.md')).toBe('Decisiones');
     expect(byPath('Lumen/idea 2.md')).toBe('');
   });
 });
@@ -61,9 +61,9 @@ describe('layoutTerritories', () => {
         expect(Math.hypot(p.x - c.x, p.y - c.y)).toBeLessThanOrEqual(c.r);
       }
     }
-    const kora = t.countries.find((c) => c.label === 'Kora')!;
-    const capital = t.positions.get(m.nodes.find((n) => n.path === 'Kora/_Kora.md')!)!;
-    expect([capital.x, capital.y]).toEqual([kora.x, kora.y]);
+    const khand = t.countries.find((c) => c.label === 'Khand')!;
+    const capital = t.positions.get(m.nodes.find((n) => n.path === 'Khand/_Khand.md')!)!;
+    expect([capital.x, capital.y]).toEqual([khand.x, khand.y]);
   });
 
   it('never lets two countries or two continents overlap, and keeps yours in the middle', () => {
@@ -82,7 +82,7 @@ describe('layoutTerritories', () => {
   it('places notes by where they are filed, whatever links them', () => {
     const unlinked = model();
     const a = layoutTerritories(unlinked.nodes, unlinked.vaults);
-    const linked = model([{ source: 'me/Kora/nota 1.md', target: 'ana/Research/entrevista 0.md', weight: 1 }]);
+    const linked = model([{ source: 'me/Khand/nota 1.md', target: 'ana/Research/entrevista 0.md', weight: 1 }]);
     const b = layoutTerritories(linked.nodes, linked.vaults);
     for (const n of unlinked.nodes) {
       const twin = linked.nodes.find((x) => x.id === n.id)!;
@@ -122,9 +122,9 @@ describe('buildLand', () => {
     expect(land.borders.get('ana')).toBeUndefined();
     expect(land.coast.get('ana')?.length).toBeGreaterThan(0);
     expect(land.provinces.get(OWN_VAULT)?.length).toBeGreaterThan(0);
-    const kora = [...land.shade.keys()].find((id) => id.endsWith('|Kora'))!;
+    const khand = [...land.shade.keys()].find((id) => id.endsWith('|Khand'))!;
     const lumen = [...land.shade.keys()].find((id) => id.endsWith('|Lumen'))!;
-    expect(land.shade.get(kora)).not.toBe(land.shade.get(lumen));
+    expect(land.shade.get(khand)).not.toBe(land.shade.get(lumen));
   });
 
   it('finds the country under a point, and nothing out at sea', () => {

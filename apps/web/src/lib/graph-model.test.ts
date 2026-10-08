@@ -170,8 +170,8 @@ describe('vaults', () => {
       ownerDisplayName,
       ownerEmail: `${ownerId}.smith@example.com`,
     });
-    const names = sharedVaultNames([root('sam', 'Kora'), root('sam', 'Gondor/App'), root('ana', 'Research', 'Ana')]);
-    expect(names.get('sam')).toEqual({ label: 'App, Kora', owner: 'sam.smith' });
+    const names = sharedVaultNames([root('sam', 'Khand'), root('sam', 'Gondor/App'), root('ana', 'Research', 'Ana')]);
+    expect(names.get('sam')).toEqual({ label: 'App, Khand', owner: 'sam.smith' });
     expect(names.get('ana')).toEqual({ label: 'Research', owner: 'Ana' });
   });
 
@@ -186,7 +186,7 @@ describe('vaults', () => {
 describe('shortLabel', () => {
   it('drops a trailing project name the position already says', () => {
     expect(shortLabel('Arquitectura y stack técnico — Gestor de Trámites FI', 'Gestor de Trámites FI')).toBe('Arquitectura y stack técnico');
-    expect(shortLabel('Modelo de datos - Billing Service', 'billing service')).toBe('Modelo de datos');
+    expect(shortLabel('Modelo de datos - Ledger Service', 'ledger service')).toBe('Modelo de datos');
   });
 
   it('keeps a dash that is part of the title', () => {
@@ -279,6 +279,6 @@ describe('noteHref', () => {
   });
 
   it("opens somebody else's note under the shared route, with its owner", () => {
-    expect(noteHref({ path: 'Erebor/Planes y pricing.md', foreign: true, ownerId: 'ana' })).toBe('/notes/shared/ana/Erebor/Planes%20y%20pricing');
+    expect(noteHref({ path: 'Erebor/Planes de cuentas.md', foreign: true, ownerId: 'ana' })).toBe('/notes/shared/ana/Erebor/Planes%20de%20cuentas');
   });
 });

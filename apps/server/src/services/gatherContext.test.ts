@@ -42,8 +42,8 @@ beforeEach(async () => {
 
 describe('gatherContext', () => {
   it('returns the notes the text names, then what they link to', async () => {
-    await notes.create(ME, 'roadmap.md', '# Roadmap Q4\n\nShip [[billing]] first.');
-    await notes.create(ME, 'billing.md', '# Billing service\n\nInvoices and plans.');
+    await notes.create(ME, 'roadmap.md', '# Roadmap Q4\n\nShip [[ledger]] first.');
+    await notes.create(ME, 'ledger.md', '# Ledger service\n\nInvoices and plans.');
     await notes.create(ME, 'onboarding.md', '# Onboarding flow\n\nSteps for new users.');
     await notes.create(ME, 'unrelated.md', '# Gardening\n\nTomatoes.');
 
@@ -51,14 +51,14 @@ describe('gatherContext', () => {
 
     const paths = result.notes.map((n) => n.path);
     expect(paths.slice(0, 2).sort()).toEqual(['onboarding.md', 'roadmap.md']);
-    expect(paths).toContain('billing.md');
+    expect(paths).toContain('ledger.md');
     expect(paths).not.toContain('unrelated.md');
 
     expect(result.notes.find((n) => n.path === 'roadmap.md')).toMatchObject({
       reason: 'the text says "Roadmap Q4"',
       via: { kind: 'named' },
     });
-    expect(result.notes.find((n) => n.path === 'billing.md')).toMatchObject({
+    expect(result.notes.find((n) => n.path === 'ledger.md')).toMatchObject({
       reason: 'linked from Roadmap Q4',
       via: { kind: 'linked', hop: 1 },
     });
@@ -76,8 +76,8 @@ describe('gatherContext', () => {
   });
 
   it('stops at the seeds with depth 0', async () => {
-    await notes.create(ME, 'roadmap.md', '# Roadmap Q4\n\nShip [[billing]] first.');
-    await notes.create(ME, 'billing.md', '# Billing service');
+    await notes.create(ME, 'roadmap.md', '# Roadmap Q4\n\nShip [[ledger]] first.');
+    await notes.create(ME, 'ledger.md', '# Ledger service');
 
     const result = await gather('Roadmap Q4', { depth: 0 });
     expect(result.notes.map((n) => n.path)).toEqual(['roadmap.md']);
@@ -146,25 +146,25 @@ describe('gatherContext', () => {
 
   it('resolves wikilinks in the text, and names in code', async () => {
     await notes.create(ME, 'specs/atlas.md', '# Project Atlas');
-    await notes.create(ME, 'billing.md', '# Billing service');
+    await notes.create(ME, 'ledger.md', '# Ledger service');
 
     const result = await gather(
-      'Compare [[atlas|the Atlas spec]] with `Billing service`, then [[nowhere]].\n\n```\nBilling service\n```',
+      'Compare [[atlas|the Atlas spec]] with `Ledger service`, then [[nowhere]].\n\n```\nLedger service\n```',
       { depth: 0 },
     );
-    expect(result.notes.map((n) => n.path).sort()).toEqual(['billing.md', 'specs/atlas.md']);
+    expect(result.notes.map((n) => n.path).sort()).toEqual(['ledger.md', 'specs/atlas.md']);
     expect(result.notes.find((n) => n.path === 'specs/atlas.md')?.reason).toBe(
       'the text says "the Atlas spec"',
     );
-    expect(result.notes.find((n) => n.path === 'billing.md')?.via).toMatchObject({ count: 2 });
+    expect(result.notes.find((n) => n.path === 'ledger.md')?.via).toMatchObject({ count: 2 });
     expect(result.unresolved).toEqual([{ term: 'nowhere', reason: 'no-match' }]);
     expect(result.coverage).toEqual({ resolved: 2, total: 3 });
   });
 
   it('does not count a term twice when the text already names it', async () => {
-    await notes.create(ME, 'billing.md', '# Billing service');
+    await notes.create(ME, 'ledger.md', '# Ledger service');
 
-    const result = await gather('Check the Billing service.', { terms: ['billing service'] });
+    const result = await gather('Check the Ledger service.', { terms: ['ledger service'] });
     expect(result.coverage).toEqual({ resolved: 1, total: 1 });
   });
 
@@ -243,7 +243,7 @@ describe('gatherContext', () => {
     await notes.create(
       ME,
       'orbit/comercial/planes-y-pricing.md',
-      '# Planes y pricing\n\nCómo cobra Orbit a sus clientes: estructura de planes.\n\n' +
+      '# Planes del producto\n\nCómo cobra Orbit a sus clientes: estructura de planes.\n\n' +
         '- Tres tiers.\n- Precios por mes.\n\n' +
         'Detalle de cada plan y sus límites. '.repeat(40),
     );
@@ -416,7 +416,7 @@ describe('gatherContext', () => {
     );
     await notes.create(
       ME,
-      'ledger/_billing.md',
+      'ledger/_ledger.md',
       index('Ledger', [...ledgerAreas, 'ledger/integracion-con-orbit']),
     );
 
@@ -437,7 +437,7 @@ describe('gatherContext', () => {
     }
     // An index is read for its links, which the crawl has already followed:
     // it costs the budget what a linked note does, not what a seed does.
-    for (const p of ['orbit/_orbit.md', 'ledger/_billing.md']) {
+    for (const p of ['orbit/_orbit.md', 'ledger/_ledger.md']) {
       const hub = result.notes.find((n) => n.path === p)!;
       expect(hub.excerpt.length).toBeLessThanOrEqual(1_500);
     }
