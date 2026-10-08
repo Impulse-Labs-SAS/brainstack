@@ -34,7 +34,9 @@ export type CrawlSource = 'assistant' | 'web';
 
 /** What a replay needs from a `gather_context` answer. */
 export interface CrawlReplay {
-  notes: Array<Pick<GatherContextResult['notes'][number], 'path' | 'title' | 'isDecision' | 'via'>>;
+  notes: Array<
+    Pick<GatherContextResult['notes'][number], 'path' | 'ownerId' | 'title' | 'isDecision' | 'via'>
+  >;
   unresolved: GatherContextResult['unresolved'];
   coverage: GatherContextResult['coverage'];
   notesLeftOut: number;
@@ -66,7 +68,13 @@ export interface CrawlHistoryOptions {
 
 export function toReplay(result: GatherContextResult): CrawlReplay {
   return {
-    notes: result.notes.map(({ path, title, isDecision, via }) => ({ path, title, isDecision, via })),
+    notes: result.notes.map(({ path, ownerId, title, isDecision, via }) => ({
+      path,
+      ...(ownerId ? { ownerId } : {}),
+      title,
+      isDecision,
+      via,
+    })),
     unresolved: result.unresolved,
     coverage: result.coverage,
     notesLeftOut: result.budget.notesLeftOut,
@@ -95,7 +103,12 @@ export class CrawlHistoryService {
    */
   async record(
     userId: string,
-    crawl: { source: CrawlSource; clientRef?: string | null; text: string; result: GatherContextResult },
+    crawl: {
+      source: CrawlSource;
+      clientRef?: string | null;
+      text: string;
+      result: GatherContextResult;
+    },
   ): Promise<string | null> {
     if (!this.enabled) return null;
     try {
@@ -131,7 +144,9 @@ export class CrawlHistoryService {
         coverage: sql<CrawlSummary['coverage']>`${crawlHistory.result} -> 'coverage'`,
       })
       .from(crawlHistory)
-      .where(and(eq(crawlHistory.userId, userId), sql`${crawlHistory.createdAt} >= ${this.cutoff()}`))
+      .where(
+        and(eq(crawlHistory.userId, userId), sql`${crawlHistory.createdAt} >= ${this.cutoff()}`),
+      )
       .orderBy(desc(crawlHistory.createdAt), desc(crawlHistory.id))
       .limit(Math.min(Math.max(limit, 1), MAX_CRAWLS_PER_USER));
     const names = await this.clientNames(

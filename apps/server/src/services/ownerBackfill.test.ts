@@ -89,7 +89,10 @@ describe('backfillOwnerId', () => {
     await seedNote('Inbox/orphan.md');
 
     const errors: unknown[] = [];
-    const spy = pino({ level: 'error' }, { write: (line: string) => errors.push(JSON.parse(line)) });
+    const spy = pino(
+      { level: 'error' },
+      { write: (line: string) => errors.push(JSON.parse(line)) },
+    );
 
     const res = await backfillOwnerId(database.db, { logger: spy });
     expect(res.notesUpdated).toBe(1);

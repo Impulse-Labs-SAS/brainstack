@@ -102,9 +102,19 @@ export class SearchService {
     return visible;
   }
 
-  /** How many of the caller's own notes match each query, in one round trip. */
-  counts(userId: string, queries: readonly string[]): Promise<number[]> {
-    return this.engine.counts(queries, userId);
+  /**
+   * How many of the notes the caller may read — their own, and the folders
+   * in `sharedScopes` — match each query, in one round trip.
+   */
+  counts(
+    userId: string,
+    queries: readonly string[],
+    sharedScopes: readonly SearchScope[] = [],
+  ): Promise<number[]> {
+    return this.engine.counts(queries, {
+      ownerId: userId,
+      folders: sharedScopes.map((s) => `${s.ownerId}/${s.folderPath}`),
+    });
   }
 }
 

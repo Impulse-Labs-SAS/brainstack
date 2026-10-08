@@ -57,7 +57,8 @@ async function main(): Promise<void> {
   // Turning the history off, or shortening it, takes effect now rather than
   // at the next crawl.
   await services.crawls.applyRetention();
-  if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Crawl view');
+  if (!services.crawls.enabled)
+    logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Crawl view');
 
   const backfill = await backfillOwnerId(db, { logger });
   if (!backfill.skipped) {

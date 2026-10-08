@@ -1,7 +1,6 @@
 import { pgSchema } from '@brainstack/core/pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-
 import { SharingService, normalizeFolderPath, pathFallsUnder } from './SharingService.js';
 import { createTestDatabase, type TestDatabase } from './testDb.js';
 
@@ -223,7 +222,6 @@ describe("SharingService — writes that name somebody else's shared folder", ()
   it('a un tercero sin grant tampoco, porque para él la carpeta no existe', async () => {
     expect(await svc.findShadowedShare('bob', 'impulse-labs/nota.md')).toBeNull();
   });
-
 });
 
 describe('SharingService — grant / revoke', () => {
@@ -375,5 +373,4 @@ describe('SharingService.revokeUnder', () => {
     const [invite] = await database.db.select().from(folderShareInvites);
     expect(invite?.revokedAt).not.toBeNull();
   });
-
 });

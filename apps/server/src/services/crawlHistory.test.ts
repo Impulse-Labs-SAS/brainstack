@@ -59,7 +59,11 @@ beforeEach(async () => {
 describe('CrawlHistoryService', () => {
   it('lists a user’s crawls newest first, and replays one without the excerpts', async () => {
     const crawls = history();
-    await crawls.record(ME, { source: 'web', text: 'What about the Roadmap Q4?', result: await crawl('Roadmap Q4') });
+    await crawls.record(ME, {
+      source: 'web',
+      text: 'What about the Roadmap Q4?',
+      result: await crawl('Roadmap Q4'),
+    });
     clock += 1_000;
     await crawls.record(ME, {
       source: 'assistant',
@@ -76,15 +80,29 @@ describe('CrawlHistoryService', () => {
 
     const one = await crawls.get(ME, list[1]!.id);
     expect(one.replay.notes).toEqual([
-      { path: 'roadmap.md', title: 'Roadmap Q4', isDecision: false, via: expect.objectContaining({ kind: 'named' }) },
-      { path: 'ledger.md', title: 'Ledger service', isDecision: false, via: expect.objectContaining({ kind: 'linked' }) },
+      {
+        path: 'roadmap.md',
+        title: 'Roadmap Q4',
+        isDecision: false,
+        via: expect.objectContaining({ kind: 'named' }),
+      },
+      {
+        path: 'ledger.md',
+        title: 'Ledger service',
+        isDecision: false,
+        via: expect.objectContaining({ kind: 'linked' }),
+      },
     ]);
     expect(JSON.stringify(one.replay)).not.toContain('Invoices');
   });
 
   it('never lists or hands over another user’s crawls', async () => {
     const crawls = history();
-    await crawls.record(ME, { source: 'web', text: 'Roadmap Q4', result: await crawl('Roadmap Q4') });
+    await crawls.record(ME, {
+      source: 'web',
+      text: 'Roadmap Q4',
+      result: await crawl('Roadmap Q4'),
+    });
     const [mine] = await crawls.list(ME);
 
     expect(await crawls.list(SOMEONE_ELSE)).toEqual([]);
@@ -97,7 +115,11 @@ describe('CrawlHistoryService', () => {
     clock += 8 * DAY;
     expect(await crawls.list(ME)).toEqual([]);
 
-    await crawls.record(SOMEONE_ELSE, { source: 'web', text: 'new', result: await crawl('nothing') });
+    await crawls.record(SOMEONE_ELSE, {
+      source: 'web',
+      text: 'new',
+      result: await crawl('nothing'),
+    });
     const rows = await database.db.select().from(crawlHistory);
     expect(rows.map((r) => r.prompt)).toEqual(['new']);
   });
@@ -139,7 +161,12 @@ describe('CrawlHistoryService', () => {
     const result = await crawl('Roadmap Q4');
     await crawls.record(ME, { source: 'assistant', clientRef: key.id, text: 'a', result });
     clock += 1;
-    await crawls.record(ME, { source: 'assistant', clientRef: `oauth:${client.id}`, text: 'b', result });
+    await crawls.record(ME, {
+      source: 'assistant',
+      clientRef: `oauth:${client.id}`,
+      text: 'b',
+      result,
+    });
     clock += 1;
     await crawls.record(ME, { source: 'assistant', clientRef: 'gone', text: 'c', result });
 

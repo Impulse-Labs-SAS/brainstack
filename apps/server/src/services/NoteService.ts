@@ -277,7 +277,10 @@ export class NoteService {
    * rather than trusted to a `LIKE`: a pattern that widens by accident is a
    * note shown to someone it was never shared with.
    */
-  private inScope(ownerId: string, sharedScopes: SharedScope[] = []): (physical: string) => boolean {
+  private inScope(
+    ownerId: string,
+    sharedScopes: SharedScope[] = [],
+  ): (physical: string) => boolean {
     const prefixes = [ownerId, ...sharedScopes.map((s) => `${s.ownerId}/${s.folderPath}`)].map(
       (p) => `${p}/`,
     );
@@ -436,7 +439,12 @@ export class NoteService {
         ? this.opts.db
             .select({ tag: tags.tag, count: sql<number>`count(*)::int` })
             .from(tags)
-            .where(inArray(tags.tag, targetTags.map((t) => t.tag)))
+            .where(
+              inArray(
+                tags.tag,
+                targetTags.map((t) => t.tag),
+              ),
+            )
             .groupBy(tags.tag)
         : [],
       facetSignals.length
@@ -444,9 +452,7 @@ export class NoteService {
             .select({ key: facets.key, value: facets.value, count: sql<number>`count(*)::int` })
             .from(facets)
             .where(
-              or(
-                ...targetFacets.map((f) => and(eq(facets.key, f.key), eq(facets.value, f.value))),
-              ),
+              or(...targetFacets.map((f) => and(eq(facets.key, f.key), eq(facets.value, f.value)))),
             )
             .groupBy(facets.key, facets.value)
         : [],
@@ -468,7 +474,10 @@ export class NoteService {
             .where(
               and(
                 scopeWhere,
-                inArray(tags.tag, targetTags.map((t) => t.tag)),
+                inArray(
+                  tags.tag,
+                  targetTags.map((t) => t.tag),
+                ),
                 sql`${notes.path} != ${physical}`,
               ),
             )
@@ -1096,38 +1105,49 @@ export class NoteService {
 
   // -- Context crawl ---------------------------------------------------------
   //
-  // The reads `gatherContext` is built from. Own vault only, like
-  // `unlinkedMentions`: a crawl that followed a link into a shared folder
-  // would hand over bodies the grant was never checked against.
+  // The reads `gatherContext` is built from: the viewer's own vault and the
+  // folders shared with them, which the caller gets from SharingService and
+  // passes in. Paths go in and come out *stored* — owner-prefixed — because a
+  // crawl reads several vaults at once and two of them may both hold
+  // `plan.md`. Every row is re-checked in memory against those scopes before
+  // it leaves: a crawl that followed a link out of a share would hand over a
+  // body the grant was never checked against.
 
   /**
-   * Every note's title and aliases, without the bodies — all a crawl needs to
-   * find the notes a piece of text names, and cheap however large notes get.
+   * Every readable note's title and aliases, without the bodies — all a crawl
+   * needs to find the notes a piece of text names, and cheap however large
+   * notes get.
    */
   async mentionIndex(
-    ownerId: string,
+    viewerId: string,
+    sharedScopes: SharedScope[] = [],
   ): Promise<Array<{ path: string; title: string; aliases: unknown[] }>> {
+    const inScope = this.inScope(viewerId, sharedScopes);
     const rows = await this.opts.db
       .select({ path: notes.path, title: notes.title, frontmatter: notes.frontmatter })
       .from(notes)
-      .where(this.ownedBy(ownerId));
-    return rows.map((r) => {
-      const c = mentionCandidate(r);
-      return { path: this.toLogical(ownerId, c.target), title: c.title, aliases: c.aliases };
-    });
+      .where(this.scopeWhere(viewerId, sharedScopes));
+    return rows
+      .filter((r) => inScope(r.path))
+      .map((r) => {
+        const c = mentionCandidate(r);
+        return { path: c.target, title: c.title, aliases: c.aliases };
+      });
   }
 
   /**
-   * Every note-to-note link touching any of `paths`, in either direction.
-   * Links into another vault cannot exist, but both ends are checked anyway:
-   * a crawl must never be the thing that reveals one.
+   * Every note-to-note link touching any of `paths`, in either direction,
+   * with both ends readable: a link into a folder the viewer was not given
+   * stays out, and a crawl must never be the thing that reveals one.
    */
   async linksTouching(
-    ownerId: string,
+    viewerId: string,
     paths: readonly string[],
+    sharedScopes: SharedScope[] = [],
   ): Promise<Array<{ source: string; target: string; position: number }>> {
-    if (paths.length === 0) return [];
-    const physical = paths.map((p) => this.toPhysical(ownerId, p));
+    const inScope = this.inScope(viewerId, sharedScopes);
+    const physical = paths.filter(inScope);
+    if (physical.length === 0) return [];
     // One row per pair, at the first place the source writes the link: a note
     // that links twice to the same target means it from where it first did.
     const rows = await this.opts.db
@@ -1144,28 +1164,25 @@ export class NoteService {
         ),
       )
       .groupBy(links.sourcePath, links.targetPath);
-    const mine = this.inScope(ownerId);
     return rows
-      .filter((r) => mine(r.source) && mine(r.target) && r.source !== r.target)
-      .map((r) => ({
-        source: this.toLogical(ownerId, r.source),
-        target: this.toLogical(ownerId, r.target),
-        position: Number(r.position),
-      }));
+      .filter((r) => inScope(r.source) && inScope(r.target) && r.source !== r.target)
+      .map((r) => ({ source: r.source, target: r.target, position: Number(r.position) }));
   }
 
   /**
    * Title, the first `bodyChars` of the body, and decision flag for each of
-   * `paths` that exists — the same test `listDecisions` applies: a
-   * `decisión`/`decision` tag or `status: decidido`.
+   * `paths` that exists and is readable — the same test `listDecisions`
+   * applies: a `decisión`/`decision` tag or `status: decidido`.
    */
   async contextDigests(
-    ownerId: string,
+    viewerId: string,
     paths: readonly string[],
     bodyChars: number,
+    sharedScopes: SharedScope[] = [],
   ): Promise<Array<{ path: string; title: string; body: string; isDecision: boolean }>> {
-    if (paths.length === 0) return [];
-    const physical = paths.map((p) => this.toPhysical(ownerId, p));
+    const inScope = this.inScope(viewerId, sharedScopes);
+    const physical = paths.filter(inScope);
+    if (physical.length === 0) return [];
     const [rows, decisionRows] = await Promise.all([
       this.opts.db
         .select({
@@ -1182,7 +1199,11 @@ export class NoteService {
         .leftJoin(tags, eq(tags.notePath, notes.path))
         .leftJoin(
           facets,
-          and(eq(facets.notePath, notes.path), eq(facets.key, 'status'), eq(facets.value, 'decidido')),
+          and(
+            eq(facets.notePath, notes.path),
+            eq(facets.key, 'status'),
+            eq(facets.value, 'decidido'),
+          ),
         )
         .where(
           and(
@@ -1192,11 +1213,10 @@ export class NoteService {
         ),
     ]);
     const decisions = new Set(decisionRows.map((r) => r.path));
-    const mine = this.inScope(ownerId);
     return rows
-      .filter((r) => mine(r.path))
+      .filter((r) => inScope(r.path))
       .map((r) => ({
-        path: this.toLogical(ownerId, r.path),
+        path: r.path,
         title: r.title,
         body: r.body,
         isDecision: decisions.has(r.path),
@@ -1226,12 +1246,20 @@ export class NoteService {
         .from(facets)
         .innerJoin(notes, eq(notes.path, facets.notePath))
         .where(owned),
-      this.opts.db.select({ count: sql<number>`count(*)::int` }).from(notes).where(owned),
+      this.opts.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(notes)
+        .where(owned),
     ]);
 
     const rows: TopicRow[] = [
       ...tagRows.map((r) => ({ path: r.path, kind: 'tag' as const, value: r.value })),
-      ...facetRows.map((r) => ({ path: r.path, kind: 'facet' as const, key: r.key, value: r.value })),
+      ...facetRows.map((r) => ({
+        path: r.path,
+        kind: 'facet' as const,
+        key: r.key,
+        value: r.value,
+      })),
     ];
     const topics = buildTopics(rows, Number(total?.count ?? 0));
     return { topics, edges: affinityEdges(topics) };
@@ -1365,7 +1393,11 @@ export class NoteService {
       .leftJoin(tags, eq(tags.notePath, notes.path))
       .leftJoin(
         facets,
-        and(eq(facets.notePath, notes.path), eq(facets.key, 'status'), eq(facets.value, 'decidido')),
+        and(
+          eq(facets.notePath, notes.path),
+          eq(facets.key, 'status'),
+          eq(facets.value, 'decidido'),
+        ),
       )
       .where(
         and(
@@ -1416,9 +1448,7 @@ export class NoteService {
 
     // A MOC is not its own index: `_ideas.md` created inside `ideas/` used to
     // come back listing itself, inviting a link from the note to the note.
-    return found
-      .map((r) => this.toLogical(ownerId, r.path))
-      .filter((moc) => moc !== logicalPath);
+    return found.map((r) => this.toLogical(ownerId, r.path)).filter((moc) => moc !== logicalPath);
   }
 
   /** Feeds `rewriteLinkTargets` from the store, in stored-path terms. */

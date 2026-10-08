@@ -18,18 +18,27 @@ import type { GraphEdge, GraphModel, GraphNode } from '@/lib/graph-model';
 export interface CrawlResult {
   notes: Array<{
     path: string;
+    /** Set for a note in a folder somebody shared: `path` is then relative to their root. */
+    ownerId?: string;
     title: string;
     isDecision: boolean;
     via:
       | { kind: 'named'; text: string; count: number }
       | { kind: 'search'; term: string; rank: number }
       | { kind: 'prompt'; rank: number }
-      | { kind: 'linked'; from: string; fromTitle: string; direction: 'out' | 'in'; hop: number };
+      | {
+          kind: 'linked';
+          from: string;
+          fromOwnerId?: string;
+          fromTitle: string;
+          direction: 'out' | 'in';
+          hop: number;
+        };
   }>;
   unresolved: Array<{
     term: string;
     reason: 'no-match' | 'ambiguous';
-    candidates?: Array<{ path: string; title: string }>;
+    candidates?: Array<{ path: string; ownerId?: string; title: string }>;
   }>;
   coverage: { resolved: number; total: number };
 }
@@ -57,15 +66,26 @@ export interface CrawlPlan {
   coverage: { resolved: number; total: number };
 }
 
-/** The viewer's own notes by path: `gather_context` reads the own vault only. */
-function ownNodes(model: GraphModel): Map<string, GraphNode> {
+/**
+ * Where a note is, as one key: a path in the viewer's own vault, or a path
+ * and its owner for a note in a folder somebody shared. Two vaults may both
+ * hold `plan.md`.
+ */
+function place(path: string, ownerId?: string | null): string {
+  return ownerId ? `${ownerId}\u0000${path}` : path;
+}
+
+/** Every note the graph shows, by where it is. */
+function notesByPlace(model: GraphModel): Map<string, GraphNode> {
   const map = new Map<string, GraphNode>();
-  for (const n of model.nodes) if (n.kind === 'note' && !n.foreign) map.set(n.path, n);
+  for (const n of model.nodes) {
+    if (n.kind === 'note') map.set(place(n.path, n.foreign ? n.ownerId : null), n);
+  }
   return map;
 }
 
 export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
-  const byPath = ownNodes(model);
+  const byPlace = notesByPlace(model);
   const steps: CrawlStep[] = [];
   let offGraph = 0;
 
@@ -73,7 +93,7 @@ export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
   const linked = result.notes.filter((n) => n.via.kind === 'linked');
 
   for (const n of seeds) {
-    const node = byPath.get(n.path);
+    const node = byPlace.get(place(n.path, n.ownerId));
     if (!node) {
       offGraph++;
       continue;
@@ -90,7 +110,7 @@ export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
 
   for (const u of result.unresolved) {
     const candidates = (u.candidates ?? [])
-      .map((c) => byPath.get(c.path))
+      .map((c) => byPlace.get(place(c.path, c.ownerId)))
       .filter((n): n is GraphNode => !!n);
     const why =
       u.reason === 'ambiguous'
@@ -104,21 +124,23 @@ export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
   const byFrom = new Map<string, typeof linked>();
   for (const n of linked) {
     if (n.via.kind !== 'linked') continue;
-    const list = byFrom.get(n.via.from) ?? [];
+    const from = place(n.via.from, n.via.fromOwnerId);
+    const list = byFrom.get(from) ?? [];
     list.push(n);
-    byFrom.set(n.via.from, list);
+    byFrom.set(from, list);
   }
-  const order = [...seeds.map((n) => n.path)];
+  const order = [...seeds.map((n) => place(n.path, n.ownerId))];
   for (let i = 0; i < order.length; i++) {
     const from = order[i]!;
     const children = byFrom.get(from);
     if (!children) continue;
     byFrom.delete(from);
-    const at = byPath.get(from);
+    const at = byPlace.get(from);
     const reach: Reach[] = [];
     for (const c of children) {
-      order.push(c.path);
-      const node = byPath.get(c.path);
+      const key = place(c.path, c.ownerId);
+      order.push(key);
+      const node = byPlace.get(key);
       if (!node) {
         offGraph++;
         continue;
