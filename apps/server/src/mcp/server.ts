@@ -17,6 +17,7 @@ import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import {
   gatherContext,
+  searchBrain,
   MAX_DEPTH,
   MAX_MAX_CHARS,
   MAX_TERMS,
@@ -171,7 +172,7 @@ export function buildMcpServer({
     {
       title: 'Search the brain',
       description:
-        'Full-text search over notes in BrainStack. `scope` controla qué notas se incluyen: `all` (default) las propias y las compartidas conmigo, `mine` solo las propias, `shared` solo las compartidas. Retorna hits rankeados con snippets; cada hit trae el `ownerId` del vault donde vive.',
+        "Full-text search over notes in BrainStack, ranked the way gather_context ranks them: a note the query names by title first, then the matches, those outside the named note's folder lower. `scope` decides what is searched: `all` (default) the user's own notes and the folders shared with them, `mine` only their own, `shared` only the shared ones. Returns up to `limit` hits (default 10, at most 50), each with a `snippet`, a `reason`, and the `ownerId` of the vault it lives in.",
       inputSchema: {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(50).optional(),
@@ -187,7 +188,6 @@ export function buildMcpServer({
         // one — the failure looked like missing data rather than a narrow
         // search.
         const effectiveScope = scope ?? 'all';
-        const includeMine = effectiveScope !== 'shared';
         const sharedScopes =
           effectiveScope !== 'mine'
             ? (await sharing.listSharedRoots(userId)).map((r) => ({
@@ -195,7 +195,14 @@ export function buildMcpServer({
                 folderPath: r.folderPath,
               }))
             : [];
-        const hits = await search.search(userId, query, { limit, includeMine, sharedScopes });
+        // The same engine as gather_context, so the two never disagree about
+        // which note comes first.
+        const hits = await searchBrain(
+          { notes, search },
+          userId,
+          { query, limit, scope: effectiveScope },
+          sharedScopes,
+        );
         logger.debug({ query, hits: hits.length, scope: effectiveScope }, 'search_brain');
         return JSON_TEXT(hits);
       } catch (err) {

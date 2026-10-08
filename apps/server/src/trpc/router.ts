@@ -11,6 +11,7 @@ import { AppError } from '../lib/errors.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
 import {
   gatherContext,
+  searchBrain,
   MAX_DEPTH,
   MAX_MAX_CHARS,
   MAX_TERMS,
@@ -416,7 +417,6 @@ export const appRouter = t.router({
       )
       .query(async ({ ctx, input }) => {
         const scope = input.scope ?? 'mine';
-        const includeMine = scope !== 'shared';
         const sharedScopes =
           scope !== 'mine'
             ? (await ctx.sharedRoots()).map((r) => ({
@@ -424,11 +424,14 @@ export const appRouter = t.router({
                 folderPath: r.folderPath,
               }))
             : [];
-        return ctx.search.search(ctx.user.id, input.query, {
-          limit: input.limit,
-          includeMine,
+        // The engine gather_context and search_brain use: one ranking for
+        // every search, so the palette never disagrees with the assistant.
+        return searchBrain(
+          { notes: ctx.notes, search: ctx.search },
+          ctx.user.id,
+          { query: input.query, limit: input.limit, scope },
           sharedScopes,
-        });
+        );
       }),
   }),
   sharing: t.router({

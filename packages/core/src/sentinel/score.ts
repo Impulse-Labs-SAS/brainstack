@@ -73,7 +73,7 @@ export const ENTRY_SCORE = 0.95;
 export const SEARCH_SPAN = 0.7;
 /** The most links can add, all together. Further capped below one covered term. */
 export const MAX_LINK = 0.15;
-/** Each place a hit ranks below the first costs this share of its term. */
+/** How fast a hit's share of its term falls with each place it ranks below the first. */
 export const RANK_STEP = 0.1;
 /** A search hit outside the folders of the notes the text named counts this much. */
 export const OUT_OF_FOLDER_FACTOR = 0.5;
@@ -325,9 +325,12 @@ export class CandidateSet {
   }
 }
 
-/** A search hit's share of its term, by the place it ranked (0 = first). */
+/**
+ * A search hit's share of its term, by the place it ranked (0 = first). It
+ * never reaches 0: a search lists fifty hits, and the fiftieth still matched.
+ */
 function rankFactor(rank: number): number {
-  return Math.max(0, 1 - rank * RANK_STEP);
+  return 1 / (1 + rank * RANK_STEP);
 }
 
 function rankOf(r: Candidate): number {
