@@ -116,6 +116,7 @@ describe('the sharing tools exist at all', () => {
       expect.arrayContaining(['share_folder', 'unshare', 'list_shares', 'list_shared_with_me']),
     );
   });
+
 });
 
 describe('share_folder', () => {
@@ -504,10 +505,7 @@ describe('the listing tools answer with their rows, not with a pending promise',
     const owner = await clientFor(OWNER.id);
     const frodo = await clientFor(FRODO.id);
 
-    await call(owner, 'create_note', {
-      path: 'Proyectos/erebor.md',
-      content: 'destino compartido',
-    });
+    await call(owner, 'create_note', { path: 'Proyectos/erebor.md', content: 'destino compartido' });
     // Privado/ is never shared, but it links into the folder that is.
     await call(owner, 'create_note', {
       path: 'Privado/diario.md',

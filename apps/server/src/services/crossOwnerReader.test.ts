@@ -12,6 +12,7 @@ let store: PgNoteStore;
 let sharing: SharingService;
 let reader: CrossOwnerReader;
 
+
 async function seedUser(id: string, email: string): Promise<void> {
   await database.db.insert(users).values({ id, email, createdAt: Date.now(), updatedAt: 0 });
 }

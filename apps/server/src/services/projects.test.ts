@@ -24,11 +24,7 @@ describe('projectTagOf', () => {
 describe('resolveProjects', () => {
   it('prefers the project tag, labelled by the MOC that carries it', () => {
     const projects = resolveProjects([
-      n(
-        'Frodo/proyectos/tba/_tba.md',
-        ['proyecto/there-and-back-again', 'tipo/moc'],
-        'There & Back Again',
-      ),
+      n('Frodo/proyectos/tba/_tba.md', ['proyecto/there-and-back-again', 'tipo/moc'], 'There & Back Again'),
       n('Frodo/proyectos/tba/arquitectura.md', ['proyecto/there-and-back-again']),
     ]);
     expect(projects.get('Frodo/proyectos/tba/arquitectura.md')).toEqual({
@@ -42,9 +38,7 @@ describe('resolveProjects', () => {
       n('Frodo/proyectos/tba/_tba.md', ['proyecto/there-and-back-again'], 'There & Back Again'),
       n('Frodo/proyectos/tba/suelta.md'),
     ]);
-    expect(projects.get('Frodo/proyectos/tba/suelta.md')!.id).toBe(
-      'tag:|proyecto/there-and-back-again',
-    );
+    expect(projects.get('Frodo/proyectos/tba/suelta.md')!.id).toBe('tag:|proyecto/there-and-back-again');
   });
 
   it('falls back to the nearest MOC folder, walking up', () => {

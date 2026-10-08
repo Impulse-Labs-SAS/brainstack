@@ -213,11 +213,7 @@ export class SharingService {
   }): Promise<string> {
     const folderPath = normalizeFolderPath(params.folderPath);
     if (folderPath === '') {
-      throw new AppError(
-        "you can't share the root of your vault; share a folder instead",
-        'INVALID_INPUT',
-        400,
-      );
+      throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
     if (params.ownerId === params.sharedWithUserId) {
       throw new AppError("you can't share a folder with yourself", 'INVALID_INPUT', 400);

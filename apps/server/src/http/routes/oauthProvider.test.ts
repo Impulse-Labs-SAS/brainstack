@@ -33,6 +33,7 @@ const REDIRECT_URI = 'https://client.test/callback';
 const VERIFIER = 'a-code-verifier-that-is-long-enough-for-rfc-7636';
 const CHALLENGE = createHash('sha256').update(VERIFIER, 'ascii').digest('base64url');
 
+
 let database: TestDatabase;
 let auth: AuthService;
 let oauth: OAuthProviderService;
@@ -101,17 +102,7 @@ beforeEach(async () => {
     appHome: ISSUER,
     oauth: { service: oauth, issuer: ISSUER },
     buildMcpServer: (principal) =>
-      buildMcpServer({
-        notes,
-        search,
-        sharing,
-        crossOwner,
-        auth,
-        invites,
-        crawls,
-        logger,
-        principal,
-      }),
+      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, crawls, logger, principal }),
   });
 
   const session = await auth.createSession('sam');
@@ -264,7 +255,9 @@ describe('discovery', () => {
     expect(body.token_endpoint).toBe(`${ISSUER}/api/oauth/token`);
 
     const resource = await prefixed.request('/.well-known/oauth-protected-resource');
-    expect(((await resource.json()) as Record<string, unknown>).resource).toBe(`${ISSUER}/api/mcp`);
+    expect(((await resource.json()) as Record<string, unknown>).resource).toBe(
+      `${ISSUER}/api/mcp`,
+    );
   });
 
   it('answers 401 on /mcp with the discovery challenge', async () => {
