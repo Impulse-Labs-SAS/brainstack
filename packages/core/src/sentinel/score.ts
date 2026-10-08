@@ -2,31 +2,36 @@
 // ContextSource, and hands the rows here.
 //
 // A crawl starts from seeds — notes the text names, and the best search hits
-// for the phrases the caller found vague — and follows wikilinks out from
-// them, both ways, a hop or two. Three decisions carry it:
+// for the question and for the phrases the caller found vague — and follows
+// wikilinks out from them, both ways, a hop or two. A note's score has two
+// parts, added, never multiplied into a probability that saturates:
 //
-//  - Naming beats searching, and both beat being linked. A note the text names
-//    by its title is what the author meant; a search hit is a good guess; a
-//    neighbour is context around either, and each hop costs score.
-//  - What a note links to says what it is about; what links to it only
-//    mentions it. So a hop out keeps more of the score than a hop in, and the
-//    first links a note writes — a MOC's "start here" — keep a little more.
-//    Without that, every decision that merely mentions a product outranked the
-//    overview its own index puts first.
-//  - Evidence adds up. A note three of the caller's terms find is likelier to
-//    be the answer than one a single term finds first — taking the best reason
-//    alone would tie them, and the budget would settle the tie by title. So
-//    does a note several results link to: in a question that spans two
-//    subjects, it is the hinge between them. Links *back* do not add up — a
-//    note that links to many results is their index — and an index adds up
-//    nothing at all: every note links up to its own.
-//  - An index is read for its links. A note that is mostly a list of them
-//    gets a linked note's excerpt even when the text names it, so two named
-//    indexes cannot fill the budget with the lists the crawl already followed.
-//  - A decision weighs extra when the text or a search reached it. "What did
-//    we already decide" is the question a prompt most often leaves implicit,
-//    and the one a guess gets most wrong. Reached along a link, it only breaks
-//    ties: the link order the author chose decides what to read first.
+//  - Coverage, the base. Which of the searched terms found the note, each
+//    weighed by how rare it is in the vault (an IDF), so a note that covers
+//    four of four terms outranks one that covers two, and a word half the
+//    vault says counts for little. The question's own search counts as one
+//    more, weaker term. A term's hit outside the folder of a note the text
+//    named counts half, and the question's own hit there only as a link:
+//    once the text says what it is about, the same word in another project
+//    is most likely about something else.
+//  - Links, the tie-breaker. The notes that link to it, added up but capped
+//    below what one covered term is worth: ten notes linking to one cannot
+//    beat covering one more term. What a note links to says what it is about;
+//    what links to it only mentions it, so a hop out keeps more than a hop in,
+//    the first links a note writes keep a little more, and links *back* do not
+//    add up — a note that links to many results is their index.
+//
+// Then, once the bodies are read:
+//
+//  - A note the text names scores NAMED_SCORE, above everything.
+//  - The first link of a named index — its "start here" — comes right after
+//    it, unless a note in the named folders covers more of what was searched:
+//    "what is X" lands on the overview, "how does X charge" on the pricing.
+//  - An index adds no links up: every note links up to its own. It also gets
+//    a linked note's excerpt, so named indexes cannot fill the budget.
+//  - A decision is worth a little more, but only when the note is relevant on
+//    its own: it covers a term, or it is one hop from a named note. A decision
+//    that merely shares a generic word is not promoted for being a decision.
 //  - The budget is in characters, not notes. The caller is an assistant with a
 //    context window; ten long notes and forty short ones are not the same cost.
 
@@ -45,39 +50,50 @@ export interface Candidate {
   also?: string[];
   /** Titles of other notes that link to it, besides the one `via` names. */
   alsoFrom?: string[];
-  /** The strongest single reason's score, before the others add to it. Absent: `score`. */
+  /** The score with only the strongest link, not their sum: what an index is worth. Absent: `score`. */
   best?: number;
+  /** It covers a term or the question, or is one hop from a named note: a decision here weighs more. */
+  relevant?: boolean;
+  /** The named note whose first written link this is: its entry point, if that note is an index. */
+  entryOf?: string;
+  /** How many distinct searches — terms, and the question — found it. */
+  covered?: number;
+  /** In a folder of a note the text named, or nothing was named. */
+  inside?: boolean;
 }
 
 /** Score of a note the text names by title or alias. */
 export const NAMED_SCORE = 1;
-/** Score of the best search hit for a term; later hits step down from it. */
-export const SEARCH_SCORE = 0.7;
-export const SEARCH_RANK_STEP = 0.1;
+/**
+ * Score of the first link a named index writes. Above anything coverage and
+ * links can reach, even as a decision, and under the index itself.
+ */
+export const ENTRY_SCORE = 0.95;
+/** What full coverage — every searched term, each at its best hit — is worth. */
+export const SEARCH_SPAN = 0.7;
+/** The most links can add, all together. Further capped below one covered term. */
+export const MAX_LINK = 0.15;
+/** Each place a hit ranks below the first costs this share of its term. */
+export const RANK_STEP = 0.1;
+/** A search hit outside the folders of the notes the text named counts this much. */
+export const OUT_OF_FOLDER_FACTOR = 0.5;
+/** The question's own search weighs this share of the least weighty term. */
+export const QUESTION_WEIGHT = 0.5;
+/** A relevant decision's score is multiplied by this. */
+export const DECISION_FACTOR = 1.1;
+/** The weights map's key for the question's own search. */
+export const QUESTION = '\u0000question';
 /** Search hits kept per term. */
 export const SEARCH_HITS_PER_TERM = 3;
 /** Search hits kept for the question as a whole. */
 export const PROMPT_HITS = 5;
 /** A hop along a link the note itself wrote multiplies the score by this. */
 export const OUT_DECAY = 0.6;
-/**
- * A hop back along a link another note wrote to this one. Low enough that a
- * decision reached this way (IN_DECAY + DECISION_BONUS) stays under any note
- * the named one links to.
- */
+/** A hop back along a link another note wrote to this one. */
 export const IN_DECAY = 0.3;
 /** Extra decay kept by a note's first outgoing link; it fades to nothing by the LEAD_LINKS-th. */
 export const LEAD_LINK_BONUS = 0.1;
 export const LEAD_LINKS = 5;
-/** Added to a decision the text names or a search finds. */
-export const DECISION_BONUS = 0.25;
-/**
- * Added to a decision reached along a link: only enough to break a tie. An
- * index lists what to read first, and its decisions — which in a product's
- * index is most of them — must not jump over the overview it puts first.
- * Smaller than one step of the lead-link bonus, so link order still decides.
- */
-export const LINKED_DECISION_BONUS = 0.01;
 /**
  * Kept by a hit for the question that never says what the text named. "A
  * general overview of Orbit" also finds every other project's "general
@@ -136,28 +152,76 @@ export function isIndex(body: string): boolean {
 }
 
 /**
- * The candidates found so far. Each note keeps every independent reason it
- * was reached by, and scores them together: 1 − ∏(1 − sᵢ). Independent means
- * each search that found it, and each note that links to it — a note three
- * results link to is likelier the hinge between them than one a single result
- * does. A note counts once whichever way it links. Being named, and being
- * linked *back* from notes (a note that links to many results is an index of
- * them, not a hinge), count once: the strongest. One reason alone scores what
- * it always did; a named note stays at NAMED_SCORE, and the rest only approach
- * it. The reason shown is the strongest single one, the others listed after.
+ * How rare a term is in a vault of `notes` notes, `matching` of which it
+ * matches: an inverse document frequency, always positive. A term every note
+ * says weighs next to nothing; one in a handful of notes weighs several times
+ * more.
+ */
+export function termWeight(matching: number, notes: number): number {
+  const n = Math.max(notes, 1);
+  const df = Math.min(Math.max(matching, 0), n);
+  return Math.log(1 + (n - df + 0.5) / (df + 0.5));
+}
+
+/** What the scores are measured against: set once the searches have run. */
+export interface ScoringContext {
+  /** Weight of each searched term that found something, by term; the question's under QUESTION. */
+  weights: ReadonlyMap<string, number>;
+  /** Folders of the notes the text names. Empty: no folder is outside. */
+  namedFolders: readonly string[];
+}
+
+const NO_CONTEXT: ScoringContext = { weights: new Map(), namedFolders: [] };
+
+/** The folder a path is in; '' for the root. */
+export function folderOf(path: string): string {
+  const slash = path.lastIndexOf('/');
+  return slash < 0 ? '' : path.slice(0, slash);
+}
+
+/**
+ * The candidates found so far. Each note keeps every reason it was reached by
+ * — named, each search that found it, each note that links to it — and is
+ * scored from them as the header says: coverage plus capped links. The
+ * reason shown is the strongest, the others listed after it.
  */
 export class CandidateSet {
   private readonly byPath = new Map<string, Candidate>();
   /** Per note, the best each reason gave it, by `reasonKey`. */
   private readonly reasons = new Map<string, Map<string, Candidate>>();
+  private readonly named = new Set<string>();
+  /** Notes that are the first link a named note writes, and which note that is. */
+  private readonly entries = new Map<string, string>();
+  private ctx: ScoringContext = NO_CONTEXT;
+  private totalWeight = 0;
+  private linkCap = MAX_LINK;
+
+  /** Sets what coverage is measured against, and rescores every note. */
+  setContext(ctx: ScoringContext): void {
+    this.ctx = ctx;
+    const all = [...ctx.weights.values()];
+    this.totalWeight = all.reduce((a, b) => a + b, 0);
+    const termWeights = [...ctx.weights].filter(([k]) => k !== QUESTION).map(([, w]) => w);
+    const least = Math.min(...(termWeights.length > 0 ? termWeights : all));
+    // One covered term, in the folder, at its worst kept rank: links never pass it.
+    const oneTerm =
+      this.totalWeight > 0
+        ? (SEARCH_SPAN * least * rankFactor(SEARCH_HITS_PER_TERM - 1)) / this.totalWeight
+        : MAX_LINK;
+    this.linkCap = Math.min(MAX_LINK, oneTerm * 0.99);
+    for (const path of this.reasons.keys()) this.byPath.set(path, this.combine(path));
+  }
 
   offer(candidate: Candidate): void {
     const { path } = candidate;
     const byKey = this.reasons.get(path) ?? new Map<string, Candidate>();
     const key = reasonKey(candidate.via);
     const current = byKey.get(key);
-    if (current && candidate.score <= current.score) return;
-    byKey.set(key, candidate);
+    const isNewEntry = !!candidate.entryOf && !this.entries.has(path);
+    if (current && strength(candidate) <= strength(current) && !isNewEntry) return;
+    if (!current || strength(candidate) > strength(current)) byKey.set(key, candidate);
+    if (candidate.entryOf) this.entries.set(path, candidate.entryOf);
+    if (candidate.via.kind === 'named') this.named.add(path);
     this.reasons.set(path, byKey);
     this.byPath.set(path, this.combine(path));
   }
@@ -170,37 +234,109 @@ export class CandidateSet {
     return this.byPath.get(path);
   }
 
+  isNamed(path: string): boolean {
+    return this.named.has(path);
+  }
+
   all(): Candidate[] {
     return [...this.byPath.values()];
   }
 
   private combine(path: string): Candidate {
     const all = [...this.reasons.get(path)!.values()];
-    const linksBack = all.filter((r) => r.via.kind === 'linked' && r.via.direction === 'in');
-    const reasons = [
-      ...all.filter((r) => !linksBack.includes(r)),
-      ...(linksBack.length > 0 ? [strongestOf(linksBack)] : []),
-    ];
-    const strongest = strongestOf(reasons);
-    const score = 1 - reasons.reduce((miss, r) => miss * (1 - r.score), 1);
-    const others = reasons.filter((r) => r !== strongest);
+    const named = all.find((r) => r.via.kind === 'named');
+    const inside =
+      this.ctx.namedFolders.length === 0 ||
+      this.ctx.namedFolders.some((f) => f === '' || path.startsWith(`${f}/`));
+    // The question's own hit outside the named folders is not coverage: the
+    // question is the weakest term, and there it most often found a word
+    // another project happens to say. It weighs as a link back from a named
+    // note — under anything the named note links to.
+    const farQuestion = all.filter((r) => r.via.kind === 'prompt' && !inside);
+    const hits = all.filter((r) => r.via.kind === 'search' || (r.via.kind === 'prompt' && inside));
+    const links = all.filter((r) => r.via.kind === 'linked');
+
+    // Coverage: each term's weight, at the rank it found the note, halved
+    // outside the named folders; over the weight of every term searched.
+    const contribution = (r: Candidate) =>
+      this.weightOf(r) * rankFactor(rankOf(r)) * (inside ? 1 : OUT_OF_FOLDER_FACTOR);
+    const coverage =
+      this.totalWeight > 0
+        ? hits.reduce((sum, r) => sum + contribution(r), 0) / this.totalWeight
+        : 0;
+
+    // Links: every note linking here adds up; links back, only the strongest.
+    const back = links.filter((r) => r.via.kind === 'linked' && r.via.direction === 'in');
+    const out = links.filter((r) => !back.includes(r));
+    const asLink = farQuestion.map((r) => ({
+      ...r,
+      score: NAMED_SCORE * IN_DECAY * rankFactor(rankOf(r)),
+    }));
+    const summed =
+      out.reduce((sum, r) => sum + r.score, 0) +
+      Math.max(0, ...back.map((r) => r.score)) +
+      asLink.reduce((sum, r) => sum + r.score, 0);
+    const single = Math.max(0, ...[...links, ...asLink].map((r) => r.score));
+
+    const base = SEARCH_SPAN * coverage;
+    const score = named ? NAMED_SCORE : base + this.capLinks(summed);
+    const best = named ? NAMED_SCORE : base + this.capLinks(single);
+
+    const strongestHit = hits.reduce<Candidate | undefined>(
+      (b, r) => (!b || contribution(r) > contribution(b) ? r : b),
+      undefined,
+    );
+    const strongestLink = [...links, ...asLink].reduce<Candidate | undefined>(
+      (b, r) => (!b || r.score > b.score ? r : b),
+      undefined,
+    );
+    const strongest = named ?? strongestHit ?? strongestLink!;
+    const others = all.filter((r) => r.via !== strongest.via);
     const also = others.flatMap((r) => (r.via.kind === 'search' ? [r.via.term] : []));
     const alsoFrom = others.flatMap((r) =>
       r.via.kind === 'linked' && r.via.direction === 'out' ? [r.via.fromTitle] : [],
     );
+    const relevant =
+      !!named ||
+      coverage > 0 ||
+      links.some((r) => r.via.kind === 'linked' && r.via.hop === 1 && this.named.has(r.via.from));
+    const entryOf = this.entries.get(path);
     return {
       path,
       score,
-      best: strongest.score,
+      best,
       via: strongest.via,
+      relevant,
+      covered: hits.length,
+      inside,
+      ...(entryOf ? { entryOf } : {}),
       ...(also.length > 0 ? { also } : {}),
       ...(alsoFrom.length > 0 ? { alsoFrom } : {}),
     };
   }
+
+  private weightOf(r: Candidate): number {
+    return this.ctx.weights.get(r.via.kind === 'search' ? r.via.term : QUESTION) ?? 0;
+  }
+
+  /** Links in [0, linkCap): growing with every link, never reaching the cap. */
+  private capLinks(sum: number): number {
+    return (this.linkCap * sum) / (1 + sum);
+  }
 }
 
-function strongestOf(reasons: readonly Candidate[]): Candidate {
-  return reasons.reduce((best, r) => (r.score > best.score ? r : best));
+/** A search hit's share of its term, by the place it ranked (0 = first). */
+function rankFactor(rank: number): number {
+  return Math.max(0, 1 - rank * RANK_STEP);
+}
+
+function rankOf(r: Candidate): number {
+  return r.via.kind === 'search' || r.via.kind === 'prompt' ? r.via.rank : 0;
+}
+
+/** How strong one reason is, to keep the best per slot: a better rank for a hit, a higher score for a link. */
+function strength(r: Candidate): number {
+  return r.via.kind === 'search' || r.via.kind === 'prompt' ? -r.via.rank : r.score;
 }
 
 /** One slot per search, one per linking note — whichever way it links — and one for being named. */
@@ -215,18 +351,6 @@ function reasonKey(via: ContextVia): string {
     case 'named':
       return 'named';
   }
-}
-
-/**
- * A hit for the question as a whole ranks under a note linked from a named one
- * (NAMED_SCORE × OUT_DECAY): a link someone wrote says more than a shared word.
- */
-export function promptScore(rank: number): number {
-  return Math.max(0.15, 0.45 - rank * 0.05);
-}
-
-export function searchScore(rank: number): number {
-  return Math.max(0, SEARCH_SCORE - rank * SEARCH_RANK_STEP);
 }
 
 /**
@@ -259,12 +383,14 @@ export function expandHop(
       // Reasons add up, so a note must not get its own back: the link from
       // the note `from` was reached through is that note's evidence, echoed.
       if (parent.via.kind === 'linked' && parent.via.from === to) continue;
-      const score = parent.score * hopDecay(direction, leadRank.get(edge));
+      const rank = leadRank.get(edge);
+      const score = parent.score * hopDecay(direction, rank);
       const before = set.get(to)?.score;
       set.offer({
         path: to,
         score,
         via: { kind: 'linked', from, fromTitle: titleOf(from), direction, hop },
+        ...(direction === 'out' && rank === 0 && set.isNamed(from) ? { entryOf: from } : {}),
       });
       if (before === undefined || set.get(to)!.score > before) reached.add(to);
     }
@@ -432,20 +558,31 @@ export function packContext(
   maxChars: number,
   maxNotes = MAX_NOTES,
 ): { notes: ContextNote[]; chars: number; dropped: number; leftOut: LeftOutNote[] } {
+  // The entry point of a named index comes right after it — unless a note in
+  // the named folders covers more of what was searched: then the question is
+  // about something more specific than the index as a whole.
+  const mostCovered = (c: Candidate) =>
+    candidates.some(
+      (o) =>
+        o.path !== c.path &&
+        o.via.kind !== 'named' &&
+        o.inside !== false &&
+        (o.covered ?? 0) > (c.covered ?? 0),
+    );
   const ranked = candidates
     .filter((c) => digests.has(c.path))
     .map((c) => {
       const d = digests.get(c.path)!;
       // Notes link up to their index by convention, so many results linking
-      // to one says nothing about it: an index scores its best reason alone.
+      // to one says nothing about it: an index scores its best link alone.
       const index = isIndex(d.body);
       const base = index ? (c.best ?? c.score) : c.score;
-      const bonus = !d.isDecision
-        ? 0
-        : c.via.kind === 'linked'
-          ? LINKED_DECISION_BONUS
-          : DECISION_BONUS;
-      return { c, d, index, score: base + bonus };
+      const entryIndex = c.entryOf ? digests.get(c.entryOf) : undefined;
+      if (entryIndex && isIndex(entryIndex.body) && base < ENTRY_SCORE && !mostCovered(c)) {
+        return { c, d, index, score: ENTRY_SCORE };
+      }
+      const decision = d.isDecision && c.relevant !== false;
+      return { c, d, index, score: decision ? base * DECISION_FACTOR : base };
     })
     .sort((a, b) => b.score - a.score || a.d.title.localeCompare(b.d.title));
 

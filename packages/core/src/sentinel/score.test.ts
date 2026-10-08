@@ -2,14 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CandidateSet,
-  DECISION_BONUS,
-  IN_DECAY,
-  LEAD_LINK_BONUS,
-  LINKED_DECISION_BONUS,
+  DECISION_FACTOR,
   MIN_EXCERPT_CHARS,
   NAMED_SCORE,
-  OUT_DECAY,
-  hopDecay,
   describeCandidate,
   demoteOffTopic,
   describeVia,
@@ -17,7 +12,6 @@ import {
   expandHop,
   isIndex,
   packContext,
-  searchScore,
   topFrontier,
   type Digest,
 } from './score.js';
@@ -36,44 +30,56 @@ const digest = (path: string, body: string, isDecision = false): Digest => ({
 });
 
 describe('CandidateSet', () => {
+  const terms = (...names: string[]) => ({
+    weights: new Map(names.map((t) => [t, 1])),
+    namedFolders: [],
+  });
+  const hit = (path: string, term: string, rank: number) => ({
+    path,
+    score: 0,
+    via: { kind: 'search' as const, term, rank },
+  });
+
   it('keeps the strongest reason a note was reached by', () => {
     const set = new CandidateSet();
-    set.offer({ path: 'a.md', score: 0.4, via: { kind: 'search', term: 'x', rank: 3 } });
+    set.setContext(terms('x', 'y'));
+    set.offer(hit('a.md', 'x', 2));
     set.offer(named('a.md'));
-    set.offer({ path: 'a.md', score: 0.5, via: { kind: 'search', term: 'y', rank: 2 } });
+    set.offer(hit('a.md', 'y', 1));
     expect(set.get('a.md')?.via.kind).toBe('named');
     expect(set.get('a.md')?.score).toBe(NAMED_SCORE);
   });
 
   it('ranks a note several searches find above one a single search finds first', () => {
     const set = new CandidateSet();
-    set.offer({
-      path: 'first.md',
-      score: searchScore(0),
-      via: { kind: 'search', term: 'x', rank: 0 },
-    });
-    for (const term of ['x', 'y', 'z']) {
-      set.offer({
-        path: 'every.md',
-        score: searchScore(2),
-        via: { kind: 'search', term, rank: 2 },
-      });
-    }
+    set.setContext(terms('x', 'y', 'z'));
+    set.offer(hit('first.md', 'x', 0));
+    for (const term of ['x', 'y', 'z']) set.offer(hit('every.md', term, 2));
     expect(set.get('every.md')!.score).toBeGreaterThan(set.get('first.md')!.score);
     expect(set.get('every.md')!.score).toBeLessThan(NAMED_SCORE);
     expect(set.get('every.md')).toMatchObject({ via: { term: 'x' }, also: ['y', 'z'] });
   });
 
-  it('counts the same search once, however often it is offered', () => {
+  it('counts a better rank for more than a worse one', () => {
     const set = new CandidateSet();
-    const hit = { path: 'a.md', score: 0.5, via: { kind: 'search' as const, term: 'x', rank: 2 } };
-    set.offer(hit);
-    set.offer(hit);
-    expect(set.get('a.md')!.score).toBe(0.5);
+    set.setContext(terms('x'));
+    set.offer(hit('top.md', 'x', 0));
+    set.offer(hit('third.md', 'x', 2));
+    expect(set.get('top.md')!.score).toBeGreaterThan(set.get('third.md')!.score);
   });
 
-  it('adds a search to a link: a written link and a shared word are two reasons', () => {
-    const set = new CandidateSet();
+  it('counts the same search once, however often it is offered', () => {
+    const once = new CandidateSet();
+    once.setContext(terms('x'));
+    once.offer(hit('a.md', 'x', 2));
+    const twice = new CandidateSet();
+    twice.setContext(terms('x'));
+    twice.offer(hit('a.md', 'x', 2));
+    twice.offer(hit('a.md', 'x', 2));
+    expect(twice.get('a.md')!.score).toBe(once.get('a.md')!.score);
+  });
+
+  it('adds a link to a search: a shared word and a written link are two reasons', () => {
     const linked = {
       kind: 'linked' as const,
       from: 'hub.md',
@@ -81,13 +87,19 @@ describe('CandidateSet', () => {
       direction: 'out' as const,
       hop: 1,
     };
-    set.offer({ path: 'a.md', score: 0.5, via: linked });
-    set.offer({ path: 'a.md', score: 0.4, via: { kind: 'search', term: 'x', rank: 3 } });
-    expect(set.get('a.md')).toMatchObject({ score: 0.7, via: linked, also: ['x'] });
+    const both = new CandidateSet();
+    both.setContext(terms('x'));
+    both.offer({ path: 'a.md', score: 0.5, via: linked });
+    both.offer(hit('a.md', 'x', 2));
+    const searchOnly = new CandidateSet();
+    searchOnly.setContext(terms('x'));
+    searchOnly.offer(hit('a.md', 'x', 2));
+    expect(both.get('a.md')!.score).toBeGreaterThan(searchOnly.get('a.md')!.score);
+    // Coverage is what the score is built on, so it is the reason named first.
+    expect(both.get('a.md')).toMatchObject({ via: { kind: 'search' }, alsoFrom: ['Hub'] });
   });
 
   it('adds up the notes that link to a note, but not the ones it links to', () => {
-    const set = new CandidateSet();
     const link = (from: string, direction: 'out' | 'in') => ({
       kind: 'linked' as const,
       from,
@@ -95,6 +107,7 @@ describe('CandidateSet', () => {
       direction,
       hop: 1,
     });
+    const set = new CandidateSet();
     // A hinge: three results link to it.
     for (const from of ['a.md', 'b.md', 'c.md']) {
       set.offer({ path: 'hinge.md', score: 0.5, via: link(from, 'out') });
@@ -103,12 +116,13 @@ describe('CandidateSet', () => {
     for (const from of ['a.md', 'b.md', 'c.md']) {
       set.offer({ path: 'index.md', score: 0.5, via: link(from, 'in') });
     }
+    set.offer({ path: 'single.md', score: 0.5, via: link('a.md', 'in') });
     expect(set.get('hinge.md')).toMatchObject({
-      score: 1 - 0.5 ** 3,
       via: { from: 'a.md' },
       alsoFrom: ['B.MD', 'C.MD'],
     });
-    expect(set.get('index.md')!.score).toBe(0.5);
+    expect(set.get('hinge.md')!.score).toBeGreaterThan(set.get('index.md')!.score);
+    expect(set.get('index.md')!.score).toBe(set.get('single.md')!.score);
   });
 });
 
@@ -126,14 +140,6 @@ describe('isIndex', () => {
   });
 });
 
-describe('searchScore', () => {
-  it('steps down with rank and never goes negative', () => {
-    expect(searchScore(0)).toBeGreaterThan(searchScore(1));
-    expect(searchScore(0)).toBeLessThan(NAMED_SCORE);
-    expect(searchScore(100)).toBe(0);
-  });
-});
-
 describe('expandHop', () => {
   it('follows links both ways, keeping more of the score along a link the note wrote', () => {
     const set = new CandidateSet();
@@ -147,11 +153,10 @@ describe('expandHop', () => {
 
     expect(reached.sort()).toEqual(['in.md', 'out.md']);
     expect(set.get('out.md')).toMatchObject({
-      score: NAMED_SCORE * OUT_DECAY,
       via: { kind: 'linked', from: 'seed.md', fromTitle: 'SEED.MD', direction: 'out', hop: 1 },
     });
-    expect(set.get('in.md')?.score).toBeCloseTo(NAMED_SCORE * IN_DECAY);
     expect(set.get('in.md')?.via).toMatchObject({ direction: 'in' });
+    expect(set.get('out.md')!.score).toBeGreaterThan(set.get('in.md')!.score);
     expect(set.has('far.md')).toBe(false);
   });
 
@@ -166,22 +171,29 @@ describe('expandHop', () => {
     ];
     expandHop(set, ['index.md'], edges, 1, (p) => p);
     const score = (p: string) => set.get(p)!.score;
-    expect(score('first.md')).toBeCloseTo(OUT_DECAY + LEAD_LINK_BONUS);
     expect(score('first.md')).toBeGreaterThan(score('second.md'));
     expect(score('second.md')).toBeGreaterThan(score('third.md'));
-    expect(score('unplaced.md')).toBe(OUT_DECAY);
+    expect(score('third.md')).toBeGreaterThan(score('unplaced.md'));
   });
 
   it('keeps a decision that only links in under any note the seed links out to', () => {
     // The case that prompted the split: an index's overview lost to decisions
-    // that merely mention the product.
-    expect(hopDecay('in') + LINKED_DECISION_BONUS).toBeLessThan(hopDecay('out'));
-  });
-
-  it('lets a decision break a tie between links, never jump the link order', () => {
-    const step = hopDecay('out', 0) - hopDecay('out', 1);
-    expect(LINKED_DECISION_BONUS).toBeGreaterThan(0);
-    expect(LINKED_DECISION_BONUS).toBeLessThan(step);
+    // that merely mention the product. One hop from the named note, the
+    // decision is relevant and weighs more — and still stays under.
+    const set = new CandidateSet();
+    set.offer(named('seed.md'));
+    const edges = [
+      { source: 'seed.md', target: 'overview.md' },
+      { source: 'decision.md', target: 'seed.md' },
+    ];
+    expandHop(set, ['seed.md'], edges, 1, (p) => p);
+    const digests = new Map([
+      ['seed.md', digest('seed.md', 's')],
+      ['overview.md', digest('overview.md', 'o')],
+      ['decision.md', digest('decision.md', 'd', true)],
+    ]);
+    const { notes } = packContext(set.all(), digests, 10_000);
+    expect(notes.map((n) => n.path)).toEqual(['seed.md', 'overview.md', 'decision.md']);
   });
 
   it('does not demote a seed that a neighbour links back to', () => {
@@ -307,7 +319,10 @@ describe('describeVia', () => {
       describeCandidate({ via: billing, alsoFrom: ['Orbit', 'Ventas'], also: ['tiers'] }),
     ).toBe('linked from Billing, Orbit and Ventas; also matches "tiers"');
     expect(
-      describeCandidate({ via: { kind: 'search', term: 'invoice', rank: 0 }, alsoFrom: ['Billing'] }),
+      describeCandidate({
+        via: { kind: 'search', term: 'invoice', rank: 0 },
+        alsoFrom: ['Billing'],
+      }),
     ).toBe('matches "invoice"; also linked from Billing');
     expect(
       describeVia({ kind: 'linked', from: 'b.md', fromTitle: 'Billing', direction: 'out', hop: 1 }),
@@ -321,8 +336,18 @@ describe('describeVia', () => {
 describe('packContext', () => {
   it('ranks a decision above an equal note that is not one', () => {
     const candidates = [
-      { path: 'plain.md', score: 0.5, via: { kind: 'search' as const, term: 'x', rank: 2 } },
-      { path: 'decided.md', score: 0.5, via: { kind: 'search' as const, term: 'x', rank: 2 } },
+      {
+        path: 'plain.md',
+        score: 0.5,
+        via: { kind: 'search' as const, term: 'x', rank: 2 },
+        relevant: true,
+      },
+      {
+        path: 'decided.md',
+        score: 0.5,
+        via: { kind: 'search' as const, term: 'x', rank: 2 },
+        relevant: true,
+      },
     ];
     const digests = new Map([
       ['plain.md', digest('plain.md', 'p')],
@@ -330,7 +355,7 @@ describe('packContext', () => {
     ]);
     const { notes } = packContext(candidates, digests, 10_000);
     expect(notes.map((n) => n.path)).toEqual(['decided.md', 'plain.md']);
-    expect(notes[0]!.score).toBe(0.5 + DECISION_BONUS);
+    expect(notes[0]!.score).toBe(0.5 * DECISION_FACTOR);
     expect(notes[0]!.isDecision).toBe(true);
   });
 
