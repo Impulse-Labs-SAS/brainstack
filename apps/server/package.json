@@ -12,7 +12,8 @@
     "dev": "tsx watch src/serve.ts",
     "start": "node dist/serve.js",
     "reindex": "tsx src/reindex.ts",
-    "cli": "tsx src/cli.ts"
+    "cli": "tsx src/cli.ts",
+    "guide": "tsx src/mcp/syncGuide.ts"
   },
   "dependencies": {
     "@brainstack/core": "workspace:*",

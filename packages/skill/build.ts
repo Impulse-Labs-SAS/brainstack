@@ -2,8 +2,9 @@
 // Reads INSTRUCTIONS.md, parses the YAML-ish frontmatter, runs every adapter,
 // and writes the result under dist/<client>/...
 //
-// The runtime equivalent (read INSTRUCTIONS at request time) lives in
-// apps/server/src/mcp/server.ts as the `get_brainstack_guide` tool.
+// The server carries the same file compiled in (apps/server/src/mcp/guide.ts):
+// its marked summary goes to every MCP connection as the server `instructions`,
+// and the whole of it answers the `get_brainstack_guide` tool.
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';

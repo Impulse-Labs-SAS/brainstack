@@ -5,3 +5,7 @@ build
 pnpm-lock.yaml
 *.min.js
 *.min.css
+
+# Written from packages/skill/INSTRUCTIONS.md; formatting it would only make
+# the sync test fail.
+*.generated.ts

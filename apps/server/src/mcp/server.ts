@@ -2,9 +2,6 @@
 // and exposes a helper to connect to a given transport (stdio, HTTP, etc).
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 import type { Logger } from 'pino';
@@ -27,6 +24,8 @@ import type { InviteService } from '../services/InviteService.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import { normalizeFolderPath, type SharingService } from '../services/SharingService.js';
+
+import { GUIDE, SERVER_INSTRUCTIONS } from './guide.generated.js';
 
 export interface McpPrincipal {
   /** The authenticated user calling the MCP server. */
@@ -88,9 +87,11 @@ export function buildMcpServer({
   logger,
   principal,
 }: BuildMcpServerOptions): McpServer {
+  // `instructions` reach the assistant on connect, before any tool is called,
+  // so the habits that matter most hold even where nobody installed the skill.
   const server = new McpServer(
     { name: 'brainstack', version: '0.1.0' },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
   );
 
   const requireUserId = (): string => {
@@ -795,57 +796,8 @@ export function buildMcpServer({
         'Return the canonical BrainStack instructions for AI assistants (Skill content).',
       inputSchema: {},
     },
-    async () => {
-      try {
-        const guide = await readInstructions();
-        return TEXT(guide);
-      } catch (err) {
-        return toMcpError(err);
-      }
-    },
+    () => TEXT(GUIDE),
   );
 
   return server;
-}
-
-/**
- * Where this module lives, when that can be known.
- *
- * `import.meta` exists in ES modules and nowhere else. A bundler that emits
- * CommonJS — Netlify's does, for some entry points — leaves it undefined, and
- * reading `.url` off it throws before any fallback gets a chance. So the
- * question is asked carefully and answered with null when it cannot be.
- */
-function moduleDir(): string | null {
-  try {
-    const url = import.meta?.url;
-    return typeof url === 'string' ? dirname(fileURLToPath(url)) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function readInstructions(): Promise<string> {
-  const here = moduleDir();
-  const candidates = [
-    // First, because it is the one that holds in a bundle: the file is carried
-    // in by `included_files` and lands relative to the function's root.
-    resolve(process.cwd(), 'packages/skill/INSTRUCTIONS.md'),
-    // Then relative to this file, which is what works when running from source
-    // regardless of where the process was launched.
-    ...(here
-      ? [
-          resolve(here, '../../../../packages/skill/INSTRUCTIONS.md'),
-          resolve(here, '../../../packages/skill/INSTRUCTIONS.md'),
-        ]
-      : []),
-  ];
-  for (const path of candidates) {
-    try {
-      return await readFile(path, 'utf8');
-    } catch {
-      // try next
-    }
-  }
-  throw new AppError('INSTRUCTIONS.md not found', 'INTERNAL');
 }

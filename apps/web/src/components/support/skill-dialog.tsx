@@ -76,10 +76,12 @@ export function SkillDialog({ open, onClose }: { open: boolean; onClose(): void 
       subtitle="Teach your assistant how to use the brain well."
     >
       <p className="mb-4 text-xs leading-relaxed text-fg-secondary">
-        The skill tells an assistant to search the brain before answering, ask before writing,
-        and file notes with the right folders and wikilinks. Connected clients can already read
-        it through the <code className="font-mono text-fg-primary">get_brainstack_guide</code>{' '}
-        tool; installing it makes the assistant follow it from the first message.
+        The skill tells an assistant to search the brain before answering, ask before writing, and
+        file notes with the right folders and wikilinks. You do not need to install it: every
+        connected client receives a summary when it connects and reads the rest through the{' '}
+        <code className="font-mono text-fg-primary">get_brainstack_guide</code> tool, always the
+        current version. Installing it is optional; it puts the whole guide in front of the
+        assistant from the first message, but an installed copy does not update itself.
       </p>
 
       <a
@@ -92,7 +94,7 @@ export function SkillDialog({ open, onClose }: { open: boolean; onClose(): void 
         View INSTRUCTIONS.md
       </a>
 
-      <div className="mb-1.5 font-mono text-[11px] text-fg-muted">install in</div>
+      <div className="mb-1.5 font-mono text-[11px] text-fg-muted">optional: install in</div>
       <PillTabs<ClientId> tabs={CLIENTS} value={clientId} onChange={setClientId} />
 
       <ol className="mb-3 list-decimal space-y-1 pl-5 text-xs text-fg-secondary">
