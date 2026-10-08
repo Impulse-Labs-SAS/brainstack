@@ -52,8 +52,6 @@ WORKDIR /app
 COPY --from=server-deploy /deploy/package.json ./
 COPY --from=server-deploy /deploy/dist ./dist
 COPY --from=server-deploy /deploy/node_modules ./node_modules
-# Served by the MCP `get_brainstack_guide` tool, which reads it from disk.
-COPY --from=build /app/packages/skill/INSTRUCTIONS.md ./packages/skill/
 
 USER node
 EXPOSE 3000

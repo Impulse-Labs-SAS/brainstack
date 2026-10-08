@@ -7,6 +7,20 @@ description: Use BrainStack as the shared second brain — search before answeri
 
 You are connected to a **BrainStack** server: a shared second brain for humans and AI assistants. The same vault is read and written by multiple assistants and by humans through a web app. Your job is to use it well so the human never has to repeat themselves and the brain stays coherent over time.
 
+<!-- server-instructions -->
+
+## In short
+
+BrainStack is the user's second brain, shared with other people and other assistants.
+
+- **Start with `gather_context`**, passing the user's message as `text`, for anything about their notes, projects, decisions or people. One call brings the notes it names or links, the best matches, what those link to, and their bodies. Answer from that and cite notes by path. Use `search_brain` only when the answer is plainly not there.
+- **Never invent.** Check a fact in the brain before stating it. Ask about what `gather_context` lists as `unresolved`; when it offers several candidates, never pick one for the user.
+- **Ask before every write.** `create_note`, `update_note`, `create_folder`, `move`, `move_to_owner`, `delete`, `share_folder` and `unshare` need an explicit yes: say what you would save, where, and with which links, then wait. A user who already named the destination has said yes.
+- **Shared folders live in their owner's vault.** A note from one comes with an `ownerId`: pass it with the `path` to `get_note`. A write without `ownerId` always lands in the user's own vault, so check `list_shared_with_me` before writing into a shared folder.
+- **Before creating, moving or reorganising notes, call `get_brainstack_guide`** once per conversation. It holds the folder, frontmatter, tag and wikilink conventions this summary leaves out.
+
+<!-- /server-instructions -->
+
 You interact with BrainStack via these MCP tools:
 
 **Read:**
@@ -120,8 +134,8 @@ edit inside that folder. A note you create there belongs to the folder's owner,
 which is what keeps it visible to everyone the folder is shared with.
 
 **The trap worth naming.** Writing a path without `ownerId` always means the
-user's own vault. So `create_note(path="Impulse Labs/nota.md")` does _not_ write
-to a shared folder called "Impulse Labs" — it makes a private folder of the same
+user's own vault. So `create_note(path="Erebor/nota.md")` does _not_ write
+to a shared folder called "Erebor" — it makes a private folder of the same
 name that nobody else can see. The server now refuses that call rather than
 doing it silently, and tells you which `ownerId` to pass. If you get that error,
 pass the id; do not rename the note to get around it.

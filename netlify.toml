@@ -34,9 +34,9 @@
   # was the *Windows* build, riding along in a node_modules directory that was
   # being uploaded by mistake. A clean install on Linux does not produce it.
   #
-  # Losing `included_files` costs the MCP `instructions` tool, which reads
-  # INSTRUCTIONS.md from disk and will not find it in a bundle. One tool
-  # degraded beats every route returning 502.
+  # Nothing needs `included_files` anyway: the assistant instructions, the one
+  # file the server used to read from disk, are compiled into the bundle
+  # (apps/server/src/mcp/guide.ts).
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"

@@ -21,6 +21,7 @@ import { SharingService } from '../services/SharingService.js';
 import { TotpService } from '../services/TotpService.js';
 import { createTestDatabase, type TestDatabase } from '../services/testDb.js';
 
+import { GUIDE, SERVER_INSTRUCTIONS } from './guide.generated.js';
 import { buildMcpServer } from './server.js';
 
 const logger = pino({ level: 'silent' });
@@ -117,6 +118,16 @@ describe('the sharing tools exist at all', () => {
     );
   });
 
+});
+
+describe('the assistant instructions', () => {
+  it('arrive with the connection, and the whole guide on request', async () => {
+    const client = await clientFor(OWNER.id);
+
+    expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
+    expect(client.getInstructions()).toContain('gather_context');
+    expect((await call(client, 'get_brainstack_guide')).value).toBe(GUIDE);
+  });
 });
 
 describe('share_folder', () => {

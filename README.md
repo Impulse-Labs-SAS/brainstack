@@ -108,14 +108,14 @@ claude mcp add brainstack --transport http https://<your-domain>/api/mcp \
 
 ### Loading the skill
 
-BrainStack ships canonical AI instructions for every major client. Build them with:
+Nothing to install. Every MCP connection receives a short summary of the assistant instructions (start with `gather_context`, ask before writing, how shared folders work), and the assistant fetches the full guide through the `get_brainstack_guide` tool when it is about to write. Both come from [`packages/skill/INSTRUCTIONS.md`](packages/skill/INSTRUCTIONS.md) and update with the server.
+
+Installing the guide as a skill is optional: it puts the whole of it in front of the assistant from the first message, but an installed copy does not update itself. To build one for every major client:
 
 ```bash
 pnpm --filter @brainstack/skill build
 # Outputs land in packages/skill/dist/<client>/...
 ```
-
-Assistants can also fetch the same instructions at runtime through the `get_brainstack_guide` MCP tool, which helps clients without a dedicated skill format.
 
 ## Architecture
 
