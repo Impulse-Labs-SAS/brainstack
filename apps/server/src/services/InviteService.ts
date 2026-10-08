@@ -85,18 +85,10 @@ export class InviteService {
   }): Promise<CreatedInvite> {
     const folderPath = normalizeFolderPath(params.folderPath);
     if (!folderPath) {
-      throw new AppError(
-        "you can't share the root of your vault; share a folder instead",
-        'INVALID_INPUT',
-        400,
-      );
+      throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
     if (params.mode === 'email' && !params.inviteeEmail) {
-      throw new AppError(
-        'an email invitation needs the address to send it to',
-        'INVALID_INPUT',
-        400,
-      );
+      throw new AppError('an email invitation needs the address to send it to', 'INVALID_INPUT', 400);
     }
     // Refused before the invite exists, so there is no pending invitation
     // nobody will ever receive.
@@ -216,8 +208,7 @@ export class InviteService {
     }
 
     if (row.mode === 'email') {
-      if (row.acceptedAt != null)
-        throw new AppError('this invitation was already accepted', 'FORBIDDEN', 403);
+      if (row.acceptedAt != null) throw new AppError('this invitation was already accepted', 'FORBIDDEN', 403);
       if (!row.inviteeEmail || row.inviteeEmail.toLowerCase() !== params.user.email.toLowerCase()) {
         throw new AppError('this invitation is for a different email address', 'FORBIDDEN', 403);
       }

@@ -103,12 +103,7 @@ export class CrawlHistoryService {
    */
   async record(
     userId: string,
-    crawl: {
-      source: CrawlSource;
-      clientRef?: string | null;
-      text: string;
-      result: GatherContextResult;
-    },
+    crawl: { source: CrawlSource; clientRef?: string | null; text: string; result: GatherContextResult },
   ): Promise<string | null> {
     if (!this.enabled) return null;
     try {
@@ -144,9 +139,7 @@ export class CrawlHistoryService {
         coverage: sql<CrawlSummary['coverage']>`${crawlHistory.result} -> 'coverage'`,
       })
       .from(crawlHistory)
-      .where(
-        and(eq(crawlHistory.userId, userId), sql`${crawlHistory.createdAt} >= ${this.cutoff()}`),
-      )
+      .where(and(eq(crawlHistory.userId, userId), sql`${crawlHistory.createdAt} >= ${this.cutoff()}`))
       .orderBy(desc(crawlHistory.createdAt), desc(crawlHistory.id))
       .limit(Math.min(Math.max(limit, 1), MAX_CRAWLS_PER_USER));
     const names = await this.clientNames(

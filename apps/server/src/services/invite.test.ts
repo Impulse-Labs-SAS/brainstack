@@ -70,9 +70,7 @@ describe('InviteService — email mode', () => {
       inviteeEmail: 'a@x.com',
     });
     await seedUser('eve', 'e@x.com');
-    await expect(
-      svc.accept({ token: inv.token, user: { id: 'eve', email: 'e@x.com' } }),
-    ).rejects.toThrow(/different email/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'eve', email: 'e@x.com' } })).rejects.toThrow(/different email/);
   });
 
   it('email mode es single-use', async () => {
@@ -83,9 +81,7 @@ describe('InviteService — email mode', () => {
       inviteeEmail: 'a@x.com',
     });
     await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
-    await expect(
-      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).rejects.toThrow(/already accepted/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/already accepted/);
   });
 });
 
@@ -112,9 +108,7 @@ describe('InviteService — link mode', () => {
       folderPath: 'p',
       mode: 'link',
     });
-    await expect(
-      svc.accept({ token: inv.token, user: { id: 'owner', email: 'o@x.com' } }),
-    ).rejects.toThrow(/your own invitation/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'owner', email: 'o@x.com' } })).rejects.toThrow(/your own invitation/);
   });
 });
 
@@ -126,9 +120,7 @@ describe('InviteService — expiración y revocación', () => {
       mode: 'link',
     });
     now = inv.expiresAt + 1000;
-    await expect(
-      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).rejects.toThrow(/expirada/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/expirada/);
   });
 
   it('revoke bloquea accept', async () => {
@@ -138,9 +130,7 @@ describe('InviteService — expiración y revocación', () => {
       mode: 'link',
     });
     await svc.revoke('owner', inv.inviteId);
-    await expect(
-      svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).rejects.toThrow(/revocada/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/revocada/);
   });
 
   it('listPending no incluye aceptadas, revocadas ni expiradas', async () => {

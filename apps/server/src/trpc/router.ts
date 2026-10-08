@@ -438,7 +438,9 @@ export const appRouter = t.router({
     listSharedWithMe: protectedProcedure.query(({ ctx }) =>
       ctx.sharing.listSharedRoots(ctx.user.id),
     ),
-    listMyShares: protectedProcedure.query(({ ctx }) => ctx.sharing.listMyShares(ctx.user.id)),
+    listMyShares: protectedProcedure.query(({ ctx }) =>
+      ctx.sharing.listMyShares(ctx.user.id),
+    ),
     shareWithUser: protectedProcedure
       .input(
         z.object({
@@ -452,11 +454,7 @@ export const appRouter = t.router({
           const target = await ctx.auth.findUserByEmail(input.email);
           if (!target) {
             // Somebody without an account is reached through an invitation instead.
-            throw new AppError(
-              'no user with that email; send an invitation instead',
-              'NOT_FOUND',
-              404,
-            );
+            throw new AppError('no user with that email; send an invitation instead', 'NOT_FOUND', 404);
           }
           const id = await ctx.sharing.grant({
             ownerId: ctx.user.id,

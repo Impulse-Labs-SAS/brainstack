@@ -10,7 +10,11 @@ export { getLogger } from './lib/logger.js';
 export { AppError } from './lib/errors.js';
 
 // --- Vault paths -------------------------------------------------------------
-export { ownerIdFromPhysicalPath, toLogical, toPhysical } from './lib/vault.js';
+export {
+  ownerIdFromPhysicalPath,
+  toLogical,
+  toPhysical,
+} from './lib/vault.js';
 
 // --- Service graph -----------------------------------------------------------
 export {
@@ -25,7 +29,11 @@ export { buildApp, type BuildAppOptions } from './http/app.js';
 export { SESSION_COOKIE, type AuthBindings, type Principal } from './http/middleware/auth.js';
 
 // --- MCP ---------------------------------------------------------------------
-export { buildMcpServer, type BuildMcpServerOptions, type McpPrincipal } from './mcp/server.js';
+export {
+  buildMcpServer,
+  type BuildMcpServerOptions,
+  type McpPrincipal,
+} from './mcp/server.js';
 
 // --- tRPC --------------------------------------------------------------------
 export { appRouter, type AppRouter } from './trpc/router.js';

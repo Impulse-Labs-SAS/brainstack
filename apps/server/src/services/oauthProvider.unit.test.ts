@@ -4,7 +4,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isAllowedRedirectUri, narrowScope, pkceChallengeFrom } from './OAuthProviderService.js';
+import {
+  isAllowedRedirectUri,
+  narrowScope,
+  pkceChallengeFrom,
+} from './OAuthProviderService.js';
 
 describe('isAllowedRedirectUri', () => {
   it('accepts https anywhere', () => {

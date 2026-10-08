@@ -51,17 +51,7 @@ function buildHarness(bs: TestDatabase['db'], basePath?: string): Harness {
 
   const app = buildApp({
     buildMcpServer: (principal) =>
-      buildMcpServer({
-        notes,
-        search,
-        sharing,
-        crossOwner,
-        auth,
-        invites,
-        crawls,
-        logger,
-        principal,
-      }),
+      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, crawls, logger, principal }),
     logger,
     auth,
     apiKeys,

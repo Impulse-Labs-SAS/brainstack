@@ -28,8 +28,7 @@ import { generateToken, sha256 } from '../lib/tokens.js';
 import type { EmailSender } from './EmailSender.js';
 import type { TotpService } from './TotpService.js';
 
-const { emailVerificationTokens, folderShareInvites, passwordResetTokens, sessions, users } =
-  pgSchema;
+const { emailVerificationTokens, folderShareInvites, passwordResetTokens, sessions, users } = pgSchema;
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -42,6 +41,7 @@ const PASSWORD_MIN = 8;
 
 /** Room for a long name, short of enough to break the layouts that print it. */
 const MAX_DISPLAY_NAME = 120;
+
 
 export interface AuthServiceOptions {
   db: PgDb;
@@ -448,9 +448,7 @@ export class AuthService {
     const row = await this.rowByEmail(rawEmail);
     if (!row || row.emailVerified) return { url: null };
     if (!this.opts.email) {
-      this.opts.logger.warn(
-        'verification email requested, but this instance has no email configured',
-      );
+      this.opts.logger.warn('verification email requested, but this instance has no email configured');
       return { url: null };
     }
     const issued = await this.issueEmailVerification(row, row.email);

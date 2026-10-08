@@ -589,7 +589,7 @@ export function buildMcpServer({
     {
       title: 'List unlinked mentions',
       description:
-        "Where a note is named without a wikilink, both ways: `incoming` lists other notes whose text says this note's title or an alias; `outgoing` lists notes whose title this note's text says. Each row has the other note's path, the text as written, how many times, and a snippet. Read-only: to link them, propose the edit to the user and write it with `update_note` once they approve, replacing the text with `[[path|text as written]]`. Own vault only; does not take `ownerId`.",
+        'Where a note is named without a wikilink, both ways: `incoming` lists other notes whose text says this note\'s title or an alias; `outgoing` lists notes whose title this note\'s text says. Each row has the other note\'s path, the text as written, how many times, and a snippet. Read-only: to link them, propose the edit to the user and write it with `update_note` once they approve, replacing the text with `[[path|text as written]]`. Own vault only; does not take `ownerId`.',
       inputSchema: { path: z.string().min(1) },
     },
     async ({ path }) => {
@@ -607,7 +607,7 @@ export function buildMcpServer({
     {
       title: 'Gather context for a question or a prompt',
       description:
-        "Start here for any question or task about the user's notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user's message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision` and its body in `excerpt`, whole when it fits `maxChars`; open a note with get_note only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user's own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user's own crawl history, which they can replay in the web app.",
+        'Start here for any question or task about the user\'s notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user\'s message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision` and its body in `excerpt`, whole when it fits `maxChars`; open a note with get_note only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user\'s own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user\'s own crawl history, which they can replay in the web app.',
       inputSchema: {
         text: z.string().min(1).max(MAX_TEXT_CHARS),
         terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),
@@ -641,7 +641,7 @@ export function buildMcpServer({
     {
       title: 'List facets',
       description:
-        "Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note's facets; omit it (optionally with `key`) to browse every (key, value) pair in use, with counts.",
+        'Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note\'s facets; omit it (optionally with `key`) to browse every (key, value) pair in use, with counts.',
       inputSchema: {
         path: z.string().optional(),
         key: z.string().optional(),
