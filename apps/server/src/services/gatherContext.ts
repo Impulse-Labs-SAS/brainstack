@@ -51,6 +51,7 @@ export function vaultSource(deps: GatherContextDeps, ownerId: string): ContextSo
       });
       return hits.filter((h) => h.ownerId === ownerId).slice(0, limit);
     },
+    counts: (queries) => deps.search.counts(ownerId, queries),
   };
 }
 

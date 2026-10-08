@@ -2,6 +2,7 @@
 // reported instead of guessed, the budget, and the vault boundary.
 
 import { pgSchema } from '@brainstack/core/pg';
+import { MAX_LINK } from '@brainstack/core/sentinel';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { NoteService } from './NoteService.js';
@@ -58,9 +59,11 @@ describe('gatherContext', () => {
       reason: 'the text says "Roadmap Q4"',
       via: { kind: 'named' },
     });
+    // The question's own words also find it ("plans"), and coverage is what
+    // a score is built on, so that reason is named first.
     expect(result.notes.find((n) => n.path === 'ledger.md')).toMatchObject({
-      reason: 'linked from Roadmap Q4',
-      via: { kind: 'linked', hop: 1 },
+      reason: 'matches the question; also linked from Roadmap Q4',
+      via: { kind: 'prompt' },
     });
     expect(result.coverage).toEqual({ resolved: 2, total: 2 });
   });
@@ -374,14 +377,17 @@ describe('gatherContext', () => {
         ...areas.map((a) => `${a}.md`),
       ]),
     );
-    // They still come back — the question did say "general" — but halved:
-    // under every Orbit note, and at most half of what any note the text does
-    // not name can reach, however many reasons add up for it.
+    // They still come back — the question did say "general" — but outside the
+    // named folder the question's hit weighs only as a link: under every Orbit
+    // note, even those only linked from the index, and never more than all
+    // the links a note can collect are worth.
     expect(other.length).toBeGreaterThan(0);
+    const linkedOnly = orbit.filter((n) => n.via.kind === 'linked');
+    expect(linkedOnly.length).toBeGreaterThan(0);
     const weakestOrbit = Math.min(...orbit.map((n) => n.score));
     for (const n of other) {
       expect(n.score).toBeLessThan(weakestOrbit);
-      expect(n.score).toBeLessThanOrEqual(0.5);
+      expect(n.score).toBeLessThanOrEqual(MAX_LINK);
     }
   });
 
@@ -426,7 +432,7 @@ describe('gatherContext', () => {
     const order = result.notes.map((n) => n.path);
     expect(order).toContain('ledger/integracion-con-orbit.md');
     const contract = result.notes.find((n) => n.path === 'ledger/integracion-con-orbit.md')!;
-    expect(contract.reason).toMatch(/^linked from /);
+    expect(contract.reason).toMatch(/^matches the question; also linked from /);
     for (const from of ['Orbit', 'Ledger', 'Ventas y facturación']) {
       expect(contract.reason).toContain(from);
     }
@@ -443,6 +449,114 @@ describe('gatherContext', () => {
     }
   });
 
+  it('puts the overview first when the question asks what a project is', async () => {
+    // A named index, its overview first; a generic word ("concepto") that
+    // notes everywhere say, and a decision in another project's folder that
+    // says it most; another project's overview that shares "visión general".
+    const filler = (what: string) => `${what}. ${'Texto de relleno sobre el módulo. '.repeat(40)}`;
+    const areas = Array.from({ length: 8 }, (_, i) => `orbit/area-${i}`);
+    for (const a of areas) {
+      await notes.create(
+        ME,
+        `${a}.md`,
+        `# Área ${a.slice(-1)}\n\nUn concepto del módulo. ${filler(a)}`,
+      );
+    }
+    await notes.create(
+      ME,
+      'orbit/vision-general.md',
+      `# Orbit — Visión general\n\nVisión general del proyecto: qué es y para quién. ${filler('Orbit')}`,
+    );
+    await notes.create(
+      ME,
+      'ledger/vision-general.md',
+      `# Ledger — Visión general\n\nVisión general del servicio. Visión general. ${filler('Ledger')}`,
+    );
+    await notes.create(
+      ME,
+      'ledger/modelo-de-datos.md',
+      `# Modelo de datos\n\n${'Cada factura lleva un concepto; el concepto se guarda. '.repeat(20)}`,
+      { tags: ['decision'] },
+    );
+    await notes.create(
+      ME,
+      'ledger/integracion.md',
+      `# Integración con Orbit\n\nEl contrato. Ver [[ledger/vision-general]]. ${filler('contrato')}`,
+      { tags: ['decision'] },
+    );
+    await notes.create(
+      ME,
+      'orbit/_orbit.md',
+      `# Orbit\n\n${['orbit/vision-general', ...areas, 'ledger/integracion']
+        .map((p) => `- [[${p}]] — qué cubre`)
+        .join('\n')}`,
+    );
+
+    const result = await gather('¿Qué es Orbit? Dame el concepto general del proyecto.', {
+      terms: ['Orbit', 'visión general', 'concepto'],
+    });
+    const order = result.notes.map((n) => n.path);
+    expect(order.slice(0, 2)).toEqual(['orbit/_orbit.md', 'orbit/vision-general.md']);
+    // The decision in another folder that only shares the generic word stays under it.
+    expect(order.indexOf('ledger/modelo-de-datos.md')).toBeGreaterThan(1);
+  });
+
+  it('ranks the note that covers every term above one that covers half, however many link to it', async () => {
+    // Four terms. One note covers all four; another covers two, and five
+    // notes of the same folder link to it.
+    const filler = (what: string) => `${what}. ${'Más detalle comercial. '.repeat(30)}`;
+    await notes.create(
+      ME,
+      'orbit/vision-general.md',
+      `# Orbit — Visión general\n\n${filler('Qué es')}`,
+    );
+    await notes.create(
+      ME,
+      'orbit/comercial/planes.md',
+      '# Planes y precios\n\nLos planes, el pricing, los precios y los tiers del producto.\n\n' +
+        'Planes por tamaño. Pricing mensual. Precios en pesos. Tres tiers.',
+    );
+    const around = ['anclas', 'entitlements', 'suscripcion', 'costos', 'canales'];
+    for (const n of around) {
+      await notes.create(
+        ME,
+        `orbit/comercial/${n}.md`,
+        `# ${n}\n\nVer [[orbit/comercial/economia]] y [[orbit/comercial/planes]]. ${filler(n)}`,
+        n === 'entitlements' || n === 'suscripcion' ? { tags: ['decision'] } : {},
+      );
+    }
+    await notes.create(
+      ME,
+      'orbit/comercial/economia.md',
+      `# Economía de la IA\n\nDos tiers de costo. Los precios del proveedor. Tiers y precios. ${filler('IA')}`,
+    );
+    await notes.create(
+      ME,
+      'orbit/_orbit.md',
+      `# Orbit\n\n${[
+        'orbit/vision-general',
+        'orbit/comercial/planes',
+        'orbit/comercial/economia',
+        ...around.map((n) => `orbit/comercial/${n}`),
+      ]
+        .map((p) => `- [[${p}]] — qué cubre`)
+        .join('\n')}`,
+    );
+
+    const result = await gather(
+      '¿Cómo son los planes y el pricing de Orbit? ¿Cuánto cobra a sus clientes?',
+      {
+        terms: ['planes', 'pricing', 'precios', 'tiers'],
+      },
+    );
+    const order = result.notes.map((n) => n.path);
+    expect(order.slice(0, 2)).toEqual(['orbit/_orbit.md', 'orbit/comercial/planes.md']);
+    expect(order.indexOf('orbit/comercial/economia.md')).toBeGreaterThan(1);
+    // The scores stay apart: no pile-up against 1.
+    const [, planes, next] = result.notes;
+    expect(planes!.score - next!.score).toBeGreaterThan(0.05);
+  });
+
   it('never returns another user’s notes, however plainly the text names them', async () => {
     await notes.create(SOMEONE_ELSE, 'secret.md', '# Secret project\n\nHidden.');
     await notes.create(ME, 'mine.md', '# My project');
@@ -450,5 +564,19 @@ describe('gatherContext', () => {
     const result = await gather('Secret project and My project', { terms: ['Hidden'] });
     expect(result.notes.map((n) => n.path)).toEqual(['mine.md']);
     expect(result.unresolved).toEqual([{ term: 'Hidden', reason: 'no-match' }]);
+  });
+});
+
+describe('SearchService.counts', () => {
+  it('counts each query among the caller’s own notes, all in one call', async () => {
+    await notes.create(ME, 'a.md', '# Planes\n\nLos planes y los precios.');
+    await notes.create(ME, 'b.md', '# Precios\n\nSolo precios.');
+    await notes.create(ME, 'c.md', '# Otra cosa\n\nNada de eso.');
+    await notes.create(SOMEONE_ELSE, 'd.md', '# Planes\n\nPlanes y precios de otro.');
+
+    expect(await search.counts(ME, ['planes', 'precios', 'inexistente', '', '!!'])).toEqual([
+      1, 2, 0, 0, 0,
+    ]);
+    expect(await search.counts(ME, [])).toEqual([]);
   });
 });

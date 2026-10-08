@@ -35,13 +35,15 @@ import {
   LEFT_OUT_LISTED,
   MAX_NOTES,
   NAMED_SCORE,
+  QUESTION,
+  QUESTION_WEIGHT,
   demoteOffTopic,
   describeCandidate,
   SEARCH_HITS_PER_TERM,
   expandHop,
+  folderOf,
   packContext,
-  promptScore,
-  searchScore,
+  termWeight,
   topFrontier,
   type ContextNote,
   type Digest,
@@ -103,6 +105,12 @@ export interface ContextSource {
   digests(paths: readonly string[], bodyChars: number): Promise<Digest[]>;
   /** Full-text hits for a query, best first, at most `limit`. */
   search(query: string, limit: number): Promise<Array<{ path: string }>>;
+  /**
+   * How many of the reader's notes match each query, with the same matching
+   * as `search`, in one call: how rare each term is. Optional; without it
+   * every term weighs the same.
+   */
+  counts?(queries: readonly string[]): Promise<number[]>;
 }
 
 const AMBIGUOUS = '\u0000ambiguous:';
@@ -219,31 +227,56 @@ export async function crawlContext(
     .map((term) => ({ term, query: withoutNamed(term) }))
     .filter((t) => t.query !== '');
   let termsResolved = 0;
-  for (const { term, hits } of await searchTerms(source, vague)) {
+  const weights = new Map<string, number>();
+  const termHits: Array<{ term: string; query: string; hits: Array<{ path: string }> }> = [];
+  for (const { term, query, hits } of await searchTerms(source, vague)) {
     if (hits.length === 0) {
       unresolved.push({ term, reason: 'no-match' });
       continue;
     }
     termsResolved += 1;
-    hits.forEach((hit, rank) => {
-      set.offer({ path: hit.path, score: searchScore(rank), via: { kind: 'search', term, rank } });
-    });
+    termHits.push({ term, query, hits });
   }
+  const matching = source.counts
+    ? await source.counts(termHits.map((t) => t.query))
+    : termHits.map(() => undefined);
+  termHits.forEach(({ term }, i) => {
+    const n = matching[i];
+    weights.set(term, n === undefined ? 1 : termWeight(n, index.length));
+  });
 
   // -- Seeds: what the question is about ---------------------------------------
   // A question rarely names a note by its title — "what did we decide about
   // annual pricing?" — so the text itself is searched too, with the words that
-  // carry meaning. It ranks under a link from a named note: a link someone
-  // wrote says more than a shared word.
+  // carry meaning. It counts as one more term, weighing half the least
+  // weighty of the caller's: a phrase someone chose says more than a word the
+  // question happens to contain.
   const words = meaningfulWords(text).filter((w) => !namedWords.has(foldForMatch(w)));
-  if (words.length > 0) {
-    const hits = await source.search(words.join(' '), PROMPT_HITS);
-    hits
-      .filter((h) => !undecided.has(h.path))
-      .forEach((hit, rank) => {
-        set.offer({ path: hit.path, score: promptScore(rank), via: { kind: 'prompt', rank } });
-      });
+  const questionHits =
+    words.length > 0
+      ? (await source.search(words.join(' '), PROMPT_HITS)).filter((h) => !undecided.has(h.path))
+      : [];
+  if (questionHits.length > 0) {
+    const termWeights = [...weights.values()];
+    weights.set(QUESTION, termWeights.length > 0 ? QUESTION_WEIGHT * Math.min(...termWeights) : 1);
   }
+
+  // -- Score the hits ----------------------------------------------------------
+  // Coverage is measured against every term that found something, weighed by
+  // how rare it is, and a hit outside the folders of the notes the text named
+  // counts half. Both are only known now that every search has run.
+  set.setContext({
+    weights,
+    namedFolders: [...new Set([...named.keys()].map(folderOf))],
+  });
+  for (const { term, hits } of termHits) {
+    hits.forEach((hit, rank) => {
+      set.offer({ path: hit.path, score: 0, via: { kind: 'search', term, rank } });
+    });
+  }
+  questionHits.forEach((hit, rank) => {
+    set.offer({ path: hit.path, score: 0, via: { kind: 'prompt', rank } });
+  });
 
   // -- Expand along wikilinks ------------------------------------------------
   let frontier = topFrontier(
@@ -310,14 +343,15 @@ export async function crawlContext(
 async function searchTerms(
   source: ContextSource,
   terms: ReadonlyArray<{ term: string; query: string }>,
-): Promise<Array<{ term: string; hits: Array<{ path: string }> }>> {
-  const out: Array<{ term: string; hits: Array<{ path: string }> }> = [];
+): Promise<Array<{ term: string; query: string; hits: Array<{ path: string }> }>> {
+  const out: Array<{ term: string; query: string; hits: Array<{ path: string }> }> = [];
   for (let i = 0; i < terms.length; i += SEARCH_BATCH) {
     const batch = terms.slice(i, i + SEARCH_BATCH);
     out.push(
       ...(await Promise.all(
         batch.map(async ({ term, query }) => ({
           term,
+          query,
           hits: await source.search(query, SEARCH_HITS_PER_TERM),
         })),
       )),

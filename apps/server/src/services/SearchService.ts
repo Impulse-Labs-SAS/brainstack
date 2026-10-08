@@ -101,6 +101,11 @@ export class SearchService {
 
     return visible;
   }
+
+  /** How many of the caller's own notes match each query, in one round trip. */
+  counts(userId: string, queries: readonly string[]): Promise<number[]> {
+    return this.engine.counts(queries, userId);
+  }
 }
 
 /** Drop a known owner prefix. Used for hits belonging to somebody else. */

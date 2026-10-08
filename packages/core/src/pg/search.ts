@@ -94,6 +94,41 @@ export class PgSearchService {
       score: Number(r.score),
     }));
   }
+
+  /**
+   * How many of one owner's notes match each query, with the same matching as
+   * `search`, in one round trip: it is how rare each word is in a vault. A
+   * ranking that weighs a word everywhere less than a word in three notes
+   * needs these counts, which `search` — ranked, capped, across every vault —
+   * cannot give. A query with nothing to search counts 0.
+   */
+  async counts(queries: readonly string[], ownerId: string): Promise<number[]> {
+    const tokenized = queries.map(tokenize);
+    const searchable = tokenized.flatMap((tokens, i) => (tokens.length > 0 ? [{ i, tokens }] : []));
+    const out = queries.map(() => 0);
+    if (searchable.length === 0) return out;
+
+    const array = (items: string[]) =>
+      sql`ARRAY[${sql.join(
+        items.map((x) => sql`${x}`),
+        sql`, `,
+      )}]::text[]`;
+    const prefix = array(searchable.map(({ tokens }) => tokens.map((t) => `${t}:*`).join(' | ')));
+    const stem = array(searchable.map(({ tokens }) => tokens.join(' | ')));
+    const result = await this.db.execute<{ ord: number | string; n: number | string }>(sql`
+      SELECT q.ord, count(n.path) AS n
+      FROM unnest(${prefix}, ${stem}) WITH ORDINALITY AS q(p, s, ord)
+      LEFT JOIN notes n
+        ON n.owner_id = ${ownerId}
+       AND n.body_tsv @@ (to_tsquery(${PREFIX_CONFIG}::regconfig, q.p)
+                          || to_tsquery(${STEM_CONFIG}::regconfig, q.s))
+      GROUP BY q.ord
+    `);
+    for (const row of result.rows) {
+      out[searchable[Number(row.ord) - 1]!.i] = Number(row.n);
+    }
+    return out;
+  }
 }
 
 /**

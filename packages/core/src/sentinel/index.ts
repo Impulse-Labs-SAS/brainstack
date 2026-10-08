@@ -14,6 +14,7 @@ export {
 } from './crawl.js';
 export {
   DEFAULT_MAX_CHARS,
+  MAX_LINK,
   MAX_MAX_CHARS,
   describeVia,
   type ContextNote,
