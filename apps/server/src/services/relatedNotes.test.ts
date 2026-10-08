@@ -71,7 +71,10 @@ describe('related reasons', () => {
   });
 
   it('turns a signal back into the tag or facet it stands for', () => {
-    expect(signalReason(tagSignal('proyecto/atlas'))).toEqual({ kind: 'tag', tag: 'proyecto/atlas' });
+    expect(signalReason(tagSignal('proyecto/atlas'))).toEqual({
+      kind: 'tag',
+      tag: 'proyecto/atlas',
+    });
     expect(signalReason(facetSignal('status', 'a:b'))).toEqual({
       kind: 'facet',
       key: 'status',

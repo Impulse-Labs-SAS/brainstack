@@ -95,7 +95,9 @@ describe('AuthService signup + email verification', () => {
   it('refuses to reuse a verification token', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
     await auth.consumeEmailVerification(verification!.token);
-    await expect(auth.consumeEmailVerification(verification!.token)).rejects.toThrow(/already used/);
+    await expect(auth.consumeEmailVerification(verification!.token)).rejects.toThrow(
+      /already used/,
+    );
   });
 });
 
@@ -195,7 +197,7 @@ describe('AuthService Google OAuth linking', () => {
     const linked = await auth.upsertGoogleUser({
       googleId: 'g-1',
       email: 'user@brain.test',
-    googleEmailVerified: true,
+      googleEmailVerified: true,
     });
     expect(linked.hasGoogle).toBe(true);
     expect(linked.hasPassword).toBe(true);

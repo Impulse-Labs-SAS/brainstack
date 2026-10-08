@@ -116,7 +116,10 @@ export function buildTopics(rows: readonly TopicRow[], totalNotes: number): Topi
  * `perNote`. An edge survives when it is in the top of *either* end — a note
  * whose only strong tie is to a busy hub still gets to show it.
  */
-export function affinityEdges(topics: readonly Topic[], perNote: number = EDGES_PER_NOTE): AffinityEdge[] {
+export function affinityEdges(
+  topics: readonly Topic[],
+  perNote: number = EDGES_PER_NOTE,
+): AffinityEdge[] {
   const pairs = new Map<string, AffinityEdge & { strengths: Map<string, number> }>();
 
   for (const topic of topics) {
@@ -158,7 +161,12 @@ export function affinityEdges(topics: readonly Topic[], perNote: number = EDGES_
   const kept = new Set<AffinityEdge>();
   for (const list of byNote.values()) {
     list
-      .sort((a, b) => b.weight - a.weight || a.source.localeCompare(b.source) || a.target.localeCompare(b.target))
+      .sort(
+        (a, b) =>
+          b.weight - a.weight ||
+          a.source.localeCompare(b.source) ||
+          a.target.localeCompare(b.target),
+      )
       .slice(0, perNote)
       .forEach((edge) => kept.add(edge));
   }

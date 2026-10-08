@@ -116,7 +116,6 @@ describe('the sharing tools exist at all', () => {
       expect.arrayContaining(['share_folder', 'unshare', 'list_shares', 'list_shared_with_me']),
     );
   });
-
 });
 
 describe('share_folder', () => {
@@ -418,7 +417,7 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(value).toMatchObject({ incoming: [{ path: 'otra.md', text: 'Atlas', count: 1 }] });
   });
 
-  it('gather_context resolves a text against the caller’s own vault only', async () => {
+  it('gather_context never reaches into a vault nothing was shared from', async () => {
     const owner = await clientFor(OWNER.id);
     const frodo = await clientFor(FRODO.id);
     await call(owner, 'create_note', { path: 'Erebor.md', content: '# Erebor\n\nnot frodo’s' });
@@ -447,6 +446,45 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(await crawls.list(OWNER.id)).toEqual([]);
   });
 
+  it('gather_context reads the folders shared with the caller, and stops at their edge', async () => {
+    const owner = await clientFor(OWNER.id);
+    const frodo = await clientFor(FRODO.id);
+    await call(owner, 'create_note', {
+      path: 'Gondor/plan.md',
+      content: '# Plan de Gondor\n\nVer [[Gondor/riesgos]] y [[Privado/secreto]].',
+    });
+    await call(owner, 'create_note', { path: 'Gondor/riesgos.md', content: '# Riesgos' });
+    await call(owner, 'create_note', { path: 'Privado/secreto.md', content: '# Secreto' });
+    await call(owner, 'share_folder', { path: 'Gondor', email: FRODO.email });
+    await call(frodo, 'create_note', {
+      path: 'mio.md',
+      content: '# Mío\n\nVer el Plan de Gondor.',
+    });
+
+    const { value, error } = await call(frodo, 'gather_context', { text: 'Plan de Gondor' });
+    expect(error).toBeUndefined();
+    const notes = (value as { notes: Array<{ path: string; ownerId?: string; via: unknown }> })
+      .notes;
+    expect(notes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'Gondor/plan.md', ownerId: OWNER.id }),
+        expect.objectContaining({
+          path: 'Gondor/riesgos.md',
+          ownerId: OWNER.id,
+          via: expect.objectContaining({ from: 'Gondor/plan.md', fromOwnerId: OWNER.id }),
+        }),
+      ]),
+    );
+    // A link out of the share leads nowhere the caller was not given.
+    expect(notes.map((n) => n.path)).not.toContain('Privado/secreto.md');
+    // The caller's own notes keep their plain path.
+    expect(notes.find((n) => n.path === 'mio.md')?.ownerId).toBeUndefined();
+
+    // Path and owner are what get_note takes.
+    const opened = await call(frodo, 'get_note', { path: 'Gondor/plan.md', ownerId: OWNER.id });
+    expect(opened.error).toBeUndefined();
+  });
+
   it('list_facets returns one note’s facets, or browses every value when path is omitted', async () => {
     const frodo = await clientFor(FRODO.id);
     await call(frodo, 'create_note', {
@@ -466,7 +504,10 @@ describe('the listing tools answer with their rows, not with a pending promise',
     const owner = await clientFor(OWNER.id);
     const frodo = await clientFor(FRODO.id);
 
-    await call(owner, 'create_note', { path: 'Proyectos/erebor.md', content: 'destino compartido' });
+    await call(owner, 'create_note', {
+      path: 'Proyectos/erebor.md',
+      content: 'destino compartido',
+    });
     // Privado/ is never shared, but it links into the folder that is.
     await call(owner, 'create_note', {
       path: 'Privado/diario.md',

@@ -113,6 +113,32 @@ describe('planCrawl', () => {
     );
     expect(plan.offGraph).toBe(1);
   });
+
+  it('places a note from a shared folder on its owner’s node, not on mine with the same path', () => {
+    const m = vault();
+    const plan = planCrawl(
+      {
+        notes: [
+          {
+            path: 'a.md',
+            ownerId: 'ana',
+            title: 'a',
+            isDecision: false,
+            via: { kind: 'named', text: 'a', count: 1 },
+          },
+        ],
+        unresolved: [],
+        coverage: { resolved: 1, total: 1 },
+      },
+      m,
+    );
+    const visit = plan.steps[0];
+    expect(visit?.kind).toBe('visit');
+    if (visit?.kind !== 'visit') return;
+    expect(visit.at.foreign).toBe(true);
+    expect(visit.at.ownerId).toBe('ana');
+    expect(plan.offGraph).toBe(0);
+  });
 });
 
 describe('findWalk', () => {

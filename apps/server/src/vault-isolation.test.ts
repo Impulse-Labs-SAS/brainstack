@@ -23,7 +23,6 @@ import { buildServices } from './wiring.js';
 
 const { users } = pgSchema;
 
-
 let database: TestDatabase;
 let notes: NoteService;
 let search: SearchService;
@@ -148,9 +147,9 @@ describe('multi-user with a shared folder', () => {
     const note = await crossOwner.getNote('bob', 'alice', 'Proyectos/erebor.md');
     expect(note.body).toContain('compartido');
 
-    await expect(
-      crossOwner.getNote('bob', 'alice', 'Privado/diario.md'),
-    ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
+    await expect(crossOwner.getNote('bob', 'alice', 'Privado/diario.md')).rejects.toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN' }),
+    );
   });
 
   it('a backlink from an unshared sibling folder does not leak to bob', async () => {
@@ -179,9 +178,9 @@ describe('multi-user with a shared folder', () => {
       folderPath: 'Proyectos',
     });
 
-    await expect(
-      crossOwner.getNote('bob', 'alice', 'Proyectos/erebor.md'),
-    ).rejects.toThrow(expect.objectContaining({ code: 'FORBIDDEN' }));
+    await expect(crossOwner.getNote('bob', 'alice', 'Proyectos/erebor.md')).rejects.toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN' }),
+    );
   });
 });
 
@@ -231,9 +230,9 @@ describe('el id interno no se escapa a las respuestas', () => {
   });
 
   it('el "ya existe" tampoco lo expone', async () => {
-    await expect(
-      notes.create('alice', 'proyectos/uno.md', 'otra cosa'),
-    ).rejects.toThrow('note already exists: proyectos/uno.md');
+    await expect(notes.create('alice', 'proyectos/uno.md', 'otra cosa')).rejects.toThrow(
+      'note already exists: proyectos/uno.md',
+    );
   });
 });
 
@@ -363,7 +362,10 @@ describe('two accounts on a default instance', () => {
     const alice = callerFor(asUser('alice', 'alice@brain.test'));
     const bob = callerFor(asUser('bob', 'bob@brain.test'));
 
-    await alice.notes.create({ path: 'Privado/diario.md', content: '# Diario\n\nsecreto de alice' });
+    await alice.notes.create({
+      path: 'Privado/diario.md',
+      content: '# Diario\n\nsecreto de alice',
+    });
 
     await expect(bob.notes.get({ path: 'Privado/diario.md' })).rejects.toThrow();
     expect(await bob.notes.list()).toEqual([]);
@@ -379,20 +381,28 @@ describe('two accounts on a default instance', () => {
     const alice = callerFor(asUser('alice', 'alice@brain.test'));
     const bob = callerFor(asUser('bob', 'bob@brain.test'));
 
-    await alice.notes.create({ path: 'Privado/diario.md', content: '# Diario\n\nsecreto de alice' });
+    await alice.notes.create({
+      path: 'Privado/diario.md',
+      content: '# Diario\n\nsecreto de alice',
+    });
 
     await expect(bob.notes.get({ path: 'Privado/diario.md', ownerId: 'alice' })).rejects.toThrow();
     await expect(
       bob.notes.update({ path: 'Privado/diario.md', content: '# pwned', ownerId: 'alice' }),
     ).rejects.toThrow();
-    expect((await alice.notes.get({ path: 'Privado/diario.md' })).body).toContain('secreto de alice');
+    expect((await alice.notes.get({ path: 'Privado/diario.md' })).body).toContain(
+      'secreto de alice',
+    );
   });
 
   it('cannot list or replay each other’s crawls', async () => {
     const alice = callerFor(asUser('alice', 'alice@brain.test'));
     const bob = callerFor(asUser('bob', 'bob@brain.test'));
 
-    await alice.notes.create({ path: 'Privado/diario.md', content: '# Diario\n\nsecreto de alice' });
+    await alice.notes.create({
+      path: 'Privado/diario.md',
+      content: '# Diario\n\nsecreto de alice',
+    });
     const { crawlId } = await alice.notes.gatherContext({ text: 'Diario' });
     expect(crawlId).toEqual(expect.any(String));
 

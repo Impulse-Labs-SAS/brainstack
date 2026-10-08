@@ -33,9 +33,7 @@ const Env = z.object({
     .string()
     .default('false')
     .transform((v) => trueish.has(v.toLowerCase())),
-  LOG_LEVEL: z
-    .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
-    .default('info'),
+  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(60),
   // Email. Resend's API or any SMTP server; either needs AUTH_EMAIL_FROM.
   RESEND_API_KEY: z.string().optional(),
@@ -94,7 +92,9 @@ export function loadConfig(): AppConfig {
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
   );
-  const corsOrigins = parsed.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  const corsOrigins = parsed.CORS_ORIGINS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const email: EmailConfig = {
     resendApiKey: parsed.RESEND_API_KEY || undefined,
     smtp: parsed.SMTP_HOST

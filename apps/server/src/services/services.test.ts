@@ -225,8 +225,14 @@ describe('NoteService.affinity', () => {
   });
 
   it('does not treat type or authorship tags as topics', async () => {
-    await notes.create(USER, 'A/_A.md', '# A', { tags: ['tipo/moc', 'persona/frodo'], status: 'idea' });
-    await notes.create(USER, 'B/_B.md', '# B', { tags: ['tipo/moc', 'persona/frodo'], status: 'idea' });
+    await notes.create(USER, 'A/_A.md', '# A', {
+      tags: ['tipo/moc', 'persona/frodo'],
+      status: 'idea',
+    });
+    await notes.create(USER, 'B/_B.md', '# B', {
+      tags: ['tipo/moc', 'persona/frodo'],
+      status: 'idea',
+    });
 
     expect(await notes.affinity(USER)).toEqual({ topics: [], edges: [] });
   });
@@ -235,8 +241,16 @@ describe('NoteService.affinity', () => {
 describe('NoteService unlinked mentions', () => {
   beforeEach(async () => {
     await notes.create(USER, 'Atlas/_Atlas.md', '# Atlas', { aliases: ['App de finanzas'] });
-    await notes.create(USER, 'Nimbus/bot.md', '# Nimbus bot\n\nComparte el lector con atlas y con la app de finanzas.');
-    await notes.create(USER, 'Nimbus/enlazada.md', '# Enlazada\n\nVer [[Atlas/_Atlas]]. Atlas otra vez.');
+    await notes.create(
+      USER,
+      'Nimbus/bot.md',
+      '# Nimbus bot\n\nComparte el lector con atlas y con la app de finanzas.',
+    );
+    await notes.create(
+      USER,
+      'Nimbus/enlazada.md',
+      '# Enlazada\n\nVer [[Atlas/_Atlas]]. Atlas otra vez.',
+    );
   });
 
   it('lists who names a note without linking it, and what a note names', async () => {

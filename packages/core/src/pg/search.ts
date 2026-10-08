@@ -15,6 +15,7 @@
 import { sql } from 'drizzle-orm';
 
 import type { PgDb } from './client.js';
+import { escapeLike } from './notes.js';
 import { PREFIX_CONFIG, STEM_CONFIG } from './schema.js';
 
 export interface SearchHit {
@@ -101,8 +102,16 @@ export class PgSearchService {
    * ranking that weighs a word everywhere less than a word in three notes
    * needs these counts, which `search` — ranked, capped, across every vault —
    * cannot give. A query with nothing to search counts 0.
+   *
+   * Counted over one owner's notes plus any `folders` — stored folder paths,
+   * owner prefix included — such as those shared with the reader. It is a
+   * count, not rows anyone sees; each folder still goes through `escapeLike`,
+   * so a name with `%` or `_` cannot widen it into a neighbour.
    */
-  async counts(queries: readonly string[], ownerId: string): Promise<number[]> {
+  async counts(
+    queries: readonly string[],
+    scope: { ownerId: string; folders?: readonly string[] },
+  ): Promise<number[]> {
     const tokenized = queries.map(tokenize);
     const searchable = tokenized.flatMap((tokens, i) => (tokens.length > 0 ? [{ i, tokens }] : []));
     const out = queries.map(() => 0);
@@ -115,11 +124,18 @@ export class PgSearchService {
       )}]::text[]`;
     const prefix = array(searchable.map(({ tokens }) => tokens.map((t) => `${t}:*`).join(' | ')));
     const stem = array(searchable.map(({ tokens }) => tokens.join(' | ')));
+    const readable = sql.join(
+      [
+        sql`n.owner_id = ${scope.ownerId}`,
+        ...(scope.folders ?? []).map((f) => sql`n.path LIKE ${`${escapeLike(f)}/%`}`),
+      ],
+      sql` OR `,
+    );
     const result = await this.db.execute<{ ord: number | string; n: number | string }>(sql`
       SELECT q.ord, count(n.path) AS n
       FROM unnest(${prefix}, ${stem}) WITH ORDINALITY AS q(p, s, ord)
       LEFT JOIN notes n
-        ON n.owner_id = ${ownerId}
+        ON (${readable})
        AND n.body_tsv @@ (to_tsquery(${PREFIX_CONFIG}::regconfig, q.p)
                           || to_tsquery(${STEM_CONFIG}::regconfig, q.s))
       GROUP BY q.ord

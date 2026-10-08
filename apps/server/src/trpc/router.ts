@@ -179,8 +179,8 @@ export const appRouter = t.router({
     unlinkedMentions: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))
       .query(({ ctx, input }) => wrap(() => ctx.notes.unlinkedMentions(ctx.user.id, input.path))),
-    // Own vault only, like `unlinkedMentions`: a crawl that followed a link
-    // into a share would hand over bodies the grant was never checked against.
+    // The caller's own vault and the folders shared with them: the crawl
+    // re-checks every row against those, so it stops at a share's edge.
     gatherContext: protectedProcedure
       .input(
         z.object({
@@ -195,10 +195,15 @@ export const appRouter = t.router({
       // (414/431) before ever reaching the handler.
       .mutation(({ ctx, input }) =>
         wrap(async () => {
+          const sharedScopes = (await ctx.sharedRoots()).map((r) => ({
+            ownerId: r.ownerId,
+            folderPath: r.folderPath,
+          }));
           const result = await gatherContext(
             { notes: ctx.notes, search: ctx.search },
             ctx.user.id,
             input,
+            sharedScopes,
           );
           const key = ctx.principal?.kind === 'apiKey' ? ctx.principal.apiKey : null;
           const crawlId = await ctx.crawls.record(ctx.user.id, {
@@ -430,9 +435,7 @@ export const appRouter = t.router({
     listSharedWithMe: protectedProcedure.query(({ ctx }) =>
       ctx.sharing.listSharedRoots(ctx.user.id),
     ),
-    listMyShares: protectedProcedure.query(({ ctx }) =>
-      ctx.sharing.listMyShares(ctx.user.id),
-    ),
+    listMyShares: protectedProcedure.query(({ ctx }) => ctx.sharing.listMyShares(ctx.user.id)),
     shareWithUser: protectedProcedure
       .input(
         z.object({
@@ -446,7 +449,11 @@ export const appRouter = t.router({
           const target = await ctx.auth.findUserByEmail(input.email);
           if (!target) {
             // Somebody without an account is reached through an invitation instead.
-            throw new AppError('no user with that email; send an invitation instead', 'NOT_FOUND', 404);
+            throw new AppError(
+              'no user with that email; send an invitation instead',
+              'NOT_FOUND',
+              404,
+            );
           }
           const id = await ctx.sharing.grant({
             ownerId: ctx.user.id,
