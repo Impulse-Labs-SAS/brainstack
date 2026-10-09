@@ -4,12 +4,13 @@
 // only judged right with the walk on top. Then, when asked, the motion's
 // insides: every joint, each tentacle's target and the six grip slots.
 //
-// Over a space of Crawl's own, the space lights its pipes and notes itself,
+// Over a space of Crawl's own, the space lights its threads and notes itself,
 // in 3D. The overlay's lit threads are the brain's gentle curves, bent
-// through each thread's midpoint, and over an L-shaped pipe they would cut
-// the corner — two walks on screen that disagree — so the lab turns them off
-// there, and the found halos with them unless asked. Labels stay: no space
-// draws text yet.
+// through each thread's midpoint, and over a thread the space routes its own
+// way they would cut the corner — two walks on screen that disagree — so the
+// lab turns them off there, and the found halos with them unless asked.
+// Labels stay — no space draws text yet — and only found notes and asks have
+// one.
 
 import type { Projected } from '@/lib/graph-camera';
 

@@ -15,10 +15,19 @@
 // one of the spaces of Crawl's own (lab-spaces.ts). A space lays the
 // notes out itself and hands the replay its own threads, scale and pace; it
 // draws first, clearing and writing depth, and the Sentinel draws into that
-// depth, so a pipe in front hides a tentacle, reflecting the space's light.
+// depth, so a thread in front hides a tentacle, reflecting the space's light.
 // Its cost is measured apart from the Sentinel's, which is all the governor
 // sees, as in Crawl. Either stage walks the 69-note sample vault or a seeded
 // one of 1,600 notes, to judge it at the density a real vault has.
+//
+// The lab opens on the dormant network over the large vault: the space Crawl
+// is meant to walk, at a real vault's size, with the flat follow camera the
+// brain stand-in uses — the whole cluster at first, then easing after the
+// walk, then what it found once done; a drag orbits, shift-drag pans, the
+// wheel zooms, Follow hands the camera back. A space is also told where the
+// Sentinel's eye is each frame (or a stand-in's, with the creature off or not
+// ready), which notes record a decision, and compiles its shaders before it
+// first draws.
 //
 // It owns its canvases. A canvas keeps its WebGL context for life, and one
 // lost on purpose — forceContextLoss, which stops hot reloads from piling
@@ -43,7 +52,6 @@ import { hash01 } from '@/lib/graph-model';
 import { CrawlReplay } from '../../crawl-replay';
 import { sampleVault, type SampleVault } from '../../sample-vault';
 import { largeVault } from '../../space/large-vault';
-import { LAB_SPACES, type LabSpace } from './lab-spaces';
 import type { SpaceBuild } from '../../space/space';
 import { typicalLink } from '../../threads';
 import type { Vec3 } from '../../vec';
@@ -61,6 +69,17 @@ import { SentinelView } from '../view';
 
 import { LabBackdrop } from './backdrop';
 import { drawCrawl, drawDebug, drawNotes, type Project } from './lab-overlay';
+import {
+  DEFAULT_SPACE,
+  LAB_SPACES,
+  blankEye,
+  labDecisions,
+  sentinelEye,
+  standInEye,
+  type LabSpace,
+  type LabSpaceReport,
+  type SpaceEye,
+} from './lab-spaces';
 
 export type Preset = keyof SampleVault['crawls'];
 export const PRESETS: readonly Preset[] = ['walk', 'gap', 'ask', 'tour'];
@@ -89,6 +108,8 @@ export const SPACES: readonly SpaceChoice[] = [BRAIN_STANDIN, ...LAB_SPACES.map(
 
 export type VaultChoice = 'sample' | 'large';
 export const VAULTS: readonly VaultChoice[] = ['sample', 'large'];
+/** The vault the lab opens on: the density a real vault has. */
+const DEFAULT_VAULT: VaultChoice = 'large';
 
 /** What the panel binds to. Plain fields the frame reads; the setters below do the rest. */
 export interface LabControls {
@@ -96,6 +117,11 @@ export interface LabControls {
   space: SpaceChoice;
   /** The 69-note sample vault, or a seeded one of 1,600. */
   vault: VaultChoice;
+  /**
+   * The creature drawn. Off, the space walks alone, as Crawl will show it when
+   * the Sentinel cannot draw: a stand-in eye at the walk still wakes it.
+   */
+  sentinel: boolean;
   playing: boolean;
   /** Playback speed of the replay; the creature itself always lives in real time. */
   speed: number;
@@ -146,8 +172,14 @@ export interface LabStats {
   spaceCost: string;
   /** Its CPU and GPU time, p50, apart from the Sentinel's. */
   spaceTime: string;
+  /** The space's shape, as it reports it. */
+  shape: string;
+  /** State texture uploads a second: 0 once nothing new happens. */
+  uploads: string;
   /** What switching space ten times left behind. */
   cycle: string;
+  /** What switching vault ten times left behind. */
+  vaultCycle: string;
   fps: string;
   dt: string;
   cpu: string;
@@ -174,16 +206,26 @@ type Stage =
       space: LabSpace;
       /** The object its knobs live on, for "export settings". */
       knobs: object;
+      /** Its lines for the Stats folder, when it has any. */
+      report: (() => LabSpaceReport | null) | null;
       build: SpaceBuild;
       /** How long `build` took, ms. */
       buildMs: number;
+      /**
+       * Its shaders compiled for this canvas (warmup settled). Until then it
+       * does not draw, so its first frame does not stall on a compile.
+       */
+      warm: boolean;
     };
 type SpaceStage = Extract<Stage, { kind: 'space' }>;
+type Kept = Pick<SpaceStage, 'space' | 'knobs' | 'report'>;
 
 /** A vault as the lab holds it, with what the brain stand-in and the overlay need of it. */
 interface LabVault extends SampleVault {
   /** Each note's world radius and pulse phase, for the overlay's found halos. */
   notes: ReadonlyMap<string, { radius: number; phase: number }>;
+  /** The notes that record a decision, as the lab stands in for the data (labDecisions). */
+  decisions: ReadonlySet<string>;
   /**
    * Where the vault laid each note out, six numbers a note (x, y, z, ox, oy,
    * oz): the brain stand-in's places, which a space overwrites, put back when
@@ -205,6 +247,7 @@ function openVault(choice: VaultChoice): LabVault {
   return {
     ...vault,
     notes: new Map(nodes.map((n) => [n.id, { radius: n.radius, phase: n.phase }])),
+    decisions: labDecisions(vault),
     home,
     phases,
   };
@@ -390,6 +433,14 @@ export class LabHost {
   private programsAtReady: number | null = null;
   /** Frames left before a new stage's programs count as settled. */
   private settleIn = 0;
+  /** Settles once the stage's shaders are compiled, or failed to: what a cycle waits for. Never rejects. */
+  private stageWarming: Promise<void> = Promise.resolve();
+  /** A space's compile is polling the renderer right now: the renderer must outlive it. */
+  private stageCompiling = false;
+  /** The eye a space is told about, written in place every frame. */
+  private readonly eye: SpaceEye = blankEye();
+  /** The space's upload count at the last stats refresh, and when: the rate is the difference. */
+  private uploadsSeen: { count: number; at: number } | null = null;
 
   constructor(private readonly container: HTMLElement) {
     this.glCanvas = canvas(container);
@@ -410,7 +461,7 @@ export class LabHost {
     // Whatever fails from here on, the context must not outlive it: a page gets
     // only a few, and the next mount needs one.
     let made: SentinelView | null = null;
-    let backdrop: LabBackdrop | null = null;
+    let stage: Stage | null = null;
     try {
       this.renderer.setClearColor(0x0a0a0a, 1);
       this.fit();
@@ -431,10 +482,7 @@ export class LabHost {
       this.timer = gl2 ? GpuTimer.create(gl2) : null;
       this.spaceTimer = gl2 ? GpuTimer.create(gl2) : null;
 
-      this.vault = openVault('sample');
-      backdrop = new LabBackdrop(this.vault.model);
-      this.stage = { kind: 'brain', backdrop };
-      this.unit = typicalLink(this.vault.model);
+      this.vault = openVault(DEFAULT_VAULT);
       this.follows.set(BRAIN_STANDIN, this.motion.params.followDistance);
       this.baseTwist = Float32Array.from(
         { length: TENTACLES },
@@ -446,8 +494,9 @@ export class LabHost {
 
       this.still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       this.controls = {
-        space: BRAIN_STANDIN,
-        vault: 'sample',
+        space: DEFAULT_SPACE,
+        vault: DEFAULT_VAULT,
+        sentinel: true,
         playing: true,
         speed: 1,
         preset: 'walk',
@@ -470,7 +519,10 @@ export class LabHost {
         space: '…',
         spaceCost: '…',
         spaceTime: '…',
+        shape: '—',
+        uploads: '—',
         cycle: '—',
+        vaultCycle: '—',
         fps: '…',
         dt: '…',
         cpu: '…',
@@ -488,13 +540,19 @@ export class LabHost {
         rebuild: '—',
       };
 
-      this.frameStage();
+      // Built before the view: the view lends a space's light as it warms up.
+      stage = this.makeStage(DEFAULT_SPACE, null);
+      this.stage = stage;
+      if (stage.kind === 'space') this.motion.params.followDistance = stage.build.camera.follow;
+      this.unit = stage.kind === 'space' ? stage.build.unit : typicalLink(this.vault.model);
 
       this.replay = new CrawlReplay(() => {});
       if (this.tier !== 'trail') this.motion.setTier(this.tier);
       made = this.createView();
       this.view = made;
       this.load(this.controls.preset);
+      this.frameStage();
+      this.warmStage();
 
       this.overlay.addEventListener('pointerdown', this.onPointerDown);
       this.overlay.addEventListener('pointermove', this.onPointerMove);
@@ -510,7 +568,8 @@ export class LabHost {
       cancelAnimationFrame(this.raf);
       window.removeEventListener('resize', this.onResize);
       made?.dispose();
-      backdrop?.dispose();
+      if (stage?.kind === 'space') stage.space.dispose();
+      else stage?.backdrop.dispose();
       this.freeRenderer();
       throw error;
     }
@@ -550,16 +609,7 @@ export class LabHost {
   setVault(choice: VaultChoice): void {
     if (this.disposed) return;
     this.controls.vault = choice;
-    const was = this.stage;
-    if (was.kind === 'brain') was.backdrop.dispose();
-    this.vault = openVault(choice);
-    this.stage = this.makeStage(
-      this.stageChoice(),
-      was.kind === 'space' ? { space: was.space, knobs: was.knobs } : null,
-    );
-    this.enter();
-    // A space that failed to build on these notes left the brain stand-in in its place.
-    if (this.stage.kind !== was.kind) this.onStageChange?.();
+    this.restage(openVault(choice));
   }
 
   setPreset(preset: Preset): void {
@@ -665,31 +715,67 @@ export class LabHost {
    * something a space, or the light the Sentinel borrowed from it, does not free.
    */
   async cycleSpaces(times = 10): Promise<void> {
+    const start = this.stageChoice();
+    const first = SPACES.indexOf(start);
+    await this.cycle(
+      'cycle',
+      times,
+      (i) => this.setSpace(SPACES[(first + i) % SPACES.length]!),
+      () => this.setSpace(start),
+    );
+  }
+
+  /**
+   * Switches vault `times` over, the same stage laid out again over each, then
+   * back, and compares memory and programs as `cycleSpaces` does: anything that
+   * grew is something a rebuild of the stage does not free.
+   */
+  async cycleVaults(times = 10): Promise<void> {
+    const start = this.controls.vault;
+    const first = VAULTS.indexOf(start);
+    await this.cycle(
+      'vaultCycle',
+      times,
+      (i) => this.setVault(VAULTS[(first + i) % VAULTS.length]!),
+      () => this.setVault(start),
+    );
+  }
+
+  private async cycle(
+    stat: 'cycle' | 'vaultCycle',
+    times: number,
+    step: (i: number) => void,
+    back: () => void,
+  ): Promise<void> {
     if (this.rebuilding || this.disposed) return;
     this.rebuilding = true;
-    const start = this.stageChoice();
     const before = this.memory();
     try {
-      const first = SPACES.indexOf(start);
       for (let i = 1; i <= times; i++) {
-        this.stats.cycle = `${i}/${times}…`;
-        this.setSpace(SPACES[(first + i) % SPACES.length]!);
-        await frames(SETTLE_FRAMES);
+        this.stats[stat] = `${i}/${times}…`;
+        step(i);
+        await this.settled();
         if (this.disposed) return;
       }
-      // Measured as before: back on the same stage, drawn.
-      this.setSpace(start);
-      await frames(SETTLE_FRAMES);
+      // Measured as before: back where it started, drawn.
+      back();
+      await this.settled();
       if (this.disposed) return;
       const after = this.memory();
-      this.stats.cycle = (['geometries', 'textures', 'programs'] as const)
+      this.stats[stat] = (['geometries', 'textures', 'programs'] as const)
         .map((k) => `${k} ${before[k]}→${after[k]}`)
         .join(' · ');
     } catch (error) {
-      this.stats.cycle = `stopped: ${message(error)}`;
+      this.stats[stat] = `stopped: ${message(error)}`;
     } finally {
       this.rebuilding = false;
     }
+  }
+
+  /** Until the stage has compiled its shaders and drawn its first few frames. */
+  private async settled(): Promise<void> {
+    await this.stageWarming;
+    await frames(SETTLE_FRAMES);
   }
 
   dispose(): void {
@@ -721,9 +807,10 @@ export class LabHost {
   }
 
   /**
-   * Frees the renderer and its context. A shader compile still polling reads
-   * the renderer's state until it settles; the renderer goes after it, or
-   * after a while if it never does.
+   * Frees the renderer and its context. A shader compile still polling — the
+   * view's, or the space's — reads the renderer's state until it settles, and
+   * throws once that state is gone; the renderer goes after both, or after a
+   * while if one never settles.
    */
   private freeRenderer(): void {
     const renderer = this.renderer;
@@ -731,10 +818,14 @@ export class LabHost {
       renderer.dispose();
       renderer.forceContextLoss();
     };
-    if (this.ready) free();
+    const compiling: Promise<unknown>[] = [];
+    if (!this.ready) compiling.push(this.warming.catch(() => {}));
+    // Never rejects; disposed, the space's compile ends as soon as it settles.
+    if (this.stageCompiling) compiling.push(this.stageWarming);
+    if (compiling.length === 0) free();
     else {
       const wait = new Promise<void>((resolve) => setTimeout(resolve, COMPILE_WAIT_MS));
-      void Promise.race([this.warming.catch(() => {}), wait]).then(free);
+      void Promise.race([Promise.all(compiling), wait]).then(free);
     }
   }
 
@@ -812,25 +903,34 @@ export class LabHost {
   /**
    * The stage for `choice` over the current vault: the brain stand-in on the
    * vault's own positions, or one of the lab's spaces, built, with its
-   * positions written into the notes. `keep` is a space to build again rather
-   * than make anew: the vault changed, its knobs stay. A space that fails to
-   * build is let go and the brain stand-in takes its place, the failure on
-   * screen.
+   * positions written into the notes and told the vault's decisions. `keep` is
+   * a space to build again rather than make anew: the vault or a layout knob
+   * changed, its knobs stay. A space that fails to build is let go and the
+   * brain stand-in takes its place, the failure on screen.
    */
-  private makeStage(choice: SpaceChoice, keep: { space: LabSpace; knobs: object } | null): Stage {
+  private makeStage(choice: SpaceChoice, keep: Kept | null): Stage {
     this.spaceFailure = null;
     const entry = LAB_SPACES.find((s) => s.name === choice);
     if (entry) {
-      const { space, knobs } = keep ?? entry.create();
+      const { space, knobs, report = null } = keep ?? entry.create();
       try {
         const t0 = performance.now();
         const build = space.build(this.vault.model);
         const buildMs = performance.now() - t0;
         this.place(build.positions);
+        space.setDecisions?.(this.vault.decisions);
+        // A knob that moves the notes lays the same vault out again, the crawl over.
+        space.onRebuild = () => {
+          if (!this.disposed && this.stage.kind === 'space' && this.stage.space === space) {
+            this.restage(this.vault);
+          }
+        };
         this.controls.space = entry.name;
-        return { kind: 'space', name: entry.name, space, knobs, build, buildMs };
+        const warm = !space.warmup;
+        return { kind: 'space', name: entry.name, space, knobs, report, build, buildMs, warm };
       } catch (error) {
-        this.view.setEnvironment(null);
+        // Only a space kept from the last stage can have lent the Sentinel its light.
+        if (keep) this.view.setEnvironment(null);
         space.dispose();
         this.spaceFailure = `${entry.name} failed to build: ${message(error)}`;
         console.error(`Sentinel lab: ${entry.name} failed to build.`, error);
@@ -850,6 +950,73 @@ export class LabHost {
     } else s.backdrop.dispose();
   }
 
+  /**
+   * The same stage laid out again over `vault` — another one, or the same
+   * after a knob that changes the layout — a space's knobs kept, and the
+   * crawl started over.
+   */
+  private restage(vault: LabVault): void {
+    const was = this.stage;
+    const choice = this.stageChoice();
+    if (was.kind === 'brain') was.backdrop.dispose();
+    this.vault = vault;
+    this.stage = this.makeStage(
+      choice,
+      was.kind === 'space' ? { space: was.space, knobs: was.knobs, report: was.report } : null,
+    );
+    this.enter();
+    // A space that failed to build on these notes left the brain stand-in in its place.
+    if (this.stage.kind !== was.kind) this.onStageChange?.();
+  }
+
+  /**
+   * Compiles the space's shaders for this canvas before it first draws.
+   * Until they are, the stage only clears, rather than stalling its first
+   * frame. One compile at a time: a space built again while its last compile
+   * still polls waits for it. A shader that fails leaves the brain stand-in in
+   * its place, the failure on screen, as a build that fails does.
+   */
+  private warmStage(): void {
+    const s = this.stage;
+    if (s.kind !== 'space' || s.warm || !s.space.warmup) return;
+    const space = s.space;
+    this.stageWarming = this.stageWarming.then(async () => {
+      // Left, or built again, while the last compile ran: that stage warms its own.
+      if (this.disposed || this.stage !== s) return;
+      this.stageCompiling = true;
+      try {
+        await space.warmup?.(this.renderer);
+        if (this.stage === s) s.warm = true;
+      } catch (error) {
+        // A space let go while compiling rejects on purpose; only the current one's failure counts.
+        if (this.disposed || this.stage !== s) return;
+        console.error(`Sentinel lab: ${s.name} failed to warm up.`, error);
+        this.fallBack(`${s.name} failed to warm up: ${message(error)}`);
+      } finally {
+        this.stageCompiling = false;
+      }
+    });
+  }
+
+  /** The brain stand-in in place of a space that cannot draw, and why on screen. */
+  private fallBack(why: string): void {
+    this.follows.set(this.stageChoice(), this.motion.params.followDistance);
+    this.leave();
+    this.controls.space = BRAIN_STANDIN;
+    this.placeBrain();
+    this.stage = { kind: 'brain', backdrop: new LabBackdrop(this.vault.model) };
+    this.spaceFailure = why;
+    this.motion.params.followDistance =
+      this.follows.get(BRAIN_STANDIN) ?? this.motion.params.followDistance;
+    this.enter();
+    this.onStageChange?.();
+  }
+
+  /** Whether the stage draws: the brain always, a space once its shaders are compiled. */
+  private stageWarm(): boolean {
+    return this.stage.kind === 'brain' || this.stage.warm;
+  }
+
   /** The crawl, the camera and the governor, once the stage changed. */
   private enter(): void {
     const s = this.stage;
@@ -860,8 +1027,10 @@ export class LabHost {
     this.governor.hold(performance.now());
     this.spaceCpus.clear();
     this.spaceGpus.clear();
+    this.uploadsSeen = null;
     this.programsAtReady = null;
     this.settleIn = SETTLE_FRAMES;
+    this.warmStage();
   }
 
   /**
@@ -1085,15 +1254,18 @@ export class LabHost {
     const t2 = performance.now();
 
     const r = this.renderer;
-    const draw = this.ready && this.tier !== 'trail';
+    const draw = this.ready && this.tier !== 'trail' && this.controls.sentinel;
+    const warm = this.stageWarm();
     const backdrop = stage.kind === 'brain' && this.controls.backdrop ? stage.backdrop : null;
     const under = this.controls.backdropOrder === 'under';
     // The stage's pass, as GraphScene's is in Crawl: it clears and draws. A
-    // space also writes depth, and the Sentinel draws into it.
+    // space also writes depth, and the Sentinel draws into it. A space still
+    // compiling its shaders only clears.
     let stageCpu: number | null = null;
     this.spaceDrawn = { calls: 0, triangles: 0 };
     if (stage.kind === 'space') {
-      stageCpu = this.timeStage(() => this.drawSpace(stage, now));
+      if (warm) stageCpu = this.timeStage(() => this.drawSpace(stage, now, draw));
+      else r.clear();
       // Its light is baked on its first frame, and lent from then on: the metal reflects the space.
       this.view.setEnvironment(this.controls.lendEnvironment ? stage.space.environment : null);
     } else if (backdrop && under) {
@@ -1103,8 +1275,9 @@ export class LabHost {
     if (draw) {
       const t3 = performance.now();
       this.timer?.begin();
+      const shared = stage.kind === 'space' && warm;
       this.view.render(this.motion.pose, this.cam, this.vp, this.dpr, {
-        depth: stage.kind === 'space' ? stage.space.depth : null,
+        depth: shared ? stage.space.depth : null,
       });
       this.timer?.end();
       submit = performance.now() - t3;
@@ -1121,7 +1294,7 @@ export class LabHost {
     const gpu = this.timer?.poll() ?? null;
     const spaceGpu = this.spaceTimer?.poll() ?? null;
     const cpu = t2 - t0 + submit;
-    if (this.settleIn > 0 && this.ready && --this.settleIn === 0) {
+    if (this.settleIn > 0 && this.ready && warm && --this.settleIn === 0) {
       this.programsAtReady = this.memory().programs;
     }
 
@@ -1148,7 +1321,7 @@ export class LabHost {
     if (spaceGpu !== null) this.spaceGpus.push(spaceGpu);
     if (now - this.statsAt >= STATS_EVERY_MS) {
       this.statsAt = now;
-      this.refreshStats();
+      this.refreshStats(now);
     }
   };
 
@@ -1173,14 +1346,28 @@ export class LabHost {
     return cpu;
   }
 
-  private drawSpace(stage: SpaceStage, now: number): { calls: number; triangles: number } {
+  /**
+   * The space's pass. `sentinel`: the creature draws this frame, so the space
+   * is told where its eye is; otherwise a stand-in eye at the walk wakes it,
+   * as Crawl would show it without the creature.
+   */
+  private drawSpace(
+    stage: SpaceStage,
+    now: number,
+    sentinel: boolean,
+  ): { calls: number; triangles: number } {
+    const view = this.replay.view;
+    // The stand-in burns as the creature's eye does when nothing flares: resting, or still.
+    const p = this.motion.params;
+    const resting = this.still ? p.eyeStill : p.eyeBase;
     stage.space.render(this.renderer, {
       cam: this.cam,
       vp: this.vp,
       dpr: this.dpr,
-      view: this.replay.view,
+      view,
       time: now / 1000,
       still: this.still,
+      eye: sentinel ? sentinelEye(this.motion.pose, this.eye) : standInEye(view, resting, this.eye),
     });
     assertRendererState(this.renderer, `the ${stage.name} space drew in the lab`);
     return stage.space.info;
@@ -1200,7 +1387,7 @@ export class LabHost {
     const project = projector(this.cam, this.vp);
     const P: Project = (p: Vec3) => project(p[0], p[1], p[2]);
     const view = this.replay.view;
-    // A space lights its own threads along its pipes; the overlay's brain curves would cut corners.
+    // A space lights its own threads along its routes; the overlay's brain curves would cut corners.
     const space = this.stage.kind === 'space';
     if (this.controls.overlay) {
       drawCrawl(ctx, P, {
@@ -1248,7 +1435,8 @@ export class LabHost {
     const notes = `${this.vault.model.nodes.length.toLocaleString('en-US')} notes`;
     if (s.kind === 'space') {
       const lent = this.controls.lendEnvironment && s.space.environment ? ' · reflected' : '';
-      return `${s.name} · ${notes}${lent}`;
+      const warming = s.warm ? '' : ' · compiling its shaders';
+      return `${s.name} · ${notes}${lent}${warming}`;
     }
     const backdrop = this.controls.backdrop
       ? `backdrop ${this.controls.backdropOrder}`
@@ -1259,6 +1447,11 @@ export class LabHost {
 
   private sentinelNote(): string {
     if (this.failure) return `Sentinel failed: ${this.failure}`;
+    if (!this.controls.sentinel) {
+      return this.stage.kind === 'space'
+        ? 'Sentinel: off · a stand-in eye rides the walk'
+        : 'Sentinel: off';
+    }
     if (this.tier === 'trail') {
       return this.startTrail && this.controls.tier === 'auto'
         ? 'Sentinel: software renderer, Crawl would show the trail (force a tier to see it)'
@@ -1268,7 +1461,7 @@ export class LabHost {
     return `Sentinel T${this.tier}`;
   }
 
-  private refreshStats(): void {
+  private refreshStats(now: number): void {
     const s = this.stats;
     const stage = this.stage;
     s.space =
@@ -1279,6 +1472,9 @@ export class LabHost {
     s.spaceCost = `${drawn.calls} draws · ${drawn.triangles.toLocaleString('en-US')} triangles`;
     const spaceGpu = this.spaceTimer ? ms(this.spaceGpus.percentile(0.5)) : 'n/a';
     s.spaceTime = `CPU ${ms(this.spaceCpus.percentile(0.5))} · GPU ${spaceGpu}`;
+    const report = stage.kind === 'space' ? (stage.report?.() ?? null) : null;
+    s.shape = report?.shape ?? '—';
+    s.uploads = this.uploadRate(report?.uploads ?? null, now);
     const mean = this.dts.mean();
     s.fps = Number.isFinite(mean) && mean > 0 ? (1000 / mean).toFixed(1) : '…';
     s.dt = `${ms(this.dts.percentile(0.5))} / ${ms(this.dts.percentile(0.95))}`;
@@ -1302,5 +1498,18 @@ export class LabHost {
     s.segments = `${t.crownSegments} crown / ${t.explorerSegments} explorer`;
     s.governor = this.governor.log[this.governor.log.length - 1] ?? '—';
     s.status = this.failure ? `failed: ${this.failure}` : this.ready ? 'ready' : 'warming up';
+  }
+
+  /**
+   * State uploads a second since the last refresh, from the space's running
+   * count: 0 is the promise at rest. A count that went down belongs to a new
+   * build, so that interval says nothing.
+   */
+  private uploadRate(count: number | null, now: number): string {
+    const seen = this.uploadsSeen;
+    this.uploadsSeen = count === null ? null : { count, at: now };
+    if (count === null) return 'n/a';
+    if (!seen || count < seen.count || now <= seen.at) return '…';
+    return `${(((count - seen.count) * 1000) / (now - seen.at)).toFixed(1)} a second`;
   }
 }

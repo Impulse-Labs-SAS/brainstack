@@ -1,11 +1,12 @@
 'use client';
 
-// The Sentinel lab: the creature over a stand-in for the graph, alone on
-// black, or walking one of the spaces of Crawl's own, with every knob
-// that shapes its look, motion and cost on a panel. It is where the look is
-// approved before the Sentinel goes into Crawl, where the space it will walk
-// is chosen, and where the values that ship are chosen ("export settings"
-// copies them).
+// The Sentinel lab: the creature walking the dormant network — the cluster of
+// notes Crawl is meant to show, dark until the walk wakes it — or over a
+// stand-in for the graph, or alone on black, with every knob that shapes its
+// look, motion and cost on a panel, the space's own among them. It is where
+// the look is approved before the Sentinel goes into Crawl, where the space
+// it will walk is judged, and where the values that ship are chosen ("export
+// settings" copies them).
 //
 // Only the dev route /dev/sentinel renders it (a page.dev.tsx, which exists
 // under `next dev` alone), so nothing here reaches a build. The work is in
@@ -84,12 +85,15 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
   const { controls: c, stats, look, grip } = host;
   const p = host.motion.params;
 
-  // Listened to: a switch ×10, or a space that fails to build, changes it from inside.
+  // Listened to: a switch ×10, or a space that fails to build, changes them from inside.
   gui
     .add(c, 'space', SPACES)
     .listen()
     .onChange((v: SpaceChoice) => host.setSpace(v));
-  gui.add(c, 'vault', VAULTS).onChange((v: VaultChoice) => host.setVault(v));
+  gui
+    .add(c, 'vault', VAULTS)
+    .listen()
+    .onChange((v: VaultChoice) => host.setVault(v));
 
   // The stage's own knobs, refilled whenever it changes; the folder keeps its place.
   const space = gui.addFolder('Space');
@@ -111,6 +115,8 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
   host.onStageChange = fillSpace;
 
   const walk = gui.addFolder('Walk');
+  // Off, a space walks alone, woken by a stand-in eye: Crawl without the creature.
+  walk.add(c, 'sentinel').name('Sentinel');
   walk.add(c, 'playing').name('play');
   walk.add(c, 'speed', 0.25, 3, 0.05);
   walk.add({ replay: () => host.replayAgain() }, 'replay');
@@ -210,6 +216,9 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
   show('space', 'space');
   show('spaceCost', 'space draws');
   show('spaceTime', 'space CPU · GPU p50');
+  show('shape', 'space shape');
+  // 0 at rest is the promise: nothing new happened, nothing goes up.
+  show('uploads', 'state uploads');
   s.add(c, 'splitGpu').name('split GPU time (sync)');
   show('programs', 'programs');
   show('memory', 'memory');
@@ -219,6 +228,8 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
   s.add({ 'rebuild ×20': () => void host.rebuild(20) }, 'rebuild ×20');
   show('cycle', 'switch space');
   s.add({ 'switch space ×10': () => void host.cycleSpaces(10) }, 'switch space ×10');
+  show('vaultCycle', 'switch vault');
+  s.add({ 'switch vault ×10': () => void host.cycleVaults(10) }, 'switch vault ×10');
   const exported = { exported: '—' };
   s.add(
     {

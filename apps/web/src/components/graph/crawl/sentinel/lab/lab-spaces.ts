@@ -1,16 +1,41 @@
 // The spaces the Sentinel lab offers beside the brain stand-in, in the order
-// its picker lists them: spaces of Crawl's own, built far enough to judge with
-// the creature walking inside before the Crawl view shows one.
+// its picker lists them — spaces of Crawl's own, built far enough to judge with
+// the creature walking inside before the Crawl view shows one — and the few
+// pure pieces the lab needs to drive them.
 //
-// The lab drives a space through the CrawlSpace contract and two things more
+// The lab drives a space through the CrawlSpace contract and a few things more
 // the contract leaves out: the environment map it lends the Sentinel, so the
-// metal reflects the space it walks in, and the plain object its knobs live
-// on, which the lab's "export settings" copies. Neither belongs in the
-// contract yet: the Crawl view takes whatever the chosen space settles on.
+// metal reflects the space it walks in; the plain object its knobs live on,
+// which the lab's "export settings" copies; a way to ask the lab to build it
+// again when a knob changes the layout; and a line or two for the Stats
+// folder. None of them belongs in the contract yet: the Crawl view takes
+// whatever the chosen space settles on.
+//
+// The rest is what the lab hands a space each frame, kept here and pure so
+// the host stays about wiring:
+//  - which notes record a decision. Crawl will take them from the data (a
+//    decision tag, the crawl's own flag), never from a title; the lab's
+//    vaults have no tags, so it stands in with what they do have — the large
+//    vault's Decisions folders, and every note a crawl flags;
+//  - the Sentinel's eye in world space, from its pose — or, with the creature
+//    off or not ready, a stand-in eye riding just above the walk, so a
+//    dormant space is still revealed where the crawl goes.
 
 import type * as THREE from 'three';
 
-import type { CrawlSpace } from '../../space/space';
+import { planCrawl } from '../../crawl-plan';
+import type { ReplayView } from '../../replay-view';
+import type { SampleVault } from '../../sample-vault';
+import {
+  DORMANT_NETWORK,
+  DormantNetwork,
+  type DormantStats,
+} from '../../space/dormant/dormant-network';
+import type { CrawlSpace, SpaceFrame } from '../../space/space';
+import { legPoint } from '../../threads';
+import { cross, dot, finite, len, mul, sub, type Vec3 } from '../../vec';
+import { LENS_POINT } from '../geometry';
+import type { SentinelPose } from '../pose';
 
 /** A space as the lab drives it: the contract, and the light it lends the Sentinel. */
 export interface LabSpace extends CrawlSpace {
@@ -20,12 +45,169 @@ export interface LabSpace extends CrawlSpace {
    * disposed.
    */
   readonly environment: THREE.Texture | null;
+  /**
+   * Set by the lab: called when a knob that changes the layout settles, so
+   * the lab builds the space again over the same notes and starts the crawl
+   * over on it. A space whose knobs are all live never calls it.
+   */
+  onRebuild?: (() => void) | null;
+}
+
+/** What the Stats folder shows of a space, beyond the draws and times every space reports. */
+export interface LabSpaceReport {
+  /** Its shape in a line: for the dormant network, its form, sites, radius, regions and cost. */
+  shape: string;
+  /**
+   * State uploads so far, which the lab turns into a rate: it must fall to 0
+   * once nothing new happens. Null for a space that uploads nothing per frame.
+   */
+  uploads: number | null;
+}
+
+/** A space just made, not built yet. */
+export interface LabSpaceMade {
+  space: LabSpace;
+  /** The object its knobs live on (plain values, read every frame). */
+  knobs: object;
+  /** Its report for the Stats folder; null before a build. */
+  report?: () => LabSpaceReport | null;
 }
 
 export interface LabSpaceEntry {
   readonly name: string;
-  /** A new space, not built yet, and the object its knobs live on (plain values, read every frame). */
-  create(): { space: LabSpace; knobs: object };
+  create(): LabSpaceMade;
 }
 
-export const LAB_SPACES: readonly LabSpaceEntry[] = [];
+export const LAB_SPACES: readonly LabSpaceEntry[] = [
+  {
+    name: DORMANT_NETWORK,
+    create: () => {
+      const space = new DormantNetwork();
+      return { space, knobs: space.knobs, report: () => dormantReport(space.stats) };
+    },
+  },
+];
+
+/** The space the lab opens on: the one Crawl is meant to walk. */
+export const DEFAULT_SPACE: string = DORMANT_NETWORK;
+
+function dormantReport(s: DormantStats | null): LabSpaceReport | null {
+  if (!s) return null;
+  const form = `${s.lobes} ${s.lobes === 1 ? 'lobe' : 'lobes'}${s.satellite ? ' + satellite' : ''}`;
+  const notes = `${s.notes.toLocaleString('en-US')} notes on ${s.sites.toLocaleString('en-US')} sites`;
+  const radius = `R ${s.radius.toFixed(0)} (${(s.radius / s.unit).toFixed(1)}u)`;
+  const split = s.pieces === 0 ? 'no region split' : `${s.pieces} region pieces apart`;
+  const lost = s.unplaced === 0 ? '' : ` · ${s.unplaced.toLocaleString('en-US')} notes unplaced`;
+  const cost = `layout ${s.layoutMs.toFixed(0)} / build ${s.buildMs.toFixed(0)} ms`;
+  return {
+    shape: `${form} · ${notes} · ${radius} · ${split}${lost} · ${cost}`,
+    uploads: s.uploads,
+  };
+}
+
+// -- Decisions -------------------------------------------------------------------
+
+/** The folder the large vault files decisions in: the lab's stand-in for a decision tag. */
+const DECISIONS_FOLDER = 'Decisions';
+
+/**
+ * The notes of a lab vault that record a decision, by id: every note filed
+ * under a Decisions folder, and every note any of its crawls hands over as a
+ * decision — resolved exactly as the replay resolves it (planCrawl), so a note
+ * found as a decision always stands as one. Deterministic, as the vaults are.
+ */
+export function labDecisions(vault: SampleVault): Set<string> {
+  const ids = new Set<string>();
+  for (const n of vault.model.nodes) {
+    if (n.kind === 'note' && n.path.split('/').slice(0, -1).includes(DECISIONS_FOLDER)) {
+      ids.add(n.id);
+    }
+  }
+  for (const crawl of Object.values(vault.crawls)) {
+    for (const step of planCrawl(crawl, vault.model).steps) {
+      if (step.kind !== 'visit') continue;
+      for (const r of step.reach) if (r.kind === 'decision') ids.add(r.node.id);
+    }
+  }
+  return ids;
+}
+
+// -- The eye ---------------------------------------------------------------------
+
+/** The eye a space is told about each frame (SpaceFrame.eye), world space. */
+export type SpaceEye = NonNullable<SpaceFrame['eye']>;
+
+/** An eye to write into every frame, so drawing one allocates nothing. */
+export function blankEye(): SpaceEye {
+  return { position: [0, 0, 0], dir: [0, 0, 1], intensity: 0 };
+}
+
+/**
+ * The Sentinel's eye in world space, written into `out`: the lens — where its
+ * spotlight sits, `anchor + unit · (hull · LENS_POINT)`, exactly as the view
+ * places it — the way it looks, and how bright it burns. Creature space is the
+ * world moved and scaled, never turned, so the direction carries over as is.
+ */
+export function sentinelEye(pose: SentinelPose, out: SpaceEye): SpaceEye {
+  const h = pose.hull;
+  const { anchor, unit } = pose;
+  const [lx, ly, lz] = LENS_POINT;
+  for (let i = 0; i < 3; i++) {
+    const lens = h[i]! * lx + h[4 + i]! * ly + h[8 + i]! * lz + h[12 + i]!;
+    out.position[i] = anchor[i]! + unit * lens;
+    out.dir[i] = pose.eye.dir[i]!;
+  }
+  out.intensity = pose.eye.intensity;
+  return out;
+}
+
+/** How high over the walk the stand-in eye rides, creature units: about where the lens is. */
+const STAND_IN_HEIGHT = 0.6;
+/**
+ * How far below the walk's horizon it looks, radians: its cone (0.55 either
+ * side) then spans from level to a steep look down, and lights the stretch
+ * just ahead, where the creature's own eye mostly rests.
+ */
+const STAND_IN_DIP = 0.45;
+const upAt: Vec3 = [0, 1, 0];
+
+/**
+ * An eye for when the Sentinel is off or not ready: at the walk's cursor —
+ * the point the replay has reached along the leg, or the note it stands on —
+ * raised along the local up, looking ahead and down, at `intensity` (the
+ * eye's resting one). Written into `out`; null when the walk has no place.
+ *
+ * A crossing of the void is walked as the replay walks it over a space of
+ * its own: straight, with no sag.
+ */
+export function standInEye(view: ReplayView, intensity: number, out: SpaceEye): SpaceEye | null {
+  const { field, walk } = view;
+  const at = out.position;
+  const placed =
+    walk && walk.segments.length > 0
+      ? legPoint(walk.segments, walk.travelled, field, 0, at)
+      : !!view.hereId && field.node(view.hereId, at);
+  if (!placed || !finite(at)) return null;
+  field.up(at, upAt);
+  const up = unitOr(upAt, [0, 1, 0]);
+  const ahead = unitOr(sub(view.dir, mul(up, dot(view.dir, up))), anyPerpendicular(up));
+  const c = Math.cos(STAND_IN_DIP);
+  const s = Math.sin(STAND_IN_DIP);
+  const lift = view.unit * STAND_IN_HEIGHT;
+  for (let i = 0; i < 3; i++) {
+    at[i] = at[i]! + up[i]! * lift;
+    out.dir[i] = ahead[i]! * c - up[i]! * s;
+  }
+  out.intensity = intensity;
+  return out;
+}
+
+function unitOr(v: Vec3, fallback: Vec3): Vec3 {
+  const l = len(v);
+  return l > 1e-9 && Number.isFinite(l) ? mul(v, 1 / l) : fallback;
+}
+
+function anyPerpendicular(v: Vec3): Vec3 {
+  const other: Vec3 = Math.abs(v[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  return unitOr(cross(other, v), [0, 0, 1]);
+}
