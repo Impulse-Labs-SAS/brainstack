@@ -8,6 +8,19 @@
 // transformed or scaled, and why it fades through a CSS variable the stage
 // sets (`--crawl-prompt`), in step with the frame it draws.
 //
+// The frame is wider than the box — its margin and its bar — so the stage also
+// writes how far it reaches below the box (`--crawl-frame-below`, CSS pixels),
+// and the recents start that far down, under the bar. That cannot feed back
+// into the frame: the recents are out of the form's flow (absolute, below
+// it), the form is exactly the box's height and centred by the grid, and only
+// the box is measured — moving the recents never moves what the frame is
+// fitted to. Nor can they run off the bottom: on a short screen — a phone
+// held sideways — what is left under the frame may hold fewer rows than
+// there are, and a row past the edge of the stage, which clips, can neither
+// be seen nor clicked, and focused from the keyboard it scrolls the whole
+// stage up for good. So the recents are held to the room left — the overlay
+// is a size container, and they measure it in `cqh` — and scroll within it.
+//
 // The glass is dark and translucent, with a backdrop blur, so the creature's
 // body behind it reads as a shape behind glass while the text stays crisp; its
 // alpha and blur are CSS variables too (`--crawl-glass-alpha`,
@@ -66,6 +79,16 @@ const GLASS_STYLE: CSSProperties = {
   WebkitBackdropFilter: 'blur(var(--crawl-glass-blur, 12px))',
 };
 
+/** Under the frame the stage draws round the box, a gap below it; without a stage writing it, 1rem under the box as before. */
+const RECENTS_GAP = 'calc(var(--crawl-frame-below, 0px) + 1rem)';
+
+/**
+ * The room left for the recents: from below that gap to a gap above the
+ * overlay's bottom. The box is centred in the overlay, so its bottom edge is
+ * half the overlay's height and half its own (`h-14`, 3.5rem) down.
+ */
+const RECENTS_ROOM = `max(0px, calc(50cqh - 1.75rem - ${RECENTS_GAP} - 1rem))`;
+
 const FOCUS_RING = 'outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
 export function CrawlPrompt({
@@ -108,6 +131,8 @@ export function CrawlPrompt({
     <div
       className="pointer-events-none absolute inset-0 z-10 grid place-items-center"
       style={{
+        // Its size is the stage's, never its content's: the recents can measure it.
+        containerType: 'size',
         visibility: (shown
           ? 'var(--crawl-prompt-visibility, visible)'
           : 'hidden') as CSSProperties['visibility'],
@@ -153,11 +178,15 @@ export function CrawlPrompt({
           </Button>
         </div>
 
-        {/* Below the box, out of its flow, so the box itself stays centred. */}
+        {/* Below the box and its frame, out of its flow, so the box itself stays centred; no taller than the room left under it. */}
         {recents.length > 0 && (
           <div
-            className="absolute inset-x-0 top-full mt-4 grid gap-1 px-1"
-            style={{ opacity: 'var(--crawl-prompt, 1)' }}
+            className="absolute inset-x-0 top-full grid content-start gap-1 overflow-y-auto px-1 pb-1"
+            style={{
+              opacity: 'var(--crawl-prompt, 1)',
+              marginTop: RECENTS_GAP,
+              maxHeight: RECENTS_ROOM,
+            }}
           >
             <span
               id={recentLabel}

@@ -70,6 +70,7 @@ import { hash01 } from '@/lib/graph-model';
 import type { CrawlSnapshot } from '../../crawl-layer';
 import { CrawlReplay } from '../../crawl-replay';
 import { PERCH_RAIL_SET } from '../../prompt/perch-field';
+import type { PerchShot } from '../../prompt/perch-geometry';
 import { PromptScene, type IdleLife, type PromptFrame } from '../../prompt/prompt-scene';
 import { promptRecents, type PromptRecent } from '../../prompt/recents';
 import { cameraBetween, type Levels, type SceneName } from '../../prompt/transition';
@@ -250,13 +251,19 @@ const IDLE_KEYS = [
   'bob',
 ] as const satisfies readonly (keyof IdleLife)[];
 
-/** The CSS variables the lab writes on the page for the prompt and the panel. */
+/**
+ * The CSS variables the lab writes on the page for the prompt and the panel.
+ * `--crawl-frame-below` is how far the frame reaches below the box, in CSS
+ * pixels, from the same shot the bar is drawn from: the prompt starts its
+ * recents that far down. Crawl writes the same when it hosts the prompt.
+ */
 const PROMPT_CSS = [
   '--crawl-prompt',
   '--crawl-panel',
   '--crawl-prompt-visibility',
   '--crawl-glass-alpha',
   '--crawl-glass-blur',
+  '--crawl-frame-below',
 ] as const;
 
 /**
@@ -555,7 +562,7 @@ export class LabHost {
   /** The follow camera while the timeline hands over to it: eased on its own, shown blended in. */
   private chase: Camera | null = null;
   /** What the page was last given: written only when it changes. */
-  private css = { prompt: '', panel: '', visibility: '' };
+  private css = { prompt: '', panel: '', visibility: '', below: '' };
   private ui: LabPromptUi | null = null;
   private focusCount = 0;
   private asked = '';
@@ -811,7 +818,7 @@ export class LabHost {
     if (this.disposed) return;
     this.prompt = { box: dom.box, chrome: dom.chrome, listener };
     this.ui = null;
-    this.css = { prompt: '', panel: '', visibility: '' };
+    this.css = { prompt: '', panel: '', visibility: '', below: '' };
     this.writeGlass();
     this.enterScene(true);
   }
@@ -1445,6 +1452,7 @@ export class LabHost {
     if (!this.prompt || s.kind !== 'space') {
       this.scene.setSpace(null, null);
       this.bezel.shape(null);
+      if (this.prompt) this.writeFrameBelow(this.prompt.chrome, null);
       this.load(this.controls.preset);
       return;
     }
@@ -1526,7 +1534,26 @@ export class LabHost {
       regrip,
     );
     this.bezel.shape(this.scene.shot?.bezel ?? null);
+    this.writeFrameBelow(p.chrome, this.scene.shot);
     return placed;
+  }
+
+  /**
+   * How far the frame reaches below the box, on the page: from the shot the
+   * bar was just shaped to, so the two never disagree, and laid out again
+   * whenever the box, the stage or a frame knob moves. Without a shot it is
+   * taken off, and the next one written whatever it is. Written only when it
+   * changes.
+   */
+  private writeFrameBelow(chrome: HTMLElement, shot: PerchShot | null): void {
+    const css = this.css;
+    if (!shot) {
+      chrome.style.removeProperty('--crawl-frame-below');
+      css.below = '';
+      return;
+    }
+    const below = `${shot.below.toFixed(2)}px`;
+    if (below !== css.below) chrome.style.setProperty('--crawl-frame-below', (css.below = below));
   }
 
   /**

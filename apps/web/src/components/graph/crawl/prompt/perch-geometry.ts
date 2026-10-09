@@ -153,6 +153,12 @@ export interface PerchShot {
   viewer: Vec3;
   bezel: BezelShape;
   /**
+   * CSS pixels from the box's bottom edge down to the lowest the bar is drawn on
+   * screen: its outer edge at the nearer face or the further, projected as three
+   * projects it. What the page keeps clear under the box.
+   */
+  below: number;
+  /**
    * The rails: the bezel's centreline, `railForward` toward the viewer, as
    * four polylines from corner node to corner node — top (TL→TR), right
    * (TR→BR), bottom (BR→BL), left (BL→TL).
@@ -289,7 +295,20 @@ export function perchShot(input: PerchInput): PerchShot | null {
   // heading: the body floats exactly at `body`, and the grips are planned from there.
   const node = at(body, [up, -PERCH_UP * unit], [heading, PERCH_BACK * unit]);
 
-  if (!finiteAll(target, [d, px], box, node, body, ...rails.flat())) return null;
+  // How far below the box the bar reaches on screen, for the page to keep
+  // clear: its outer bottom edge, `edge` world units above the shot's axis,
+  // at its nearer face and its further one. Below the axis the nearer face
+  // lies lower on screen, above it the further. In closed form rather than
+  // through graph-camera's projector, whose near plane can lie past the box
+  // on a space with a small unit.
+  const yc = (1 - (2 * (rect.top + rect.height / 2)) / vp.height) * d * tan;
+  const edge = yc - (rh + (k.band * unit) / 2);
+  const th = (k.thickness * unit) / 2;
+  const screenY = (depth: number) => (1 - edge / (depth * tan)) * (vp.height / 2);
+  const below =
+    Math.max(d - th > 0 ? screenY(d - th) : -Infinity, screenY(d + th)) - (rect.top + rect.height);
+
+  if (!finiteAll(target, [d, px, below], box, node, body, ...rails.flat())) return null;
   return {
     cam,
     depth: d,
@@ -310,6 +329,7 @@ export function perchShot(input: PerchInput): PerchShot | null {
       band: k.band * unit,
       thickness: k.thickness * unit,
     },
+    below,
     rails,
     corners,
     perch: { node, body, up, heading },

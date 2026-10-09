@@ -302,6 +302,48 @@ describe('perchShot', () => {
     }
   });
 
+  it('says how far below the box the bar is drawn, as three projects it', () => {
+    for (const vp of VIEWPORTS) {
+      for (const dy of [0, 120, -120]) {
+        const rect = boxOn(vp, 0, dy);
+        const { shot } = shotOver(sample, vp, DEFAULT_PERCH, rect);
+        const b = shot.bezel;
+        const project = projector(shot.cam, vp);
+        // The bar's outer bottom edge, at its nearer face and its further one: the lower on screen.
+        const edge = at(shot.box, [b.up, -(b.height / 2 + b.band / 2)]);
+        const lowest = Math.max(
+          ...[1, -1].map((side) => {
+            const p = at(edge, [b.normal, (side * b.thickness) / 2]);
+            return project(p[0], p[1], p[2])!.y;
+          }),
+        );
+        expect(Math.abs(shot.below - (lowest - (rect.top + rect.height)))).toBeLessThan(1e-6);
+        // The margin and half the band, on the box's plane: one of the bar's
+        // faces always lies lower, the more so the further the box sits off
+        // the screen's middle.
+        const u = sample.unit;
+        const m = Math.max(DEFAULT_PERCH.margin, DEFAULT_PERCH.band / 2 + CLAW_ROOM);
+        const planar = (m * u + (DEFAULT_PERCH.band * u) / 2) * shot.pixels;
+        expect(shot.below).toBeGreaterThanOrEqual(planar - 1e-9);
+        expect(shot.below / planar).toBeLessThan(dy === 0 ? 1.02 : 1.04);
+      }
+    }
+  });
+
+  it('moves the room below the box with the frame’s knobs, and not with the creature’s', () => {
+    const vp = VIEWPORTS[1]!;
+    const u = sample.unit;
+    const base = shotOver(sample, vp).shot;
+    const wider = shotOver(sample, vp, { ...DEFAULT_PERCH, margin: DEFAULT_PERCH.margin + 0.1 });
+    expect((wider.shot.below - base.below) / (0.1 * u * base.pixels)).toBeCloseTo(1, 1);
+    // A wider band reaches half its widening further out; the margin is still its own.
+    const band = shotOver(sample, vp, { ...DEFAULT_PERCH, band: DEFAULT_PERCH.band + 0.04 });
+    expect((band.shot.below - base.below) / (0.02 * u * base.pixels)).toBeCloseTo(1, 1);
+    for (const knobs of [{ bodyY: 0.1 }, { tilt: 30 }, { bodyBehind: 0.6 }]) {
+      expect(shotOver(sample, vp, { ...DEFAULT_PERCH, ...knobs }).shot.below).toBe(base.below);
+    }
+  });
+
   it('is null for a box or a viewport with no size', () => {
     const vp = VIEWPORTS[1]!;
     const overview = overviewCamera(sample.bounds, vp, 0.5, 0.3);
