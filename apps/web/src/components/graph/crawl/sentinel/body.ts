@@ -13,7 +13,10 @@
 //
 // The heading turns on its own spring; up is carried along with it and slowly
 // rights itself, so a thread that goes straight up never flips the body over.
-// It banks into turns and leans with its acceleration, both bounded.
+// A goal heading far round behind it is held to 60° about up from its own at
+// a time, so a walk that doubles back turns round on its feet instead of
+// pitching over the top. It banks into turns and leans with its acceleration,
+// both bounded.
 
 import { legPoint } from '../threads';
 import type { ReplayView } from '../replay-view';
@@ -175,6 +178,51 @@ export function headingFrom(tangent: Vec3, up: Vec3, current: Vec3, out: Vec3): 
   // Facing straight up or down with nothing to go on: any horizontal will do.
   const side = Math.abs(up[2]) < 0.9 ? ([0, 0, 1] as Vec3) : ([1, 0, 0] as Vec3);
   return pick(side) ? out : set(out, 0, 0, 1);
+}
+
+/** The most a goal heading may turn round about up from the body's own, radians: 60°. */
+const YAW_MOST = Math.PI / 3;
+
+/**
+ * `heading`, in place, turned back toward `f` about unit `up` until it is at
+ * most `max` radians round from it, its climb kept. Exactly behind, the
+ * rounding picks a side, and the frames after keep to it because the held
+ * heading is then never behind. A heading with no level way of its own —
+ * within 10° of up, which `headingFrom` ignores anyway — or an `f` with none,
+ * or anything not finite, is left as it is.
+ */
+export function yawAtMost(heading: Vec3, f: Vec3, up: Vec3, max: number): void {
+  const eh = dot(heading, up);
+  const ef = dot(f, up);
+  const hx = heading[0] - up[0] * eh;
+  const hy = heading[1] - up[1] * eh;
+  const hz = heading[2] - up[2] * eh;
+  let gx = f[0] - up[0] * ef;
+  let gy = f[1] - up[1] * ef;
+  let gz = f[2] - up[2] * ef;
+  const lh = Math.sqrt(hx * hx + hy * hy + hz * hz);
+  const lg = Math.sqrt(gx * gx + gy * gy + gz * gz);
+  const hl = Math.sqrt(dot(heading, heading));
+  // `!(… > …)` is also true of NaN.
+  if (!(lh > VERTICAL * hl) || !(lg > 1e-6)) return;
+  // Signed about up, from the body's level way to the goal's.
+  const sin =
+    up[0] * (gy * hz - gz * hy) + up[1] * (gz * hx - gx * hz) + up[2] * (gx * hy - gy * hx);
+  const yaw = Math.atan2(sin, gx * hx + gy * hy + gz * hz);
+  if (!(Math.abs(yaw) > max)) return;
+  gx /= lg;
+  gy /= lg;
+  gz /= lg;
+  // The body's level way turned `max` toward the goal's: g·cos + (up × g)·sin, as g ⊥ up.
+  const turn = yaw < 0 ? -max : max;
+  const c = Math.cos(turn);
+  const s = Math.sin(turn);
+  set(
+    heading,
+    (gx * c + (up[1] * gz - up[2] * gy) * s) * lh + up[0] * eh,
+    (gy * c + (up[2] * gx - up[0] * gz) * s) * lh + up[1] * eh,
+    (gz * c + (up[0] * gy - up[1] * gx) * s) * lh + up[2] * eh,
+  );
 }
 
 /** Put the body at `p`, at rest, facing `forward` (any steepness), upright on `up`. */
@@ -357,8 +405,15 @@ export function stepBody(
   b.acc[1] += ((b.v[1] - vy) / dt - b.acc[1]) * ka;
   b.acc[2] += ((b.v[2] - vz) / dt - b.acc[2]) * ka;
 
+  // A walk that turns straight back wants the shortest turn, and with any
+  // climb in it that is a pitch over the top: a somersault. Held to 60° about
+  // up at a time, the body turns round on its feet instead. The brain had the
+  // same latent flip; a turn about to snap, or under reduced motion, never
+  // gets here.
+  const aim: Vec3 = [goal.heading[0], goal.heading[1], goal.heading[2]];
+  yawAtMost(aim, b.f, up, YAW_MOST);
   const want: Vec3 = [0, 0, 0];
-  headingFrom(goal.heading, up, b.f, want);
+  headingFrom(aim, up, b.f, want);
   turnToward(b.f, want, 1 - Math.exp(-params.omegaTurn * goal.turn * dt), b.u);
 
   // Up is carried along with the heading, then rights itself toward the field's up.

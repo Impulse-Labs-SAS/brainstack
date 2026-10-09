@@ -1,22 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphModel } from '@/lib/graph-model';
+import {
+  DEFAULT_LAYERS,
+  buildGraphModel,
+  type GraphModel,
+  type InputEdge,
+  type InputNode,
+} from '@/lib/graph-model';
 
-import { findWalk, walkable } from '../crawl-plan';
+import { findWalk, walkable, type CrawlResult } from '../crawl-plan';
 import { CrawlReplay, walkProgress, walkRamp } from '../crawl-replay';
 import type { Hold, Lit, Reach, ReplayEvent, ReplayView, Swing, WalkLeg } from '../replay-view';
 import { sampleVault } from '../sample-vault';
+import { polylineThreadField, type PolylineField } from '../space/polyline-field';
 import {
   graphThreadField,
   legPoint,
   segmentLength,
+  threadEnds,
   threadKey,
   typicalLink,
   type LegStretch,
   type ThreadField,
   type ThreadKey,
 } from '../threads';
-import { dist, dot, type Vec3 } from '../vec';
+import { dist, dot, len, type Vec3 } from '../vec';
 
 import { GRIP_SLOTS, SLOT_TENTACLE, TENTACLES, TENTACLE_SPECS } from './anatomy';
 import { DEFAULT_MOTION, SentinelMotion } from './motion';
@@ -523,5 +531,166 @@ describe('SentinelMotion', () => {
     // lets it go.
     expect(quantile(0.95)).toBeLessThan(0.02);
     expect(quantile(0.99)).toBeLessThan(0.25);
+  });
+});
+
+/** World units per creature unit in the spaces below, made by hand. */
+const WU = 10;
+
+const unitOf = (p: Vec3): Vec3 => {
+  const l = len(p);
+  return [p[0] / l, p[1] / l, p[2] / l];
+};
+
+/** Angle between two unit vectors. */
+const angle = (a: Vec3, b: Vec3) => Math.acos(Math.max(-1, Math.min(1, dot(a, b))));
+
+/**
+ * A space of Crawl's own by hand, with world up: a note at each of `places`
+ * (by name, world units), each of `links` a thread drawn straight between its
+ * notes. A name starting with `_` is an index, so its threads are structure.
+ */
+function handSpace(
+  places: Record<string, Vec3>,
+  links: Array<[string, string]>,
+): { model: GraphModel; field: PolylineField } {
+  const id = (s: string) => `me/${s}.md`;
+  const names = Object.keys(places);
+  const nodes: InputNode[] = names.map((s, i) => ({
+    id: id(s),
+    path: `${s}.md`,
+    title: s,
+    ownerId: 'me',
+    project: { id: 'me|hand', label: 'Hand' },
+    createdAt: i,
+    updatedAt: i,
+  }));
+  const edges: InputEdge[] = links.map(([a, b]) => ({ source: id(a), target: id(b), weight: 1 }));
+  const model = buildGraphModel({
+    nodes,
+    edges,
+    affinity: null,
+    layers: DEFAULT_LAYERS,
+    viewerId: 'me',
+    vaultNames: new Map(),
+    cache: new Map(),
+  });
+  const positions = new Map(names.map((s) => [id(s), places[s]!]));
+  const routes = new Map<ThreadKey, Float32Array>();
+  const adjacency = new Map<string, ThreadKey[]>();
+  for (const e of model.edges) {
+    if (!walkable(e)) continue;
+    const key = threadKey(e.source, e.target);
+    if (routes.has(key)) continue;
+    const [first, second] = threadEnds(key);
+    routes.set(key, Float32Array.from([...positions.get(first)!, ...positions.get(second)!]));
+    for (const end of [first, second]) adjacency.set(end, [...(adjacency.get(end) ?? []), key]);
+  }
+  return { model, field: polylineThreadField({ nodes: positions, routes, adjacency, cell: WU }) };
+}
+
+const seed = (s: string, kind: 'named' | 'search'): CrawlResult['notes'][number] => ({
+  path: `${s}.md`,
+  title: s,
+  isDecision: false,
+  via: kind === 'named' ? { kind, text: s, count: 1 } : { kind, term: s, rank: 0 },
+});
+
+/** One frame of the Sentinel walking a space by hand, as the tests below read it. */
+interface HandFrame {
+  /** The hull's up against the world's. */
+  upright: number;
+  /** Radians a second the hull's up and forward turned since the last frame. */
+  upTurn: number;
+  forwardTurn: number;
+  /** Every pose matrix, the eye's way and every joint of every tentacle. */
+  finite: boolean;
+}
+
+/** Walks `crawl` over `space` at its pace, at a frame length, to the end. */
+function walkHand(
+  space: { model: GraphModel; field: PolylineField },
+  crawl: CrawlResult,
+  dt: number,
+): HandFrame[] {
+  const replay = new CrawlReplay(() => {});
+  replay.load(crawl, space.model, { field: space.field, unit: WU, pace: 9 * WU });
+  const m = new SentinelMotion();
+  m.setTier(3);
+  const frames: HandFrame[] = [];
+  let time = 0;
+  let guard = 0;
+  let before: { u: Vec3; f: Vec3 } | null = null;
+  while (replay.view.mode !== 'done' && guard++ < 20_000) {
+    replay.update(dt);
+    m.step(replay.view, replay.drain(), dt, (time += dt), false);
+    const p = m.pose;
+    const h = p.hull;
+    const u = unitOf([h[4]!, h[5]!, h[6]!]);
+    const f = unitOf([h[8]!, h[9]!, h[10]!]);
+    frames.push({
+      upright: u[1],
+      upTurn: before ? angle(before.u, u) / dt : 0,
+      forwardTurn: before ? angle(before.f, f) / dt : 0,
+      finite:
+        allFinite(p.segmentMatrices, p.segments * 16) &&
+        allFinite(p.clawMatrices, p.claws * 16) &&
+        allFinite(p.hull) &&
+        allFinite(p.eye.dir) &&
+        allFinite(m.bodyWorld) &&
+        allFinite(m.debug.joints, m.debug.jointCount * 3),
+    });
+    before = { u, f };
+  }
+  expect(replay.view.mode).toBe('done');
+  return frames;
+}
+
+const most = (frames: HandFrame[], pick: (f: HandFrame) => number) =>
+  frames.reduce((m, f) => Math.max(m, pick(f)), -Infinity);
+const least = (frames: HandFrame[], pick: (f: HandFrame) => number) =>
+  frames.reduce((m, f) => Math.min(m, pick(f)), Infinity);
+
+describe('SentinelMotion under world up', () => {
+  it('turns round on its feet to walk straight back the way it came, under world up', () => {
+    // A row of five notes 1.7 units apart along +x, sinking as it goes, so the
+    // walk arrives a touch nose-down and the way back climbs at another
+    // angle: the turn whose shortest way round is a pitch over the top.
+    const places: Record<string, Vec3> = {};
+    for (let i = 0; i < 5; i++) places[`r${i}`] = [i * 1.7 * WU, -0.02 * WU * i * i, 0];
+    const links: Array<[string, string]> = [0, 1, 2, 3].map((i) => [`r${i}`, `r${i + 1}`]);
+    const space = handSpace(places, links);
+    const crawl: CrawlResult = {
+      notes: [seed('r0', 'named'), seed('r4', 'search'), seed('r0', 'named')],
+      unresolved: [],
+      coverage: { resolved: 3, total: 3 },
+    };
+    for (const dt of [1 / 60, 0.064]) {
+      const frames = walkHand(space, crawl, dt);
+      expect(frames.every((f) => f.finite)).toBe(true);
+      expect(least(frames, (f) => f.upright)).toBeGreaterThan(0.7);
+      // A flip turns half a turn in a frame: it never turns faster than its springs let it.
+      expect(most(frames, (f) => f.upTurn)).toBeLessThan(8);
+      expect(most(frames, (f) => f.forwardTurn)).toBeLessThan(8);
+    }
+  });
+
+  it('walks a vertical leg up and back without flipping or a NaN, eye and claws included', () => {
+    // The glance at a note straight below, the explorers feeling for one
+    // straight above, the perch's level back-off: everything that takes a
+    // level way from a direction meets one with none.
+    const space = handSpace({ _low: [0, 0, 0], high: [0, 10 * WU, 0] }, [['_low', 'high']]);
+    expect(space.model.edges.some((e) => e.kind === 'structure')).toBe(true);
+    const crawl: CrawlResult = {
+      notes: [seed('_low', 'named'), seed('high', 'named'), seed('_low', 'named')],
+      unresolved: [],
+      coverage: { resolved: 3, total: 3 },
+    };
+    for (const dt of [1 / 60, 0.064]) {
+      const frames = walkHand(space, crawl, dt);
+      expect(frames.every((f) => f.finite)).toBe(true);
+      expect(least(frames, (f) => f.upright)).toBeGreaterThan(0.9);
+      expect(most(frames, (f) => f.upTurn)).toBeLessThan(8);
+    }
   });
 });

@@ -6,10 +6,12 @@ import { findWalk, walkable } from '../crawl-plan';
 import { walkProgress, walkRamp } from '../crawl-replay';
 import type { ReplayView } from '../replay-view';
 import { sampleVault } from '../sample-vault';
+import { polylineThreadField } from '../space/polyline-field';
 import {
   graphThreadField,
   legPoint,
   segmentLength,
+  threadEnds,
   threadKey,
   typicalLink,
   type LegStretch,
@@ -23,6 +25,7 @@ import {
   createGoal,
   stepBody,
   trackCursor,
+  yawAtMost,
   type BodyParams,
   type BodyState,
 } from './body';
@@ -223,6 +226,140 @@ describe('the Sentinel’s body', () => {
       expect(b.u[1]).toBeGreaterThan(0.5);
       expect(Math.abs(dot(b.u, b.f))).toBeLessThan(1e-6);
     }
+  });
+
+  it('turns round on its feet to walk back the way it came, under world up', () => {
+    // A row of five notes 1.7 units apart along +x, sinking as it goes, and
+    // one leg out to the last and straight back: it arrives a touch nose-down
+    // and the way back climbs at another angle, so the shortest turn round is
+    // a pitch over the top.
+    const unit = 10;
+    const id = (i: number) => `r${i}`;
+    const nodes = new Map<string, Vec3>();
+    for (let i = 0; i < 5; i++) nodes.set(id(i), [i * 1.7 * unit, -0.02 * unit * i * i, 0]);
+    const routes = new Map<string, Float32Array>();
+    const adjacency = new Map<string, string[]>();
+    for (let i = 0; i < 4; i++) {
+      const key = threadKey({ id: id(i) }, { id: id(i + 1) });
+      const [first, second] = threadEnds(key);
+      routes.set(key, Float32Array.from([...nodes.get(first)!, ...nodes.get(second)!]));
+      for (const end of [first, second]) adjacency.set(end, [...(adjacency.get(end) ?? []), key]);
+    }
+    const field = polylineThreadField({ nodes, routes, adjacency, cell: unit });
+    const way = [0, 1, 2, 3, 4, 3, 2, 1, 0];
+    const segments: LegStretch[] = way.slice(1).map((to, k) => {
+      const key = threadKey({ id: id(way[k]!) }, { id: id(to) });
+      return { fromId: id(way[k]!), toId: id(to), key, length: field.length(key) };
+    });
+    const total = segments.reduce((s, x) => s + x.length, 0);
+    const D = total / (6 * unit);
+    for (const dt of [1 / 120, 1 / 60, 1 / 20]) {
+      const b = createBody();
+      const goal = createGoal();
+      let upright = Infinity;
+      let turn = 0;
+      let before: Vec3 | null = null;
+      for (let t = 0; t <= D + 1; t += dt) {
+        const v = view(
+          field,
+          unit,
+          segments,
+          walkProgress(Math.min(t, D), total, D, walkRamp(D)),
+          t,
+        );
+        trackCursor(b, v, dt);
+        bodyGoal(v, b, PARAMS, goal);
+        stepBody(b, goal, unit, dt, PARAMS, false);
+        expect([...b.p, ...b.f, ...b.u].every(Number.isFinite)).toBe(true);
+        upright = Math.min(upright, b.u[1]);
+        if (before) turn = Math.max(turn, Math.acos(Math.min(1, dot(before, b.f))) - 7 * dt);
+        before = [...b.f];
+      }
+      // On its feet all the way round, and never turning faster than its heading spring.
+      expect(upright).toBeGreaterThan(0.7);
+      expect(turn).toBeLessThan(0.02);
+    }
+  });
+
+  it('walks a vertical leg up and straight back down without flipping', () => {
+    const unit = 10;
+    const nodes = new Map<string, Vec3>([
+      ['a', [0, 0, 0]],
+      ['b', [0, 10 * unit, 0]],
+    ]);
+    const key = threadKey({ id: 'a' }, { id: 'b' });
+    const field = polylineThreadField({
+      nodes,
+      routes: new Map([[key, Float32Array.from([0, 0, 0, 0, 10 * unit, 0])]]),
+      adjacency: new Map([
+        ['a', [key]],
+        ['b', [key]],
+      ]),
+      cell: unit,
+    });
+    const segments: LegStretch[] = [
+      { fromId: 'a', toId: 'b', key, length: 10 * unit },
+      { fromId: 'b', toId: 'a', key, length: 10 * unit },
+    ];
+    const D = 5;
+    const yaw0: Vec3 = [Math.SQRT1_2, 0, Math.SQRT1_2];
+    for (const dt of [1 / 120, 1 / 60, 1 / 20]) {
+      const b = createBody();
+      const goal = createGoal();
+      let first = true;
+      for (let t = 0; t <= D + 1; t += dt) {
+        const progress = walkProgress(Math.min(t, D), 20 * unit, D, walkRamp(D));
+        const v = view(field, unit, segments, progress, t);
+        v.dir = yaw0;
+        trackCursor(b, v, dt);
+        bodyGoal(v, b, PARAMS, goal);
+        if (first) goal.heading = [...yaw0];
+        first = false;
+        stepBody(b, goal, unit, dt, PARAMS, false);
+        expect([...b.p, ...b.f, ...b.u].every(Number.isFinite)).toBe(true);
+        // Upright, facing the way it started, up and down alike.
+        expect(b.u[1]).toBeGreaterThan(0.9);
+        const level = Math.hypot(b.f[0], b.f[2]);
+        expect(Math.abs(b.f[0] / level - yaw0[0])).toBeLessThan(1e-3);
+        expect(Math.abs(b.f[2] / level - yaw0[2])).toBeLessThan(1e-3);
+      }
+    }
+  });
+
+  it('holds a goal far round behind to 60° about up, its climb kept', () => {
+    const up: Vec3 = [0, 1, 0];
+    const f: Vec3 = [0, 0, 1];
+    const max = Math.PI / 3;
+    // Behind, a little to the right and nose-down: turned to exactly 60°, to the right.
+    const behind: Vec3 = [0.2, -0.3, -1];
+    const h: Vec3 = [...behind];
+    yawAtMost(h, f, up, max);
+    expect(h[1]).toBeCloseTo(behind[1], 12);
+    expect(Math.hypot(h[0], h[2])).toBeCloseTo(Math.hypot(behind[0], behind[2]), 12);
+    expect(Math.atan2(h[0], h[2])).toBeCloseTo(max, 12);
+    // Exactly behind: a side is picked, and the turn is still 60°.
+    const back: Vec3 = [0, 0.1, -1];
+    yawAtMost(back, f, up, max);
+    expect(Math.abs(Math.atan2(back[0], back[2]))).toBeCloseTo(max, 12);
+    expect(back[1]).toBeCloseTo(0.1, 12);
+    // Within 60°: left exactly as it was.
+    const ahead: Vec3 = [0.5, 0.2, 1];
+    yawAtMost(ahead, f, up, max);
+    expect(ahead).toEqual([0.5, 0.2, 1]);
+    // Within 10° of up, or with nothing finite: no level way to hold, so untouched.
+    for (const steep of [
+      [0, 1, -0.1],
+      [0, -1, 0],
+      [Number.NaN, 0, -1],
+    ] as Vec3[]) {
+      const kept: Vec3 = [...steep];
+      yawAtMost(kept, f, up, max);
+      expect(kept).toEqual(steep);
+    }
+    // A body facing straight up has no level way of its own either.
+    const any: Vec3 = [0, 0, -1];
+    yawAtMost(any, [0, 1, 0], up, max);
+    expect(any).toEqual([0, 0, -1]);
   });
 
   it('perches above and behind the note it reads, and keeps the last goal when the note is gone', () => {
