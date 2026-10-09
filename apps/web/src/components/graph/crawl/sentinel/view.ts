@@ -34,6 +34,8 @@ import * as THREE from 'three';
 
 import { FOV_DEG, TAN_HALF_FOV, basis, type Camera, type Viewport } from '@/lib/graph-camera';
 
+import type { Vec3 } from '../vec';
+
 import { CLAW_FINGERS, TENTACLES } from './anatomy';
 import { bakeEnvironment, buildHangar, disposeScene } from './environment';
 import {
@@ -206,6 +208,25 @@ export function creatureDepthRange(
   const far = depth.far / unit;
   if (!(near > 0 && far > near && Number.isFinite(far))) return null;
   return { near, far };
+}
+
+/**
+ * The sphere round everything the creature draws, in world units: the one
+ * `render` culls it against and fits its own planes round, moved back out of
+ * creature space. For a host choosing the planes the creature shares with
+ * something else, so they hold all of it. Null for a pose with no place.
+ */
+export function creatureBounds(pose: SentinelPose): { centre: Vec3; radius: number } | null {
+  const u = pose.unit;
+  if (!(u > 0) || !pose.anchor.every(Number.isFinite)) return null;
+  const b = pose.bounds;
+  const centre: Vec3 = [
+    pose.anchor[0] + (b[0] ?? 0) * u,
+    pose.anchor[1] + (b[1] ?? 0) * u,
+    pose.anchor[2] + (b[2] ?? 0) * u,
+  ];
+  const radius = Math.max(b[3] ?? 0, HULL_REACH) * u;
+  return centre.every(Number.isFinite) && Number.isFinite(radius) ? { centre, radius } : null;
 }
 
 /** The height three reads from a PMREM's image when it keys a program; null for anything else. */

@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import { FOV_DEG } from '@/lib/graph-camera';
 
-import { creatureDepthRange, sharesPrograms } from './view';
+import { createPose } from './pose';
+import { creatureBounds, creatureDepthRange, sharesPrograms } from './view';
 
 const ASPECT = 16 / 9;
 
@@ -65,6 +66,28 @@ describe('creatureDepthRange', () => {
 
   it('divides the planes by the unit', () => {
     expect(creatureDepthRange({ near: 2, far: 600 }, 4)).toEqual({ near: 0.5, far: 150 });
+  });
+});
+
+describe('creatureBounds', () => {
+  it('moves the pose’s sphere back out of creature space, never smaller than the hull', () => {
+    const pose = createPose();
+    pose.anchor = [10, -4, 2];
+    pose.unit = 3;
+    pose.bounds.set([1, 0, -2, 2.5]);
+    expect(creatureBounds(pose)).toEqual({ centre: [13, -4, -4], radius: 7.5 });
+    // A sphere that claims less than the hull reaches: the hull's, as the view culls it.
+    pose.bounds.set([0, 0, 0, 0.1]);
+    expect(creatureBounds(pose)!.radius).toBeCloseTo(0.55 * 3, 9);
+  });
+
+  it('is null for a pose with no place', () => {
+    const pose = createPose();
+    pose.unit = 0;
+    expect(creatureBounds(pose)).toBeNull();
+    pose.unit = 1;
+    pose.anchor = [Number.NaN, 0, 0];
+    expect(creatureBounds(pose)).toBeNull();
   });
 });
 
