@@ -3,6 +3,13 @@
 // overlay sits above the creature in the real view, and the composition is
 // only judged right with the walk on top. Then, when asked, the motion's
 // insides: every joint, each tentacle's target and the six grip slots.
+//
+// Over a space of Crawl's own, the space lights its pipes and notes itself,
+// in 3D. The overlay's lit threads are the brain's gentle curves, bent
+// through each thread's midpoint, and over an L-shaped pipe they would cut
+// the corner — two walks on screen that disagree — so the lab turns them off
+// there, and the found halos with them unless asked. Labels stay: no space
+// draws text yet.
 
 import type { Projected } from '@/lib/graph-camera';
 
@@ -21,6 +28,9 @@ function hexA(hex: string, a: number): string {
   return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
+/** What a switched-off layer iterates over. */
+const NONE: ReadonlyMap<never, never> = new Map<never, never>();
+
 export interface CrawlDrawing {
   view: ReplayView;
   labels: readonly ReplayLabel[];
@@ -31,6 +41,10 @@ export interface CrawlDrawing {
   still: boolean;
   width: number;
   font: string;
+  /** The lit threads, as the brain's curves. False over a space that lights its own; default true. */
+  threads?: boolean;
+  /** A halo on each note found. False over a space that lights its own; default true. */
+  halos?: boolean;
 }
 
 /** The lit threads, found notes and labels, drawn the way crawl-layer.ts draws them. */
@@ -40,9 +54,11 @@ export function drawCrawl(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDra
   const a: Vec3 = [0, 0, 0];
   const b: Vec3 = [0, 0, 0];
   const m: Vec3 = [0, 0, 0];
+  const lit = d.threads === false ? NONE : view.lit;
+  const found = d.halos === false ? NONE : view.found;
   ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
-  for (const [key, l] of view.lit) {
+  for (const [key, l] of lit) {
     const [from, to] = threadEnds(key);
     if (!field.node(from, a) || !field.node(to, b) || !field.point(key, 0.5, m)) continue;
     const pa = P(a);
@@ -59,7 +75,7 @@ export function drawCrawl(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDra
     ctx.quadraticCurveTo(2 * pm.x - (pa.x + pb.x) / 2, 2 * pm.y - (pa.y + pb.y) / 2, pb.x, pb.y);
     ctx.stroke();
   }
-  for (const [id, kind] of view.found) {
+  for (const [id, kind] of found) {
     const note = d.note(id);
     if (!note || !field.node(id, a)) continue;
     const p = P(a);

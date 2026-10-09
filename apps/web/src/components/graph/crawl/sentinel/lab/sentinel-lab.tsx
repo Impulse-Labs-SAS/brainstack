@@ -1,9 +1,11 @@
 'use client';
 
-// The Sentinel lab: the creature over a stand-in for the graph, or alone on
-// black, with every knob that shapes its look, motion and cost on a panel.
-// It is where the look is approved before the Sentinel goes into Crawl, and
-// where the values that ship are chosen ("export settings" copies them).
+// The Sentinel lab: the creature over a stand-in for the graph, alone on
+// black, or walking one of the spaces of Crawl's own, with every knob
+// that shapes its look, motion and cost on a panel. It is where the look is
+// approved before the Sentinel goes into Crawl, where the space it will walk
+// is chosen, and where the values that ship are chosen ("export settings"
+// copies them).
 //
 // Only the dev route /dev/sentinel renders it (a page.dev.tsx, which exists
 // under `next dev` alone), so nothing here reaches a build. The work is in
@@ -21,10 +23,14 @@ import {
   ENVIRONMENTS,
   LabHost,
   PRESETS,
+  SPACES,
   TIER_CHOICES,
+  VAULTS,
   type EnvironmentPreset,
   type Preset,
+  type SpaceChoice,
   type TierChoice,
+  type VaultChoice,
 } from './lab-host';
 
 const TONE_MAPPERS: readonly SentinelLook['toneMapping'][] = ['agx', 'neutral', 'aces'];
@@ -78,6 +84,32 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
   const { controls: c, stats, look, grip } = host;
   const p = host.motion.params;
 
+  // Listened to: a switch ×10, or a space that fails to build, changes it from inside.
+  gui
+    .add(c, 'space', SPACES)
+    .listen()
+    .onChange((v: SpaceChoice) => host.setSpace(v));
+  gui.add(c, 'vault', VAULTS).onChange((v: VaultChoice) => host.setVault(v));
+
+  // The stage's own knobs, refilled whenever it changes; the folder keeps its place.
+  const space = gui.addFolder('Space');
+  const fillSpace = () => {
+    for (const controller of [...space.controllers]) controller.destroy();
+    for (const folder of [...space.folders]) folder.destroy();
+    space.title(`Space · ${c.space}`);
+    const labSpace = host.space;
+    if (!labSpace) {
+      space.add(c, 'backdrop');
+      space.add(c, 'backdropOrder', BACKDROP_ORDERS).name('backdrop order');
+      return;
+    }
+    labSpace.gui?.(space);
+    if (labSpace.environment) space.add(c, 'lendEnvironment').name('Sentinel reflects it');
+    space.add(c, 'spaceHalos').name('2D found halos');
+  };
+  fillSpace();
+  host.onStageChange = fillSpace;
+
   const walk = gui.addFolder('Walk');
   walk.add(c, 'playing').name('play');
   walk.add(c, 'speed', 0.25, 3, 0.05);
@@ -88,12 +120,13 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
     .name('follow')
     .listen()
     .onChange((v: boolean) => host.setFollowing(v));
-  walk.add(p, 'followDistance', 4, 30, 0.5).name('follow distance');
+  // Each space suggests its own; listened to, so a change of space shows here.
+  walk.add(p, 'followDistance', 4, 30, 0.5).name('follow distance').listen();
   walk
     .add(c, 'reducedMotion')
     .name('reduced motion')
     .onChange((v: boolean) => host.setReducedMotion(v));
-  walk.add(c, 'drift').name('layout drift');
+  walk.add(c, 'drift').name('layout drift (brain)');
 
   const tentacles = gui.addFolder('Tentacles').close();
   // Fourteen at every tier, by design: tiers change detail, never the count.
@@ -160,8 +193,6 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
   quality.add(c, 'slowCpuMs', 0, 20, 0.5).name('slow CPU (ms)');
 
   const debug = gui.addFolder('Debug').close();
-  debug.add(c, 'backdrop');
-  debug.add(c, 'backdropOrder', BACKDROP_ORDERS).name('backdrop order');
   debug.add(c, 'overlay').name('crawl overlay');
   debug.add(c, 'debug').name('joints · targets · slots');
 
@@ -175,12 +206,19 @@ function buildPanel(Gui: typeof GUI, host: LabHost): GUI {
   show('gpu', 'GPU p50');
   show('draws', 'draw calls');
   show('triangles', 'triangles');
+  // The stage apart from the Sentinel: the governor never sees it, as in Crawl.
+  show('space', 'space');
+  show('spaceCost', 'space draws');
+  show('spaceTime', 'space CPU · GPU p50');
+  s.add(c, 'splitGpu').name('split GPU time (sync)');
   show('programs', 'programs');
   show('memory', 'memory');
   show('renderer', 'renderer');
   show('status', 'status');
   show('rebuild', 'rebuild');
   s.add({ 'rebuild ×20': () => void host.rebuild(20) }, 'rebuild ×20');
+  show('cycle', 'switch space');
+  s.add({ 'switch space ×10': () => void host.cycleSpaces(10) }, 'switch space ×10');
   const exported = { exported: '—' };
   s.add(
     {
