@@ -6,6 +6,7 @@ import { seededRandom } from '@/lib/graph-brain';
 import { CLAW_FINGERS, GRIP_SLOTS, SLOT_TENTACLE, TENTACLES, TENTACLE_SPECS } from './anatomy';
 import {
   CHAIN_MAX_STEPS,
+  SOLID_FIRST,
   TIP_FREE,
   TIP_PINNED,
   TIP_SOFT,
@@ -28,6 +29,7 @@ import { springStep } from './body';
 import { createPose } from './pose';
 import { makeRig, type Rig } from './rig';
 import { TIERS, type Tier } from './tiers';
+import type { ThreadSolid } from '../threads';
 import type { Vec3 } from '../vec';
 
 const UNIT = 26;
@@ -120,6 +122,42 @@ function busy(h: Harness) {
   });
   setTarget(h.d, 12, TIP_SOFT, world(h.d.body1, [-0.4, -0.5, 1.8]));
   setTarget(h.d, 13, TIP_SOFT, world(h.d.body1, [0.4, -0.5, 2.6]));
+}
+
+/** A ball `radius` round `centre`, as a body. */
+function ball(centre: Vec3, radius: number): ThreadSolid {
+  return {
+    across: 2 * radius,
+    distance(x, y, z, n) {
+      const d = [x - centre[0], y - centre[1], z - centre[2]];
+      const l = Math.hypot(d[0]!, d[1]!, d[2]!);
+      n[0] = d[0]! / l;
+      n[1] = d[1]! / l;
+      n[2] = d[2]! / l;
+      return l - radius;
+    },
+  };
+}
+
+/** A box of half extents `half` about `centre`, square to the world's axes, its edges rounded by `round`. */
+function bar(centre: Vec3, half: Vec3, round: number): ThreadSolid {
+  return {
+    across: 2 * Math.hypot(half[1], half[2]),
+    distance(x, y, z, n) {
+      const p = [x - centre[0], y - centre[1], z - centre[2]];
+      const q = p.map((v, k) => Math.abs(v) - (half[k]! - round));
+      const o = q.map((v) => Math.max(v, 0));
+      const out = Math.hypot(o[0]!, o[1]!, o[2]!);
+      if (out > 0) {
+        for (let k = 0; k < 3; k++) n[k] = (Math.sign(p[k]!) * o[k]!) / out;
+        return out - round;
+      }
+      const k = q.indexOf(Math.max(...q));
+      n[0] = n[1] = n[2] = 0;
+      n[k] = p[k]! < 0 ? -1 : 1;
+      return q[k]! - round;
+    },
+  };
 }
 
 function segmentAngles(c: ChainState, rig: Rig, i: number): number[] {
@@ -449,6 +487,154 @@ describe('the Sentinel’s chains', () => {
     const a = settle(false);
     const b = settle(true);
     expect(Array.from(b)).toEqual(Array.from(a));
+  });
+
+  it('moves exactly as it would without a body when it meets none', () => {
+    const far = ball([1e6, 1e6, 1e6], UNIT);
+    for (const fps of [24, 60, 144]) {
+      const run = (solid: ThreadSolid | null | 'absent') => {
+        const h = harness();
+        busy(h);
+        if (solid !== 'absent') h.d.solid = solid;
+        for (let f = 0; f < 3 * fps; f++) {
+          const t = f / fps;
+          h.frame(1 / fps, [Math.sin(t) * 0.4 * UNIT, 0, t * 0.5 * UNIT]);
+        }
+        const stepped = [Array.from(h.c.x), Array.from(h.c.xp), Array.from(h.c.xr)];
+        relaxChain(h.c, h.rig, h.d, h.s, 8);
+        return [...stepped, Array.from(h.c.x), Array.from(h.c.xr)];
+      };
+      const plain = run('absent');
+      expect(run(null)).toEqual(plain);
+      expect(run(far)).toEqual(plain);
+    }
+  });
+
+  it('keeps every arm out of a body: pressed on it and swept across it, every segment its length', () => {
+    // A bar across the body's underside, along its right, where the middle
+    // arms hang through it: the right one pinned on its top, a claw's
+    // clearance out, the left one hanging, while the body is lowered onto it
+    // from where no arm reaches it, then sways over it and bobs.
+    const top = -0.405 * UNIT;
+    const solid = bar(
+      [0, -0.45 * UNIT, 0],
+      [1.4 * UNIT, 0.045 * UNIT, 0.035 * UNIT],
+      0.0175 * UNIT,
+    );
+    const n: Vec3 = [0, 0, 0];
+    const away = (x: Float32Array, q: number) => solid.distance(x[q]!, x[q + 1]!, x[q + 2]!, n);
+    const pinned = SLOT_TENTACLE[1]!;
+    const run = (fps: number, withSolid: boolean) => {
+      const h = harness(3, {}, [0, 1.2 * UNIT, 0]);
+      if (withSolid) h.d.solid = solid;
+      const target: Vec3 = [GRIP_SLOTS[1]!.natural[0] * UNIT, top + 0.042 * UNIT, 0];
+      setTarget(h.d, pinned, TIP_PINNED, target);
+      // As shares of each joint's tube: the solved and the drawn joints the
+      // body keeps out, and the centre of every drawn joint but the claw's.
+      let solved = Infinity;
+      let drawn = Infinity;
+      let centre = Infinity;
+      let pin = 0;
+      let length = 0;
+      let finite = true;
+      for (let f = 0; f < 4 * fps; f++) {
+        const t = f / fps;
+        const p: Vec3 = [
+          Math.sin(1.3 * t) * 0.15 * UNIT,
+          (Math.sin(2.9 * t) * 0.04 + Math.max(0, 1 - t) * 1.2) * UNIT,
+          Math.sin(1.7 * t) * 0.15 * UNIT,
+        ];
+        h.frame(1 / fps, p);
+        finite &&= h.c.x.every(Number.isFinite) && h.c.xr.every(Number.isFinite);
+        for (let i = 0; i < TENTACLES; i++) {
+          const M = h.rig.segments[i]!;
+          const j0 = h.rig.jointStart[i]!;
+          const sg0 = h.rig.segStart[i]!;
+          const last = i === pinned ? M - 2 : M;
+          for (let j = 1; j <= M; j++) {
+            const q = (j0 + j) * 3;
+            const r = h.rig.segRadius[sg0 + j - 1]!;
+            if (j >= SOLID_FIRST && j <= last) {
+              solved = Math.min(solved, away(h.c.x, q) / r);
+              drawn = Math.min(drawn, away(h.c.xr, q) / r);
+            }
+            if (j <= last) centre = Math.min(centre, away(h.c.xr, q) / r);
+            const a = q - 3;
+            const l = dist(h.c.xr.subarray(a, a + 3), h.c.xr.subarray(q, q + 3));
+            const want = h.rig.segLength[sg0 + j - 1]! * h.c.stretch[i]!;
+            length = Math.max(length, Math.abs(l / want - 1));
+          }
+        }
+        // Once the body has come down and the arm has taken the bar.
+        if (t >= 1.5) {
+          pin = Math.max(pin, dist(tipOf(h.c, h.rig, pinned, [0, 0, 0]), target) / UNIT);
+        }
+      }
+      return { solved, drawn, centre, pin, length, finite };
+    };
+    for (const fps of [24, 60, 144]) {
+      const free = run(fps, false);
+      // Without it, the arms would pass through it: the check means something.
+      expect(free.solved).toBeLessThan(-0.5);
+      const kept = run(fps, true);
+      expect(kept.finite).toBe(true);
+      expect(kept.solved).toBeGreaterThan(0.8);
+      expect(kept.drawn).toBeGreaterThan(0.8);
+      expect(kept.centre).toBeGreaterThan(0);
+      expect(kept.length).toBeLessThan(0.01);
+      // The claw on the bar's surface holds as well as it does with nothing there.
+      expect(kept.pin).toBeLessThan(free.pin + 1e-3);
+    }
+  });
+
+  it('draws an arm that runs straight into a body turned out of it, every segment its length', () => {
+    // The solved arm straight along its socket's axis, into a slab square to
+    // it: the drawn chain follows it in. Pushed out along the slab's normal —
+    // back along the segment — and put back at its length, a joint lands
+    // where it was; it must turn about the joint before instead.
+    const h = harness(3);
+    const { rig, c, d } = h;
+    const i = 12;
+    const M = rig.segments[i]!;
+    const j0 = rig.jointStart[i]!;
+    const sg0 = rig.segStart[i]!;
+    const k3 = i * 3;
+    const axis: Vec3 = [c.axis[k3]!, c.axis[k3 + 1]!, c.axis[k3 + 2]!];
+    const along: number[] = [0];
+    for (let j = 0; j < M; j++) along.push(along[j]! + rig.segLength[sg0 + j]!);
+    for (let j = 0; j <= M; j++) {
+      for (let e = 0; e < 3; e++) c.x[(j0 + j) * 3 + e] = c.root[k3 + e]! + axis[e]! * along[j]!;
+    }
+    c.xp.set(c.x);
+    // Its near face a tube and a fifth past joint 7: joint 8 lies well inside.
+    const near = along[7]! + 1.2 * rig.segRadius[sg0 + 6]!;
+    const deep = UNIT;
+    const middle = [0, 1, 2].map((e) => c.root[k3 + e]! + axis[e]! * (near + deep / 2));
+    const slab: ThreadSolid = {
+      across: deep,
+      distance(x, y, z, n) {
+        const s =
+          (x - middle[0]!) * axis[0] + (y - middle[1]!) * axis[1] + (z - middle[2]!) * axis[2];
+        for (let e = 0; e < 3; e++) n[e] = (s < 0 ? -1 : 1) * axis[e]!;
+        return Math.abs(s) - deep / 2;
+      },
+    };
+    d.solid = slab;
+    d.dt = 0;
+    // No step: only the drawn chain is built, from the solved one as it lies.
+    stepChain(c, rig, d, h.s);
+    const n: Vec3 = [0, 0, 0];
+    for (let j = 1; j <= M; j++) {
+      const q = (j0 + j) * 3;
+      const l = dist(c.xr.subarray(q - 3, q), c.xr.subarray(q, q + 3));
+      expect(
+        Math.abs(l / (rig.segLength[sg0 + j - 1]! * c.stretch[i]!) - 1),
+        `segment ${j}`,
+      ).toBeLessThan(1e-5);
+      if (j < SOLID_FIRST) continue;
+      const out = slab.distance(c.xr[q]!, c.xr[q + 1]!, c.xr[q + 2]!, n);
+      expect(out / rig.segRadius[sg0 + j - 1]!, `joint ${j}`).toBeGreaterThan(0.99);
+    }
   });
 
   it('changes tier without a pop', () => {

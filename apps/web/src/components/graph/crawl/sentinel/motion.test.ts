@@ -11,8 +11,20 @@ import {
 
 import { findWalk, walkable, type CrawlResult } from '../crawl-plan';
 import { CrawlReplay, walkProgress, walkRamp } from '../crawl-replay';
-import { PERCH_ID, PERCH_RAIL_SET, replayPerch, withPerch } from '../prompt/perch-field';
-import { DEFAULT_PERCH, perchShot } from '../prompt/perch-geometry';
+import { bezelSolid } from '../prompt/bezel-solid';
+import {
+  PERCH_ID,
+  PERCH_RAILS,
+  PERCH_RAIL_SET,
+  replayPerch,
+  withPerch,
+} from '../prompt/perch-field';
+import {
+  DEFAULT_PERCH,
+  perchShot,
+  type BezelShape,
+  type PerchKnobs,
+} from '../prompt/perch-geometry';
 import { defaultTimes } from '../prompt/transition';
 import type { Hold, Lit, Reach, ReplayEvent, ReplayView, Swing, WalkLeg } from '../replay-view';
 import { sampleVault } from '../sample-vault';
@@ -29,12 +41,24 @@ import {
   type LegStretch,
   type ThreadField,
   type ThreadKey,
+  type ThreadSolid,
 } from '../threads';
 import { dist, dot, len, type Vec3 } from '../vec';
 
-import { EYE, GRIP_SLOTS, SLOT_TENTACLE, TENTACLES, TENTACLE_SPECS } from './anatomy';
+import {
+  BODY_SCALE,
+  CLAW_FINGERS,
+  EYE,
+  GRIP_SLOTS,
+  SLOT_TENTACLE,
+  TENTACLES,
+  TENTACLE_SPECS,
+} from './anatomy';
+import { SOLID_FIRST } from './chain';
+import { clawClearance } from './landing';
 import { DEFAULT_MOTION, SentinelMotion } from './motion';
-import { segmentsAt, TIER_ORDER } from './tiers';
+import { SENTINEL_SEED, makeRig } from './rig';
+import { segmentsAt, TIER_ORDER, type Tier } from './tiers';
 
 interface Frame {
   view: ReplayView;
@@ -702,7 +726,10 @@ describe('SentinelMotion under world up', () => {
 });
 
 /** The sample vault laid out as the dormant network lays it out, the frame round the prompt in front of it. */
-function perchedCluster(vp: Viewport = { width: 1280, height: 800 }) {
+function perchedCluster(
+  vp: Viewport = { width: 1280, height: 800 },
+  knobs: Partial<PerchKnobs> = {},
+) {
   const { model, crawls } = sampleVault();
   const l = volumeLayout(model);
   const space = polylineThreadField({
@@ -722,11 +749,19 @@ function perchedCluster(vp: Viewport = { width: 1280, height: 800 }) {
     height: 56,
     radius: 16,
   };
-  const shot = perchShot({ overview, vp, rect, unit: l.unit, radius, knobs: DEFAULT_PERCH })!;
+  const shot = perchShot({
+    overview,
+    vp,
+    rect,
+    unit: l.unit,
+    radius,
+    knobs: { ...DEFAULT_PERCH, ...knobs },
+  })!;
   const times = defaultTimes();
   return {
     model,
     crawls,
+    space,
     field: withPerch(space, shot),
     shot,
     perch: replayPerch(shot, { reach: 1, crossing: times.enter.crossing, release: 0.35 }),
@@ -875,18 +910,469 @@ describe('SentinelMotion on the frame round the prompt', () => {
       expect(dot(unitOf([h[4]!, h[5]!, h[6]!]), s.shot.perch.up)).toBeGreaterThan(0.95);
       const held = replay.view.holds.filter((x) => x !== null);
       expect(held.length).toBeGreaterThanOrEqual(5);
+      const bar = bezelSolid(s.shot.bezel);
+      const rig = makeRig(3, s.unit, SENTINEL_SEED, BODY_SCALE);
       replay.view.holds.forEach((hold, slot) => {
         if (!hold) return;
         expect(PERCH_RAIL_SET.has(hold.key)).toBe(true);
         const at: Vec3 = [0, 0, 0];
         expect(replay.view.field.point(hold.key, hold.u, at)).toBe(true);
-        const o = lastSegment(m, SLOT_TENTACLE[slot]!) * 16;
+        const i = SLOT_TENTACLE[slot]!;
+        const o = lastSegment(m, i) * 16;
         const sm = m.pose.segmentMatrices;
         const claw = [0, 1, 2].map(
           (k) => m.pose.anchor[k]! + (sm[o + 12 + k]! + sm[o + 4 + k]!) * s.unit,
         ) as Vec3;
-        expect(dist(claw, at) / s.unit).toBeLessThan(0.05);
+        // On the bar it holds — the rail is its centreline — a claw's clearance out from its surface.
+        const target = targetOf(m, i);
+        expect(dist(claw, target) / s.unit).toBeLessThan(5e-3);
+        expect(dist(target, at) / s.unit).toBeLessThan(0.15);
+        const d = bar.distance(target[0], target[1], target[2], [0, 0, 0]);
+        expect(Math.abs(d - clawClearance(rig, i)) / s.unit).toBeLessThan(2e-3);
       });
     }
+  });
+});
+
+/** Where the motion aims tentacle `i`'s tip, world space. */
+function targetOf(m: SentinelMotion, i: number): Vec3 {
+  const { anchor, unit } = m.pose;
+  return [0, 1, 2].map((k) => anchor[k]! + m.debug.targets[i * 3 + k]! * unit) as Vec3;
+}
+
+/** Every drawn joint, world space. */
+function jointsOf(m: SentinelMotion): Float64Array {
+  const { anchor, unit } = m.pose;
+  const out = new Float64Array(m.debug.jointCount * 3);
+  for (let q = 0; q < out.length; q++) out[q] = anchor[q % 3]! + m.debug.joints[q]! * unit;
+  return out;
+}
+
+/**
+ * How restless the arms are: the RMS of every drawn joint's second difference
+ * from one frame to the next, creature units, over the frames `add` counts.
+ */
+function jitterMeter(unit: number) {
+  let a: Float64Array | null = null;
+  let b: Float64Array | null = null;
+  let sum = 0;
+  let count = 0;
+  return {
+    add(J: Float64Array, counted: boolean) {
+      if (counted && a && b) {
+        for (let q = 0; q < J.length; q++) {
+          const d = (J[q]! - 2 * a[q]! + b[q]!) / unit;
+          sum += d * d;
+          count++;
+        }
+      }
+      b = a;
+      a = J;
+    },
+    rms: () => Math.sqrt(sum / count),
+  };
+}
+
+/** The rig the motion makes for a tier at the defaults: the same lengths, radii and claws. */
+const rigOf = (tier: Tier, unit: number) => makeRig(tier, unit, SENTINEL_SEED, BODY_SCALE);
+
+/**
+ * The grippers the motion pins this frame, each with what it holds: a hold,
+ * or a swing landed since, and no swing in flight — as `grippers` reads it.
+ */
+function pinnedHolds(view: ReplayView): Map<number, Hold> {
+  const out = new Map<number, Hold>();
+  GRIP_SLOTS.forEach((_, s) => {
+    let held: Hold | null = view.holds[s] ?? null;
+    let since = held ? held.since : -Infinity;
+    let flying = false;
+    for (const sw of view.swings) {
+      if (sw.slot !== s || view.clock < sw.start) continue;
+      if (view.clock < sw.land) flying = true;
+      else if (sw.land >= since) {
+        held = sw.to;
+        since = sw.land;
+      }
+    }
+    if (held && !flying) out.set(SLOT_TENTACLE[s]!, { ...held, since });
+  });
+  return out;
+}
+
+/**
+ * A point in the bar's terms: `s` out from the rails' rounded rectangle, `z`
+ * toward the viewer, and whether a straight run of the rails is the nearest.
+ */
+function sectionOf(b: BezelShape, p: ArrayLike<number>) {
+  const d = [p[0]! - b.centre[0], p[1]! - b.centre[1], p[2]! - b.centre[2]];
+  const along = (v: Vec3) => d[0]! * v[0] + d[1]! * v[1] + d[2]! * v[2];
+  const qx = Math.abs(along(b.right)) - (b.width / 2 - b.radius);
+  const qy = Math.abs(along(b.up)) - (b.height / 2 - b.radius);
+  const s = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - b.radius;
+  return { s, z: along(b.normal), straight: qx <= 0 || qy <= 0 };
+}
+
+/** Every matrix the pose draws, its hull and its eye: what two runs that must not differ are compared by. */
+function drawnOf(m: SentinelMotion): number[] {
+  const p = m.pose;
+  return [
+    ...p.segmentMatrices.subarray(0, p.segments * 16),
+    ...p.clawMatrices.subarray(0, p.claws * 16),
+    ...p.hull,
+    ...p.eye.dir,
+    p.eye.intensity,
+    p.eye.aperture,
+  ];
+}
+
+/** How many numbers two lists hold that are not the same, bit for bit. */
+function differences(a: readonly number[], b: readonly number[]): number {
+  let n = Math.abs(a.length - b.length);
+  for (let k = 0; k < Math.min(a.length, b.length); k++) if (!Object.is(a[k], b[k])) n++;
+  return n;
+}
+
+/** A ball far from anything: a body no arm ever comes near. */
+const FAR: ThreadSolid = {
+  across: 2,
+  distance(x, y, z, n) {
+    const d = [x - 1e6, y - 1e6, z - 1e6];
+    const l = Math.hypot(d[0]!, d[1]!, d[2]!);
+    for (let k = 0; k < 3; k++) n[k] = d[k]! / l;
+    return l - 1;
+  },
+};
+
+const PHONE: Viewport = { width: 375, height: 812 };
+const LAPTOP: Viewport = { width: 1280, height: 800 };
+const WIDE: Viewport = { width: 2560, height: 1440 };
+
+/** The Sentinel resting on the frame of `s`, a frame at a time. */
+function restOn(s: ReturnType<typeof perchedCluster>, tier: Tier, field: ThreadField = s.field) {
+  const replay = new CrawlReplay(() => {});
+  replay.rest(s.model, { field, unit: s.unit, perch: s.perch });
+  const m = new SentinelMotion();
+  m.setTier(tier);
+  m.gaze = s.shot.viewer;
+  m.snap(replay.view);
+  let time = 0;
+  return {
+    replay,
+    m,
+    get time() {
+      return time;
+    },
+    frame(dt: number) {
+      replay.update(dt);
+      m.step(replay.view, replay.drain(), dt, (time += dt), false);
+    },
+  };
+}
+
+describe('SentinelMotion beside threads with a body', () => {
+  it('walks bit for bit as it did when no thread near it has a body', () => {
+    for (const dt of [1 / 24, 1 / 60, 1 / 144]) {
+      const { frames, field } = tour(dt);
+      const fields: ThreadField[] = [
+        field,
+        { ...field, solid: () => null },
+        { ...field, solid: () => FAR },
+      ];
+      const ms = fields.map(() => {
+        const m = new SentinelMotion();
+        m.setTier(3);
+        return m;
+      });
+      let time = 0;
+      let differ = 0;
+      for (const f of frames) {
+        time += dt;
+        ms.forEach((m, k) => m.step({ ...f.view, field: fields[k]! }, f.events, dt, time, false));
+        const plain = drawnOf(ms[0]!);
+        for (const m of ms.slice(1)) differ += differences(plain, drawnOf(m));
+      }
+      const end = frames.at(-1)!.view;
+      ms.forEach((m, k) => m.finalPose({ ...end, field: fields[k]! }));
+      for (const m of ms.slice(1)) differ += differences(drawnOf(ms[0]!), drawnOf(m));
+      expect(differ).toBe(0);
+    }
+  });
+
+  it('walks the cluster bit for bit as it did with the frame in the field, the frame far off', () => {
+    const s = perchedCluster();
+    for (const [crawl, dt] of [
+      ['walk', 1 / 144],
+      ['tour', 1 / 24],
+    ] as const) {
+      const runs = [s.space, s.field].map((field) => {
+        const replay = new CrawlReplay(() => {});
+        replay.load(s.crawls[crawl], s.model, { field, unit: s.unit, pace: s.pace });
+        const m = new SentinelMotion();
+        m.setTier(3);
+        m.snap(replay.view);
+        return { replay, m };
+      });
+      let time = 0;
+      let differ = 0;
+      let frames = 0;
+      while (runs[0]!.replay.view.mode !== 'done' && frames++ < 20_000) {
+        time += dt;
+        for (const { replay, m } of runs) {
+          replay.update(dt);
+          m.step(replay.view, replay.drain(), dt, time, false);
+        }
+        differ += differences(drawnOf(runs[0]!.m), drawnOf(runs[1]!.m));
+      }
+      expect(frames).toBeGreaterThan(100);
+      expect(differ).toBe(0);
+    }
+  });
+
+  it('rests on the frame with no joint inside the bar and every segment its length, at any lean, viewport and frame rate', () => {
+    const runs: Array<[Viewport, number, number, Tier]> = [];
+    for (const vp of [PHONE, LAPTOP, WIDE])
+      for (const tilt of [45, 75, 90]) runs.push([vp, tilt, 60, 3]);
+    runs.push([LAPTOP, 75, 24, 3], [LAPTOP, 75, 144, 3], [LAPTOP, 75, 60, 0]);
+    for (const [vp, tilt, fps, tier] of runs) {
+      const s = perchedCluster(vp, { tilt });
+      const bar = bezelSolid(s.shot.bezel);
+      const rig = rigOf(tier, s.unit);
+      const at = restOn(s, tier);
+      const n: Vec3 = [0, 0, 0];
+      // Shares of each joint's tube out of the bar, and of each segment's length off its arm's.
+      let out = Infinity;
+      let length = 0;
+      let finite = true;
+      // Six seconds, a fidget included: the first is at 3 s.
+      for (let f = 0; f < 6 * fps; f++) {
+        at.frame(1 / fps);
+        const J = jointsOf(at.m);
+        finite &&= J.every(Number.isFinite) && allFinite(at.m.pose.clawMatrices);
+        const pinned = pinnedHolds(at.replay.view);
+        for (let i = 0; i < TENTACLES; i++) {
+          const M = rig.segments[i]!;
+          const j0 = rig.jointStart[i]!;
+          const sg0 = rig.segStart[i]!;
+          // A pinned claw's last segment wraps the bar.
+          const last = pinned.has(i) ? M - 2 : M;
+          const ratios: number[] = [];
+          for (let j = 1; j <= M; j++) {
+            const q = (j0 + j) * 3;
+            const p = q - 3;
+            const r = rig.segRadius[sg0 + j - 1]!;
+            if (j >= SOLID_FIRST && j <= last) {
+              out = Math.min(out, bar.distance(J[q]!, J[q + 1]!, J[q + 2]!, n) / r);
+            }
+            const l = Math.hypot(J[q]! - J[p]!, J[q + 1]! - J[p + 1]!, J[q + 2]! - J[p + 2]!);
+            ratios.push(l / rig.segLength[sg0 + j - 1]!);
+          }
+          // Every segment of an arm telescopes alike: each against the arm's middle one.
+          const middle = [...ratios].sort((a, b) => a - b)[Math.floor(ratios.length / 2)]!;
+          for (const r of ratios) length = Math.max(length, Math.abs(r / middle - 1));
+        }
+      }
+      const label = `${vp.width}x${vp.height} tilt ${tilt} at ${fps} fps, tier ${tier}`;
+      expect(finite, label).toBe(true);
+      expect(out, label).toBeGreaterThan(0.8);
+      expect(length, label).toBeLessThan(0.01);
+    }
+  }, 60_000);
+
+  it('rests each claw on the bar’s surface, from the side it reaches it, its talons never through it', () => {
+    for (const vp of [PHONE, LAPTOP]) {
+      for (const tier of [2, 3] as Tier[]) {
+        const s = perchedCluster(vp);
+        const b = s.shot.bezel;
+        const bar = bezelSolid(b);
+        const rig = rigOf(tier, s.unit);
+        const at = restOn(s, tier);
+        const n: Vec3 = [0, 0, 0];
+        const u = s.unit;
+        let tip = 0;
+        let clear = 0;
+        let before = Infinity;
+        let through = 0;
+        let held = 0;
+        // Five seconds after the first fidget.
+        while (at.time < 8) {
+          at.frame(1 / 60);
+          if (at.time < 3) continue;
+          const view = at.replay.view;
+          const J = jointsOf(at.m);
+          const c = at.m.pose.clawMatrices;
+          const anchor = at.m.pose.anchor;
+          for (const [i, hold] of pinnedHolds(view)) {
+            // Landed a moment ago, so the arm has had time to settle on it.
+            if (view.clock - hold.since < 0.15) continue;
+            held++;
+            const rail = PERCH_RAILS.indexOf(hold.key);
+            expect(rail).toBeGreaterThanOrEqual(0);
+            const M = rig.segments[i]!;
+            const q = (rig.jointStart[i]! + M) * 3;
+            const target = targetOf(at.m, i);
+            tip = Math.max(
+              tip,
+              Math.hypot(J[q]! - target[0], J[q + 1]! - target[1], J[q + 2]! - target[2]) / u,
+            );
+            const d = bar.distance(target[0], target[1], target[2], n);
+            clear = Math.max(clear, Math.abs(d - clawClearance(rig, i)) / u);
+            // The face it is reached from: the top rail's top, the bottom rail's upper edge, behind the sides.
+            const sec = sectionOf(b, target);
+            const on: Vec3 = [0, 0, 0];
+            view.field.point(hold.key, hold.u, on);
+            if (rail === 0) expect(sec.s).toBeGreaterThan(b.band / 2);
+            if (rail === 2) expect(sec.s).toBeLessThan(-b.band / 2);
+            if ((rail === 1 || rail === 3) && sectionOf(b, on).straight) {
+              expect(sec.z).toBeLessThan(-b.thickness / 2);
+            }
+            // The joint before the claw: its centre at most half a tip's radius into the bar.
+            const r = rig.segRadius[rig.segStart[i]! + M - 1]!;
+            before = Math.min(
+              before,
+              (bar.distance(J[q - 3]!, J[q - 2]!, J[q - 1]!, n) + r / 2) / u,
+            );
+            // No talon into the bar and out again: once a point along it is in, every later one is.
+            for (let k = 0; k < CLAW_FINGERS; k++) {
+              const o = (i * CLAW_FINGERS + k) * 16;
+              let inside = false;
+              for (let step = 0; step <= 8; step++) {
+                const t = step / 8;
+                const x = -0.2 * t - 1.8 * t * t * t;
+                const p = [0, 1, 2].map(
+                  (e) => anchor[e]! + (c[o + 12 + e]! + c[o + 4 + e]! * t + c[o + e]! * x) * u,
+                );
+                const sd = bar.distance(p[0]!, p[1]!, p[2]!, n) / u;
+                if (sd < -2e-3) inside = true;
+                else if (inside && sd > 2e-3) through++;
+              }
+            }
+          }
+        }
+        const label = `${vp.width}x${vp.height}, tier ${tier}`;
+        expect(held, label).toBeGreaterThan(5 * 60);
+        expect(tip, label).toBeLessThan(1e-3);
+        expect(clear, label).toBeLessThan(2e-3);
+        expect(before, label).toBeGreaterThanOrEqual(0);
+        expect(through, label).toBe(0);
+      }
+    }
+  }, 30_000);
+
+  it('rests on the bar within 5% as calm as through it, at 24, 60 and 144 fps', () => {
+    // Not "no less calm": the same rest with and without the bar differs by a
+    // few per cent either way from one run to the next — fidgets land a
+    // little differently — and 5% is the noise the two runs are compared at.
+    const jitter = (
+      s: ReturnType<typeof perchedCluster>,
+      tier: Tier,
+      field: ThreadField,
+      fps: number,
+    ) => {
+      const at = restOn(s, tier, field);
+      const shake = jitterMeter(s.unit);
+      for (let f = 0; f < 20 * fps; f++) {
+        at.frame(1 / fps);
+        shake.add(jointsOf(at.m), f >= 2 * fps);
+      }
+      return shake.rms();
+    };
+    for (const [vp, tier, tilt, fps] of [
+      [PHONE, 2, 75, 60],
+      [PHONE, 3, 75, 60],
+      [LAPTOP, 2, 75, 60],
+      [LAPTOP, 3, 75, 60],
+      [LAPTOP, 0, 75, 60],
+      [LAPTOP, 3, 90, 60],
+      [PHONE, 3, 75, 24],
+      [LAPTOP, 2, 75, 24],
+      [PHONE, 3, 75, 144],
+      [LAPTOP, 2, 75, 144],
+    ] as const) {
+      const s = perchedCluster(vp, { tilt });
+      // The same field with no body to it: the claws on the rails inside the bar, as before.
+      const through = jitter(s, tier, { ...s.field, solid: undefined }, fps);
+      const on = jitter(s, tier, s.field, fps);
+      expect(
+        on / through,
+        `${vp.width}x${vp.height} tier ${tier} tilt ${tilt} at ${fps} fps`,
+      ).toBeLessThan(1.05);
+    }
+  }, 180_000);
+
+  it('comes back to the frame from a crawl as calm as through it, no arm left caught round the bar', () => {
+    // Called back, it crosses the void from behind the frame and its arms
+    // reach through the frame's hole; then the body rises over the top rail
+    // to its perch. Held out of the bar the shortest way, arms threaded
+    // through the hole stayed hooked round the top rail for seconds,
+    // thrashing — every return to the prompt, many times as restless as
+    // without the bar. Rested by `snap`, as every test above is, it never
+    // comes in that way.
+    const s = perchedCluster();
+    const b = s.shot.bezel;
+    const bar = bezelSolid(b);
+    const rig = rigOf(3, s.unit);
+    const n: Vec3 = [0, 0, 0];
+    const back = (field: ThreadField, fps: number) => {
+      const opts = { field, unit: s.unit, pace: s.pace, perch: s.perch };
+      const replay = new CrawlReplay(() => {});
+      replay.rest(s.model, opts);
+      const m = new SentinelMotion();
+      m.setTier(3);
+      m.gaze = s.shot.viewer;
+      m.snap(replay.view);
+      replay.load(s.crawls.tour, s.model, opts);
+      m.gaze = null;
+      let time = 0;
+      const frame = () => {
+        replay.update(1 / fps);
+        m.step(replay.view, replay.drain(), 1 / fps, (time += 1 / fps), false);
+      };
+      while (time < 7) frame();
+      expect(replay.recall(s.perch, s.leave)).toBe(true);
+      m.gaze = s.shot.viewer;
+      let guard = 0;
+      while (!replay.resting && guard++ < 10_000) frame();
+      const rested = time;
+      // Ten seconds on the frame: how restless, and in how many frames,
+      // after the first second, a joint lies in the bar.
+      const shake = jitterMeter(s.unit);
+      let inside = 0;
+      let finite = true;
+      while (time < rested + 10) {
+        frame();
+        const J = jointsOf(m);
+        finite &&= J.every(Number.isFinite);
+        shake.add(J, true);
+        if (time < rested + 1) continue;
+        const pinned = pinnedHolds(replay.view);
+        let any = false;
+        for (let i = 0; i < TENTACLES && !any; i++) {
+          const M = rig.segments[i]!;
+          const j0 = rig.jointStart[i]!;
+          for (let j = SOLID_FIRST; j <= (pinned.has(i) ? M - 2 : M) && !any; j++) {
+            const q = (j0 + j) * 3;
+            any = bar.distance(J[q]!, J[q + 1]!, J[q + 2]!, n) < 0;
+          }
+        }
+        if (any) inside++;
+      }
+      return { jitter: shake.rms(), inside, finite };
+    };
+    for (const fps of [24, 60, 144]) {
+      const through = back({ ...s.field, solid: undefined }, fps);
+      const on = back(s.field, fps);
+      expect(on.finite, `${fps} fps`).toBe(true);
+      expect(on.inside, `${fps} fps`).toBe(0);
+      expect(on.jitter / through.jitter, `${fps} fps`).toBeLessThan(1.2);
+    }
+  }, 120_000);
+
+  it('steps at the prompt in well under the frame', () => {
+    const at = restOn(perchedCluster(), 3);
+    for (let f = 0; f < 200; f++) at.frame(1 / 60);
+    const start = performance.now();
+    for (let f = 0; f < 400; f++) at.frame(1 / 60);
+    // About two milliseconds in node; generous, so a busy test machine does not fail it.
+    expect((performance.now() - start) / 400).toBeLessThan(5);
   });
 });

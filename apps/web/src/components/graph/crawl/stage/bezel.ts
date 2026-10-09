@@ -3,7 +3,8 @@
 // The box is a DOM element above the canvas; this is its rim in the world,
 // placed where prompt/perch-geometry.ts unprojects the box (`BezelShape`), so
 // the claws close on something that is there in 3D — the rails the grip
-// planner holds are this bar's centreline.
+// planner holds are this bar's centreline, and the claws rest on its surface,
+// the arms kept out of it, by the same shape as a solid (prompt/bezel-solid.ts).
 //
 // It is lit as the dormant glass is, so the frame belongs to the world the
 // creature walks into: dark glass under a soft key that rides with the camera,
@@ -27,6 +28,7 @@ import * as THREE from 'three';
 
 import { FOV_DEG, basis, type Camera, type Viewport } from '@/lib/graph-camera';
 
+import { bezelBevel } from '../prompt/bezel-solid';
 import type { BezelShape } from '../prompt/perch-geometry';
 import { withRendererState } from '../sentinel/gl-state';
 import { SENTINEL_LINEAR, linear } from '../sentinel/palette';
@@ -181,10 +183,11 @@ function roundedRect<T extends THREE.Path>(path: T, hw: number, hh: number, r: n
  * with a small bevel. Three's bevel grows the outline by its size and the
  * depth by its thickness either side, so both are taken off first: the whole
  * bar spans the rails' rectangle grown by half the band, and the thickness
- * centred on the box's plane.
+ * centred on the box's plane. Its bevel is the solid's (bezelBevel), so what
+ * is drawn and what a claw rests on are one shape.
  */
 export function bezelGeometry(s: Size): THREE.ExtrudeGeometry {
-  const bevel = Math.min(s.band, s.thickness) / 4;
+  const bevel = bezelBevel(s.band, s.thickness);
   const hw = s.width / 2;
   const hh = s.height / 2;
   const half = s.band / 2;

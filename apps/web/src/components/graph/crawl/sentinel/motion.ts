@@ -12,6 +12,8 @@
 // Each tentacle has one duty a frame:
 // - The six grippers follow their slots: pinned where it holds, swinging on an
 //   arc to the next hold, hanging toward the slot's natural point when free.
+//   A thread with a body — the frame round the prompt — is held on its
+//   surface, from above along up (landing.ts), not on its line inside it.
 // - The two explorers lead along the walk, the first a little ahead of the
 //   cursor, the second a beat behind; across a gap they feel for the far note,
 //   tapping, and once they touch it they hold on and are hauled across. While
@@ -23,6 +25,10 @@
 // Under reduced motion ("still") nothing animates: no wave, hum, breath or
 // pulse, the body sits at its goal and the chains are only re-settled, a few
 // passes a frame, so tips stay on threads the layout is still moving.
+//
+// The chains are told of any body within an arm's reach (`drive.solid`), and
+// keep every arm out of it. Over a space with no such thread — the brain, the
+// cluster — there is none, and the motion is exactly what it was without.
 
 import { hash01 } from '@/lib/graph-model';
 
@@ -69,6 +75,7 @@ import {
 } from './chain';
 import { createEye, hum, stepEye, type EyeCue, type EyeParams } from './eye';
 import { PERCH_BACK, PERCH_UP } from './grips';
+import { clawClearance, landOnSolid } from './landing';
 import { createPose, type SentinelPose } from './pose';
 import { SENTINEL_SEED, makeRig, type Rig } from './rig';
 import { MAX_SEGMENTS, TIERS, type Tier } from './tiers';
@@ -225,6 +232,8 @@ export class SentinelMotion {
   /** Where the eye is drawn this frame, world space; null looks ahead. */
   private lookAt: Vec3 | null = null;
   private readonly lookPoint = v3();
+  /** A gripper's socket in the world, as its landing asks it. */
+  private readonly socketAt = v3();
 
   constructor(params: Partial<MotionParams> = {}, seed = SENTINEL_SEED) {
     this.params = { ...DEFAULT_MOTION, ...params };
@@ -420,6 +429,12 @@ export class SentinelMotion {
     chain.glowFront.fill(0);
     this.touchNow = false;
     this.lookAt = null;
+    // Bodies any arm can touch this frame, wherever along it the body is: what
+    // its reach takes in from where it ends, and from as far as it came.
+    const before = this.before.p;
+    const now = this.now.p;
+    const came = Math.hypot(now[0] - before[0], now[1] - before[1], now[2] - before[2]);
+    d.solid = view.field.solid?.(now, this.armReach(this.rig!) + came) ?? null;
 
     this.grippers(view);
     const walk =
@@ -453,6 +468,49 @@ export class SentinelMotion {
     return !!hold && view.field.point(hold.key, hold.u, out);
   }
 
+  /**
+   * Where gripper `i`'s claw goes for `hold`: its point on the thread, or —
+   * the thread having a body there, or one within the claw's clearance — on
+   * that body's surface, a claw's clearance out (landing.ts). Asked per hold,
+   * not of the frame's solid, so a swing to the frame lands on its surface
+   * while the body is still far.
+   */
+  private landing(view: ReplayView, hold: Hold | null, i: number, out: Vec3): boolean {
+    if (!hold || !this.holdPoint(view, hold, out)) return false;
+    const rig = this.rig!;
+    const clearance = clawClearance(rig, i);
+    const solid = view.field.solid?.(out, clearance);
+    if (!solid) return true;
+    const n = this.now;
+    const k = i * 3;
+    const socket = this.socketAt;
+    for (let c = 0; c < 3; c++) {
+      socket[c] =
+        n.p[c]! +
+        (n.s[c]! * rig.socket[k]! + n.u[c]! * rig.socket[k + 1]! + n.f[c]! * rig.socket[k + 2]!) *
+          rig.unit;
+    }
+    landOnSolid(view.field, solid, hold.key, hold.u, socket, clearance, out);
+    return true;
+  }
+
+  /**
+   * The furthest any part of an arm can lie from the body's middle, world
+   * units: a socket, its arm telescoped all the way, and the thickest tube.
+   */
+  private armReach(rig: Rig): number {
+    const scale = this.params.maxStretchScale;
+    let most = 0;
+    let tube = 0;
+    for (let i = 0; i < rig.tentacles; i++) {
+      const k = i * 3;
+      const socket = Math.hypot(rig.socket[k]!, rig.socket[k + 1]!, rig.socket[k + 2]!) * rig.unit;
+      most = Math.max(most, socket + rig.length[i]! * Math.max(1, rig.maxStretch[i]! * scale));
+      tube = Math.max(tube, rig.segRadius[rig.segStart[i]!]!);
+    }
+    return most + tube;
+  }
+
   /** Grippers: pinned where their slot holds, swinging to the next hold, or hanging free. */
   private grippers(view: ReplayView): void {
     const clock = view.clock;
@@ -477,8 +535,8 @@ export class SentinelMotion {
       }
       const natural = GRIP_SLOTS[s]!.natural;
       if (swing) {
-        if (!this.holdPoint(view, swing.from, from)) this.world(natural, from);
-        if (!this.holdPoint(view, swing.to, to)) this.world(natural, to);
+        if (!this.landing(view, swing.from, i, from)) this.world(natural, from);
+        if (!this.landing(view, swing.to, i, to)) this.world(natural, to);
         const f = clamp01((clock - swing.start) / Math.max(1e-6, swing.land - swing.start));
         const e = 1 - (1 - f) * (1 - f);
         const lift = Math.sin(Math.PI * e) * SWING_LIFT * unit;
@@ -486,7 +544,7 @@ export class SentinelMotion {
         for (let k = 0; k < 3; k++)
           p[k] = from[k]! + (to[k]! - from[k]!) * e + this.now.u[k]! * lift;
         this.set(i, TIP_SOFT, p, 0.5);
-      } else if (held && this.holdPoint(view, held, to)) {
+      } else if (held && this.landing(view, held, i, to)) {
         this.set(i, TIP_PINNED, to);
         // Only fresh light climbs the arm: what the thread glows above the floor it keeps.
         const lit = view.lit.get(held.key);

@@ -8,6 +8,10 @@
 // same crossing of the void, the same motion. Ids start with U+0001, which no
 // note path or id holds.
 //
+// Unlike a note's thread, the frame's rails have a body: the bar stage/bezel.ts
+// draws round them (`solid`, prompt/bezel-solid.ts). A claw rests on its
+// surface instead of on the rail inside it, and no arm passes through it.
+//
 // Up is the frame's near the perch — away from the viewer, the creature
 // clinging to the back of the panel — and the space's further out. Between
 // the two it turns about the screen's right, which both are square to (the
@@ -20,9 +24,16 @@
 import type { CrossingPace, ReplayPerch } from '../crawl-replay';
 import { HOVER } from '../sentinel/anatomy';
 import { polylineThreadField, type PolylineField } from '../space/polyline-field';
-import { threadEnds, threadKey, type ThreadField, type ThreadKey } from '../threads';
+import {
+  threadEnds,
+  threadKey,
+  type ThreadField,
+  type ThreadKey,
+  type ThreadSolid,
+} from '../threads';
 import type { Vec3 } from '../vec';
 
+import { bezelSolid } from './bezel-solid';
 import type { PerchShot } from './perch-geometry';
 
 export const PERCH_ID = '\u0001perch';
@@ -90,19 +101,26 @@ const smoothstep = (x: number) => {
  * `nearby` alone, and over a field without it the rails are found through the
  * perch node's `around`. Up is the frame's within UP_NEAR units of the perch
  * node, the space's past UP_FAR, and turns between them about the screen's
- * right, eased.
+ * right, eased. `solid` is the frame's bar wherever it is asked near enough,
+ * else whatever bodies `base` has: the notes stand at least GAP_MIN units
+ * from the frame, further than any arm reaches, so the walk among them never
+ * meets it.
  */
 export function withPerch(base: ThreadField, shot: PerchShot | null): PerchedField {
   let frame: PolylineField | null = null;
+  let bar: ThreadSolid | null = null;
   let node: Vec3 = [0, 0, 0];
   let unit = 1;
   let frameUp: Vec3 = [0, 1, 0];
   let screenRight: Vec3 = [1, 0, 0];
+  /** The normal `solid`'s test writes and nobody reads: asked every frame, it must not allocate. */
+  const scratch: Vec3 = [0, 0, 0];
   const owns = (key: ThreadKey) => PERCH_RAIL_SET.has(key);
 
   const field: PerchedField = {
     setFrame(s) {
       frame = s ? frameField(s) : null;
+      bar = s ? bezelSolid(s.bezel) : null;
       if (!s) return;
       node = s.perch.node;
       unit = s.unit;
@@ -124,6 +142,11 @@ export function withPerch(base: ThreadField, shot: PerchShot | null): PerchedFie
         out.push(...base.around(theirs, hops, max - out.length));
       }
       return out;
+    },
+    solid(q, r) {
+      // The frame's bar when the ball reaches it; else whatever the space's own threads have.
+      if (bar && bar.distance(q[0], q[1], q[2], scratch) <= r) return bar;
+      return base.solid?.(q, r) ?? null;
     },
     up(p, out) {
       base.up(p, out);

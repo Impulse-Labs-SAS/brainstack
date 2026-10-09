@@ -245,6 +245,23 @@ export function legPoint(
 }
 
 /**
+ * The body of threads that have one: what a claw rests on and an arm never
+ * passes through. Plain threads — the brain's, a space's filaments — are lines
+ * and have none.
+ */
+export interface ThreadSolid {
+  /**
+   * Signed distance from (x, y, z) to the surface, world units, negative
+   * inside, and the outward unit normal at the nearest surface point into `n`.
+   * Exact, or at least never more than the true distance (1-Lipschitz): a step
+   * of that length toward the surface never crosses it.
+   */
+  distance(x: number, y: number, z: number, n: Vec3): number;
+  /** The most two points of a cross-section lie apart, world units: from inside, this far along any way is out. */
+  readonly across: number;
+}
+
+/**
  * The world as the Sentinel sees it: notes as points, threads as curves,
  * named by id and key. It never sees the brain or the model, so the space
  * Crawl walks can change under it.
@@ -278,6 +295,13 @@ export interface ThreadField {
    * hand, whatever the links say. Without it, grips search around the walk.
    */
   nearby?(q: Vec3, r: number, max: number): ThreadKey[];
+  /**
+   * The bodies of the threads that have one within `r` of `q`, as one solid;
+   * null when none does. Without it no thread has a body, and a claw holds the
+   * drawn line as it always has. Asked a few times a frame; it may hand back the
+   * same object each time, and must not allocate.
+   */
+  solid?(q: Vec3, r: number): ThreadSolid | null;
 }
 
 /** A note is shown once it has appeared this far; the scene hides threads below it. */

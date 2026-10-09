@@ -29,12 +29,26 @@
 //   length, along the solved directions: rigid parts drawn with gaps or
 //   overlaps read as rubber. What error is left lands at the claw, and any
 //   bend the soft cones let through is clamped there.
+// - Threads with a body (the frame round the prompt) are kept out of last in
+//   every pass, at every tier: each joint, and each segment's middle, pushed
+//   out the shortest way, both its positions moved and whatever velocity it
+//   still had into the body taken away. Inelastic, so an arm pressed against
+//   the bar rests on it instead of sinking a step's worth and being flung back
+//   each step, which shivers. The drawn chain is cleared once more, as the
+//   cones are clamped there, each segment kept its length: never drawn
+//   through the bar.
+// - Except an arm caught round one — turned more than a claw's grip round it,
+//   as when the body rises over the top rail with an arm threaded through the
+//   frame's hole: the shortest way out holds it there for good, its own pull
+//   dragging it back in each step, and it thrashes. It is let through, once,
+//   until it has swung clear or half a second has passed (`loosen`).
 //
 // The rendered frame of each segment is carried along the arm by double
 // reflection (Wang et al. 2008, a rotation-minimising frame), so the twist the
 // vertebrae show is only the twist the rig gives them, never a spin from how
 // the arm happens to bend.
 
+import type { ThreadSolid } from '../threads';
 import type { Vec3 } from '../vec';
 
 import { CLAW_FINGERS, HULL, TENTACLES } from './anatomy';
@@ -135,6 +149,8 @@ export interface ChainDrive {
   target: Float32Array;
   /** Per tentacle, for TIP_SOFT: the fraction of the way to its target the tip moves per pass. */
   gain: Float32Array;
+  /** Bodies the tentacles may not enter: threads with one near the creature. Null or absent: the chains are exactly as without it. */
+  solid?: ThreadSolid | null;
 }
 
 export interface ChainState {
@@ -166,6 +182,11 @@ export interface ChainState {
   root: Float32Array;
   axis: Float32Array;
   normal: Float32Array;
+  /** Per tentacle: radians its arm turns round a body it lies by, as the last step left it (`wrapRound`). */
+  wrap: Float32Array;
+  /** Per tentacle: 1 while it is let through the bodies it was caught round, and the seconds it has been. */
+  loose: Uint8Array;
+  looseFor: Float32Array;
   /** Seconds not yet stepped. */
   acc: number;
 }
@@ -192,6 +213,9 @@ export function createChain(rig: Rig): ChainState {
     root: new Float32Array(T * 3),
     axis: new Float32Array(T * 3),
     normal: new Float32Array(T * 3),
+    wrap: new Float32Array(T),
+    loose: new Uint8Array(T),
+    looseFor: new Float32Array(T),
     acc: 0,
   };
 }
@@ -574,10 +598,410 @@ function place(
 }
 
 /**
+ * The first joint kept out of a body. The ones before sit in the collar, as
+ * the hull's push leaves them; and where a socket itself lies in the bar —
+ * the explorers' as the creature leans upright behind the frame — pushing
+ * them out only stretches the arm and shakes it.
+ */
+export const SOLID_FIRST = 3;
+
+/** The body's normal at the last contact asked: the loops below allocate nothing. */
+const contact: Vec3 = [0, 0, 0];
+
+/**
+ * Whether tentacle `i` can touch `solid` at all: its root no further from it
+ * than the arm telescoped all the way and its thickest tube. One that cannot
+ * is not looked at.
+ */
+function reaches(
+  solid: ThreadSolid,
+  c: ChainState,
+  rig: Rig,
+  s: ChainSettings,
+  i: number,
+): boolean {
+  const k3 = i * 3;
+  const far =
+    rig.length[i]! * Math.max(1, rig.maxStretch[i]! * s.maxStretchScale) +
+    rig.segRadius[rig.segStart[i]!]!;
+  return solid.distance(c.root[k3]!, c.root[k3 + 1]!, c.root[k3 + 2]!, contact) <= far;
+}
+
+/**
+ * Joint `q` moved `k` out along `contact`. With `xp`, its previous position
+ * moves too — a reshape, not a kick, as `bend` does — and whatever velocity it
+ * still had into the body is taken away: it rests on the surface, where
+ * otherwise it would sink a step's worth into it each step and be thrown out.
+ */
+function pushOut(x: Float32Array, xp: Float32Array | null, q: number, k: number): void {
+  const nx = contact[0];
+  const ny = contact[1];
+  const nz = contact[2];
+  x[q] = x[q]! + nx * k;
+  x[q + 1] = x[q + 1]! + ny * k;
+  x[q + 2] = x[q + 2]! + nz * k;
+  if (!xp) return;
+  xp[q] = xp[q]! + nx * k;
+  xp[q + 1] = xp[q + 1]! + ny * k;
+  xp[q + 2] = xp[q + 2]! + nz * k;
+  const vn = (x[q]! - xp[q]!) * nx + (x[q + 1]! - xp[q + 1]!) * ny + (x[q + 2]! - xp[q + 2]!) * nz;
+  if (vn < 0) {
+    xp[q] = xp[q]! + nx * vn;
+    xp[q + 1] = xp[q + 1]! + ny * vn;
+    xp[q + 2] = xp[q + 2]! + nz * vn;
+  }
+}
+
+/**
+ * An arm turned further than this round a body is caught round it: it reached
+ * the far side of the bar by going round it — threaded through the frame's
+ * hole as the body rose over the top rail, or coiled round the bar by a swing
+ * the body made while it held on. Pushed out the shortest way every pass, such
+ * an arm can never come free: its own pull drags it back in each step, and it
+ * thrashes for seconds. A claw that takes the bar over its edge turns a
+ * quarter of a turn round it; resting at any lean the lab offers, every arm
+ * turns less than half a turn.
+ */
+const WRAP_CAUGHT = 1.2 * Math.PI;
+/** Turned no further than this round it, an arm let through is held off it again. */
+const WRAP_FREE = 0.75 * Math.PI;
+/**
+ * Most seconds an arm is let through: enough for it to swing clear, as it
+ * would with no body there. One whose free shape still crosses the bar is
+ * then held off it again, out the shortest way, and settles as a fresh start does.
+ */
+const LOOSE_MOST = 0.5;
+
+/** The body's normal at the last joint near it, as `wrapRound` walks the arm. */
+const lastNormal: Vec3 = [0, 0, 0];
+
+/**
+ * `wrap` and the turn to the next joint along the arm, `d` from the body with
+ * the body's normal at it in `contact`: the angle from the normal at the last
+ * joint near the body. Only joints within a section's width of it count;
+ * `near` says whether there was one before. -1 for a joint further out, which
+ * leaves the total as it was.
+ */
+function turn(d: number, near: boolean, wrap: number, across: number): number {
+  if (!(d < across)) return -1;
+  let total = wrap;
+  if (near) {
+    const c = lastNormal[0] * contact[0] + lastNormal[1] * contact[1] + lastNormal[2] * contact[2];
+    total += Math.acos(Math.max(-1, Math.min(1, c)));
+  }
+  lastNormal[0] = contact[0];
+  lastNormal[1] = contact[1];
+  lastNormal[2] = contact[2];
+  return total;
+}
+
+/**
+ * Radians tentacle `i`'s joints SOLID_FIRST…`last` turn round `solid`: the
+ * angle its normal sweeps from one joint near it to the next. An arm lying
+ * along a face turns not at all, one taking the bar over its edge a quarter
+ * of a turn, one wrapped round it a whole turn or more. What `clearSolid`
+ * measures as it pushes, for an arm it does not push.
+ */
+function wrapRound(x: Float32Array, rig: Rig, i: number, solid: ThreadSolid, last: number): number {
+  const j0 = rig.jointStart[i]!;
+  let wrap = 0;
+  let near = false;
+  for (let j = SOLID_FIRST; j <= last; j++) {
+    const q = (j0 + j) * 3;
+    const d = solid.distance(x[q]!, x[q + 1]!, x[q + 2]!, contact);
+    const w = turn(d, near, wrap, solid.across);
+    if (w < 0) continue;
+    wrap = w;
+    near = true;
+  }
+  return wrap;
+}
+
+/**
+ * Tentacle `i`'s joints SOLID_FIRST…`last` out of `solid` by their tubes'
+ * radius, root to tip, and the middles of the segments between them, both
+ * ends pushed along the middle's normal: a segment across a corner of the bar
+ * slides round it. A middle is looked at only when its nearer end lies within
+ * half a segment and a tube of the body — the distance is 1-Lipschitz, so the
+ * rest cannot touch it. A NaN distance fails every test and moves nothing.
+ * Returns how far round the body the arm turns (`wrapRound`), from the same
+ * distances: a joint pushed along its normal keeps it.
+ */
+function clearSolid(
+  x: Float32Array,
+  xp: Float32Array,
+  rig: Rig,
+  i: number,
+  stretch: number,
+  solid: ThreadSolid,
+  last: number,
+): number {
+  const j0 = rig.jointStart[i]!;
+  const sg0 = rig.segStart[i]!;
+  // How far the joint before lies from the body, at least.
+  let before = Infinity;
+  let wrap = 0;
+  let near = false;
+  for (let j = SOLID_FIRST; j <= last; j++) {
+    const q = (j0 + j) * 3;
+    // The tube of the segment that ends at this joint.
+    const r = rig.segRadius[sg0 + j - 1]!;
+    let dj = solid.distance(x[q]!, x[q + 1]!, x[q + 2]!, contact);
+    const w = turn(dj, near, wrap, solid.across);
+    if (w >= 0) {
+      wrap = w;
+      near = true;
+    }
+    if (dj < r) {
+      pushOut(x, xp, q, r - dj);
+      dj = r;
+    }
+    if (j > SOLID_FIRST && Math.min(before, dj) - (rig.segLength[sg0 + j - 1]! * stretch) / 2 < r) {
+      const p = q - 3;
+      const dm = solid.distance(
+        (x[p]! + x[q]!) / 2,
+        (x[p + 1]! + x[q + 1]!) / 2,
+        (x[p + 2]! + x[q + 2]!) / 2,
+        contact,
+      );
+      if (dm < r) {
+        pushOut(x, xp, p, r - dm);
+        pushOut(x, xp, q, r - dm);
+        // Moved that far, it is at most that much nearer the body than it was.
+        dj -= r - dm;
+      }
+    }
+    before = dj;
+  }
+  return wrap;
+}
+
+/**
+ * Whether tentacle `i` is let through the bodies it lies by, after a step of
+ * `h` seconds that turned it `wrap` round them: caught round one, it is let
+ * through until it has turned free or LOOSE_MOST has passed.
+ */
+function loosen(c: ChainState, i: number, wrap: number, h: number): void {
+  c.wrap[i] = wrap;
+  if (!c.loose[i]) {
+    if (wrap > WRAP_CAUGHT) {
+      c.loose[i] = 1;
+      c.looseFor[i] = 0;
+    }
+    return;
+  }
+  c.looseFor[i] = c.looseFor[i]! + h;
+  if (wrap < WRAP_FREE || c.looseFor[i]! >= LOOSE_MOST) c.loose[i] = 0;
+}
+
+/** Most sweeps the drawn chain takes to clear a body and still reach a pinned claw. */
+const DRAWN_ROUNDS = 6;
+
+/** Joint `b` put `length` from joint `a`, along the way it lies from it. */
+function hold(x: Float32Array, a: number, b: number, length: number): void {
+  const dx = x[b]! - x[a]!;
+  const dy = x[b + 1]! - x[a + 1]!;
+  const dz = x[b + 2]! - x[a + 2]!;
+  const d = mag(dx, dy, dz);
+  if (!(d > 1e-9)) return;
+  const k = length / d;
+  x[b] = x[a]! + dx * k;
+  x[b + 1] = x[a + 1]! + dy * k;
+  x[b + 2] = x[a + 2]! + dz * k;
+}
+
+/**
+ * Joint `b` between joints `a` and `c`, `la` from the one and `lb` from the
+ * other, as near as it can stay to where it is: two segments that bridge
+ * whatever lies between their ends. Too far apart, it lies on the line
+ * between them, `la` from `a`, and it says so: false.
+ */
+function bridge(x: Float32Array, a: number, b: number, c: number, la: number, lb: number): boolean {
+  let ex = x[c]! - x[a]!;
+  let ey = x[c + 1]! - x[a + 1]!;
+  let ez = x[c + 2]! - x[a + 2]!;
+  const d = mag(ex, ey, ez);
+  if (!(d > 1e-9)) return false;
+  ex /= d;
+  ey /= d;
+  ez /= d;
+  // Where it stands along a → c, and how far off that line the two lengths put it.
+  const along = Math.max(-la, Math.min(la, (d * d + la * la - lb * lb) / (2 * d)));
+  const off = Math.sqrt(Math.max(0, la * la - along * along));
+  let vx = x[b]! - x[a]!;
+  let vy = x[b + 1]! - x[a + 1]!;
+  let vz = x[b + 2]! - x[a + 2]!;
+  const k = vx * ex + vy * ey + vz * ez;
+  vx -= ex * k;
+  vy -= ey * k;
+  vz -= ez * k;
+  const vl = mag(vx, vy, vz);
+  const s = vl > 1e-9 ? off / vl : 0;
+  x[b] = x[a]! + ex * along + vx * s;
+  x[b + 1] = x[a + 1]! + ey * along + vy * s;
+  x[b + 2] = x[a + 2]! + ez * along + vz * s;
+  return d <= (la + lb) * (1 + 1e-6);
+}
+
+/**
+ * Halvings of the turn `turnOut` searches. Fewer, a turned joint lands a
+ * little off the surface, by a different little each frame, and shivers.
+ */
+const TURN_STEPS = 16;
+/** The way out from the joint before, and one square to it, as `turnOut` turns a segment. */
+const outward: Vec3 = [0, 0, 0];
+const square: Vec3 = [0, 0, 0];
+
+/**
+ * Joint `b`, `length` from joint `a` with its tube still in `solid`, turned
+ * about `a` toward the way out of the body there — the side `a` lies on —
+ * no further than takes its tube out, so the segment keeps its length and as
+ * much of its way as it can. A push along the normal does not do it when the
+ * segment runs into the body along that normal: put back at its length along
+ * the way it lay, it comes straight back. Where even straight out is not
+ * clear — `a` itself deep in the body — straight out is the best there is.
+ */
+function turnOut(
+  x: Float32Array,
+  a: number,
+  b: number,
+  length: number,
+  r: number,
+  solid: ThreadSolid,
+): void {
+  if (!Number.isFinite(solid.distance(x[a]!, x[a + 1]!, x[a + 2]!, outward))) return;
+  const ox = outward[0];
+  const oy = outward[1];
+  const oz = outward[2];
+  // The segment's way, and its part square to the way out.
+  const ex = (x[b]! - x[a]!) / length;
+  const ey = (x[b + 1]! - x[a + 1]!) / length;
+  const ez = (x[b + 2]! - x[a + 2]!) / length;
+  const along = Math.max(-1, Math.min(1, ex * ox + ey * oy + ez * oz));
+  let sx = ex - ox * along;
+  let sy = ey - oy * along;
+  let sz = ez - oz * along;
+  let sl = mag(sx, sy, sz);
+  if (!(sl > 1e-3)) {
+    // Straight into it, near enough that what is left across is rounding:
+    // any way across will do — square to the way out and to the world axis
+    // it leans least along.
+    const ax = Math.abs(ox) <= Math.abs(oy) && Math.abs(ox) <= Math.abs(oz) ? 1 : 0;
+    const ay = ax === 0 && Math.abs(oy) <= Math.abs(oz) ? 1 : 0;
+    const az = 1 - ax - ay;
+    sx = ay * oz - az * oy;
+    sy = az * ox - ax * oz;
+    sz = ax * oy - ay * ox;
+    sl = mag(sx, sy, sz);
+  }
+  // Square to the way out once more: off by rounding, the turned segment
+  // would not keep its length.
+  sx /= sl;
+  sy /= sl;
+  sz /= sl;
+  const k = sx * ox + sy * oy + sz * oz;
+  sx -= ox * k;
+  sy -= oy * k;
+  sz -= oz * k;
+  sl = mag(sx, sy, sz);
+  square[0] = sx / sl;
+  square[1] = sy / sl;
+  square[2] = sz / sl;
+  // From straight out (0) to the way it lay: the furthest turn whose tube is out.
+  let lo = 0;
+  let hi = Math.acos(along);
+  if (turned(x, a, b, length, lo, solid) >= r) {
+    for (let n = 0; n < TURN_STEPS; n++) {
+      const mid = (lo + hi) / 2;
+      if (turned(x, a, b, length, mid, solid) >= r) lo = mid;
+      else hi = mid;
+    }
+  }
+  turned(x, a, b, length, lo, solid);
+}
+
+/** Joint `b` put `length` from `a`, `angle` off `outward` toward `square`; how far it then lies from `solid`. */
+function turned(
+  x: Float32Array,
+  a: number,
+  b: number,
+  length: number,
+  angle: number,
+  solid: ThreadSolid,
+): number {
+  const c = Math.cos(angle) * length;
+  const s = Math.sin(angle) * length;
+  x[b] = x[a]! + outward[0] * c + square[0] * s;
+  x[b + 1] = x[a + 1]! + outward[1] * c + square[1] * s;
+  x[b + 2] = x[a + 2]! + outward[2] * c + square[2] * s;
+  return solid.distance(x[b]!, x[b + 1]!, x[b + 2]!, contact);
+}
+
+/**
+ * The drawn chain out of `solid`, every segment still exactly its length.
+ * The solved chain already ends every pass clear of it: this takes up what
+ * the drawn chain's carry ahead and its FABRIK closing left. Root to tip, from
+ * SOLID_FIRST, each joint is put back its length from the one before — which
+ * may have moved — and, its tube in the body, pushed out and put back again,
+ * or, that not enough, turned out about the joint before (`turnOut`): the rest
+ * of the arm moves with it, as rigid parts do. A pinned arm stops two short of
+ * its claw, and the joint between is set to bridge to the claw, which holds.
+ * Drawn segments that stretched or shrank to clear the bar would read as
+ * rubber, as the rebuild above says.
+ */
+function clearDrawn(
+  xr: Float32Array,
+  rig: Rig,
+  i: number,
+  stretch: number,
+  solid: ThreadSolid,
+  pinned: boolean,
+): void {
+  const M = rig.segments[i]!;
+  const j0 = rig.jointStart[i]!;
+  const sg0 = rig.segStart[i]!;
+  const last = pinned ? M - 2 : M;
+  for (let round = 0; ; round++) {
+    for (let j = SOLID_FIRST; j <= last; j++) {
+      const q = (j0 + j) * 3;
+      const length = rig.segLength[sg0 + j - 1]! * stretch;
+      const r = rig.segRadius[sg0 + j - 1]!;
+      hold(xr, q - 3, q, length);
+      // Twice: put back at its length, it may lie a little in again; and still
+      // in, the push went along the segment and came back with it — turned.
+      for (let pass = 0; ; pass++) {
+        const d = solid.distance(xr[q]!, xr[q + 1]!, xr[q + 2]!, contact);
+        if (!(d < r)) break;
+        if (pass === 2) {
+          turnOut(xr, q - 3, q, length, r, solid);
+          break;
+        }
+        pushOut(xr, null, q, r - d);
+        hold(xr, q - 3, q, length);
+      }
+    }
+    if (!pinned || last < SOLID_FIRST) return;
+    const a = (j0 + M - 2) * 3;
+    const la = rig.segLength[sg0 + M - 2]! * stretch;
+    const lb = rig.segLength[sg0 + M - 1]! * stretch;
+    if (bridge(xr, a, a + 3, a + 6, la, lb) || round + 1 >= DRAWN_ROUNDS) return;
+    // Dragged further from the claw than its last two segments reach: back
+    // from the claw, each joint its length from the one after, and round
+    // again — FABRIK, the body in its forward sweep. What is left at the end
+    // lands at the claw, as the closing above leaves it.
+    for (let j = M - 1; j >= SOLID_FIRST; j--) {
+      const q = (j0 + j) * 3;
+      hold(xr, q + 3, q, rig.segLength[sg0 + j]! * stretch);
+    }
+  }
+}
+
+/**
  * The constraint passes of one step (or of a relaxation), for one tentacle.
  * `minGain` firms up soft targets and finishes them with FABRIK like pins: a
  * relaxation has no motion to keep, only a pose to reach in a few passes, and
- * a tip's pull otherwise travels back up the arm one joint per pass.
+ * a tip's pull otherwise travels back up the arm one joint per pass. `h`, the
+ * step's seconds, is 0 in a relaxation: nothing is let through a body there.
  */
 function solve(
   c: ChainState,
@@ -588,6 +1012,7 @@ function solve(
   pose: BodyPose,
   iterations: number,
   minGain = 0,
+  h = 0,
 ): void {
   const x = c.x;
   const M = rig.segments[i]!;
@@ -616,6 +1041,12 @@ function solve(
   const unit = rig.unit * rig.bodyScale;
   const hullR = ((HULL.width + HULL.height) / 4) * unit;
   const hullH = Math.max(0, HULL.length / 2 - (HULL.width + HULL.height) / 4) * unit;
+  // A body this arm can touch from where its root is this step, if any, and
+  // whether it is let through it this step, caught round it.
+  const solid = d.solid ?? null;
+  const near = solid !== null && reaches(solid, c, rig, s, i);
+  const loose = near && c.loose[i] === 1;
+  let wrap = 0;
 
   for (let it = 0; it < iterations; it++) {
     // a. The root rides its socket.
@@ -740,7 +1171,27 @@ function solve(
         x[q + 2] = x[q + 2]! + cz * push;
       }
     }
+
+    // h. Out of the bodies of thick threads — the frame round the prompt —
+    //    every pass and at every tier, not with the hull: an arm through the
+    //    bar is not a detail a cheaper tier may drop. Last, so each pass ends
+    //    clear of it. A pinned claw's last segment wraps the bar, its tip
+    //    already a clearance out: pushing the joint before it would only fight
+    //    the pin and FABRIK. An arm caught round it is let through instead.
+    if (solid && near && !loose) {
+      wrap = clearSolid(x, c.xp, rig, i, stretch, solid, pinned ? M - 2 : M);
+    }
   }
+  if (!(h > 0)) return;
+  if (!solid || !near) {
+    c.wrap[i] = 0;
+    c.loose[i] = 0;
+    return;
+  }
+  // How far round it the last pass left the arm: measured as it was pushed,
+  // or, let through, now.
+  if (loose) wrap = wrapRound(x, rig, i, solid, pinned ? M - 2 : M);
+  loosen(c, i, wrap, h);
 }
 
 /** Telescoping springs toward its click (critically damped, ω = 16), within its limit. */
@@ -795,7 +1246,7 @@ function substep(
       x[q + 1] = x[q + 1]! + vy;
       x[q + 2] = x[q + 2]! + vz;
     }
-    solve(c, rig, d, s, i, pose, s.iterations);
+    solve(c, rig, d, s, i, pose, s.iterations, 0, h);
   }
 }
 
@@ -864,6 +1315,8 @@ export function relaxChain(
   const still = Object.assign(STILL, s);
   still.waveAmplitude = 0;
   still.restStiffness = Math.max(1, s.restStiffness) * 3;
+  // Nothing moves here to come free by: every arm is held off every body.
+  c.loose.fill(0);
   placeRoots(c, rig, d.body1);
   for (let i = 0; i < rig.tentacles; i++) {
     aimStretch(c, rig, d, still, i);
@@ -894,6 +1347,9 @@ export function resetChain(c: ChainState, rig: Rig, body: BodyPose): void {
   c.held.fill(0);
   c.recoil.fill(NO_RECOIL);
   c.closure.fill(0);
+  c.wrap.fill(0);
+  c.loose.fill(0);
+  c.looseFor.fill(0);
   c.acc = 0;
   for (let i = 0; i < rig.tentacles; i++) {
     placeRest(c, rig, i, body, 0, RESTING, null);
@@ -931,6 +1387,7 @@ function guard(c: ChainState, rig: Rig, d: ChainDrive, s: ChainSettings): void {
     c.stretchV[i] = 0;
     c.stretchGoal[i] = 1;
     c.aim[i] = 0;
+    c.loose[i] = 0;
     placeRest(c, rig, i, d.body1, d.time, { ...s, waveAmplitude: 0 }, null);
     resetTentacle(c, rig, i);
   }
@@ -1021,12 +1478,14 @@ function finish(
   // Drawn as they were, a frame with no step would show the arm frozen while
   // the body moves, and the next would catch up twice as far.
   const ahead = c.acc / CHAIN_STEP;
+  const solid = d?.solid ?? null;
   for (let i = 0; i < rig.tentacles; i++) {
     const M = rig.segments[i]!;
     const j0 = rig.jointStart[i]!;
     const sg0 = rig.segStart[i]!;
     const k3 = i * 3;
     const stretch = c.stretch[i]!;
+    const pinned = !!d && d.mode[i] === TIP_PINNED;
     const limit = coneLimit(M, s.coneScale) * DRAWN_SLACK;
     const cosMax = Math.cos(limit);
     const sinMax = Math.sin(limit);
@@ -1085,7 +1544,7 @@ function finish(
     // A claw that holds is drawn on its thread: what the solver left between
     // them is closed by two FABRIK passes over the drawn joints themselves,
     // which keep every segment its length and every bend within its cone.
-    if (d && d.mode[i] === TIP_PINNED) {
+    if (d && pinned) {
       const tip = (j0 + M) * 3;
       const gx = d.target[k3]!;
       const gy = d.target[k3 + 1]!;
@@ -1122,6 +1581,12 @@ function finish(
         }
       }
     }
+    // Never drawn through a body: what the carry and the closing left of the
+    // solved chain's clearance is taken up here, the claw's last segment
+    // still wrapping the bar. An arm let through it is drawn as it is solved.
+    if (solid && !c.loose[i] && reaches(solid, c, rig, s, i)) {
+      clearDrawn(xr, rig, i, stretch, solid, pinned);
+    }
   }
 }
 
@@ -1145,10 +1610,13 @@ export function resampleChain(c: ChainState, from: Rig, to: Rig): ChainState {
     'root',
     'axis',
     'normal',
+    'wrap',
+    'looseFor',
   ] as const) {
     out[k].set(c[k]);
   }
   out.held.set(c.held);
+  out.loose.set(c.loose);
   out.acc = c.acc;
   for (let i = 0; i < from.tentacles; i++) {
     for (const key of ['x', 'xp', 'xr'] as const) {
