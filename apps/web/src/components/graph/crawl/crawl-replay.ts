@@ -17,6 +17,14 @@
 // crossing of the void feels its way first — but it lasts exactly as long as
 // it always did, so the panel's timings do not move.
 //
+// Each leg and each pause starts exactly where the last one ended, on that
+// profile, not at the first frame that notices: what is left of the frame
+// goes to the next. A replay used to lose up to a frame at every step, so its
+// clock — and anything stamped on it — drifted with the frame rate. Now the
+// history it keeps (`ReplayView.history`: the threads gone along, the notes
+// reached and found, each stamped) is the same at any frame rate and after a
+// jump to the end, and whatever draws a dormant network lights from it alone.
+//
 // Everything is remembered by note id and thread key, never by graph object.
 // The graph builds new edge objects whenever it is rebuilt (a layer toggled, a
 // note added), and a Map keyed by edge counted the same thread twice after
@@ -48,8 +56,10 @@ import type {
   Hold,
   LegSegment,
   Lit,
+  Passage,
   Reach,
   ReplayEvent,
+  ReplayHistory,
   ReplayView,
   Swing,
   WalkLeg,
@@ -153,7 +163,8 @@ const EXPLORER = TENTACLE_SPECS.find((t) => t.role === 'explorer')!;
 const CONTACT_REACH = EXPLORER.length * EXPLORER.maxStretch;
 /** Events kept for a reader that stopped draining them. */
 const MAX_EVENTS = 256;
-
+/** A reach touches what it reaches for this long after it sets out, seconds: that is when it is found. */
+const REACH_TOUCH = 0.4;
 /**
  * What a replay may be handed besides the crawl and its model, to walk a
  * space of its own instead of the brain. Each is optional: with none of them
@@ -314,6 +325,19 @@ export class CrawlReplay {
   private reaching: Reaching[] = [];
   private readonly reachViews: Reach[] = [];
   private readonly found = new Map<string, ReachKind>();
+  private readonly passages: Passage[] = [];
+  private readonly reachedAt = new Map<string, number>();
+  private readonly foundAt = new Map<string, number>();
+  private readonly history: ReplayHistory = {
+    passages: this.passages,
+    reached: this.reachedAt,
+    foundAt: this.foundAt,
+    epoch: 0,
+  };
+  /** Seconds into the current leg when it reaches the end of each stretch: the last is its duration. */
+  private leaves: number[] = [];
+  /** Legs and pauses begun so far: a frame runs on until one stops ending. */
+  private phases = 0;
   private readonly holds: (Hold | null)[] = GRIP_SLOTS.map(() => null);
   private readonly swings: Swing[] = [];
   /** Swings on the current leg or dwell's clock, in order; `next` is the first still to happen. */
@@ -352,6 +376,7 @@ export class CrawlReplay {
       reaches: this.reachViews,
       lit: this.lit,
       found: this.found,
+      history: this.history,
       field: this.field,
     };
   }
@@ -387,7 +412,7 @@ export class CrawlReplay {
       this.emit();
       return;
     }
-    this.begin();
+    this.setOut();
     this.emit();
   }
 
@@ -447,7 +472,7 @@ export class CrawlReplay {
     };
     const first = firstVisit(plan);
     if (first) this.here = this.node(first.at);
-    this.begin();
+    this.setOut();
     this.emit();
   }
 
@@ -464,8 +489,17 @@ export class CrawlReplay {
     for (const l of this.lit.values()) l.glow = Math.max(l.floor, l.glow - step * 0.9);
     if (this.mode === 'done' || this.mode === 'idle') return;
     this.t += step;
-    if (this.mode === 'walk') this.walk();
-    else this.read();
+    // A leg or a pause that ends partway through the frame hands the rest of
+    // it to the next, which starts where it ended; one long frame may see
+    // several through. Each step of the plan is a leg and a pause at most, and
+    // once done nothing begins again.
+    const most = 2 * (this.plan?.steps.length ?? 0) + 2;
+    for (let n = 0; n < most; n++) {
+      const phases = this.phases;
+      if (this.mode === 'walk') this.walk();
+      else if (this.mode === 'dwell') this.read();
+      if (this.phases === phases) break;
+    }
   }
 
   // -- Camera --------------------------------------------------------------------
@@ -665,6 +699,11 @@ export class CrawlReplay {
     this.reaching = [];
     this.reachViews.length = 0;
     this.found.clear();
+    this.passages.length = 0;
+    this.reachedAt.clear();
+    this.foundAt.clear();
+    this.history.epoch++;
+    this.leaves = [];
     this.holds.fill(null);
     this.swings.length = 0;
     this.actions = [];
@@ -681,6 +720,48 @@ export class CrawlReplay {
     this.dir[0] = 0;
     this.dir[1] = 0;
     this.dir[2] = 1;
+  }
+
+  /** Sets out from the first note: reached at the start, facing the way it will go, and the first step begun. */
+  private setOut(): void {
+    if (this.here) {
+      this.markReached(this.here.id, this.clock);
+      this.headOut(this.here);
+    }
+    this.begin();
+  }
+
+  /**
+   * The heading it starts with, which the first note's grips are planned
+   * along. The brain's has always been +z, and still is: its first grips
+   * never move. A space of its own faces the first note it walks to instead,
+   * level with where it stands — or +z, failing a level way there.
+   */
+  private headOut(here: GraphNode): void {
+    if (!this.injected) return;
+    const at = this.where(here);
+    if (!at) return;
+    const up: Vec3 = [0, 1, 0];
+    this.field.up(at, up);
+    const next = this.plan?.steps.find(
+      (s): s is Extract<CrawlStep, { kind: 'visit' }> =>
+        s.kind === 'visit' && s.at.id !== here.id && this.where(this.node(s.at)) !== null,
+    );
+    const to = next ? this.where(this.node(next.at)) : null;
+    const level = (v: Vec3): boolean => {
+      const k = v[0] * up[0] + v[1] * up[1] + v[2] * up[2];
+      const x = v[0] - k * up[0];
+      const y = v[1] - k * up[1];
+      const z = v[2] - k * up[2];
+      const l = Math.hypot(x, y, z);
+      if (!(l > 1e-6)) return false;
+      this.dir[0] = x / l;
+      this.dir[1] = y / l;
+      this.dir[2] = z / l;
+      return true;
+    };
+    if (to && level([to[0] - at[0], to[1] - at[1], to[2] - at[2]])) return;
+    if (!level([0, 0, 1])) level([1, 0, 0]);
   }
 
   private step(): CrawlStep | null {
@@ -701,7 +782,11 @@ export class CrawlReplay {
     return walked;
   }
 
-  private begin(): void {
+  /**
+   * The current step's leg, starting at `start` on the replay clock — where
+   * the pause before it ended — with `carry` seconds of it already gone.
+   */
+  private begin(start = this.clock, carry = 0): void {
     const st = this.step();
     const model = this.model;
     if (!st || !model || !this.here) return;
@@ -771,13 +856,20 @@ export class CrawlReplay {
     const duration =
       this.pace === null ? total / brisk : Math.max(total / brisk, pacedDuration(total, this.pace));
     this.duration = this.segments.length > 0 ? duration : EMPTY_WAIT;
-    this.t = 0;
-    this.phaseStart = this.clock;
+    this.t = carry;
+    this.phaseStart = start;
     this.mode = 'walk';
-    if (this.segments.length > 0) this.light(this.segments[0]!.key, 1.2, 'walk');
+    // When it reaches the end of each stretch, from the leg's own profile: the
+    // history is stamped with these, never with the frame that saw it happen.
+    const last = this.segments.length - 1;
+    this.leaves = this.ends.map((end, k) => (k === last ? this.duration : this.timeAt(end)));
+    if (this.segments.length > 0) {
+      this.light(this.segments[0]!.key, 1.2, 'walk');
+      this.pass(0);
+    }
     this.push({
       kind: 'begin',
-      clock: this.clock,
+      clock: this.phaseStart,
       stepIndex: this.stepIndex,
       nextId: this.target?.id ?? null,
     });
@@ -833,6 +925,7 @@ export class CrawlReplay {
     this.actions = [];
     this.next = 0;
     this.slotLand.fill(0);
+    this.phases++;
   }
 
   /** A swing on this leg or dwell's clock, `start` and `land` in seconds into it. */
@@ -923,8 +1016,10 @@ export class CrawlReplay {
     if (this.segments.length > 0) {
       this.travelled = this.progress(this.t);
       while (this.k < this.segments.length - 1 && this.travelled >= this.ends[this.k]!) {
+        this.markReached(this.segments[this.k]!.toId, this.phaseStart + this.leaves[this.k]!);
         this.k++;
         this.light(this.segments[this.k]!.key, 1.2, 'walk');
+        this.pass(this.k);
       }
       legPoint(this.segments, this.travelled, this.field, this.voidSag, this.scratch, this.dir);
       this.run(this.t);
@@ -947,24 +1042,30 @@ export class CrawlReplay {
   private read(): void {
     this.run(this.t);
     for (const r of this.reaching) {
-      if (!r.applied && this.t >= r.at + 0.4) this.reach(r);
-      r.view.reached = this.t >= r.at + 0.4;
+      if (!r.applied && this.t >= r.at + REACH_TOUCH) this.reach(r);
+      r.view.reached = this.t >= r.at + REACH_TOUCH;
     }
     if (this.t >= this.dwell && this.plan && this.stepIndex < this.plan.steps.length - 1) {
       this.stepIndex++;
-      this.begin();
+      this.begin(this.phaseStart + this.dwell, this.t - this.dwell);
     }
   }
 
   private arrive(): void {
     const st = this.step();
     if (!st) return;
+    // The leg ended at its duration exactly, however late in the frame that was.
+    const end = this.phaseStart + this.duration;
+    const carry = Math.max(0, this.t - this.duration);
     this.newPhase();
     if (this.crossing && !this.touched) this.touch();
-    if (this.target) this.here = this.node(this.target);
+    if (this.target) {
+      this.here = this.node(this.target);
+      this.markReached(this.here.id, end);
+    }
     this.mode = 'dwell';
-    this.t = 0;
-    this.phaseStart = this.clock;
+    this.t = carry;
+    this.phaseStart = end;
     this.reaching = [];
     this.reachViews.length = 0;
     this.snap = { ...this.snap, state: 'reading' };
@@ -986,10 +1087,10 @@ export class CrawlReplay {
         'done',
         `${n} ${n === 1 ? 'note' : 'notes'} · ${this.snap.asks.length} to ask`,
       );
-      this.push({ kind: 'done', clock: this.clock });
+      this.push({ kind: 'done', clock: end });
     }
     if (st.kind !== 'finish' && this.here) {
-      this.push({ kind: 'arrive', clock: this.clock, nodeId: this.here.id });
+      this.push({ kind: 'arrive', clock: end, nodeId: this.here.id });
       const perch = planPerchGrips({
         hereId: this.here.id,
         forward: this.dir,
@@ -1083,11 +1184,27 @@ export class CrawlReplay {
     r.applied = true;
     const f = r.found;
     if (!f || this.found.has(f.node.id)) return;
+    // When it touched, on the dwell's own clock: the frame that noticed may be later.
+    const touched = this.phaseStart + r.at + REACH_TOUCH;
     this.found.set(f.node.id, f.kind);
+    this.foundAt.set(f.node.id, touched);
     if (f.kind !== 'named' && this.here) {
-      // Whatever joins them, link or not, is the thread it reached along.
+      // Whatever joins them, link or not, is the thread it reached along —
+      // even one the space draws no line for, which whatever draws the
+      // passage has to allow for.
       const nb = this.model?.adjacency.get(this.here)?.find((x) => x.node.id === f.node.id);
-      if (nb) this.light(threadKey(this.here, nb.node), 1.6, f.kind);
+      if (nb) {
+        const key = threadKey(this.here, nb.node);
+        this.light(key, 1.6, f.kind);
+        this.passages.push({
+          key,
+          fromId: this.here.id,
+          toId: f.node.id,
+          enter: this.phaseStart + r.at,
+          leave: touched,
+          kind: f.kind,
+        });
+      }
     }
     this.labelList.push({
       nodeId: f.node.id,
@@ -1104,7 +1221,26 @@ export class CrawlReplay {
       f.kind === 'named' ? 'read' : f.kind === 'linked' ? 'link' : 'decision',
       f.node.label,
     );
-    this.push({ kind: 'found', clock: this.clock, nodeId: f.node.id, reachKind: f.kind });
+    this.push({ kind: 'found', clock: touched, nodeId: f.node.id, reachKind: f.kind });
+  }
+
+  /** A note reached by the walk, the first time only. */
+  private markReached(id: string, clock: number): void {
+    if (!this.reachedAt.has(id)) this.reachedAt.set(id, clock);
+  }
+
+  /** The current leg sets out along stretch `k`: a passage, when there is a thread to go along. */
+  private pass(k: number): void {
+    const s = this.segments[k];
+    if (!s?.key) return;
+    this.passages.push({
+      key: s.key,
+      fromId: s.fromId,
+      toId: s.toId,
+      enter: this.phaseStart + (k > 0 ? this.leaves[k - 1]! : 0),
+      leave: this.phaseStart + this.leaves[k]!,
+      kind: 'walk',
+    });
   }
 
   private light(key: ThreadKey | null, glow: number, kind: Lit['kind']): void {

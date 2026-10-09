@@ -1,6 +1,8 @@
 // What a crawl replay looks like from outside: the contract between the replay
 // (crawl-replay.ts), which decides where the walk is and which threads are
-// held and lit, and whatever draws it — the light trail, or the Sentinel.
+// held and lit, and whatever draws it — the light trail, the Sentinel, or a
+// network that stays dark until the crawl wakes it, which reads what has
+// happened so far from the replay's stamped history rather than from frames.
 //
 // Everything is named by id and thread key, never by graph object, so it
 // survives the graph being rebuilt mid-crawl, and the Sentinel never needs to
@@ -73,6 +75,45 @@ export type ReplayEvent =
   | { kind: 'contact'; clock: number; nodeId: string }
   | { kind: 'done'; clock: number };
 
+/**
+ * A thread gone along from one note to the other: walked by the body, or
+ * lit by a reach to a note it found along it. Grips are not passages: they
+ * light threads the body never went along.
+ */
+export interface Passage {
+  key: ThreadKey;
+  /** The way it went. */
+  fromId: string;
+  toId: string;
+  /** Replay clock when it set out along the thread, and when it reached the far end. */
+  enter: number;
+  leave: number;
+  kind: 'walk' | ReachKind;
+}
+
+/**
+ * What the crawl has done so far, each on the replay's clock exactly as it was
+ * planned, not as a frame happened to see it: the same at any frame rate, and
+ * after a jump to the end. Append-only while it plays; emptied when it starts
+ * over. Whatever draws it can tell from the stamps alone what to light, and
+ * how long ago.
+ */
+export interface ReplayHistory {
+  /** In the order they set out. A crossing of the void is not a thread, and not here. */
+  passages: readonly Passage[];
+  /** When the walk first reached each note: the note it starts on at the start. */
+  reached: ReadonlyMap<string, number>;
+  /** When each found note was handed over: its reach touching it. */
+  foundAt: ReadonlyMap<string, number>;
+  /**
+   * How many times it has started over (a load, a replay, a clear). It is one
+   * object, emptied and filled again, and a crawl jumped to its end before
+   * anyone looks can end later than the last one did, with no fewer entries:
+   * only this tells a reader that what it saw before is gone.
+   */
+  epoch: number;
+}
+
 export interface ReplayView {
   mode: 'idle' | 'walk' | 'dwell' | 'done';
   /** Seconds since the replay started, advanced only while playing. */
@@ -96,6 +137,8 @@ export interface ReplayView {
   lit: ReadonlyMap<ThreadKey, Lit>;
   /** Notes handed over, by id. */
   found: ReadonlyMap<string, ReachKind>;
+  /** Everything it has done so far, stamped. */
+  history: ReplayHistory;
   /** The threads and notes it walks over. */
   field: ThreadField;
 }

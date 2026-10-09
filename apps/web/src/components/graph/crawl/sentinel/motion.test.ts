@@ -103,6 +103,7 @@ function tour(dt: number): { frames: Frame[]; unit: number; field: ThreadField }
         reaches: reaches.map((r) => ({ ...r })),
         lit: new Map([...lit].map(([k, l]) => [k, { ...l }])),
         found: new Map(found),
+        history: { passages: [], reached: new Map(), foundAt: new Map(), epoch: 0 },
         field,
       },
       events,

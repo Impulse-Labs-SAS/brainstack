@@ -78,6 +78,7 @@ function view(
     reaches: [],
     lit: new Map(),
     found: new Map(),
+    history: { passages: [], reached: new Map(), foundAt: new Map(), epoch: 0 },
     field,
   };
 }

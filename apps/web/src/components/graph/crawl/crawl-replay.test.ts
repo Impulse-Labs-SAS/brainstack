@@ -358,6 +358,32 @@ describe('CrawlReplay', () => {
     expect(home.out[0]! * home.away[0]! + home.out[2]! * home.away[1]!).toBeGreaterThan(0);
   });
 
+  it('reaches into the void away from the vault even from a note almost over its middle', () => {
+    const { model, crawls } = sampleVault();
+    const first = new CrawlReplay(() => {});
+    first.load(crawls.ask, model);
+    run(first, 60);
+    // The note it asks from, put high over the middle of the others and just
+    // off it: the level way from the middle is short, but it is still a way.
+    const here = model.nodes.find((n) => n.id === first.view.hereId)!;
+    const others = model.nodes.filter((n) => n.kind === 'note' && !n.foreign && n !== here);
+    const mid = [0, 1, 2].map(
+      (i) => others.reduce((s, n) => s + [n.x, n.y, n.z][i]!, 0) / others.length,
+    );
+    here.x = mid[0]! + 6;
+    here.y = mid[1]! + 400;
+    here.z = mid[2]! - 4;
+    const r = new CrawlReplay(() => {});
+    r.load(crawls.ask, model);
+    run(r, 60);
+    expect(r.view.hereId).toBe(here.id);
+    const label = r.labels.find((l) => l.text.startsWith('? the Q3 roadmap'))!;
+    const out = [label.point![0] - here.x, label.point![2] - here.z];
+    const l = Math.hypot(out[0]!, out[1]!);
+    expect(out[0]! / l).toBeCloseTo(6 / Math.hypot(6, 4), 9);
+    expect(out[1]! / l).toBeCloseTo(-4 / Math.hypot(6, 4), 9);
+  });
+
   it('follows the walk, lets go when the camera is taken, and frames what it found at the end', () => {
     const { model, crawls } = sampleVault();
     const unit = typicalLink(model);
@@ -858,5 +884,218 @@ describe('voidProgress', () => {
         0.01 * (total / duration),
       );
     }
+  });
+});
+
+/** The level part of `v` square to unit `up`, unit length. */
+function levelOf(v: Vec3, up: Vec3): Vec3 {
+  const k = v[0] * up[0] + v[1] * up[1] + v[2] * up[2];
+  const x = v[0] - k * up[0];
+  const y = v[1] - k * up[1];
+  const z = v[2] - k * up[2];
+  const l = Math.hypot(x, y, z);
+  return [x / l, y / l, z / l];
+}
+
+/** Where a replay's second step walks to, in its field: the first is a pause where it starts. */
+function secondNote(r: CrawlReplay, field: ThreadField, crawl: Crawl): Vec3 {
+  const { crawls } = sampleVault();
+  const p: Vec3 = [0, 0, 0];
+  expect(field.node(`me/${crawls[crawl].notes[1]!.path}`, p)).toBe(true);
+  expect(r.view.hereId).not.toBe(`me/${crawls[crawl].notes[1]!.path}`);
+  return p;
+}
+
+describe('CrawlReplay setting out', () => {
+  it('sets out facing +z on the brain, and level toward its first note in a space of its own, even where up is +z', () => {
+    // The brain faces +z as it always has: its first grips never move.
+    expect([...replayOf('walk').view.dir]).toEqual([0, 0, 1]);
+
+    // A space of its own faces the first note it walks to, level with where it stands.
+    const piped = pipedReplay('walk');
+    const here: Vec3 = [0, 0, 0];
+    expect(piped.field.node(piped.r.view.hereId!, here)).toBe(true);
+    const next = secondNote(piped.r, piped.field, 'walk');
+    const dir = piped.r.view.dir;
+    expect(dir[1]).toBe(0);
+    const toward = levelOf([next[0] - here[0], next[1] - here[1], next[2] - here[2]], [0, 1, 0]);
+    expect(dist(dir, toward)).toBeLessThan(1e-9);
+
+    // Where up is +z itself, +z is no way to face: still the first note's way, square to it.
+    const { model, crawls } = sampleVault();
+    const sky: ThreadField = {
+      ...pipesOf(model),
+      up: (_p, o) => {
+        o[0] = 0;
+        o[1] = 0;
+        o[2] = 1;
+      },
+    };
+    const r = new CrawlReplay(() => {});
+    r.load(crawls.walk, model, { field: sky, unit: typicalLink(model) });
+    const from: Vec3 = [0, 0, 0];
+    expect(sky.node(r.view.hereId!, from)).toBe(true);
+    const to = secondNote(r, sky, 'walk');
+    expect(Math.abs(r.view.dir[2])).toBeLessThan(1e-12);
+    const level = levelOf([to[0] - from[0], to[1] - from[1], to[2] - from[2]], [0, 0, 1]);
+    expect(dist(r.view.dir, level)).toBeLessThan(1e-9);
+  });
+});
+
+/** A replay's history, as plain values to compare. */
+const historyOf = (r: CrawlReplay) => ({
+  passages: r.view.history.passages.map((p) => ({ ...p })),
+  reached: [...r.view.history.reached],
+  foundAt: [...r.view.history.foundAt],
+});
+
+describe("CrawlReplay's history", () => {
+  const replays: Array<[string, (crawl: Crawl) => CrawlReplay]> = [
+    ['the brain', (crawl) => replayOf(crawl)],
+    ['a field of its own', (crawl) => pipedReplay(crawl).r],
+  ];
+
+  it('is the same at 24, 60 and 144 frames a second, and after a jump to the end', () => {
+    for (const [, make] of replays) {
+      let passages = 0;
+      for (const crawl of CRAWLS) {
+        const histories = [24, 60, 144].map((fps) => {
+          const r = make(crawl);
+          run(r, fps);
+          return historyOf(r);
+        });
+        const jumped = make(crawl);
+        jumped.skipToEnd();
+        passages += histories[0]!.passages.length;
+        expect(histories[0]!.reached.length).toBeGreaterThan(0);
+        expect(histories[1]).toEqual(histories[0]);
+        expect(histories[2]).toEqual(histories[0]);
+        expect(historyOf(jumped)).toEqual(histories[0]);
+      }
+      expect(passages).toBeGreaterThan(10);
+    }
+  });
+
+  it('stamps each thread it walks the way it went, in order, from the profile of each leg', () => {
+    for (const [, make] of replays) {
+      for (const crawl of CRAWLS) {
+        const r = make(crawl);
+        const legs: Array<{ begin: number; arrive?: number; stretches: LegSegmentCopy[] }> = [];
+        run(r, 60, (events) => {
+          for (const e of events) {
+            const w = r.view.walk;
+            if (e.kind === 'begin' && w && w.segments.length > 0) {
+              legs.push({ begin: e.clock, stretches: w.segments.map((s) => ({ ...s })) });
+            }
+            if (e.kind === 'arrive' && legs.length > 0 && legs.at(-1)!.arrive === undefined) {
+              legs.at(-1)!.arrive = e.clock;
+            }
+          }
+        });
+        const { passages, reached } = r.view.history;
+        const walked = passages.filter((p) => p.kind === 'walk');
+        // Exactly the stretches along threads, in the order and the way they were walked.
+        const stretches = legs.flatMap((l) => l.stretches.filter((s) => s.key));
+        expect(walked.map((p) => [p.key, p.fromId, p.toId])).toEqual(
+          stretches.map((s) => [s.key, s.fromId, s.toId]),
+        );
+        let i = 0;
+        for (const leg of legs) {
+          const along = leg.stretches.filter((s) => s.key).length;
+          const mine = walked.slice(i, i + along);
+          i += along;
+          if (along === 0) continue;
+          // From the leg's start to its arrival, each stretch leaving where the next one enters.
+          expect(mine[0]!.enter).toBe(leg.begin);
+          expect(mine.at(-1)!.leave).toBe(leg.arrive);
+          mine.forEach((p, k) => {
+            expect(p.leave).toBeGreaterThan(p.enter);
+            if (k > 0) expect(p.enter).toBe(mine[k - 1]!.leave);
+            // Reached when it got there, unless it had been there before.
+            expect(reached.get(p.toId)).toBeLessThanOrEqual(p.leave);
+          });
+        }
+        expect(i).toBe(walked.length);
+        // Order of setting out, whatever the kind.
+        for (let k = 1; k < passages.length; k++) {
+          expect(passages[k]!.enter).toBeGreaterThanOrEqual(passages[k - 1]!.enter);
+        }
+        // The note it starts on, at the start.
+        const first = [...reached].sort((a, b) => a[1] - b[1])[0]!;
+        expect(first[1]).toBe(0);
+      }
+    }
+  });
+
+  it('stamps each note found when its reach touches it, and the thread it reached along', () => {
+    const r = replayOf('walk');
+    const starts = new Map<string, number>();
+    const foundEvents = new Map<string, number>();
+    run(r, 60, (events) => {
+      for (const reach of r.view.reaches) {
+        if (reach.nodeId && reach.kind !== 'ask' && !starts.has(reach.nodeId)) {
+          starts.set(reach.nodeId, reach.start);
+        }
+      }
+      for (const e of events) if (e.kind === 'found') foundEvents.set(e.nodeId, e.clock);
+    });
+    const { foundAt, passages } = r.view.history;
+    expect([...foundAt.keys()].sort()).toEqual([...r.view.found.keys()].sort());
+    for (const [id, at] of foundAt) {
+      expect(at).toBe(starts.get(id)! + 0.4);
+      expect(foundEvents.get(id)).toBe(at);
+    }
+    const reachedAlong = passages.filter((p) => p.kind !== 'walk');
+    // Every thread a reach lit, and nothing else: the ones it lit in the colour of why.
+    expect(reachedAlong.map((p) => p.key).sort()).toEqual(
+      [...r.view.lit]
+        .filter(([, l]) => l.kind !== 'walk')
+        .map(([key]) => key)
+        .sort(),
+    );
+    expect(reachedAlong.length).toBeGreaterThan(0);
+    for (const p of reachedAlong) {
+      expect(p.kind).toBe(r.view.found.get(p.toId));
+      expect(p.enter).toBe(starts.get(p.toId));
+      expect(p.leave).toBe(foundAt.get(p.toId));
+      expect(r.view.lit.get(p.key)?.kind).toBe(p.kind);
+    }
+  });
+
+  it('lights what its grips hold, but counts only what it walked and reached along as passages', () => {
+    for (const crawl of CRAWLS) {
+      const r = replayOf(crawl);
+      const gripped = new Set<ThreadKey>();
+      run(r, 60, (events) => {
+        for (const e of events) if (e.kind === 'grip') gripped.add(e.key);
+      });
+      const passed = new Set(r.view.history.passages.map((p) => p.key));
+      for (const key of passed) expect(r.view.lit.has(key)).toBe(true);
+      const onlyHeld = [...gripped].filter((k) => !passed.has(k));
+      expect(onlyHeld.length).toBeGreaterThan(0);
+      for (const key of onlyHeld) expect(r.view.lit.has(key)).toBe(true);
+      expect(r.view.lit.size).toBeGreaterThan(passed.size);
+    }
+  });
+
+  it('starts over when it replays or loads again', () => {
+    const r = replayOf('tour');
+    run(r, 60);
+    const first = historyOf(r);
+    const history = r.view.history;
+    const epoch = history.epoch;
+    r.replay();
+    expect(r.view.history).toBe(history);
+    expect(history.epoch).toBe(epoch + 1);
+    expect(history.passages).toHaveLength(0);
+    expect(history.foundAt.size).toBe(0);
+    expect([...history.reached.values()]).toEqual([0]);
+    run(r, 60);
+    expect(historyOf(r)).toEqual(first);
+    expect(history.epoch).toBe(epoch + 1);
+    r.load(sampleVault().crawls.gap, sampleVault().model);
+    expect(history.epoch).toBe(epoch + 2);
+    expect(r.view.history.passages.length).toBeLessThanOrEqual(1);
+    expect(r.view.history.foundAt.size).toBe(0);
   });
 });
