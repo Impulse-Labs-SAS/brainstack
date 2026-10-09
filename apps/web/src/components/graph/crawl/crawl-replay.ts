@@ -38,8 +38,15 @@
 // field, and — given its unit too — the brain's positions in the model are
 // never read: they say nothing about where a note stands in the space, or
 // which way is short there.
+//
+// Over a space's field a walk may also start from, and come back to, a place
+// that is no note: a perch, the frame round the prompt the Sentinel clings to
+// (prompt/). It rests there holding the frame until a crawl is loaded, sets
+// out across the void to the crawl's first note, and is called back from
+// wherever it is. The frame's rails are threads its claws hold, but they are
+// no part of the vault: nothing lights them, counts them or stamps them.
 
-import type { GraphEdge, GraphModel, GraphNode } from '@/lib/graph-model';
+import { hash01, type GraphEdge, type GraphModel, type GraphNode } from '@/lib/graph-model';
 
 import type { CrawlSnapshot } from './crawl-layer';
 import {
@@ -65,7 +72,15 @@ import type {
   WalkLeg,
 } from './replay-view';
 import { GRIP_SLOTS, TENTACLE_SPECS } from './sentinel/anatomy';
-import { DEFAULT_GRIP, planPerchGrips, planWalkGrips, swingDuration } from './sentinel/grips';
+import {
+  CROWD_RADIUS,
+  DEFAULT_GRIP,
+  PERCH_ORDER,
+  planPerchGrips,
+  planWalkGrips,
+  swingDuration,
+  type GripParams,
+} from './sentinel/grips';
 import {
   at,
   graphThreadField,
@@ -166,6 +181,87 @@ const MAX_EVENTS = 256;
 /** A reach touches what it reaches for this long after it sets out, seconds: that is when it is found. */
 const REACH_TOUCH = 0.4;
 /**
+ * Resting on a perch, a claw re-grips first this many seconds in, then every
+ * FIDGET_EVERY plus up to FIDGET_SPREAD more, each swing taking FIDGET_SWING:
+ * often enough to read as alive, seldom enough to read as calm. The swing is
+ * slow: at a third of a second, and every three to six seconds, a re-grip
+ * read as a twitch on a creature otherwise at rest.
+ */
+const FIDGET_FIRST = 3;
+const FIDGET_EVERY = 4;
+const FIDGET_SPREAD = 3;
+const FIDGET_SWING = 0.7;
+/** A re-grip lands this far from where the claw first took hold, creature units, plus up to FIDGET_SHIFT_SPREAD more. */
+const FIDGET_SHIFT = 0.1;
+const FIDGET_SHIFT_SPREAD = 0.12;
+
+/**
+ * How long a crossing of the void takes, by its length: `speed` creature
+ * units a second on average, never under `min` seconds nor over `max`. A
+ * crossing given a fixed time goes the faster the further it is, and body.ts
+ * snaps a body whose goal moves more than 3 units in a frame instead of
+ * moving it there.
+ */
+export interface CrossingPace {
+  speed: number;
+  min: number;
+  max: number;
+}
+
+/**
+ * The fastest a paced crossing may go on average, creature units a second,
+ * whatever its `max` says. `voidProgress` peaks at 1.35 to 1.6 times its
+ * average — the most on the shortest crossings, whose ramps take the largest
+ * share of them — so the cursor stays under 2.6 units in a 64 ms frame,
+ * short of the 3 at which the body is snapped across. Only a crossing far
+ * longer than any a cluster of today's vaults asks for reaches it.
+ */
+const CROSSING_MOST = 25;
+
+/** Seconds a crossing of `length` world units takes at `pace`, measured in creature units of `unit`. */
+export function crossingTime(length: number, unit: number, pace: CrossingPace): number {
+  const units = length / unit;
+  const paced =
+    pace.speed > 0 ? Math.min(pace.max, Math.max(pace.min, units / pace.speed)) : pace.max;
+  return Math.max(paced, units / CROSSING_MOST);
+}
+
+/**
+ * A place the walk sets out from and comes back to that is no note: the frame
+ * round the prompt the Sentinel clings to. The injected field places it
+ * (`node(id)`) and draws its rails; the model knows nothing of it.
+ */
+export interface ReplayPerch {
+  id: string;
+  /** The way the Sentinel faces on it, world space: its grips are planned along it. */
+  heading: Vec3;
+  /**
+   * Where a crossing from it sets out and one back to it lands, world space:
+   * the spot its body floats `hover` above as it clings there. A walk floats
+   * there too, so the body neither jumps as it lets go nor skims the frame on
+   * its way. Absent, the perch's node.
+   */
+  at?: Vec3 | null;
+  /**
+   * Threads that belong to it — the frame's rails — which a grip holds but
+   * never lights: they are no part of the vault, and nothing counts them.
+   */
+  keys: ReadonlySet<ThreadKey>;
+  /** The grip planner's parameters on it, over its defaults: a claw may reach further for the frame. */
+  grip?: Partial<GripParams>;
+  /**
+   * How long the crossing from it to the crawl's first note takes: seconds,
+   * or paced by its length. Absent or null, as long as any crossing that long.
+   */
+  crossing?: number | CrossingPace | null;
+  /**
+   * Seconds it holds still, letting go of the perch, before that crossing
+   * moves: it is seen to let go, rather than torn away. None by default.
+   */
+  release?: number;
+}
+
+/**
  * What a replay may be handed besides the crawl and its model, to walk a
  * space of its own instead of the brain. Each is optional: with none of them
  * it walks the brain exactly as it always has.
@@ -195,6 +291,13 @@ export interface ReplayOptions {
    * Null or absent: no limit.
    */
   pace?: number | null;
+  /**
+   * On `load`, the walk sets out from this perch, holding it, its first leg a
+   * crossing of the void to the crawl's first note; on `rest`, it rests
+   * there. Needs `field`, which must place it. Not kept: `replay()` starts at
+   * the first note, as ever.
+   */
+  perch?: ReplayPerch | null;
 }
 
 /** How far each note has faded in, as the scene draws it. */
@@ -359,6 +462,21 @@ export class CrawlReplay {
   private readonly dwelling = { t: 0, duration: 0 };
   private readonly out: ReplayView;
   private readonly scratch: Vec3 = [0, 0, 0];
+  /** The perch it rests on, sets out from or goes back to; null while it walks a crawl alone. */
+  private perch: ReplayPerch | null = null;
+  /** It stands on the perch, not on a note: `here` is null, or the note it last left. */
+  private perched = false;
+  /** Resting on the perch with no crawl to walk: nothing happens but re-grips. */
+  private restingNow = false;
+  /** The current leg goes back to the perch. */
+  private homing = false;
+  /** Seconds at the start of the current leg it holds still before it moves: letting go of the perch. */
+  private hold = 0;
+  /** Re-grips so far in this rest, and when the next is due, seconds into it. */
+  private fidgets = 0;
+  private nextFidget = 0;
+  /** What each slot held once the rest's grips landed: a re-grip shifts about that, never about the last. */
+  private readonly restGrips: (Hold | null)[] = GRIP_SLOTS.map(() => null);
 
   constructor(private readonly onChange: (s: CrawlSnapshot) => void) {
     this.out = {
@@ -396,6 +514,14 @@ export class CrawlReplay {
     const plan = planCrawl(result, model);
     this.plan = plan;
     this.scale = positive(o.unit) ?? typicalLink(model);
+    const first = firstVisit(plan);
+    // A crawl with no note to walk to has nowhere to cross to: it starts as ever.
+    const perch = first ? this.placed(o.perch) : null;
+    // Loaded while it rests there, its claws hold what they held — they let
+    // go as the crossing sets out, not a frame before. The clock starts over,
+    // so they have held since its start.
+    const kept =
+      perch && this.restingNow && this.perch?.id === perch.id ? this.settledHolds() : null;
     this.reset();
     this.snap = {
       ...emptySnapshot(),
@@ -403,7 +529,17 @@ export class CrawlReplay {
       offGraph: plan.offGraph,
       following: true,
     };
-    const first = firstVisit(plan);
+    if (perch) {
+      this.perch = perch;
+      this.perched = true;
+      this.here = null;
+      this.face(perch.heading);
+      if (kept) kept.forEach((h, g) => (this.holds[g] = h));
+      else this.gripPerch(this.clock, true);
+      this.begin();
+      this.emit();
+      return;
+    }
     this.here = first
       ? this.node(first.at)
       : (model.nodes.find((n) => n.kind === 'note' && !n.foreign) ?? null);
@@ -476,10 +612,116 @@ export class CrawlReplay {
     this.emit();
   }
 
-  /** Runs the replay to its end in the steps an animation would take: it lights exactly what the animation lights. */
+  /**
+   * Rests on the perch with no crawl: holding it, dwelling there until a
+   * crawl is loaded — the prompt scene. Its grips are taken at once: it is
+   * found holding on, not seen landing. While it rests, every few seconds on
+   * its own clock one claw lets go and takes hold again a little along its
+   * edge: the same at any frame rate. Needs `opts.field` placing
+   * `opts.perch`; without them it clears (mode 'idle').
+   */
+  rest(model: GraphModel, opts: ReplayOptions): void {
+    this.appear = opts.appear ?? (() => 1);
+    this.injected = opts.field ?? null;
+    this.pace = positive(opts.pace);
+    this.bind(model);
+    this.plan = null;
+    this.scale = positive(opts.unit) ?? typicalLink(model);
+    this.reset();
+    this.snap = emptySnapshot();
+    this.here = null;
+    const perch = this.placed(opts.perch);
+    if (!perch) {
+      this.mode = 'idle';
+      this.emit();
+      return;
+    }
+    this.perch = perch;
+    this.settleOnPerch(this.clock, 0, true);
+    this.emit();
+  }
+
+  /**
+   * Calls the walk back to a perch — the prompt scene's "new search" — from
+   * wherever it is: a note it stands on, partway along a leg, or
+   * mid-crossing. It goes straight across the void from exactly where the
+   * cursor was, letting go of what it holds, then takes hold of the perch and
+   * rests there as `rest` does, its grips landing one after another. The leg
+   * it was on is cut, not run to its end: grips it would have taken further
+   * along never land, so nothing new lights. What the crawl lit and found
+   * stays, so whatever draws it fades it out on its own. `crossing` is the
+   * seconds the way back takes, or a pace for its length; absent, as long as
+   * any crossing that long. False, and nothing changes, when the field does
+   * not place the perch or it already rests.
+   */
+  recall(perch: ReplayPerch, crossing?: number | CrossingPace | null): boolean {
+    if (this.restingNow || !this.placed(perch)) return false;
+    const cursor = this.cursorPoint();
+    const from: Vec3 | null = cursor ? [cursor[0], cursor[1], cursor[2]] : null;
+    this.cut();
+    this.perch = perch;
+    this.reaching = [];
+    this.reachViews.length = 0;
+    this.target = null;
+    this.touched = false;
+    const to = this.perchPoint(perch);
+    if (!from || !to) {
+      // Nowhere to come back from — nothing was loaded: it is simply there.
+      this.settleOnPerch(this.clock, 0, true);
+      this.emit();
+      return true;
+    }
+    // A step the plan has not: there is no step to read, and the motion sees a new phase.
+    this.stepIndex = Math.max(this.stepIndex + 1, this.plan?.steps.length ?? 0);
+    this.homing = true;
+    this.perched = false;
+    this.restingNow = false;
+    this.crossing = true;
+    this.hold = 0;
+    const length = Math.max(dist(from, to), 1e-6);
+    this.segments = [
+      {
+        fromId: this.here?.id ?? perch.id,
+        toId: perch.id,
+        key: null,
+        length,
+        from,
+        ...(perch.at ? { to: [perch.at[0], perch.at[1], perch.at[2]] as Vec3 } : {}),
+      },
+    ];
+    this.ends = [length];
+    this.total = length;
+    this.k = 0;
+    this.travelled = 0;
+    this.duration = this.crossingDuration(length, crossing);
+    this.leaves = [this.duration];
+    this.t = 0;
+    this.phaseStart = this.clock;
+    this.mode = 'walk';
+    this.push({ kind: 'begin', clock: this.clock, stepIndex: this.stepIndex, nextId: perch.id });
+    this.letGo();
+    this.snap = { ...this.snap, state: 'walking' };
+    this.log('walk', 'go back', 'to the prompt');
+    return true;
+  }
+
+  /** Resting on a perch: after `rest`, or once a `recall` has landed. Nothing more happens but re-grips. */
+  get resting(): boolean {
+    return this.restingNow;
+  }
+
+  /**
+   * Runs the replay to its end in the steps an animation would take: it
+   * lights exactly what the animation lights. A walk going back to its perch
+   * ends resting there, its grips landed; a replay already resting stays
+   * where it is, but its claw mid re-grip lands.
+   */
   skipToEnd(): void {
     let guard = 0;
-    while (this.mode !== 'done' && this.mode !== 'idle' && guard++ < 20000) this.update(0.05);
+    while (this.mode !== 'done' && this.mode !== 'idle' && !this.restingNow && guard++ < 20000) {
+      this.update(0.05);
+    }
+    if (this.restingNow) this.flush();
   }
 
   /** Advances the replay `dt` seconds — already scaled by the playback speed, and 0 while paused. */
@@ -546,8 +788,15 @@ export class CrawlReplay {
     v.clock = this.clock;
     v.unit = this.scale;
     v.stepIndex = this.stepIndex;
-    v.hereId = this.here?.id ?? null;
-    v.nextId = this.mode === 'walk' ? (this.target?.id ?? null) : this.upcoming();
+    v.hereId = this.perched && this.perch ? this.perch.id : (this.here?.id ?? null);
+    v.nextId =
+      this.mode === 'walk'
+        ? this.homing
+          ? (this.perch?.id ?? null)
+          : (this.target?.id ?? null)
+        : this.restingNow
+          ? null
+          : this.upcoming();
     v.field = this.field;
     if (this.mode === 'walk') {
       const leg = this.leg;
@@ -715,11 +964,206 @@ export class CrawlReplay {
     this.following = true;
     this.target = null;
     this.segments = [];
+    this.perch = null;
+    this.perched = false;
+    this.restingNow = false;
+    this.homing = false;
+    this.hold = 0;
+    this.fidgets = 0;
+    this.nextFidget = 0;
+    this.restGrips.fill(null);
     // Grips around the first note are planned along the heading: a replay
     // must not inherit the last run's.
     this.dir[0] = 0;
     this.dir[1] = 0;
     this.dir[2] = 1;
+  }
+
+  // -- The perch -----------------------------------------------------------------
+
+  /** `perch` when the injected field places it; null otherwise, or without one. */
+  private placed(perch: ReplayPerch | null | undefined): ReplayPerch | null {
+    return perch && this.injected && this.field.node(perch.id, this.scratch) ? perch : null;
+  }
+
+  /** Where a crossing from the perch sets out and one back to it lands, a new triple; null when it is gone. */
+  private perchPoint(perch: ReplayPerch): Vec3 | null {
+    if (perch.at) return [perch.at[0], perch.at[1], perch.at[2]];
+    const p: Vec3 = [0, 0, 0];
+    return this.field.node(perch.id, p) ? p : null;
+  }
+
+  /** Faces `heading`, when it has a length. */
+  private face(heading: Vec3): void {
+    const l = Math.hypot(heading[0], heading[1], heading[2]);
+    if (!(l > 1e-9)) return;
+    this.dir[0] = heading[0] / l;
+    this.dir[1] = heading[1] / l;
+    this.dir[2] = heading[2] / l;
+  }
+
+  /** What the slots hold once everything on the clock has landed, as of the clock's start. */
+  private settledHolds(): (Hold | null)[] {
+    this.flush();
+    return this.holds.map((h) => (h ? { key: h.key, u: h.u, since: 0 } : null));
+  }
+
+  /**
+   * Takes hold of the perch's frame as it does round a note it reads: the
+   * grips planned about the perch's node along its heading, with the perch's
+   * own parameters. `atOnce`, they hold from `start` — it is found holding
+   * on; otherwise they land one after another, `start` being when the dwell
+   * began. What each slot then holds is where its re-grips return to.
+   */
+  private gripPerch(start: number, atOnce: boolean): void {
+    const perch = this.perch;
+    if (!perch) return;
+    const p = { ...DEFAULT_GRIP, ...perch.grip };
+    const grips = planPerchGrips({
+      hereId: perch.id,
+      forward: this.dir,
+      field: this.field,
+      unit: this.scale,
+      lit: new Set(),
+      held: this.holds,
+      params: perch.grip,
+    });
+    for (let g = 0; g < this.holds.length; g++) {
+      const h = this.holds[g];
+      this.restGrips[g] = h ? { key: h.key, u: h.u, since: h.since } : null;
+    }
+    for (const g of grips) {
+      const hold = g.key ? { key: g.key, u: g.u, since: start + (atOnce ? 0 : g.t) } : null;
+      this.restGrips[g.slot] = hold;
+      if (atOnce) {
+        this.holds[g.slot] = hold ? { ...hold } : null;
+        continue;
+      }
+      this.enqueue(g.slot, g.key, g.u, Math.max(0, g.t - p.swingMax), g.t);
+      this.slotLand[g.slot] = g.t;
+    }
+  }
+
+  /**
+   * Comes to rest on the perch, `carry` seconds of the rest already gone:
+   * holding its frame, dwelling there for good until a crawl is loaded.
+   * Taken `atOnce`, its grips hold from `start`; otherwise it has just
+   * landed, and they land one after another as round a note it arrives at.
+   */
+  private settleOnPerch(start: number, carry: number, atOnce: boolean): void {
+    const perch = this.perch;
+    if (!perch) return;
+    this.newPhase();
+    this.homing = false;
+    this.perched = true;
+    this.restingNow = true;
+    this.target = null;
+    this.segments = [];
+    this.crossing = false;
+    this.hold = 0;
+    this.mode = 'dwell';
+    this.dwell = Infinity;
+    this.t = carry;
+    this.phaseStart = start;
+    this.reaching = [];
+    this.reachViews.length = 0;
+    this.face(perch.heading);
+    this.fidgets = 0;
+    this.nextFidget = FIDGET_FIRST;
+    this.gripPerch(start, atOnce);
+    if (!atOnce) this.push({ kind: 'arrive', clock: start, nodeId: perch.id });
+    this.snap = { ...this.snap, state: 'idle' };
+  }
+
+  /**
+   * While it rests, now and then one claw lets go of the frame and takes hold
+   * again a little along its edge: alive, not frozen. Each re-grip is due on
+   * the rest's own clock and decided from what had landed by then, so it is
+   * the same at any frame rate. Each lands about where that claw first took
+   * hold, never about where it last did: shifts added one to the next would
+   * walk the claws along the rails, past the arm's reach and onto each other.
+   * One that would land on another claw is skipped.
+   */
+  private fidget(): void {
+    const perch = this.perch;
+    if (!perch) return;
+    const p = { ...DEFAULT_GRIP, ...perch.grip };
+    const crowd = CROWD_RADIUS * this.scale;
+    const q: Vec3 = [0, 0, 0];
+    const other: Vec3 = [0, 0, 0];
+    const clear = (slot: number, key: ThreadKey, u: number): boolean => {
+      if (!this.field.point(key, u, q)) return false;
+      return this.holds.every(
+        (h, k) =>
+          k === slot || !h || !this.field.point(h.key, h.u, other) || dist(q, other) >= crowd,
+      );
+    };
+    while (this.t >= this.nextFidget) {
+      const n = this.fidgets++;
+      const when = this.nextFidget;
+      this.nextFidget += FIDGET_EVERY + FIDGET_SPREAD * hash01(`fidget:${n}:wait`);
+      this.run(when);
+      for (let j = 0; j < PERCH_ORDER.length; j++) {
+        const g = PERCH_ORDER[(n + j) % PERCH_ORDER.length]!;
+        const h = this.holds[g];
+        const home = this.restGrips[g];
+        if (!h || !home || home.key !== h.key || !perch.keys.has(h.key)) continue;
+        if (this.slotLand[g]! > when) continue;
+        const length = drawnLength(this.field, h.key);
+        if (!(length > 0)) continue;
+        const shift =
+          ((FIDGET_SHIFT + FIDGET_SHIFT_SPREAD * hash01(`fidget:${n}:shift`)) * this.scale) /
+          length;
+        const way = hash01(`fidget:${n}:way`) < 0.5 ? -1 : 1;
+        const u = [home.u + way * shift, home.u - way * shift].find(
+          (v) => v >= p.uMin && v <= p.uMax && clear(g, h.key, v),
+        );
+        if (u !== undefined) {
+          this.enqueue(g, h.key, u, when, when + FIDGET_SWING);
+          this.slotLand[g] = when + FIDGET_SWING;
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Cuts the current leg or dwell where it stands — a walk called back
+   * midway. A swing in flight lets go where it is, and whatever had not set
+   * out never will. Unlike `newPhase`, nothing left on the clock is run: the
+   * grips the walk would have taken further along would all land, and light,
+   * at once — threads it never reached lit up, and claws pinned far ahead.
+   */
+  private cut(): void {
+    // A swing that set out has already let go of what it held.
+    this.swings.length = 0;
+    this.actions = [];
+    this.next = 0;
+    this.slotLand.fill(0);
+    this.phases++;
+  }
+
+  /** Seconds a crossing of `length` takes: as it is told — seconds, or a pace — or as long as any leg that long. */
+  private crossingDuration(
+    length: number,
+    crossing: number | CrossingPace | null | undefined,
+  ): number {
+    if (typeof crossing === 'number') return crossing > 0 ? crossing : this.legDuration(length);
+    return crossing ? crossingTime(length, this.scale, crossing) : this.legDuration(length);
+  }
+
+  /**
+   * How long a leg of `total` world units takes. A long leg goes faster, so
+   * no walk takes more than 3.4 s — unless the space caps the pace. Then it
+   * takes at least as long as cruising at that pace would: its average,
+   * capped instead, let it cruise up to a third faster than the cap on a
+   * short leg, the ramps being part of its time.
+   */
+  private legDuration(total: number): number {
+    const brisk = Math.max(this.scale * 4.5, total / 3.4);
+    return this.pace === null
+      ? total / brisk
+      : Math.max(total / brisk, pacedDuration(total, this.pace));
   }
 
   /** Sets out from the first note: reached at the start, facing the way it will go, and the first step begun. */
@@ -789,7 +1233,7 @@ export class CrawlReplay {
   private begin(start = this.clock, carry = 0): void {
     const st = this.step();
     const model = this.model;
-    if (!st || !model || !this.here) return;
+    if (!st || !model || (!this.here && !this.perched)) return;
     this.newPhase();
     const phase: 0 | 1 | 2 = st.kind === 'finish' ? 2 : st.kind === 'visit' ? st.phase : 0;
     if (phase !== this.snap.phase)
@@ -803,7 +1247,10 @@ export class CrawlReplay {
     this.target = null;
     this.crossing = false;
     this.touched = false;
-    if (st.kind === 'visit' && st.at.id !== this.here.id) {
+    this.hold = 0;
+    const perch = this.perched ? this.perch : null;
+    if (perch && st.kind === 'visit') this.crossFromPerch(perch, this.node(st.at));
+    else if (st.kind === 'visit' && this.here && st.at.id !== this.here.id) {
       const target = this.node(st.at);
       const path = this.injected
         ? this.fieldWalk(model, this.injected, this.here, target)
@@ -848,14 +1295,12 @@ export class CrawlReplay {
     this.total = total;
     this.k = 0;
     this.travelled = 0;
-    // A long leg goes faster, so no walk takes more than 3.4 s — unless the
-    // space caps the pace. Then it takes at least as long as cruising at that
-    // pace would: its average, capped instead, let it cruise up to a third
-    // faster than the cap on a short leg, the ramps being part of its time.
-    const brisk = Math.max(this.scale * 4.5, total / 3.4);
-    const duration =
-      this.pace === null ? total / brisk : Math.max(total / brisk, pacedDuration(total, this.pace));
-    this.duration = this.segments.length > 0 ? duration : EMPTY_WAIT;
+    this.duration =
+      this.segments.length === 0
+        ? EMPTY_WAIT
+        : perch && this.crossing
+          ? this.hold + this.crossingDuration(total, perch.crossing)
+          : this.legDuration(total);
     this.t = carry;
     this.phaseStart = start;
     this.mode = 'walk';
@@ -875,6 +1320,25 @@ export class CrawlReplay {
     });
     if (this.crossing) this.letGo();
     else if (this.segments.length > 0) this.planWalk();
+  }
+
+  /**
+   * The first leg from the perch: straight across the void to the crawl's
+   * first note, from the spot it clings above, after holding still while its
+   * claws let go. Not silk: nothing joins the frame to the vault, and the
+   * trail draws none from it.
+   */
+  private crossFromPerch(perch: ReplayPerch, target: GraphNode): void {
+    this.target = target;
+    const from = this.perchPoint(perch);
+    const to: Vec3 = [0, 0, 0];
+    if (from && this.field.node(target.id, to)) {
+      const length = Math.max(dist(from, to), 1e-6);
+      this.segments = [{ fromId: perch.id, toId: target.id, key: null, length, from }];
+      this.crossing = true;
+      this.hold = Math.max(0, perch.release ?? 0);
+    }
+    this.log('walk', 'set out', 'across from the prompt');
   }
 
   /**
@@ -987,9 +1451,10 @@ export class CrawlReplay {
     this.run(Infinity);
   }
 
+  /** Distance along the leg `t` seconds in; a crossing that holds still first moves only after `hold`. */
   private progress(t: number): number {
     return this.crossing
-      ? voidProgress(t, this.total, this.duration)
+      ? voidProgress(t - this.hold, this.total, this.duration - this.hold)
       : walkProgress(t, this.total, this.duration, walkRamp(this.duration));
   }
 
@@ -1036,10 +1501,16 @@ export class CrawlReplay {
 
   private touch(): void {
     this.touched = true;
-    if (this.target) this.push({ kind: 'contact', clock: this.clock, nodeId: this.target.id });
+    const id = this.homing ? (this.perch?.id ?? null) : (this.target?.id ?? null);
+    if (id) this.push({ kind: 'contact', clock: this.clock, nodeId: id });
   }
 
   private read(): void {
+    if (this.restingNow) {
+      this.fidget();
+      this.run(this.t);
+      return;
+    }
     this.run(this.t);
     for (const r of this.reaching) {
       if (!r.applied && this.t >= r.at + REACH_TOUCH) this.reach(r);
@@ -1052,15 +1523,23 @@ export class CrawlReplay {
   }
 
   private arrive(): void {
-    const st = this.step();
-    if (!st) return;
     // The leg ended at its duration exactly, however late in the frame that was.
     const end = this.phaseStart + this.duration;
     const carry = Math.max(0, this.t - this.duration);
+    if (this.homing) {
+      // Back on the perch: there is no step to read, only the frame to take hold of.
+      if (!this.touched) this.touch();
+      this.settleOnPerch(end, carry, false);
+      this.emit();
+      return;
+    }
+    const st = this.step();
+    if (!st) return;
     this.newPhase();
     if (this.crossing && !this.touched) this.touch();
     if (this.target) {
       this.here = this.node(this.target);
+      this.perched = false;
       this.markReached(this.here.id, end);
     }
     this.mode = 'dwell';
@@ -1244,7 +1723,8 @@ export class CrawlReplay {
   }
 
   private light(key: ThreadKey | null, glow: number, kind: Lit['kind']): void {
-    if (!key) return;
+    // The perch's rails are held, never lit: they are no thread of the vault.
+    if (!key || this.perch?.keys.has(key)) return;
     const l = this.lit.get(key) ?? { glow: 0, floor: 0, kind: 'walk' as Lit['kind'] };
     l.glow = Math.max(l.glow, glow);
     l.floor = Math.max(l.floor, kind === 'walk' ? 0.32 : 0.9);
@@ -1257,7 +1737,7 @@ export class CrawlReplay {
     }
   }
 
-  /** Where the walk is: on its thread, on the silk across the void, or on its note. */
+  /** Where the walk is: on its thread, on the silk across the void, on its note, or on its perch. */
   private cursorPoint(): Vec3 | null {
     if (
       this.mode === 'walk' &&
@@ -1265,6 +1745,7 @@ export class CrawlReplay {
       legPoint(this.segments, this.travelled, this.field, this.voidSag, this.scratch)
     )
       return this.scratch;
+    if (this.perched && this.perch) return this.perchPoint(this.perch);
     return this.here ? this.where(this.here) : null;
   }
 

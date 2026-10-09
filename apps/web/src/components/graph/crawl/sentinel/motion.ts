@@ -28,7 +28,7 @@ import { hash01 } from '@/lib/graph-model';
 
 import type { Hold, ReplayEvent, ReplayView, Swing } from '../replay-view';
 import { legPoint } from '../threads';
-import { cross, dist, dot, type Vec3 } from '../vec';
+import { cross, dist, dot, finite, type Vec3 } from '../vec';
 
 import {
   BODY_SCALE,
@@ -165,6 +165,15 @@ const smooth = (v: number) => {
 
 export class SentinelMotion {
   params: MotionParams;
+  /**
+   * Where the eye rests when the walk gives it nothing to watch — perched, no
+   * reach out — world space; null leaves it on the note it stands on. The
+   * prompt scene sets it to the viewer, or to the box the question is typed
+   * in, while the creature clings to the frame round it. Read every frame;
+   * the eye's socket still bounds it, so at a small lean "the viewer" settles
+   * as far down as the socket turns, which reads as watching the input.
+   */
+  gaze: Vec3 | null = null;
   readonly pose: SentinelPose = createPose();
   /** The body's world position: what the camera follows. */
   readonly bodyWorld: Vec3 = [0, 0, 0];
@@ -727,11 +736,22 @@ export class SentinelMotion {
     return l > 1e-9 ? [d[0] / l, d[1] / l, d[2] / l] : null;
   }
 
-  /** Nothing else to watch: the note it stands on, or the way it walks. */
+  /**
+   * Nothing else to watch: where it is told to rest its gaze, or the note it
+   * stands on — or, walking, the way it walks. The still pose goes through
+   * here too, so reduced motion keeps the same gaze.
+   */
   private lookFor(view: ReplayView): void {
-    if (view.mode !== 'walk' && view.hereId && view.field.node(view.hereId, this.lookPoint)) {
+    if (view.mode === 'walk') return;
+    const g = this.gaze;
+    if (g && finite(g)) {
+      this.lookPoint[0] = g[0];
+      this.lookPoint[1] = g[1];
+      this.lookPoint[2] = g[2];
       this.lookAt = this.lookPoint;
+      return;
     }
+    if (view.hereId && view.field.node(view.hereId, this.lookPoint)) this.lookAt = this.lookPoint;
   }
 
   private eyeCue(view: ReplayView): EyeCue {

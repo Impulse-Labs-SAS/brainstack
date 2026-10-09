@@ -137,14 +137,14 @@ export function swingDuration(
 const AXIS_WEIGHT = 0.6;
 const CROWD_WEIGHT = 1.5;
 /** Grips closer than this to another, in units, crowd each other. */
-const CROWD_RADIUS = 0.35;
+export const CROWD_RADIUS = 0.35;
 const REGRIP_PENALTY = 0.4;
 const LIT_BONUS = 0.15;
 /** Keys a slot remembers letting go of: it is slow to take them straight back. */
 const MEMORY = 2;
 
 /** Left front, right front, left middle, …: grips around a perch land alternating sides. */
-const PERCH_ORDER: readonly number[] = [0, 3, 1, 4, 2, 5];
+export const PERCH_ORDER: readonly number[] = [0, 3, 1, 4, 2, 5];
 
 /**
  * A thread worth a closer look. The drawn curve is its chord bent sideways by

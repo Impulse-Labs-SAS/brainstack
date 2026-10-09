@@ -102,4 +102,41 @@ describe('legPoint', () => {
     legPoint(gap, length / 2, field, 0, straight);
     expect(straight[1] - sagged[1]).toBeCloseTo(10, 6);
   });
+
+  it('sets out across the void from the point a stretch names, not from its note, and ends on its far note', () => {
+    const { model } = sampleVault();
+    const field = graphThreadField(model);
+    const e = edgeOf(model);
+    const far: Vec3 = [e.target.x, e.target.y, e.target.z];
+    const from: Vec3 = [far[0] + 30, far[1] - 12, far[2] + 7];
+    const length = dist(from, far);
+    // The note it names is nowhere near: only the point counts.
+    const gap = [{ fromId: e.source.id, toId: e.target.id, key: null, length, from }];
+    const p: Vec3 = [0, 0, 0];
+    const heading: Vec3 = [0, 0, 0];
+    expect(legPoint(gap, 0, field, 0, p)).toBe(true);
+    expect(dist(p, from)).toBeLessThan(1e-9);
+    expect(legPoint(gap, length / 2, field, 0, p, heading)).toBe(true);
+    expect(
+      dist(p, [(from[0] + far[0]) / 2, (from[1] + far[1]) / 2, (from[2] + far[2]) / 2]),
+    ).toBeLessThan(1e-9);
+    const way: Vec3 = [
+      (far[0] - from[0]) / length,
+      (far[1] - from[1]) / length,
+      (far[2] - from[2]) / length,
+    ];
+    expect(dist(heading, way)).toBeLessThan(1e-9);
+    expect(legPoint(gap, length, field, 0, p)).toBe(true);
+    expect(dist(p, far)).toBeLessThan(1e-6);
+    // Named at the far end too, it ends there, whatever the note: and the
+    // notes themselves need not be placed at all.
+    const to: Vec3 = [1, 2, 3];
+    const free = [
+      { fromId: 'nowhere', toId: 'elsewhere', key: null, length: dist(from, to), from, to },
+    ];
+    expect(legPoint(free, dist(from, to), field, 0, p)).toBe(true);
+    expect(dist(p, to)).toBeLessThan(1e-9);
+    // A note it needs and does not name is still needed.
+    expect(legPoint([{ ...free[0]!, to: undefined }], 0, field, 0, p)).toBe(false);
+  });
 });

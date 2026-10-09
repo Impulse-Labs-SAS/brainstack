@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { boundsOf, type Viewport } from '@/lib/graph-camera';
 import {
   DEFAULT_LAYERS,
   buildGraphModel,
@@ -10,9 +11,14 @@ import {
 
 import { findWalk, walkable, type CrawlResult } from '../crawl-plan';
 import { CrawlReplay, walkProgress, walkRamp } from '../crawl-replay';
+import { PERCH_ID, PERCH_RAIL_SET, replayPerch, withPerch } from '../prompt/perch-field';
+import { DEFAULT_PERCH, perchShot } from '../prompt/perch-geometry';
+import { defaultTimes } from '../prompt/transition';
 import type { Hold, Lit, Reach, ReplayEvent, ReplayView, Swing, WalkLeg } from '../replay-view';
 import { sampleVault } from '../sample-vault';
 import { polylineThreadField, type PolylineField } from '../space/polyline-field';
+import { volumeLayout } from '../space/volume/layout';
+import { notesReach, overviewCamera } from '../stage/overview';
 import {
   graphThreadField,
   legPoint,
@@ -26,7 +32,7 @@ import {
 } from '../threads';
 import { dist, dot, len, type Vec3 } from '../vec';
 
-import { GRIP_SLOTS, SLOT_TENTACLE, TENTACLES, TENTACLE_SPECS } from './anatomy';
+import { EYE, GRIP_SLOTS, SLOT_TENTACLE, TENTACLES, TENTACLE_SPECS } from './anatomy';
 import { DEFAULT_MOTION, SentinelMotion } from './motion';
 import { segmentsAt, TIER_ORDER } from './tiers';
 
@@ -691,6 +697,196 @@ describe('SentinelMotion under world up', () => {
       expect(frames.every((f) => f.finite)).toBe(true);
       expect(least(frames, (f) => f.upright)).toBeGreaterThan(0.9);
       expect(most(frames, (f) => f.upTurn)).toBeLessThan(8);
+    }
+  });
+});
+
+/** The sample vault laid out as the dormant network lays it out, the frame round the prompt in front of it. */
+function perchedCluster(vp: Viewport = { width: 1280, height: 800 }) {
+  const { model, crawls } = sampleVault();
+  const l = volumeLayout(model);
+  const space = polylineThreadField({
+    nodes: l.positions,
+    routes: l.routes,
+    adjacency: l.adjacency,
+    cell: l.unit,
+  });
+  const bounds = boundsOf([...l.positions.values()].map(([x, y, z]) => ({ x, y, z })))!;
+  const overview = overviewCamera(bounds, vp, 0.5, 0.3);
+  const radius = notesReach(l.positions.values(), [overview.tx, overview.ty, overview.tz], l.unit);
+  const width = Math.min(560, 0.8 * vp.width);
+  const rect = {
+    left: (vp.width - width) / 2,
+    top: (vp.height - 56) / 2,
+    width,
+    height: 56,
+    radius: 16,
+  };
+  const shot = perchShot({ overview, vp, rect, unit: l.unit, radius, knobs: DEFAULT_PERCH })!;
+  const times = defaultTimes();
+  return {
+    model,
+    crawls,
+    field: withPerch(space, shot),
+    shot,
+    perch: replayPerch(shot, { reach: 1, crossing: times.enter.crossing, release: 0.35 }),
+    unit: l.unit,
+    pace: 9 * l.unit,
+    leave: times.leave.crossing,
+  };
+}
+
+/** Where the lens is drawn: the hull's frame, body scale included, at the eye. */
+function lensOf(m: SentinelMotion): Vec3 {
+  const { hull: h, anchor, unit } = m.pose;
+  const [x, y, z] = EYE.position;
+  return [0, 1, 2].map(
+    (i) => anchor[i]! + unit * (h[i]! * x + h[4 + i]! * y + h[8 + i]! * z + h[12 + i]!),
+  ) as Vec3;
+}
+
+/** Radians between where the eye looks and the way from the lens to `at`. */
+function offGaze(m: SentinelMotion, at: Vec3): number {
+  const lens = lensOf(m);
+  return angle(m.pose.eye.dir, unitOf([at[0] - lens[0], at[1] - lens[1], at[2] - lens[2]]));
+}
+
+describe('SentinelMotion on the frame round the prompt', () => {
+  it('rests its eye on the gaze it is handed while perched, within its socket, and not while walking', () => {
+    const s = perchedCluster();
+    // Somewhere the socket lets it look: ahead and to its right. At the
+    // defaults the viewer lies as far below as the socket turns, and so does
+    // the perch's own node, so both rest the eye at the same place.
+    const { body, up, heading } = s.shot.perch;
+    const right = [
+      up[1] * heading[2] - up[2] * heading[1],
+      up[2] * heading[0] - up[0] * heading[2],
+      up[0] * heading[1] - up[1] * heading[0],
+    ];
+    const viewer = [0, 1, 2].map(
+      (k) => body[k]! + (heading[k]! * 3 + right[k]! * 1.2) * s.unit,
+    ) as Vec3;
+    const replay = new CrawlReplay(() => {});
+    replay.rest(s.model, { field: s.field, unit: s.unit, perch: s.perch });
+    const watching = new SentinelMotion();
+    watching.gaze = viewer;
+    const plain = new SentinelMotion();
+    for (const m of [watching, plain]) m.snap(replay.view);
+    let time = 0;
+    const frames = (n: number, ms: SentinelMotion[]) => {
+      for (let i = 0; i < n; i++) {
+        replay.update(1 / 60);
+        const events = replay.drain();
+        time += 1 / 60;
+        for (const m of ms) m.step(replay.view, events, 1 / 60, time, false);
+      }
+    };
+    frames(120, [watching, plain]);
+    expect(offGaze(watching, viewer)).toBeLessThan(0.1);
+    expect(offGaze(plain, viewer)).toBeGreaterThan(0.5);
+    // The socket still bounds it: never past its yaw and pitch from the hull's way.
+    const h = watching.pose.hull;
+    const forward = unitOf([h[8]!, h[9]!, h[10]!]);
+    expect(angle(watching.pose.eye.dir, forward)).toBeLessThanOrEqual(Math.hypot(1.2, 0.9) + 1e-6);
+
+    // Cleared, it looks where it would have: at the perch it stands on.
+    watching.gaze = null;
+    frames(120, [watching, plain]);
+    expect(angle(watching.pose.eye.dir, plain.pose.eye.dir)).toBeLessThan(0.02);
+    const node: Vec3 = [0, 0, 0];
+    expect(replay.view.field.node(PERCH_ID, node)).toBe(true);
+    expect(offGaze(plain, node)).toBeLessThan(offGaze(plain, viewer));
+
+    // The still pose honours it too.
+    const still = new SentinelMotion();
+    still.gaze = viewer;
+    still.finalPose(replay.view);
+    const blind = new SentinelMotion();
+    blind.finalPose(replay.view);
+    expect(offGaze(still, viewer)).toBeLessThan(0.1);
+    expect(offGaze(blind, viewer)).toBeGreaterThan(0.5);
+
+    // Walking, it watches the walk, whatever it is handed.
+    replay.load(s.crawls.walk, s.model, { field: s.field, unit: s.unit, perch: s.perch });
+    for (const m of [watching, plain]) m.snap(replay.view);
+    watching.gaze = viewer;
+    let walking = 0;
+    for (;;) {
+      frames(1, [watching, plain]);
+      if (replay.view.mode !== 'walk') break;
+      expect([...watching.pose.eye.dir]).toEqual([...plain.pose.eye.dir]);
+      walking++;
+    }
+    expect(walking).toBeGreaterThan(60);
+    // Arrived, it may rest its eye on what it is handed again: the scene hands it nothing in the crawl.
+    expect(replay.view.mode).toBe('dwell');
+  });
+
+  it('sets out from the frame and is called back to it without a NaN or a somersault, its claws back on the rails', () => {
+    const s = perchedCluster();
+    const opts = { field: s.field, unit: s.unit, pace: s.pace, perch: s.perch };
+    for (const dt of [1 / 30, 1 / 144]) {
+      const replay = new CrawlReplay(() => {});
+      replay.rest(s.model, opts);
+      const m = new SentinelMotion();
+      m.setTier(3);
+      m.gaze = s.shot.viewer;
+      m.snap(replay.view);
+      replay.load(s.crawls.tour, s.model, opts);
+      m.gaze = null;
+      let time = 0;
+      let before: { u: Vec3; f: Vec3 } | null = null;
+      let upTurn = 0;
+      let forwardTurn = 0;
+      // Only to and from the frame: the walk among the notes is the walk's own.
+      let watch = true;
+      const frame = () => {
+        replay.update(dt);
+        m.step(replay.view, replay.drain(), dt, (time += dt), false);
+        const p = m.pose;
+        expect(allFinite(p.segmentMatrices, p.segments * 16)).toBe(true);
+        expect(allFinite(p.clawMatrices, p.claws * 16)).toBe(true);
+        expect(allFinite(p.hull)).toBe(true);
+        expect(allFinite(p.eye.dir)).toBe(true);
+        expect(allFinite(m.bodyWorld)).toBe(true);
+        const u = unitOf([p.hull[4]!, p.hull[5]!, p.hull[6]!]);
+        const f = unitOf([p.hull[8]!, p.hull[9]!, p.hull[10]!]);
+        if (before && watch) {
+          upTurn = Math.max(upTurn, angle(before.u, u) / dt);
+          forwardTurn = Math.max(forwardTurn, angle(before.f, f) / dt);
+        }
+        before = { u, f };
+      };
+      // Across to the cluster, and a while along the crawl.
+      while (replay.view.hereId === PERCH_ID) frame();
+      watch = false;
+      while (time < 7) frame();
+      expect(replay.recall(s.perch, s.leave)).toBe(true);
+      m.gaze = s.shot.viewer;
+      watch = true;
+      let guard = 0;
+      while (!replay.resting && guard++ < 10_000) frame();
+      for (let i = 0; i < 1.5 / dt; i++) frame();
+      // A flip turns half a turn in a frame: it never turns faster than its springs let it.
+      expect(upTurn).toBeLessThan(8);
+      expect(forwardTurn).toBeLessThan(8);
+      // Back on the frame, clinging to it as before.
+      const h = m.pose.hull;
+      expect(dot(unitOf([h[4]!, h[5]!, h[6]!]), s.shot.perch.up)).toBeGreaterThan(0.95);
+      const held = replay.view.holds.filter((x) => x !== null);
+      expect(held.length).toBeGreaterThanOrEqual(5);
+      replay.view.holds.forEach((hold, slot) => {
+        if (!hold) return;
+        expect(PERCH_RAIL_SET.has(hold.key)).toBe(true);
+        const at: Vec3 = [0, 0, 0];
+        expect(replay.view.field.point(hold.key, hold.u, at)).toBe(true);
+        const o = lastSegment(m, SLOT_TENTACLE[slot]!) * 16;
+        const sm = m.pose.segmentMatrices;
+        const claw = [0, 1, 2].map(
+          (k) => m.pose.anchor[k]! + (sm[o + 12 + k]! + sm[o + 4 + k]!) * s.unit,
+        ) as Vec3;
+        expect(dist(claw, at) / s.unit).toBeLessThan(0.05);
+      });
     }
   });
 });

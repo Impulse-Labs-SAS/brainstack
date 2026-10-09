@@ -170,11 +170,21 @@ export interface LegStretch {
   toId: string;
   key: ThreadKey | null;
   length: number;
+  /**
+   * Where a stretch across the void sets out when that is no note's place:
+   * the point a walk had reached along a thread when it was called back
+   * (CrawlReplay.recall), or the spot below the body as it clings to the
+   * frame round the prompt. World units; absent, it sets out from `fromId`.
+   */
+  from?: Vec3;
+  /** Where a stretch across the void ends when that is no note's place, as `from`; absent, at `toId`. */
+  to?: Vec3;
 }
 
 /**
  * Where a cursor `s` (world units from the start) sits along a leg, and the
  * heading there. Threads are followed as drawn; across the void the line
+ * runs between its notes, or the points a stretch names in their place, and
  * sags by `voidSag` (world units, positive is down) at its middle — silk
  * under its weight, or a negative sag for something gliding over the gap.
  * False when a note or thread it needs is gone.
@@ -201,9 +211,11 @@ export function legPoint(
       const [first] = threadEnds(st.key);
       return field.point(st.key, first === st.fromId ? tt : 1 - tt, o);
     }
-    const a: Vec3 = [0, 0, 0];
-    const b: Vec3 = [0, 0, 0];
-    if (!field.node(st.fromId, a) || !field.node(st.toId, b)) return false;
+    const a: Vec3 = st.from ? [st.from[0], st.from[1], st.from[2]] : [0, 0, 0];
+    const b: Vec3 = st.to ? [st.to[0], st.to[1], st.to[2]] : [0, 0, 0];
+    if ((!st.from && !field.node(st.fromId, a)) || (!st.to && !field.node(st.toId, b))) {
+      return false;
+    }
     const up: Vec3 = [0, 0, 0];
     field.up(a, up);
     const sag = -Math.sin(Math.PI * tt) * voidSag;

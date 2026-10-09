@@ -8,20 +8,34 @@ import {
   type InputNode,
 } from '@/lib/graph-model';
 
+import { boundsOf, type Viewport } from '@/lib/graph-camera';
+
 import { walkable, type CrawlResult } from './crawl-plan';
 import {
   CrawlReplay,
+  crossingTime,
   pacedDuration,
   voidProgress,
   walkProgress,
   walkRamp,
+  type CrossingPace,
   type ReplayOptions,
+  type ReplayPerch,
 } from './crawl-replay';
+import { PERCH_ID, PERCH_RAIL_SET, replayPerch, withPerch } from './prompt/perch-field';
+import { DEFAULT_PERCH, perchShot } from './prompt/perch-geometry';
+import { defaultTimes } from './prompt/transition';
 import type { ReplayEvent } from './replay-view';
-import { sampleVault } from './sample-vault';
+import { sampleVault, type SampleVault } from './sample-vault';
+import { BODY_SCALE, SLOT_TENTACLE, TENTACLE_SPECS } from './sentinel/anatomy';
+import { CROWD_RADIUS, DEFAULT_GRIP } from './sentinel/grips';
+import { largeVault } from './space/large-vault';
 import { polylineThreadField, type PolylineField } from './space/polyline-field';
+import { volumeLayout } from './space/volume/layout';
+import { notesReach, overviewCamera } from './stage/overview';
 import {
   at,
+  legPoint,
   segmentLength,
   threadEnds,
   threadKey,
@@ -29,7 +43,7 @@ import {
   type ThreadField,
   type ThreadKey,
 } from './threads';
-import { dist, type Vec3 } from './vec';
+import { cross, dist, type Vec3 } from './vec';
 
 type Crawl = keyof ReturnType<typeof sampleVault>['crawls'];
 const CRAWLS: readonly Crawl[] = ['walk', 'gap', 'ask', 'tour'];
@@ -1097,5 +1111,510 @@ describe("CrawlReplay's history", () => {
     expect(history.epoch).toBe(epoch + 2);
     expect(r.view.history.passages.length).toBeLessThanOrEqual(1);
     expect(r.view.history.foundAt.size).toBe(0);
+  });
+});
+
+/** The prompt's box on a viewport, as the page lays it out: centred, 56 px tall, 16 px corners. */
+function boxOn(vp: Viewport) {
+  const width = Math.min(560, 0.8 * vp.width);
+  return { left: (vp.width - width) / 2, top: (vp.height - 56) / 2, width, height: 56, radius: 16 };
+}
+
+const LAPTOP: Viewport = { width: 1280, height: 800 };
+
+/**
+ * The sample vault as `pipesOf` draws it, with the frame round the prompt in
+ * front of it: the shot from the overview of its notes, at the defaults.
+ */
+function perched(vp = LAPTOP) {
+  const { model, crawls } = sampleVault();
+  const pipes = pipesOf(model);
+  const unit = typicalLink(model);
+  const overview = overviewCamera(boundsOf(model.nodes)!, vp, 0.5, 0.3);
+  const radius = notesReach(model.nodes.map(at), [overview.tx, overview.ty, overview.tz], unit);
+  const shot = perchShot({ overview, vp, rect: boxOn(vp), unit, radius, knobs: DEFAULT_PERCH })!;
+  const field = withPerch(pipes, shot);
+  const perch = replayPerch(shot, { reach: 1 });
+  return { model, crawls, pipes, field, shot, perch, unit };
+}
+
+type Perched = ReturnType<typeof perched>;
+
+function resting(s: Perched): CrawlReplay {
+  const r = new CrawlReplay(() => {});
+  r.rest(s.model, { field: s.field, unit: s.unit, perch: s.perch });
+  return r;
+}
+
+/** Rests on the frame, then sets out from it on `crawl`. */
+function fromPerch(s: Perched, crawl: Crawl, perch: ReplayPerch = s.perch): CrawlReplay {
+  const r = resting(s);
+  r.load(s.crawls[crawl], s.model, { field: s.field, unit: s.unit, perch });
+  return r;
+}
+
+/** Steps a replay at `fps` until `done` says so, draining its events into `events` when given. */
+function stepUntil(r: CrawlReplay, fps: number, done: () => boolean, events?: ReplayEvent[]): void {
+  let guard = 0;
+  while (!done() && guard++ < 200_000) {
+    r.update(1 / fps);
+    const e = r.drain();
+    events?.push(...e);
+  }
+  expect(done()).toBe(true);
+}
+
+const holdsOf = (r: CrawlReplay) => r.view.holds.map((h) => (h ? { key: h.key, u: h.u } : null));
+
+/** Every hold on a rail of the frame, within the planner's range along it. */
+function onRails(r: CrawlReplay, least = 6): void {
+  const held = r.view.holds.filter((h) => h !== null);
+  expect(held.length).toBeGreaterThanOrEqual(least);
+  for (const h of held) {
+    expect(PERCH_RAIL_SET.has(h!.key)).toBe(true);
+    expect(h!.u).toBeGreaterThanOrEqual(DEFAULT_GRIP.uMin - 1e-9);
+    expect(h!.u).toBeLessThanOrEqual(DEFAULT_GRIP.uMax + 1e-9);
+  }
+}
+
+/** The fastest a crossing's cursor moves, world units a second, sampled finely. */
+function peakSpeed(total: number, duration: number): number {
+  let most = 0;
+  const n = 4000;
+  for (let i = 0; i < n; i++) {
+    const a = (duration * i) / n;
+    const b = (duration * (i + 1)) / n;
+    const v = (voidProgress(b, total, duration) - voidProgress(a, total, duration)) / (b - a);
+    most = Math.max(most, v);
+  }
+  return most;
+}
+
+describe('CrawlReplay on a perch', () => {
+  it('rests on the perch holding the frame at once, lighting nothing and counting nothing', () => {
+    const s = perched();
+    const r = resting(s);
+    const v = r.view;
+    expect(r.resting).toBe(true);
+    expect(v.mode).toBe('dwell');
+    expect(v.hereId).toBe(PERCH_ID);
+    expect(v.nextId).toBeNull();
+    expect(v.walk).toBeNull();
+    expect(v.dwell!.duration).toBe(Infinity);
+    expect(v.swings).toHaveLength(0);
+    expect(dist([...v.dir] as Vec3, s.perch.heading)).toBeLessThan(1e-12);
+    onRails(r);
+    expect(v.lit.size).toBe(0);
+    expect(r.snapshot.threads).toBe(0);
+    expect(r.snapshot.state).toBe('idle');
+    expect(v.history.reached.size).toBe(0);
+    expect(v.history.passages).toHaveLength(0);
+    // Found holding on, not seen landing.
+    expect(r.drain()).toEqual([]);
+    for (const h of v.holds) expect(h!.since).toBe(0);
+    // Over a field that does not place it, it clears instead.
+    const bare = new CrawlReplay(() => {});
+    bare.rest(s.model, { field: s.pipes, unit: s.unit, perch: s.perch });
+    expect(bare.resting).toBe(false);
+    expect(bare.view.mode).toBe('idle');
+  });
+
+  it('re-grips one claw at a time along its edge every few seconds, the same at any frame rate', () => {
+    const s = perched();
+    const traces = [24, 60, 144].map((fps) => {
+      const r = resting(s);
+      const start = holdsOf(r);
+      const events: ReplayEvent[] = [];
+      for (let i = 0; i < 30 * fps; i++) {
+        r.update(1 / fps);
+        events.push(...r.drain());
+        expect(r.view.swings.length).toBeLessThanOrEqual(1);
+        onRails(r, 5);
+      }
+      expect(r.resting).toBe(true);
+      expect(r.view.lit.size).toBe(0);
+      const grips = events.filter((e) => e.kind === 'grip');
+      expect(grips.length).toBeGreaterThanOrEqual(3);
+      for (const g of grips) {
+        if (g.kind !== 'grip') continue;
+        // Along the edge it held, somewhere else on it.
+        expect(g.key).toBe(start[g.slot]!.key);
+        expect(g.u).not.toBe(start[g.slot]!.u);
+      }
+      return { events, holds: holdsOf(r) };
+    });
+    expect(traces[1]).toEqual(traces[0]);
+    expect(traces[2]).toEqual(traces[0]);
+  });
+
+  it('keeps its claws about where they first took hold, and off each other, for half an hour', () => {
+    const s = perched();
+    const r = resting(s);
+    const home = holdsOf(r);
+    const { body, up, heading } = s.shot.perch;
+    const right = cross(up, heading);
+    const sockets = SLOT_TENTACLE.map((i) => {
+      const [x, y, z] = TENTACLE_SPECS[i]!.socket;
+      return [0, 1, 2].map(
+        (k) => body[k]! + (right[k]! * x + up[k]! * y + heading[k]! * z) * s.unit * BODY_SCALE,
+      ) as Vec3;
+    });
+    const p: Vec3 = [0, 0, 0];
+    const q: Vec3 = [0, 0, 0];
+    let grips = 0;
+    for (let i = 0; i < 30 * 60 * 20; i++) {
+      r.update(1 / 20);
+      grips += r.drain().filter((e) => e.kind === 'grip').length;
+    }
+    expect(grips).toBeGreaterThan(300);
+    r.skipToEnd();
+    onRails(r);
+    r.view.holds.forEach((h, g) => {
+      expect(s.field.point(h!.key, h!.u, p)).toBe(true);
+      expect(dist(p, sockets[g]!) / s.unit).toBeLessThan(DEFAULT_GRIP.maxFromAnchor);
+      expect(h!.key).toBe(home[g]!.key);
+      // A re-grip lands at most 0.22 units from where the claw first held.
+      const length = s.field.length!(h!.key);
+      expect((Math.abs(h!.u - home[g]!.u) * length) / s.unit).toBeLessThan(0.22 + 1e-9);
+      r.view.holds.forEach((o, k) => {
+        if (k === g) return;
+        s.field.point(o!.key, o!.u, q);
+        expect(dist(p, q) / s.unit).toBeGreaterThanOrEqual(CROWD_RADIUS - 1e-9);
+      });
+    });
+  });
+
+  it('sets out from the perch across the void to the first note, letting go of the frame', () => {
+    const s = perched();
+    for (const crawl of CRAWLS) {
+      const perch = { ...s.perch, release: 0.35 };
+      const r = fromPerch(s, crawl, perch);
+      const v = r.view;
+      const first = `me/${s.crawls[crawl].notes[0]!.path}`;
+      const duration = v.walk!.duration;
+      expect(r.resting).toBe(false);
+      expect(v.mode).toBe('walk');
+      expect(v.hereId).toBe(PERCH_ID);
+      expect(v.nextId).toBe(first);
+      expect(v.walk!.void).toBe(true);
+      expect(v.walk!.segments).toHaveLength(1);
+      const leg = v.walk!.segments[0]!;
+      expect(leg.fromId).toBe(PERCH_ID);
+      expect(leg.toId).toBe(first);
+      expect(leg.from).toEqual(perch.at);
+      const far: Vec3 = [0, 0, 0];
+      s.field.node(first, far);
+      expect(leg.length).toBeCloseTo(dist(perch.at!, far), 9);
+      // No silk from the frame: nothing joins it to the vault.
+      expect(r.silk).toHaveLength(0);
+      // Still while its claws let go, every one of them, then across.
+      const events: ReplayEvent[] = [];
+      stepUntil(r, 60, () => r.view.clock >= 0.3, events);
+      expect(r.view.walk!.travelled).toBe(0);
+      stepUntil(r, 60, () => r.view.clock >= 0.45, events);
+      expect(r.view.walk!.travelled).toBeGreaterThan(0);
+      expect(r.view.holds.every((h) => h === null)).toBe(true);
+      expect(events.filter((e) => e.kind === 'release')).toHaveLength(6);
+      stepUntil(r, 60, () => r.view.mode !== 'walk', events);
+      expect(r.view.hereId).toBe(first);
+      expect(r.view.history.reached.get(first)).toBeCloseTo(duration, 9);
+    }
+  });
+
+  it('finds what a crawl without the perch finds, in the order it visits them', () => {
+    const s = perched();
+    const visits = (r: CrawlReplay) => {
+      const events = run(r, 60);
+      return {
+        arrived: events.flatMap((e) => (e.kind === 'arrive' ? [e.nodeId] : [])),
+        found: [...r.view.found].sort(),
+      };
+    };
+    for (const crawl of CRAWLS) {
+      const plain = new CrawlReplay(() => {});
+      plain.load(s.crawls[crawl], s.model, { field: s.pipes, unit: s.unit });
+      const from = visits(fromPerch(s, crawl));
+      expect(from.found.length).toBeGreaterThan(0);
+      expect(from).toEqual(visits(plain));
+    }
+  });
+
+  it('lights the same threads and stamps the same history at any frame rate, entering and called back', () => {
+    const s = perched();
+    for (const crawl of CRAWLS) {
+      const entered = [24, 60, 144].map((fps) => {
+        const r = fromPerch(s, crawl);
+        run(r, fps);
+        return { lit: litKeys(r), history: historyOf(r) };
+      });
+      const jumped = fromPerch(s, crawl);
+      jumped.skipToEnd();
+      expect(entered[0]!.lit.length).toBeGreaterThan(0);
+      expect(entered[1]).toEqual(entered[0]);
+      expect(entered[2]).toEqual(entered[0]);
+      expect({ lit: litKeys(jumped), history: historyOf(jumped) }).toEqual(entered[0]);
+
+      // Called back at the same moment of the crawl, 6 s in.
+      const recalled = [24, 60, 144].map((fps) => {
+        const r = fromPerch(s, crawl);
+        stepUntil(r, fps, () => r.view.clock >= 6 - 1e-9 || r.view.mode === 'done');
+        expect(r.recall(s.perch, 1.5)).toBe(true);
+        stepUntil(r, fps, () => r.resting);
+        return { lit: litKeys(r), history: historyOf(r), holds: holdsOf(r) };
+      });
+      expect(recalled[1]).toEqual(recalled[0]);
+      expect(recalled[2]).toEqual(recalled[0]);
+    }
+  });
+
+  it('is called back from partway along a leg without lighting anything more', () => {
+    const s = perched();
+    let tried = 0;
+    for (const crawl of CRAWLS) {
+      const r = fromPerch(s, crawl);
+      // Out along a thread, a claw swinging to its next hold.
+      const midway = () => {
+        const w = r.view.walk;
+        return (
+          !!w &&
+          !w.void &&
+          w.travelled > 0.2 * w.total &&
+          w.travelled < 0.7 * w.total &&
+          r.view.swings.length > 0
+        );
+      };
+      let guard = 0;
+      while (guard++ < 20_000 && r.view.mode !== 'done' && !midway()) {
+        r.update(1 / 60);
+        r.drain();
+      }
+      if (!midway()) continue;
+      tried++;
+      const lit = [...r.view.lit].map(([k, l]) => [k, { ...l }]);
+      const history = historyOf(r);
+      expect(r.recall(s.perch, 1.2)).toBe(true);
+      expect([...r.view.lit].map(([k, l]) => [k, { ...l }])).toEqual(lit);
+      expect(historyOf(r)).toEqual(history);
+      expect(r.view.swings).toHaveLength(0);
+      const events: ReplayEvent[] = [];
+      stepUntil(r, 60, () => r.resting, events);
+      // Nothing lights on the way back, or on the frame.
+      expect(litKeys(r)).toEqual(lit.map(([k]) => k as ThreadKey).sort());
+      expect(historyOf(r)).toEqual(history);
+      expect(events.some((e) => e.kind === 'contact' && e.nodeId === PERCH_ID)).toBe(true);
+    }
+    expect(tried).toBeGreaterThanOrEqual(2);
+  });
+
+  it('is called back from a note, from a thread and from mid-crossing, setting out exactly where it was', () => {
+    const s = perched();
+    const cases: Array<[string, (r: CrawlReplay) => boolean]> = [
+      ['reading a note', (r) => r.view.mode === 'dwell' && r.view.hereId !== PERCH_ID],
+      ['along a thread', (r) => !!r.view.walk && !r.view.walk.void && r.view.walk.travelled > 0],
+      [
+        'mid-crossing',
+        (r) =>
+          !!r.view.walk &&
+          r.view.walk.void &&
+          r.view.walk.travelled > 0.3 * r.view.walk.total &&
+          r.view.walk.travelled < 0.7 * r.view.walk.total,
+      ],
+    ];
+    for (const [name, when] of cases) {
+      const r = fromPerch(s, 'tour');
+      stepUntil(r, 60, () => when(r));
+      const v = r.view;
+      const cursor: Vec3 = [0, 0, 0];
+      if (v.walk) legPoint(v.walk.segments, v.walk.travelled, v.field, 0, cursor);
+      else expect(v.field.node(v.hereId!, cursor)).toBe(true);
+      const found = [...v.found];
+      expect(r.recall(s.perch), name).toBe(true);
+      const back = r.view.walk!;
+      expect(back.void).toBe(true);
+      expect(back.segments).toHaveLength(1);
+      expect(dist(back.segments[0]!.from!, cursor), name).toBeLessThan(1e-9 * s.unit);
+      expect(back.segments[0]!.toId).toBe(PERCH_ID);
+      expect(back.segments[0]!.to).toEqual(s.perch.at);
+      expect(r.view.nextId).toBe(PERCH_ID);
+      expect(r.snapshot.state).toBe('walking');
+      // It lets go of what it held, lands, and takes hold of the frame one claw after another.
+      const events: ReplayEvent[] = [];
+      stepUntil(r, 60, () => r.resting, events);
+      expect(r.view.hereId).toBe(PERCH_ID);
+      expect(r.view.mode).toBe('dwell');
+      expect(events.some((e) => e.kind === 'arrive' && e.nodeId === PERCH_ID)).toBe(true);
+      stepUntil(r, 60, () => r.view.swings.length === 0 && r.view.holds.every((h) => h !== null));
+      onRails(r);
+      expect([...r.view.found]).toEqual(found);
+      expect(r.snapshot.state).toBe('idle');
+    }
+  });
+
+  it('keeps what the crawl lit and found when called back; a load afterwards starts dark', () => {
+    const s = perched();
+    const r = fromPerch(s, 'tour');
+    run(r, 60);
+    const lit = litKeys(r);
+    const found = [...r.view.found];
+    const epoch = r.view.history.epoch;
+    expect(r.recall(s.perch)).toBe(true);
+    r.skipToEnd();
+    expect(r.resting).toBe(true);
+    expect(litKeys(r)).toEqual(lit);
+    expect([...r.view.found]).toEqual(found);
+    expect(r.view.history.epoch).toBe(epoch);
+    r.load(s.crawls.walk, s.model, { field: s.field, unit: s.unit, perch: s.perch });
+    expect(r.view.lit.size).toBe(0);
+    expect(r.view.found.size).toBe(0);
+    expect(r.view.history.epoch).toBe(epoch + 1);
+    expect(r.view.hereId).toBe(PERCH_ID);
+  });
+
+  it('takes its crossings in the seconds it is handed, or paced by their length', () => {
+    const s = perched();
+    // Seconds, the release on top: it lands exactly then.
+    const timed = fromPerch(s, 'walk', { ...s.perch, crossing: 2.5, release: 0.35 });
+    expect(timed.view.walk!.duration).toBeCloseTo(2.85, 12);
+    const events: ReplayEvent[] = [];
+    stepUntil(timed, 60, () => timed.view.mode === 'dwell', events);
+    expect(events.find((e) => e.kind === 'arrive')!.clock).toBeCloseTo(2.85, 12);
+    // A pace: as long as its length asks.
+    const pace: CrossingPace = { speed: 14, min: 2, max: 4 };
+    const paced = fromPerch(s, 'walk', { ...s.perch, crossing: pace });
+    const w = paced.view.walk!;
+    expect(w.duration).toBeCloseTo(crossingTime(w.total, s.unit, pace), 12);
+    // Back: the seconds asked for, or paced too.
+    run(paced, 60);
+    expect(paced.recall(s.perch, 1.7)).toBe(true);
+    expect(paced.view.walk!.duration).toBe(1.7);
+    const clock = paced.view.clock;
+    stepUntil(paced, 60, () => paced.resting);
+    expect(paced.view.clock - clock).toBeGreaterThanOrEqual(1.7 - 1e-9);
+    expect(paced.view.clock - clock).toBeLessThan(1.7 + 1 / 60 + 1e-9);
+    const again = fromPerch(s, 'gap');
+    run(again, 60);
+    const leave = defaultTimes().leave.crossing;
+    expect(again.recall(s.perch, leave)).toBe(true);
+    const back = again.view.walk!;
+    expect(back.duration).toBeCloseTo(crossingTime(back.total, s.unit, leave), 12);
+  });
+
+  it('refuses a recall over a field that does not place the perch, or while it rests', () => {
+    const s = perched();
+    const plain = new CrawlReplay(() => {});
+    plain.load(s.crawls.walk, s.model, { field: s.pipes, unit: s.unit });
+    plain.update(0.5);
+    const before = { mode: plain.view.mode, step: plain.view.stepIndex, holds: holdsOf(plain) };
+    expect(plain.recall(s.perch)).toBe(false);
+    expect({ mode: plain.view.mode, step: plain.view.stepIndex, holds: holdsOf(plain) }).toEqual(
+      before,
+    );
+    const r = resting(s);
+    expect(r.recall(s.perch)).toBe(false);
+    expect(r.resting).toBe(true);
+  });
+
+  it('keeps its claws on the frame across a load from rest', () => {
+    const s = perched();
+    const r = resting(s);
+    for (let i = 0; i < 600; i++) r.update(1 / 60);
+    r.drain();
+    // Whatever was mid re-grip has landed: the holds as they now are.
+    r.skipToEnd();
+    const holds = holdsOf(r);
+    r.load(s.crawls.walk, s.model, { field: s.field, unit: s.unit, perch: s.perch });
+    expect(holdsOf(r)).toEqual(holds);
+    expect(r.view.clock).toBe(0);
+    for (const h of r.view.holds) expect(h!.since).toBe(0);
+    // Loaded from no rest, it takes hold at once as it would have resting.
+    const fresh = new CrawlReplay(() => {});
+    fresh.load(s.crawls.walk, s.model, { field: s.field, unit: s.unit, perch: s.perch });
+    expect(holdsOf(fresh)).toEqual(holdsOf(resting(s)));
+  });
+
+  it('stops on the perch, its grips landed, when jumped to the end; and stays put when resting', () => {
+    const s = perched();
+    const r = fromPerch(s, 'tour');
+    for (let i = 0; i < 300; i++) r.update(1 / 60);
+    expect(r.recall(s.perch, 1.4)).toBe(true);
+    r.skipToEnd();
+    expect(r.resting).toBe(true);
+    expect(r.view.swings).toHaveLength(0);
+    onRails(r);
+    const clock = r.view.clock;
+    r.skipToEnd();
+    expect(r.view.clock).toBe(clock);
+  });
+
+  it('replays from the first note, not the perch', () => {
+    const s = perched();
+    const r = fromPerch(s, 'walk');
+    run(r, 60);
+    r.replay();
+    const first = `me/${s.crawls.walk.notes[0]!.path}`;
+    expect(r.view.hereId).toBe(first);
+    expect(r.view.walk?.void ?? false).toBe(false);
+    expect([...r.view.history.reached]).toEqual([[first, 0]]);
+    run(r, 60);
+    expect(r.view.mode).toBe('done');
+  });
+
+  it('never crosses faster than the body can follow, on either vault and any viewport', () => {
+    const times = defaultTimes();
+    // body.ts snaps a body whose goal moves 3 units in a frame; frames run to 64 ms.
+    const most = (total: number, duration: number, unit: number) =>
+      (peakSpeed(total, duration) * 0.064) / unit;
+    for (const vault of [sampleVault(), largeVault()] as SampleVault[]) {
+      const l = volumeLayout(vault.model);
+      const space = polylineThreadField({
+        nodes: l.positions,
+        routes: l.routes,
+        adjacency: l.adjacency,
+        cell: l.unit,
+      });
+      const bounds = boundsOf([...l.positions.values()].map(([x, y, z]) => ({ x, y, z })))!;
+      for (const vp of [{ width: 375, height: 812 }, LAPTOP, { width: 2560, height: 1440 }]) {
+        const overview = overviewCamera(bounds, vp, 0.5, 0.3);
+        const target: Vec3 = [overview.tx, overview.ty, overview.tz];
+        const radius = notesReach(l.positions.values(), target, l.unit);
+        const rect = boxOn(vp);
+        const shot = perchShot({ overview, vp, rect, unit: l.unit, radius, knobs: DEFAULT_PERCH })!;
+        const field = withPerch(space, shot);
+        const crossing = times.enter.crossing;
+        const perch = replayPerch(shot, { reach: 1, crossing, release: 0.35 });
+        const opts = { field, unit: l.unit, pace: 9 * l.unit, perch };
+        for (const crawl of CRAWLS) {
+          const r = new CrawlReplay(() => {});
+          r.rest(vault.model, opts);
+          r.load(vault.crawls[crawl], vault.model, opts);
+          const enter = r.view.walk!;
+          expect(enter.void).toBe(true);
+          expect(most(enter.total, enter.duration - 0.35, l.unit)).toBeLessThan(3);
+          r.skipToEnd();
+          expect(r.recall(perch, times.leave.crossing)).toBe(true);
+          const leave = r.view.walk!;
+          expect(most(leave.total, leave.duration, l.unit)).toBeLessThan(3);
+        }
+      }
+    }
+  });
+});
+
+describe('crossingTime', () => {
+  it('paces a crossing by its length within its bounds, and never past what the body can follow', () => {
+    const pace: CrossingPace = { speed: 14, min: 2, max: 4 };
+    const unit = 10;
+    expect(crossingTime(10 * unit, unit, pace)).toBe(2);
+    expect(crossingTime(42 * unit, unit, pace)).toBeCloseTo(3, 12);
+    expect(crossingTime(50 * unit, unit, pace)).toBeCloseTo(50 / 14, 12);
+    expect(crossingTime(70 * unit, unit, pace)).toBe(4);
+    // Far past `max`, the time grows with the length, so the speed holds.
+    expect(crossingTime(200 * unit, unit, pace)).toBeCloseTo(200 / 25, 12);
+    expect(crossingTime(10 * unit, unit, { speed: 0, min: 1, max: 3 })).toBe(3);
+    // At that speed the cursor peaks under 2.6 units in a 64 ms frame, at any length.
+    for (const length of [10, 30, 120, 300, 1000]) {
+      const duration = crossingTime(length * unit, unit, { speed: 1000, min: 0, max: 0 });
+      expect((peakSpeed(length * unit, duration) * 0.064) / unit).toBeLessThan(2.6);
+    }
   });
 });
