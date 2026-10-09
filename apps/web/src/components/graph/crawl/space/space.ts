@@ -7,6 +7,13 @@
 // the Sentinel read. It draws first, into the canvas, writing depth; the
 // Sentinel then draws into the same depth, so a pipe in front of a tentacle
 // hides it. Everything it changes on the renderer it restores.
+//
+// A space that stays dark until the crawl wakes it is told where the
+// Sentinel's eye is each frame (`SpaceFrame.eye`): what the eye looks at is
+// what it reveals. Which notes record a decision comes from the data, after
+// the build (`setDecisions`), and a space may compile its shaders before its
+// first frame (`warmup`). All three are optional: a space that needs none of
+// them ignores them.
 
 import type * as THREE from 'three';
 import type GUI from 'three/addons/libs/lil-gui.module.min.js';
@@ -43,6 +50,14 @@ export interface SpaceFrame {
   time: number;
   /** Reduced motion: nothing moves on its own. */
   still: boolean;
+  /**
+   * The Sentinel's eye, world space: where the lens is, the way it looks (unit
+   * length) and how bright it is (1 at rest, more when it finds something). A
+   * space that wakes under the eye lights what falls in its cone. With the
+   * creature off, whoever draws may pass a stand-in eye at the walk, so the
+   * reveal still happens; null or absent, nothing is revealed.
+   */
+  eye?: { position: Vec3; dir: Vec3; intensity: number } | null;
 }
 
 export interface CrawlSpace {
@@ -61,5 +76,17 @@ export interface CrawlSpace {
   readonly info: { calls: number; triangles: number };
   /** Its own knobs, in the lab. */
   gui?(folder: GUI): void;
+  /**
+   * The notes that record a decision, by id — from the data (a decision tag,
+   * the crawl's own flag), never guessed from a title. Takes effect at once,
+   * before or after a build, and holds across builds until set again.
+   */
+  setDecisions?(ids: ReadonlySet<string>): void;
+  /**
+   * Compiles every shader the space draws with, for the canvas it will draw
+   * into, so its first frame does not stall. Call it after a build; rejects
+   * if a shader fails.
+   */
+  warmup?(renderer: THREE.WebGLRenderer): Promise<void>;
   dispose(): void;
 }
