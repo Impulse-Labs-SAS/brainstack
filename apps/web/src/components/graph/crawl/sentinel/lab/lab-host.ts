@@ -29,6 +29,26 @@
 // ready), which notes record a decision, and compiles its shaders before it
 // first draws.
 //
+// Over a space, once the page hands it the prompt (`attachPrompt`), the lab
+// opens on the prompt scene, as Crawl will: the input at the centre, the
+// Sentinel clinging to the frame round it, big on screen, the cluster not
+// drawn at all. A send — or a recent crawl touched — runs the transition into
+// the crawl: the panel slides in, the cluster fades up from under a veil of
+// the background, the camera backs out to the overview and the creature lets
+// go and crosses to the crawl's first note; "New search" runs it back.
+// prompt/prompt-scene.ts decides all of it; the lab draws it, writes the
+// levels to the page as CSS variables, and hands the camera between the
+// scene's timeline, the follow camera and the user. At the prompt nothing may
+// move the camera, or the frame would leave the box.
+//
+// The stage's pass then depends on where the scene is. At rest at the prompt:
+// a clear, the Sentinel in the frame's planes, the frame. Under way: the
+// space, the veil over it while the cluster is below full, its depth cleared
+// then — crystals veiled to nothing must not cut holes in the creature — the
+// Sentinel in the space's planes, the frame over it. In the crawl, as ever.
+// The frame is always drawn after the creature, with the depth test on: it
+// hides what lies behind it, and fades over it rather than cutting it out.
+//
 // It owns its canvases. A canvas keeps its WebGL context for life, and one
 // lost on purpose — forceContextLoss, which stops hot reloads from piling
 // contexts up — stays lost; React's Strict Mode mounts, unmounts and mounts
@@ -38,37 +58,45 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import {
-  TAN_HALF_FOV,
   boundsOf,
   orbitBy,
   panBy,
   projector,
-  type Bounds,
   type Camera,
   type Viewport,
 } from '@/lib/graph-camera';
 import { hash01 } from '@/lib/graph-model';
 
+import type { CrawlSnapshot } from '../../crawl-layer';
 import { CrawlReplay } from '../../crawl-replay';
+import { PERCH_RAIL_SET } from '../../prompt/perch-field';
+import { PromptScene, type IdleLife, type PromptFrame } from '../../prompt/prompt-scene';
+import { promptRecents, type PromptRecent } from '../../prompt/recents';
+import { cameraBetween, type Levels, type SceneName } from '../../prompt/transition';
+import type { ReplayView } from '../../replay-view';
 import { sampleVault, type SampleVault } from '../../sample-vault';
 import { largeVault } from '../../space/large-vault';
 import type { SpaceBuild } from '../../space/space';
+import { PromptBezel } from '../../stage/bezel';
+import { notesReach, overviewCamera } from '../../stage/overview';
+import { Veil } from '../../stage/veil';
 import { typicalLink } from '../../threads';
 import type { Vec3 } from '../../vec';
-import { TENTACLES } from '../anatomy';
+import { GRIP_SLOTS, TENTACLES } from '../anatomy';
 import { assertRendererState, withRendererState } from '../gl-state';
 import { GpuTimer } from '../gpu-timer';
 import { DEFAULT_GRIP, type GripParams } from '../grips';
 import { defaultLook, type SentinelLook } from '../look';
-import { SentinelMotion } from '../motion';
+import { SentinelMotion, type MotionParams } from '../motion';
 import { probeCaps } from '../probe';
 import { QualityGovernor, recallStable, startTier, type Caps } from '../quality';
 import { SENTINEL_SEED, tentacleCharacter, type Rig } from '../rig';
 import { TIERS, type Tier } from '../tiers';
-import { SentinelView } from '../view';
+import { SentinelView, creatureBounds } from '../view';
 
 import { LabBackdrop } from './backdrop';
-import { drawCrawl, drawDebug, drawNotes, type Project } from './lab-overlay';
+import { drawCrawl, drawDebug, drawNotes, drawPerch, type Project } from './lab-overlay';
+import { LAB_ASKED, labRecents } from './lab-prompt';
 import {
   DEFAULT_SPACE,
   LAB_SPACES,
@@ -195,7 +223,49 @@ export interface LabStats {
   renderer: string;
   status: string;
   rebuild: string;
+  /** The prompt scene: where it is, the frame's size, the shot, the camera's pull, the claws on the frame. */
+  prompt: string;
+  /** What going from the prompt to the crawl and back twenty times left behind. */
+  promptCycle: string;
 }
+
+/** What the lab's prompt and panel show, as React reads it: sent whenever it changes. */
+export interface LabPromptUi {
+  scene: SceneName;
+  /** The stage can show the prompt: a space, and a place for the box in it. */
+  available: boolean;
+  /** The input takes text and a send. */
+  interactive: boolean;
+  /** Bumped whenever the input should take focus: each time it takes text again at the prompt. */
+  focus: number;
+  /** What the crawl on screen was asked. */
+  asked: string;
+  recents: PromptRecent[];
+}
+
+/** The motion params the prompt's idle life stands in for, blended by its level: the body's, never the tentacles'. */
+const IDLE_KEYS = [
+  'breathing',
+  'humAmplitude',
+  'bob',
+] as const satisfies readonly (keyof IdleLife)[];
+
+/** The CSS variables the lab writes on the page for the prompt and the panel. */
+const PROMPT_CSS = [
+  '--crawl-prompt',
+  '--crawl-panel',
+  '--crawl-prompt-visibility',
+  '--crawl-glass-alpha',
+  '--crawl-glass-blur',
+] as const;
+
+/**
+ * Frames a cycle waits for the scene to get somewhere before it gives up: 30 s
+ * at 60 fps. Counted in frames, not seconds — the walk, and the transitions on
+ * its clock, advance at most 64 ms a frame, so on a throttled tab a transition
+ * takes longer than its seconds.
+ */
+const CYCLE_WAIT_FRAMES = 1800;
 
 /** Where the Sentinel walks: the brain stand-in, or a space built over the vault's notes. */
 type Stage =
@@ -330,13 +400,6 @@ function busyWait(duration: number): number {
   return spins;
 }
 
-/** How far back all of `b` is in view: its bounding sphere inside the narrower field of view. */
-function overview(b: Bounds, vp: Viewport): number {
-  const radius = Math.hypot(b.w, b.h, b.d) / 2;
-  const tan = TAN_HALF_FOV * Math.min(1, vp.width / vp.height);
-  return radius / Math.sin(Math.atan(tan));
-}
-
 function canvas(container: HTMLElement): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.style.position = 'absolute';
@@ -366,6 +429,19 @@ export class LabHost {
    * folder with the new stage's knobs.
    */
   onStageChange: (() => void) | null = null;
+  /** Every snapshot the replay emits: what the panel shows of the walk. */
+  onSnapshot: ((s: CrawlSnapshot) => void) | null = null;
+  /** The prompt scene: its `knobs` are what the Prompt folder binds. */
+  readonly scene: PromptScene;
+  /** The frame round the prompt: its `look` is what the Bezel folder binds. */
+  readonly bezel: PromptBezel;
+  /**
+   * The panel's motion params, which the GUI binds; the motion reads a copy
+   * with the prompt's idle life blended in, so the walk's values stay as tuned.
+   */
+  readonly params: MotionParams;
+  /** The prompt box's glass, written to the page as CSS variables: its alpha, and its blur in px. */
+  readonly glass = { alpha: 0.5, blur: 12 };
 
   private readonly glCanvas: HTMLCanvasElement;
   private readonly overlay: HTMLCanvasElement;
@@ -442,10 +518,60 @@ export class LabHost {
   /** The space's upload count at the last stats refresh, and when: the rate is the difference. */
   private uploadsSeen: { count: number; at: number } | null = null;
 
+  /** Over the background, the cluster fading in and out. */
+  private readonly veil: Veil;
+  /** What the motion reads: `params`, with the prompt's idle life blended in. */
+  private readonly live: MotionParams;
+  /** The page's prompt: the box the frame is fitted to, the element the levels are written on, who hears of changes. */
+  private prompt: {
+    box: HTMLElement;
+    chrome: HTMLElement;
+    listener: (ui: LabPromptUi) => void;
+  } | null = null;
+  /** The box and the stage as last laid out: the scene is laid out again only when they change. */
+  private promptRects: number[] = [];
+  /** Lay the scene out again at the next frame: the stage resized, or a knob moved (and the claws take hold anew). */
+  private promptDirty: 'move' | 'regrip' | null = null;
+  /** The prompt was asked for and could not be placed yet — the box had no size: it rests as soon as it can. */
+  private promptPending = false;
+  /** The frame's and the veil's shaders compiled: neither draws before. */
+  private promptWarm = false;
+  private promptFailure: string | null = null;
+  /** Settles once their compile has, or failed to. Never rejects. */
+  private promptWarming: Promise<void> = Promise.resolve();
+  /** Their compile is polling the renderer right now: the renderer must outlive it. */
+  private promptCompiling = false;
+  /**
+   * The prompt scene's clock, seconds: the replay's steps added up — capped,
+   * at the panel's speed, none while paused — never wall time. The scene times
+   * the camera's way to end as the creature's crossing lands, on the clock the
+   * crossing runs on; on wall time a slow speed, a pause or a frame past the
+   * cap would bring the camera to the overview with the creature still
+   * mid-void, and back to the perch shot with the claws not yet on the frame.
+   */
+  private sceneClock = 0;
+  /** This frame's scene, for the overlay, the stats and the cycles. */
+  private sf: PromptFrame | null = null;
+  /** The follow camera while the timeline hands over to it: eased on its own, shown blended in. */
+  private chase: Camera | null = null;
+  /** What the page was last given: written only when it changes. */
+  private css = { prompt: '', panel: '', visibility: '' };
+  private ui: LabPromptUi | null = null;
+  private focusCount = 0;
+  private asked = '';
+  /** The recent crawls this view has shown: an assistant's is new until it is played. */
+  private readonly seen = new Set<string>();
+  /** When the lab opened, ms: its recents were made minutes before. */
+  private readonly opened = Date.now();
+  private recents: PromptRecent[] = [];
+  /** How far the notes of a build reach from its overview's target: the perch keeps its gap from them. */
+  private reach: { build: SpaceBuild; radius: number } | null = null;
+  private cursor = '';
+
   constructor(private readonly container: HTMLElement) {
     this.glCanvas = canvas(container);
     this.overlay = canvas(container);
-    this.overlay.style.cursor = 'grab';
+    this.setCursor('grab');
     this.overlay.style.touchAction = 'none';
     const ctx = this.overlay.getContext('2d');
     if (!ctx) throw new Error('No 2D canvas context');
@@ -462,9 +588,15 @@ export class LabHost {
     // only a few, and the next mount needs one.
     let made: SentinelView | null = null;
     let stage: Stage | null = null;
+    let bezel: PromptBezel | null = null;
+    let veil: Veil | null = null;
     try {
       this.renderer.setClearColor(0x0a0a0a, 1);
       this.fit();
+      // The panel tunes `params`; the motion reads `live`, the same with the prompt's life blended in.
+      this.params = this.motion.params;
+      this.live = { ...this.params };
+      this.motion.params = this.live;
 
       this.caps = probeCaps(this.renderer);
       const start = startTier(this.caps, recallStable());
@@ -483,7 +615,7 @@ export class LabHost {
       this.spaceTimer = gl2 ? GpuTimer.create(gl2) : null;
 
       this.vault = openVault(DEFAULT_VAULT);
-      this.follows.set(BRAIN_STANDIN, this.motion.params.followDistance);
+      this.follows.set(BRAIN_STANDIN, this.params.followDistance);
       this.baseTwist = Float32Array.from(
         { length: TENTACLES },
         (_, i) => tentacleCharacter(i, SENTINEL_SEED).twist,
@@ -538,21 +670,31 @@ export class LabHost {
         renderer: this.caps.renderer ?? 'unknown',
         status: '…',
         rebuild: '—',
+        prompt: '—',
+        promptCycle: '—',
       };
 
       // Built before the view: the view lends a space's light as it warms up.
       stage = this.makeStage(DEFAULT_SPACE, null);
       this.stage = stage;
-      if (stage.kind === 'space') this.motion.params.followDistance = stage.build.camera.follow;
+      if (stage.kind === 'space') this.params.followDistance = stage.build.camera.follow;
       this.unit = stage.kind === 'space' ? stage.build.unit : typicalLink(this.vault.model);
 
-      this.replay = new CrawlReplay(() => {});
+      this.replay = new CrawlReplay((s) => this.onSnapshot?.(s));
+      this.scene = new PromptScene(this.replay);
+      bezel = new PromptBezel();
+      this.bezel = bezel;
+      veil = new Veil();
+      this.veil = veil;
+      this.refreshRecents();
       if (this.tier !== 'trail') this.motion.setTier(this.tier);
       made = this.createView();
       this.view = made;
+      // The crawl until the page hands in the prompt (attachPrompt), which then takes over.
       this.load(this.controls.preset);
       this.frameStage();
       this.warmStage();
+      this.warmPrompt();
 
       this.overlay.addEventListener('pointerdown', this.onPointerDown);
       this.overlay.addEventListener('pointermove', this.onPointerMove);
@@ -570,6 +712,8 @@ export class LabHost {
       made?.dispose();
       if (stage?.kind === 'space') stage.space.dispose();
       else stage?.backdrop.dispose();
+      bezel?.dispose();
+      veil?.dispose();
       this.freeRenderer();
       throw error;
     }
@@ -591,33 +735,39 @@ export class LabHost {
   setSpace(choice: SpaceChoice): void {
     if (this.disposed) return;
     // From the stage, not the controls: the panel has already written the new choice there.
-    this.follows.set(this.stageChoice(), this.motion.params.followDistance);
+    this.follows.set(this.stageChoice(), this.params.followDistance);
     this.leave();
     this.stage = this.makeStage(choice, null);
     const s = this.stage;
-    this.motion.params.followDistance =
+    this.params.followDistance =
       this.follows.get(this.stageChoice()) ??
-      (s.kind === 'space' ? s.build.camera.follow : this.motion.params.followDistance);
+      (s.kind === 'space' ? s.build.camera.follow : this.params.followDistance);
     this.enter();
     this.onStageChange?.();
   }
 
   /**
    * Another vault: the same stage laid out again over its notes, a space's
-   * knobs kept, and the crawl started over.
+   * knobs kept, and the crawl started over — or, at the prompt, the creature
+   * back on the frame in front of the new cluster.
    */
   setVault(choice: VaultChoice): void {
     if (this.disposed) return;
     this.controls.vault = choice;
     this.restage(openVault(choice));
+    this.refreshRecents();
   }
 
+  /** The crawl the walk plays. At the prompt it only picks what a send plays. */
   setPreset(preset: Preset): void {
     this.controls.preset = preset;
+    if (this.promptHolds()) return;
     this.load(preset);
   }
 
+  /** The crawl from its first note again; nothing at the prompt, where there is no crawl to replay. */
   replayAgain(): void {
+    if (this.promptHolds()) return;
     this.replay.replay();
     this.motion.snap(this.replay.view);
     if (this.still) this.settleAtEnd();
@@ -628,11 +778,97 @@ export class LabHost {
     else this.replay.onUserCamera();
   }
 
-  /** Reduced motion, as Crawl will honour it: the crawl jumps to its end and the creature to its still pose. */
+  /**
+   * Reduced motion, as Crawl will honour it: the crawl jumps to its end and
+   * the creature to its still pose. At the prompt, or on the way back to it,
+   * the creature is on the frame at once, its grips landed; a transition
+   * under way ends at the next frame.
+   */
   setReducedMotion(on: boolean): void {
     this.controls.reducedMotion = on;
     this.still = on;
-    if (on) this.settleAtEnd();
+    if (!on) return;
+    if (this.promptHolds()) {
+      this.replay.skipToEnd();
+      this.replay.drain();
+      this.motion.finalPose(this.replay.view);
+    } else this.settleAtEnd();
+  }
+
+  // -- The prompt ----------------------------------------------------------------
+
+  /**
+   * The page's prompt: `box` is the input's box, which the frame is fitted to
+   * (measured against the lab's container, never transformed); `chrome` the
+   * element the levels are written on as CSS variables, an ancestor of both
+   * the prompt and the panel. Over a space, the lab goes to the prompt scene
+   * at once. `listener` hears whatever the prompt and the panel show change.
+   */
+  attachPrompt(
+    dom: { box: HTMLElement; chrome: HTMLElement },
+    listener: (ui: LabPromptUi) => void,
+  ): void {
+    if (this.disposed) return;
+    this.prompt = { box: dom.box, chrome: dom.chrome, listener };
+    this.ui = null;
+    this.css = { prompt: '', panel: '', visibility: '' };
+    this.writeGlass();
+    this.enterScene(true);
+  }
+
+  /** The page's prompt gone: its variables taken off the page, and the crawl as the lab walked it before. */
+  detachPrompt(): void {
+    const p = this.prompt;
+    if (!p) return;
+    for (const name of PROMPT_CSS) p.chrome.style.removeProperty(name);
+    this.prompt = null;
+    this.ui = null;
+    this.sf = null;
+    if (!this.disposed) this.enterScene();
+  }
+
+  /**
+   * A question sent from the prompt. The lab has no gather to run: it plays
+   * the preset picked in the panel, as if that were what the question found.
+   */
+  submit(text: string): void {
+    const asked = text.trim();
+    if (!asked || !this.startCrawl(this.controls.preset)) return;
+    this.asked = asked;
+  }
+
+  /** A recent crawl touched (its id a preset): the same way into the crawl. It is seen from then on. */
+  playRecent(id: string): void {
+    const preset = PRESETS.find((p) => p === id);
+    if (!preset || !this.startCrawl(preset)) return;
+    this.controls.preset = preset;
+    this.asked = LAB_ASKED[preset];
+    this.seen.add(preset);
+    this.refreshRecents();
+  }
+
+  /** "New search": back to the prompt from wherever the walk and the camera are. */
+  newSearch(): void {
+    if (this.disposed || !this.prompt) return;
+    if (!this.scene.back(this.sceneClock, this.still, this.cam)) return;
+    this.chase = null;
+    this.governor.hold(performance.now());
+    if (this.still) {
+      // Back on the frame at once, its grips landed: what happened on the way flares for nothing.
+      this.replay.skipToEnd();
+      this.replay.drain();
+      this.motion.finalPose(this.replay.view);
+    }
+  }
+
+  /** A frame knob moved: the scene is laid out again at the next frame, and the claws take hold anew. */
+  promptChanged(): void {
+    this.promptDirty = 'regrip';
+  }
+
+  /** The glass knobs moved: written to the page. */
+  glassChanged(): void {
+    this.writeGlass();
   }
 
   /** The hangar the Sentinel ships with, or three's RoomEnvironment to compare: a new view either way. */
@@ -667,11 +903,13 @@ export class LabHost {
                   backdropOrder: this.controls.backdropOrder,
                 },
               },
-        motion: this.motion.params,
+        // The panel's, not the copy the motion reads with the prompt's life blended in.
+        motion: this.params,
         look: this.look,
         grip: { ...this.grip },
         // Not a parameter anywhere yet: it scales rig.ts's seeded twist per segment.
         twistScale: this.controls.twist,
+        prompt: { ...this.scene.knobs, glass: { ...this.glass }, bezel: this.bezel.look },
       },
       null,
       2,
@@ -778,6 +1016,56 @@ export class LabHost {
     await frames(SETTLE_FRAMES);
   }
 
+  /**
+   * Goes from the prompt to the crawl and back `times` over — a send, the
+   * transition, New search, the way back until the claws are on the frame —
+   * then compares the renderer's memory and programs with what they were, as
+   * `cycleSpaces` does: anything that grew is something the frame, the veil
+   * or a transition does not free. Needs the walk playing: a paused return
+   * never lands, and the cycle stops.
+   */
+  async cyclePrompt(times = 20): Promise<void> {
+    if (this.rebuilding || this.disposed || !this.prompt || !this.scene.available) return;
+    this.rebuilding = true;
+    const before = this.memory();
+    try {
+      for (let i = 1; i <= times; i++) {
+        this.stats.promptCycle = `${i}/${times}…`;
+        await this.until(() => this.sf?.interactive === true);
+        if (this.disposed) return;
+        if (!this.startCrawl(this.controls.preset)) throw new Error('the prompt refused the send');
+        await this.until(() => {
+          const sf = this.sf;
+          return !!sf && sf.scene === 'crawl' && !sf.moving;
+        });
+        if (this.disposed) return;
+        this.newSearch();
+        await this.until(() => this.sf?.interactive === true);
+        if (this.disposed) return;
+      }
+      // Measured as before: at the prompt, drawn.
+      await frames(2);
+      if (this.disposed) return;
+      const after = this.memory();
+      this.stats.promptCycle = (['geometries', 'textures', 'programs'] as const)
+        .map((k) => `${k} ${before[k]}→${after[k]}`)
+        .join(' · ');
+    } catch (error) {
+      this.stats.promptCycle = `stopped: ${message(error)}`;
+    } finally {
+      this.rebuilding = false;
+    }
+  }
+
+  /** Until `done` holds at a frame; throws after CYCLE_WAIT_FRAMES. */
+  private async until(done: () => boolean): Promise<void> {
+    for (let n = 0; !done(); n++) {
+      if (this.disposed) return;
+      if (n > CYCLE_WAIT_FRAMES) throw new Error('timed out: is the walk paused?');
+      await frames(1);
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -791,11 +1079,15 @@ export class LabHost {
     this.resizeObserver.disconnect();
 
     this.onStageChange = null;
+    this.onSnapshot = null;
+    this.detachPrompt();
 
     // Everything on the GPU goes while the renderer that holds it is alive; the
     // view first, so it lets go of the light it borrowed before the space frees it.
     this.view.dispose();
     this.leave();
+    this.bezel.dispose();
+    this.veil.dispose();
     this.timer?.dispose();
     this.spaceTimer?.dispose();
     this.room?.dispose();
@@ -808,9 +1100,9 @@ export class LabHost {
 
   /**
    * Frees the renderer and its context. A shader compile still polling — the
-   * view's, or the space's — reads the renderer's state until it settles, and
-   * throws once that state is gone; the renderer goes after both, or after a
-   * while if one never settles.
+   * view's, the space's, or the prompt frame's — reads the renderer's state
+   * until it settles, and throws once that state is gone; the renderer goes
+   * after all of them, or after a while if one never settles.
    */
   private freeRenderer(): void {
     const renderer = this.renderer;
@@ -822,6 +1114,8 @@ export class LabHost {
     if (!this.ready) compiling.push(this.warming.catch(() => {}));
     // Never rejects; disposed, the space's compile ends as soon as it settles.
     if (this.stageCompiling) compiling.push(this.stageWarming);
+    // Never rejects either.
+    if (this.promptCompiling) compiling.push(this.promptWarming);
     if (compiling.length === 0) free();
     else {
       const wait = new Promise<void>((resolve) => setTimeout(resolve, COMPILE_WAIT_MS));
@@ -851,7 +1145,8 @@ export class LabHost {
       () => {
         if (this.view !== view || this.disposed) return;
         this.ready = true;
-        this.programsAtReady = this.memory().programs;
+        // The prompt frame's programs count too: until they are in, the count is not settled.
+        if (this.promptSettled()) this.programsAtReady = this.memory().programs;
         // Uploads and the first frames after a compile stutter: no reason to step down.
         this.governor.hold(performance.now());
       },
@@ -998,16 +1293,45 @@ export class LabHost {
     });
   }
 
+  /**
+   * Compiles the prompt frame's and the veil's shaders for this canvas before
+   * either first draws: a transition must not stall on a compile. A shader
+   * that fails leaves the prompt without its frame, the failure on screen.
+   */
+  private warmPrompt(): void {
+    this.promptCompiling = true;
+    this.promptWarming = Promise.allSettled([
+      this.bezel.warmup(this.renderer),
+      this.veil.warmup(this.renderer),
+    ]).then((results) => {
+      this.promptCompiling = false;
+      if (this.disposed) return;
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed) {
+        this.promptFailure = message(failed.reason);
+        console.error('Sentinel lab: the prompt frame failed to warm up.', failed.reason);
+      } else this.promptWarm = true;
+      // New programs: the count settles again, a few frames on.
+      this.programsAtReady = null;
+      this.settleIn = Math.max(this.settleIn, SETTLE_FRAMES);
+      this.governor.hold(performance.now());
+    });
+  }
+
+  /** The prompt frame's compile is over, one way or the other. */
+  private promptSettled(): boolean {
+    return this.promptWarm || this.promptFailure !== null;
+  }
+
   /** The brain stand-in in place of a space that cannot draw, and why on screen. */
   private fallBack(why: string): void {
-    this.follows.set(this.stageChoice(), this.motion.params.followDistance);
+    this.follows.set(this.stageChoice(), this.params.followDistance);
     this.leave();
     this.controls.space = BRAIN_STANDIN;
     this.placeBrain();
     this.stage = { kind: 'brain', backdrop: new LabBackdrop(this.vault.model) };
     this.spaceFailure = why;
-    this.motion.params.followDistance =
-      this.follows.get(BRAIN_STANDIN) ?? this.motion.params.followDistance;
+    this.params.followDistance = this.follows.get(BRAIN_STANDIN) ?? this.params.followDistance;
     this.enter();
     this.onStageChange?.();
   }
@@ -1017,12 +1341,12 @@ export class LabHost {
     return this.stage.kind === 'brain' || this.stage.warm;
   }
 
-  /** The crawl, the camera and the governor, once the stage changed. */
+  /** The crawl (or the prompt), the camera and the governor, once the stage changed. */
   private enter(): void {
     const s = this.stage;
     this.unit = s.kind === 'space' ? s.build.unit : typicalLink(this.vault.model);
-    this.load(this.controls.preset);
     this.frameStage();
+    this.enterScene();
     // A build, a bake and new programs stutter: no reason to step the Sentinel down for them.
     this.governor.hold(performance.now());
     this.spaceCpus.clear();
@@ -1041,7 +1365,10 @@ export class LabHost {
   private frameStage(): void {
     const s = this.stage;
     const bounds = s.kind === 'space' ? s.build.bounds : boundsOf(this.vault.model.nodes);
-    const whole = s.kind === 'space' ? overview(s.build.bounds, this.vp) : this.unit * 20;
+    const whole =
+      s.kind === 'space'
+        ? overviewCamera(s.build.bounds, this.vp, LAB_YAW, s.build.camera.pitch).dist
+        : this.unit * 20;
     this.cam = {
       tx: bounds?.cx ?? 0,
       ty: bounds?.cy ?? 0,
@@ -1092,13 +1419,234 @@ export class LabHost {
     const s = this.stage;
     const crawl = this.vault.crawls[preset];
     // The brain stand-in is walked as Crawl walks the brain today; a space hands in its own
-    // threads, scale and pace.
+    // threads, scale and pace — with the frame round the prompt in them when the scene has
+    // one, so a walk loaded in the crawl can still be called back to it.
     if (s.kind === 'space') {
-      const { field, unit, pace } = s.build;
+      const { unit, pace } = s.build;
+      const field = this.scene.field ?? s.build.field;
       this.replay.load(crawl, this.vault.model, { field, unit, pace });
     } else this.replay.load(crawl, this.vault.model);
     this.motion.snap(this.replay.view);
     if (this.still) this.settleAtEnd();
+  }
+
+  /**
+   * The crawl, or the prompt scene, over the stage as it now stands. With the
+   * prompt attached and a space on the stage, the scene takes the space's new
+   * layout — cutting any transition to where it was going — and rests on the
+   * frame when it was at the prompt or is new here (`fresh`, or coming from
+   * the brain stand-in); otherwise the crawl loads as before, over the field
+   * with the frame in it. Without both, the crawl as the lab always walked it.
+   */
+  private enterScene(fresh = false): void {
+    const s = this.stage;
+    this.chase = null;
+    this.promptPending = false;
+    if (!this.prompt || s.kind !== 'space') {
+      this.scene.setSpace(null, null);
+      this.bezel.shape(null);
+      this.load(this.controls.preset);
+      return;
+    }
+    const toPrompt = fresh || !this.scene.available || this.scene.name === 'prompt';
+    this.scene.setSpace(s.build, this.vault.model);
+    this.layoutPrompt(true, this.readRects(this.prompt));
+    this.promptDirty = null;
+    if (toPrompt && this.restAtPrompt()) return;
+    // The box had no place yet: the crawl meanwhile, and the prompt as soon as it can be laid out.
+    this.promptPending = toPrompt;
+    this.load(this.controls.preset);
+  }
+
+  /** At the prompt, resting on the frame, the creature placed there at once: a cut. */
+  private restAtPrompt(): boolean {
+    if (!this.scene.reset()) return false;
+    this.chase = null;
+    const view = this.replay.view;
+    if (this.still) this.motion.finalPose(view);
+    else this.motion.snap(view);
+    return true;
+  }
+
+  /**
+   * From the prompt into the crawl — a send, or a recent touched — playing
+   * `preset`. False when the prompt takes no send now.
+   */
+  private startCrawl(preset: Preset): boolean {
+    if (this.disposed || !this.prompt) return false;
+    if (!this.scene.submit(this.vault.crawls[preset], this.sceneClock, this.still)) return false;
+    this.chase = null;
+    // The cluster's first full upload after rest, and the camera's sweep, are no reason to step down.
+    this.governor.hold(performance.now());
+    if (this.still) this.settleAtEnd();
+    return true;
+  }
+
+  /** The prompt scene holds the camera — at the prompt, or on the way back to it — and nothing may move it. */
+  private promptHolds(): boolean {
+    return !!this.prompt && this.scene.available && this.scene.name === 'prompt';
+  }
+
+  /** The box's place on the stage, and the stage's size and density: what the scene is laid out against. */
+  private readRects(p: { box: HTMLElement }): number[] {
+    const box = p.box.getBoundingClientRect();
+    const stage = this.container.getBoundingClientRect();
+    return [
+      box.left - stage.left,
+      box.top - stage.top,
+      box.width,
+      box.height,
+      this.vp.width,
+      this.vp.height,
+      this.dpr,
+    ];
+  }
+
+  /**
+   * Fits the prompt scene to the box as `rects` (readRects) find it: its
+   * corners' radius from the page, the space's overview from the lab's angle,
+   * and how far the notes reach from where it looks. The frame is shaped to
+   * match. False when nothing could be placed.
+   */
+  private layoutPrompt(regrip: boolean, rects: number[]): boolean {
+    const p = this.prompt;
+    const s = this.stage;
+    if (!p || s.kind !== 'space') return false;
+    this.promptRects = rects;
+    const [left, top, width, height] = rects as [number, number, number, number];
+    const radius = parseFloat(getComputedStyle(p.box).borderTopLeftRadius) || 0;
+    const overview = overviewCamera(s.build.bounds, this.vp, LAB_YAW, s.build.camera.pitch);
+    const placed = this.scene.layout(
+      {
+        vp: this.vp,
+        rect: { left, top, width, height, radius },
+        overview,
+        radius: this.reachOf(s.build, overview),
+      },
+      regrip,
+    );
+    this.bezel.shape(this.scene.shot?.bezel ?? null);
+    return placed;
+  }
+
+  /**
+   * How far a build's notes reach from its overview's target, plus a unit for
+   * the cage round them: the perch keeps its gap from that. The target is the
+   * build's own centre, whatever the viewport, so it is measured once a build.
+   */
+  private reachOf(build: SpaceBuild, overview: Camera): number {
+    if (this.reach?.build !== build) {
+      const target: Vec3 = [overview.tx, overview.ty, overview.tz];
+      this.reach = { build, radius: notesReach(build.positions.values(), target, build.unit) };
+    }
+    return this.reach.radius;
+  }
+
+  /**
+   * The prompt scene this frame: laid out again first when the box or the
+   * stage moved, or a knob asked for it — the box is read every frame it
+   * shows, since an observer misses a box that moves without resizing, and
+   * two rect reads force no layout when nothing changed — with its levels
+   * written on the page and the page told of anything it shows that changed.
+   * On the scene's clock, which this frame's step has already moved. Null
+   * without the prompt attached.
+   */
+  private promptFrame(): PromptFrame | null {
+    const p = this.prompt;
+    if (!p) return null;
+    if (this.stage.kind === 'space') {
+      const showing = (this.sf?.levels.prompt ?? 1) > 0;
+      // A prompt still waiting for a place reads the box too: the crawl it
+      // walks meanwhile shows no prompt, so nothing else would ever lay it out.
+      if (this.promptDirty || showing || this.promptPending) {
+        const rects = this.readRects(p);
+        if (this.promptDirty || rects.some((v, i) => v !== this.promptRects[i])) {
+          this.layoutPrompt(this.promptDirty === 'regrip', rects);
+          this.promptDirty = null;
+        }
+      }
+      if (this.promptPending && this.scene.available && this.restAtPrompt()) {
+        this.promptPending = false;
+      }
+    }
+    const sf = this.scene.frame(this.sceneClock, this.still);
+    this.writeLevels(p.chrome, sf.levels);
+    this.tell(p.listener, sf);
+    return sf;
+  }
+
+  /**
+   * The levels on the page, as CSS variables on the chrome: the prompt's and
+   * the panel's, and the prompt hidden from everyone only once it has faded
+   * out — never the instant the scene turns away, or the fade would be cut.
+   * Written only when they change.
+   */
+  private writeLevels(chrome: HTMLElement, l: Levels): void {
+    const css = this.css;
+    const prompt = l.prompt.toFixed(4);
+    const panel = l.panel.toFixed(4);
+    const visibility = l.prompt > 0 ? 'visible' : 'hidden';
+    if (prompt !== css.prompt) chrome.style.setProperty('--crawl-prompt', (css.prompt = prompt));
+    if (panel !== css.panel) chrome.style.setProperty('--crawl-panel', (css.panel = panel));
+    if (visibility !== css.visibility) {
+      chrome.style.setProperty('--crawl-prompt-visibility', (css.visibility = visibility));
+    }
+  }
+
+  /** The prompt box's glass knobs, on the page. */
+  private writeGlass(): void {
+    const chrome = this.prompt?.chrome;
+    if (!chrome) return;
+    chrome.style.setProperty('--crawl-glass-alpha', String(clamp(this.glass.alpha, 0, 1)));
+    chrome.style.setProperty('--crawl-glass-blur', `${Math.max(0, this.glass.blur)}px`);
+  }
+
+  /** The page told what the prompt and the panel show, when any of it changed. */
+  private tell(listener: (ui: LabPromptUi) => void, sf: PromptFrame): void {
+    const last = this.ui;
+    // Each time the input takes text again at the prompt, it takes focus.
+    if (sf.interactive && !last?.interactive) this.focusCount++;
+    const ui: LabPromptUi = {
+      scene: sf.scene,
+      available: this.scene.available,
+      interactive: sf.interactive,
+      focus: this.focusCount,
+      asked: this.asked,
+      recents: this.recents,
+    };
+    if (
+      last &&
+      last.scene === ui.scene &&
+      last.available === ui.available &&
+      last.interactive === ui.interactive &&
+      last.focus === ui.focus &&
+      last.asked === ui.asked &&
+      last.recents === ui.recents
+    ) {
+      return;
+    }
+    this.ui = ui;
+    listener(ui);
+  }
+
+  /** The recents under the prompt, from the lab's crawls over the current vault. */
+  private refreshRecents(): void {
+    this.recents = promptRecents(labRecents(this.vault, this.opened), this.seen, Date.now());
+  }
+
+  /**
+   * The motion's params this frame: the panel's, with the prompt's idle life
+   * blended in by its level — at the prompt the body breathes and hums, and
+   * the tentacles move as they do on the walk; in the crawl, the walk's own
+   * values throughout, as the panel tuned them.
+   */
+  private blendLife(k: number): void {
+    const live = this.live;
+    Object.assign(live, this.params);
+    if (!(k > 0)) return;
+    const idle = this.scene.knobs.idle;
+    const share = Math.min(1, k);
+    for (const key of IDLE_KEYS) live[key] = live[key] + (idle[key] - live[key]) * share;
   }
 
   /** The end of the crawl, at once, and the creature's still pose there. */
@@ -1149,17 +1697,35 @@ export class LabHost {
 
   // -- Camera and input ----------------------------------------------------------
 
-  /** As the graph controller follows a plugin: eased over 450 ms, at once under reduced motion. */
-  private followCamera(dt: number): void {
+  /**
+   * The camera this frame. The prompt scene's while it holds it — the perch
+   * shot, or the way between it and the overview. Then, at the crawl, the
+   * follow camera, handed over through a blend from the camera the timeline
+   * held: the follow's own ease sets off at full speed, and shown straight it
+   * would lurch. Otherwise the follow camera, or the user's.
+   */
+  private aimCamera(sf: PromptFrame | null, dt: number): void {
+    if (sf?.camera) {
+      this.cam = sf.camera;
+      this.chase = null;
+    } else if (sf?.handoff) {
+      this.chase = this.followed(this.chase ?? { ...sf.handoff.camera }, dt);
+      this.cam = cameraBetween(sf.handoff.camera, this.chase, sf.handoff.k);
+    } else {
+      if (this.chase) this.cam = this.chase;
+      this.chase = null;
+      this.cam = this.followed(this.cam, dt);
+    }
+  }
+
+  /** `c` eased toward the walk, as the graph controller follows a plugin: over 450 ms, at once under reduced motion. */
+  private followed(c: Camera, dt: number): Camera {
     const f = this.replay.follow();
-    if (!f || this.drag) return;
+    if (!f || this.drag) return c;
     const dist =
-      this.replay.view.mode === 'done'
-        ? f.dist
-        : this.replay.unit * this.motion.params.followDistance;
+      this.replay.view.mode === 'done' ? f.dist : this.replay.unit * this.params.followDistance;
     const k = this.still ? 1 : 1 - Math.exp(-dt / 450);
-    const c = this.cam;
-    this.cam = {
+    return {
       ...c,
       tx: c.tx + (f.x - c.tx) * k,
       ty: c.ty + (f.y - c.ty) * k,
@@ -1168,11 +1734,30 @@ export class LabHost {
     };
   }
 
-  private readonly onPointerDown = (e: PointerEvent): void => {
-    this.overlay.setPointerCapture(e.pointerId);
+  /**
+   * The user took the camera: from the follow, as ever, and from the prompt
+   * scene's timeline mid-transition, the hand-off included — whatever is on
+   * screen is where the drag or the wheel starts from.
+   */
+  private takeCamera(): void {
+    this.scene.takeCamera();
+    this.chase = null;
     this.replay.onUserCamera();
+  }
+
+  private setCursor(cursor: string): void {
+    if (cursor === this.cursor) return;
+    this.cursor = cursor;
+    this.overlay.style.cursor = cursor;
+  }
+
+  private readonly onPointerDown = (e: PointerEvent): void => {
+    // The perch shot is the only camera the frame fits: at the prompt nothing orbits it.
+    if (this.promptHolds()) return;
+    this.overlay.setPointerCapture(e.pointerId);
+    this.takeCamera();
     this.drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey };
-    this.overlay.style.cursor = 'grabbing';
+    this.setCursor('grabbing');
   };
 
   private readonly onPointerMove = (e: PointerEvent): void => {
@@ -1189,12 +1774,13 @@ export class LabHost {
     if (this.overlay.hasPointerCapture(e.pointerId))
       this.overlay.releasePointerCapture(e.pointerId);
     this.drag = null;
-    this.overlay.style.cursor = 'grab';
+    this.setCursor(this.promptHolds() ? 'default' : 'grab');
   };
 
   private readonly onWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    this.replay.onUserCamera();
+    if (this.promptHolds()) return;
+    this.takeCamera();
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
     this.cam = {
       ...this.cam,
@@ -1230,6 +1816,8 @@ export class LabHost {
     if (this.resized) {
       this.fit();
       this.governor.hold(now);
+      // The box moves with the stage: laid out again even in the crawl, so the way back finds it.
+      if (this.promptDirty !== 'regrip') this.promptDirty = 'move';
     }
     const stage = this.stage;
     let moved = false;
@@ -1237,16 +1825,29 @@ export class LabHost {
       moved = this.drift(now);
       if (moved) stage.backdrop.place();
     }
-    this.followCamera(dt);
-    this.controls.following = this.replay.snapshot.following;
-
     const replay = this.replay;
-    replay.update(this.controls.playing ? (dt / 1000) * this.controls.speed : 0);
+    // The replay's step this frame, and the prompt scene's clock moved by it
+    // first, so the scene below and the replay after it stand at the same moment.
+    const step = this.controls.playing ? (dt / 1000) * this.controls.speed : 0;
+    this.sceneClock += step;
+    // The prompt scene first: it says who holds the camera, and how much of each part shows.
+    const sf = this.promptFrame();
+    this.sf = sf;
+    const prompting = !!sf && this.scene.available;
+    this.aimCamera(sf, dt);
+    this.controls.following = this.replay.snapshot.following;
+    if (!this.drag) this.setCursor(this.promptHolds() ? 'default' : 'grab');
+
+    // Resting under reduced motion nothing happens at all, not even a re-grip. The
+    // scene's clock may run on meanwhile: under reduced motion every transition is a cut.
+    replay.update(this.still && replay.resting ? 0 : step);
     const view = replay.view;
     const events = replay.drain();
 
     // The Sentinel's own CPU time: its motion, its draw calls, and the simulated slow CPU.
     const t0 = performance.now();
+    this.motion.gaze = sf?.gaze ?? null;
+    this.blendLife(sf && prompting ? sf.levels.prompt : 0);
     this.scaleTwist();
     this.motion.step(view, events, dt / 1000, now / 1000, this.still);
     const t1 = performance.now();
@@ -1263,9 +1864,29 @@ export class LabHost {
     // compiling its shaders only clears.
     let stageCpu: number | null = null;
     this.spaceDrawn = { calls: 0, triangles: 0 };
+    // The planes the Sentinel and the frame draw in, sharing one depth: the space's, or the frame's.
+    let depth: { near: number; far: number } | null = null;
+    let eye: SpaceEye | null = null;
     if (stage.kind === 'space') {
-      if (warm) stageCpu = this.timeStage(() => this.drawSpace(stage, now, draw));
-      else r.clear();
+      eye = this.spaceEye(draw, view);
+      const cluster = sf && prompting ? sf.levels.cluster : 1;
+      // At rest at the prompt the cluster is not drawn at all: a clear, and the
+      // frame's planes for the creature and the frame. So too while the frame
+      // shows and the space, or the veil over it, cannot draw yet — with planes
+      // that hold the creature wherever its crossing has taken it (bareDepth).
+      const bare =
+        sf &&
+        prompting &&
+        (sf.atRest || (!warm && sf.levels.prompt > 0) || (cluster < 1 && !this.promptWarm))
+          ? sf
+          : null;
+      if (bare) {
+        stageCpu = this.timeStage(() => this.clearStage());
+        depth = this.bareDepth(bare, draw, stage.build.unit);
+      } else if (warm) {
+        stageCpu = this.timeStage(() => this.drawSpace(stage, now, eye, cluster));
+        depth = stage.space.depth;
+      } else r.clear();
       // Its light is baked on its first frame, and lent from then on: the metal reflects the space.
       this.view.setEnvironment(this.controls.lendEnvironment ? stage.space.environment : null);
     } else if (backdrop && under) {
@@ -1275,13 +1896,14 @@ export class LabHost {
     if (draw) {
       const t3 = performance.now();
       this.timer?.begin();
-      const shared = stage.kind === 'space' && warm;
-      this.view.render(this.motion.pose, this.cam, this.vp, this.dpr, {
-        depth: shared ? stage.space.depth : null,
-      });
+      this.view.render(this.motion.pose, this.cam, this.vp, this.dpr, { depth });
       this.timer?.end();
       submit = performance.now() - t3;
       assertRendererState(r, 'the Sentinel drew in the lab');
+    }
+    // The frame after the creature, depth-tested: it hides what lies behind it, and fades over it.
+    if (stage.kind === 'space' && sf && prompting && this.promptWarm && sf.levels.prompt > 0) {
+      stageCpu = (stageCpu ?? 0) + this.drawBezel(stage, sf.levels.prompt, depth, eye);
     }
     if (backdrop && !under) {
       stageCpu = this.timeStage(() =>
@@ -1294,7 +1916,7 @@ export class LabHost {
     const gpu = this.timer?.poll() ?? null;
     const spaceGpu = this.spaceTimer?.poll() ?? null;
     const cpu = t2 - t0 + submit;
-    if (this.settleIn > 0 && this.ready && warm && --this.settleIn === 0) {
+    if (this.settleIn > 0 && this.ready && warm && this.promptSettled() && --this.settleIn === 0) {
       this.programsAtReady = this.memory().programs;
     }
 
@@ -1347,30 +1969,114 @@ export class LabHost {
   }
 
   /**
-   * The space's pass. `sentinel`: the creature draws this frame, so the space
-   * is told where its eye is; otherwise a stand-in eye at the walk wakes it,
-   * as Crawl would show it without the creature.
+   * The eye the space and the frame are told of: the Sentinel's, when it
+   * draws this frame; otherwise a stand-in at the walk, burning as the
+   * creature's eye does when nothing flares (resting, or still), as Crawl
+   * would show it without the creature.
+   */
+  private spaceEye(sentinel: boolean, view: ReplayView): SpaceEye | null {
+    if (sentinel) return sentinelEye(this.motion.pose, this.eye);
+    const p = this.params;
+    return standInEye(view, this.still ? p.eyeStill : p.eyeBase, this.eye);
+  }
+
+  /**
+   * The space's pass, the cluster at `cluster` of its light. Below full, the
+   * background is laid over it, and its depth cleared after: crystals veiled
+   * to nothing must not cut holes in the creature, and going to the crawl the
+   * creature is in front of the cluster until it is whole, so nothing is lost.
    */
   private drawSpace(
     stage: SpaceStage,
     now: number,
-    sentinel: boolean,
+    eye: SpaceEye | null,
+    cluster: number,
   ): { calls: number; triangles: number } {
-    const view = this.replay.view;
-    // The stand-in burns as the creature's eye does when nothing flares: resting, or still.
-    const p = this.motion.params;
-    const resting = this.still ? p.eyeStill : p.eyeBase;
-    stage.space.render(this.renderer, {
+    const r = this.renderer;
+    stage.space.render(r, {
       cam: this.cam,
       vp: this.vp,
       dpr: this.dpr,
-      view,
+      view: this.replay.view,
       time: now / 1000,
       still: this.still,
-      eye: sentinel ? sentinelEye(this.motion.pose, this.eye) : standInEye(view, resting, this.eye),
+      eye,
     });
-    assertRendererState(this.renderer, `the ${stage.name} space drew in the lab`);
-    return stage.space.info;
+    assertRendererState(r, `the ${stage.name} space drew in the lab`);
+    const drawn = { ...stage.space.info };
+    if (cluster < 1) {
+      this.veil.render(r, 1 - cluster);
+      withRendererState(r, () => {
+        // A clear honours the depth mask, which the last draw may have left off.
+        r.state.buffers.depth.setMask(true);
+        r.clearDepth();
+      });
+      assertRendererState(r, 'the veil drew in the lab');
+      drawn.calls += this.veil.info.calls;
+      drawn.triangles += this.veil.info.triangles;
+    }
+    return drawn;
+  }
+
+  /**
+   * The planes the creature and the frame share on a bare stage, world units.
+   * Resting on the frame, the frame's own: the creature is within them by
+   * design. Under way — bare because the space, or the frame and the veil,
+   * cannot draw yet, or failed to — the creature is anywhere between the
+   * frame and the cluster, and in the frame's planes it would be sliced, then
+   * culled whole mid-crossing. When the frame draws, its planes widened to
+   * hold the creature too, so the two still share one depth; when it does not,
+   * none, and the creature fits its own and clears depth.
+   */
+  private bareDepth(
+    sf: PromptFrame,
+    sentinel: boolean,
+    unit: number,
+  ): { near: number; far: number } | null {
+    if (sf.atRest) return this.bezel.planes(this.cam, unit);
+    if (!this.promptWarm || !(sf.levels.prompt > 0)) return null;
+    return this.bezel.planes(this.cam, unit, sentinel ? creatureBounds(this.motion.pose) : null);
+  }
+
+  /** The canvas cleared, depth too, with the mask on: the Sentinel shares that depth without clearing it. */
+  private clearStage(): { calls: number; triangles: number } {
+    const r = this.renderer;
+    withRendererState(r, () => {
+      r.state.buffers.depth.setMask(true);
+      r.clear();
+    });
+    return { calls: 0, triangles: 0 };
+  }
+
+  /**
+   * The frame round the prompt, over the creature, in the planes it drew in.
+   * Counted with the stage; its GPU time is not timed apart — timed after the
+   * Sentinel, its timer would hold the creature's tail instead. Returns its
+   * CPU time, ms.
+   */
+  private drawBezel(
+    stage: SpaceStage,
+    level: number,
+    depth: { near: number; far: number } | null,
+    eye: SpaceEye | null,
+  ): number {
+    const t0 = performance.now();
+    const r = this.renderer;
+    this.bezel.render(r, {
+      cam: this.cam,
+      vp: this.vp,
+      level,
+      unit: stage.build.unit,
+      depth,
+      eye,
+    });
+    assertRendererState(r, 'the prompt frame drew in the lab');
+    const b = this.bezel.info;
+    this.spaceDrawn = {
+      calls: this.spaceDrawn.calls + b.calls,
+      triangles: this.spaceDrawn.triangles + b.triangles,
+    };
+    return performance.now() - t0;
   }
 
   /** The backdrop's draws: three counts each render() call afresh. */
@@ -1389,7 +2095,11 @@ export class LabHost {
     const view = this.replay.view;
     // A space lights its own threads along its routes; the overlay's brain curves would cut corners.
     const space = this.stage.kind === 'space';
-    if (this.controls.overlay) {
+    // The walk's labels and halos fade with the cluster they belong to.
+    const sf = this.sf;
+    const prompting = !!sf && this.scene.available;
+    const cluster = sf && prompting ? sf.levels.cluster : 1;
+    if (this.controls.overlay && cluster > 0) {
       drawCrawl(ctx, P, {
         view,
         labels: this.replay.labels,
@@ -1400,24 +2110,75 @@ export class LabHost {
         font: this.font,
         threads: !space,
         halos: !space || this.controls.spaceHalos,
+        alpha: cluster,
       });
     }
     if (this.controls.debug) {
       drawDebug(ctx, P, this.motion.pose, this.motion.debug, view, this.font);
+      const shot = this.scene.shot;
+      if (sf && prompting && shot && sf.levels.prompt > 0) {
+        drawPerch(ctx, P, shot, sf.levels.prompt);
+      }
     }
     const snap = this.replay.snapshot;
     const found = snap.found.named + snap.found.linked + snap.found.decision;
+    const prompt = this.promptNote();
     drawNotes(
       ctx,
       [
         this.sentinelNote(),
         this.stageNote(),
+        ...(prompt ? [prompt] : []),
         `${snap.state} · ${snap.threads} threads · ${found} found${this.still ? ' · reduced motion' : ''}`,
-        'drag to orbit · shift-drag to pan · wheel to zoom',
+        this.promptHolds()
+          ? 'type a question, or touch a recent crawl'
+          : 'drag to orbit · shift-drag to pan · wheel to zoom',
       ],
       this.vp.height,
       this.font,
     );
+  }
+
+  /**
+   * Where the prompt scene is, for the notes: at the prompt, the frame's size,
+   * the perch shot's distance and how far the camera backs off to the
+   * overview, creature units; or on its way, or in the crawl. Null without
+   * the prompt on a space.
+   */
+  private promptNote(): string | null {
+    if (!this.prompt || this.stage.kind !== 'space') return null;
+    if (this.promptFailure) return `prompt frame failed: ${this.promptFailure}`;
+    const sf = this.sf;
+    const shot = this.scene.shot;
+    if (!sf || !shot) return 'prompt · the box has no place yet';
+    if (sf.moving) return sf.scene === 'crawl' ? 'going to the crawl' : 'going back';
+    if (sf.scene === 'crawl') return 'crawl';
+    const u = shot.unit;
+    // A paused return leaves the claws short of the frame, and the input waiting for them.
+    const waiting = sf.interactive
+      ? ''
+      : this.controls.playing
+        ? ' · landing'
+        : ' · paused: the input waits for the claws';
+    const frame = `${(shot.bezel.width / u).toFixed(2)} × ${(shot.bezel.height / u).toFixed(2)} u`;
+    return `prompt · frame ${frame} · shot ${(shot.depth / u).toFixed(1)} u · pull ${(shot.pulled / u).toFixed(1)} u${waiting}`;
+  }
+
+  /** The Stats folder's prompt line: where the scene is, the frame, the shot, the pull, the claws on the frame. */
+  private promptStat(): string {
+    if (!this.prompt) return 'not attached';
+    const shot = this.scene.shot;
+    if (!this.scene.available || !shot) {
+      return this.stage.kind === 'space'
+        ? 'no place for the box yet'
+        : 'none on the brain stand-in';
+    }
+    const sf = this.sf;
+    const where = sf?.moving ? `→ ${sf.scene}` : (sf?.scene ?? this.scene.name);
+    const u = shot.unit;
+    const held = this.replay.view.holds.filter((h) => h && PERCH_RAIL_SET.has(h.key)).length;
+    const frame = `${(shot.bezel.width / u).toFixed(2)}×${(shot.bezel.height / u).toFixed(2)} u`;
+    return `${where} · frame ${frame} · shot ${(shot.depth / u).toFixed(1)} u · pull ${(shot.pulled / u).toFixed(1)} u · ${held}/${GRIP_SLOTS.length} on the frame`;
   }
 
   /**
@@ -1498,6 +2259,7 @@ export class LabHost {
     s.segments = `${t.crownSegments} crown / ${t.explorerSegments} explorer`;
     s.governor = this.governor.log[this.governor.log.length - 1] ?? '—';
     s.status = this.failure ? `failed: ${this.failure}` : this.ready ? 'ready' : 'warming up';
+    s.prompt = this.promptStat();
   }
 
   /**

@@ -11,11 +11,16 @@
 // lab turns them off there, and the found halos with them unless asked.
 // Labels stay — no space draws text yet — and only found notes and asks have
 // one.
+//
+// At the prompt the crawl fades with the cluster (`alpha`), and with debug on
+// the frame the Sentinel clings to is drawn too: the rails its claws hold, the
+// perch's node the grip planner plans from, and where the body floats.
 
 import type { Projected } from '@/lib/graph-camera';
 
 import { CRAWL_COLORS } from '../../crawl-layer';
 import type { ReplayLabel } from '../../crawl-replay';
+import type { PerchShot } from '../../prompt/perch-geometry';
 import type { ReplayView } from '../../replay-view';
 import { threadEnds } from '../../threads';
 import type { Vec3 } from '../../vec';
@@ -46,6 +51,8 @@ export interface CrawlDrawing {
   threads?: boolean;
   /** A halo on each note found. False over a space that lights its own; default true. */
   halos?: boolean;
+  /** All of it at this opacity, 0–1: the cluster's level as it fades in and out. Default 1. */
+  alpha?: number;
 }
 
 /** The lit threads, found notes and labels, drawn the way crawl-layer.ts draws them. */
@@ -57,6 +64,7 @@ export function drawCrawl(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDra
   const m: Vec3 = [0, 0, 0];
   const lit = d.threads === false ? NONE : view.lit;
   const found = d.halos === false ? NONE : view.found;
+  ctx.globalAlpha = d.alpha ?? 1;
   ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
   for (const [key, l] of lit) {
@@ -94,6 +102,7 @@ export function drawCrawl(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDra
   }
   ctx.globalCompositeOperation = 'source-over';
   drawLabels(ctx, P, d);
+  ctx.globalAlpha = 1;
 }
 
 function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing): void {
@@ -121,7 +130,7 @@ function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing):
       y += 21;
     }
     placed.push({ x, y, w, h });
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = alpha * (d.alpha ?? 1);
     ctx.fillStyle = 'rgba(6,6,10,0.86)';
     ctx.strokeStyle = CRAWL_COLORS[L.kind];
     ctx.lineWidth = 1;
@@ -131,7 +140,6 @@ function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing):
     ctx.stroke();
     ctx.fillStyle = CRAWL_COLORS[L.kind];
     ctx.fillText(L.text, x + 6, y + 12.5);
-    ctx.globalAlpha = 1;
   }
 }
 
@@ -220,6 +228,66 @@ export function drawDebug(
     ctx.stroke();
     ctx.fillText(String(s), natural.x, natural.y + 0.5);
   });
+}
+
+const PERCH_COLOUR = '#fbbf24';
+
+/**
+ * The frame round the prompt as the grip planner sees it: each rail dashed,
+ * corner to corner, the corner nodes as dots, the perch's node as a cross and
+ * the body as a ring where it floats. At `alpha`, the prompt's level.
+ */
+export function drawPerch(
+  ctx: CanvasRenderingContext2D,
+  P: Project,
+  shot: PerchShot,
+  alpha: number,
+): void {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+  ctx.strokeStyle = PERCH_COLOUR;
+  ctx.fillStyle = PERCH_COLOUR;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  for (const rail of shot.rails) {
+    ctx.beginPath();
+    let started = false;
+    for (const point of rail) {
+      const p = P(point);
+      if (!p) {
+        started = false;
+        continue;
+      }
+      if (started) ctx.lineTo(p.x, p.y);
+      else ctx.moveTo(p.x, p.y);
+      started = true;
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (const corner of shot.corners) {
+    const p = P(corner);
+    if (!p) continue;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const node = P(shot.perch.node);
+  if (node) {
+    ctx.beginPath();
+    ctx.moveTo(node.x - 5, node.y);
+    ctx.lineTo(node.x + 5, node.y);
+    ctx.moveTo(node.x, node.y - 5);
+    ctx.lineTo(node.x, node.y + 5);
+    ctx.stroke();
+  }
+  const body = P(shot.perch.body);
+  if (body) {
+    ctx.beginPath();
+    ctx.arc(body.x, body.y, Math.max(3, 0.3 * shot.unit * body.scale), 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /** A few lines of text at the bottom left: what the lab is doing, and what is wrong. */
