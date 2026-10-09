@@ -11,6 +11,12 @@
 // far planes fitted to the creature. Lights, distances and the hangar are
 // tuned once, in these units, for any vault.
 //
+// In a space of Crawl's own (space/space.ts) the space draws first and writes
+// depth. There the Sentinel can draw into that depth instead of clearing it,
+// with the space's near and far planes brought into creature space, so a pipe
+// in front of a tentacle hides it. The space can also lend its environment
+// map, so the metal reflects the space it walks in rather than the hangar.
+//
 // Lighting: the hangar's reflections; a cold rim light from behind, placed
 // from the camera every frame; and the eye, a spotlight at the lens — the
 // only light the creature makes. Neither light is ever hidden (hiding one
@@ -161,6 +167,67 @@ export interface SentinelViewOptions {
   environment?: THREE.Scene;
 }
 
+export interface SentinelRenderOptions {
+  /**
+   * The near and far planes the space's camera drew with this frame, world
+   * units: the Sentinel draws into the depth the space wrote, instead of
+   * clearing it. Null or absent, it clears depth and draws on top.
+   */
+  depth?: { near: number; far: number } | null;
+}
+
+/**
+ * A space's depth range in creature units, or null when there is none worth
+ * sharing.
+ *
+ * Creature space is the world moved to the anchor and divided by `unit`, with
+ * no rotation. In the Sentinel's camera every view-space coordinate is the
+ * space camera's divided by `unit`. A perspective projection's depth is
+ * (A·z + B) / −z, where A depends only on far / near and B scales with them.
+ * Dividing z, near and far by `unit` leaves A as it was and divides B by
+ * `unit`, so the numerator and the denominator shrink alike and the NDC depth
+ * comes out the same. The same field of view and aspect fix x and y. Both
+ * cameras therefore put every surface at the same depth in the buffer, up to
+ * float rounding, and the depth test between the space's pipes and the
+ * creature is exact. This holds for the standard depth buffer the graph's
+ * renderer uses; a logarithmic one writes log(view depth), which a scale does
+ * change.
+ *
+ * A range the space cannot have drawn with (not positive, not finite, far not
+ * beyond near) is treated as no range: the creature draws on its own rather
+ * than being clipped by nonsense.
+ */
+export function creatureDepthRange(
+  depth: { near: number; far: number } | null | undefined,
+  unit: number,
+): { near: number; far: number } | null {
+  if (!depth) return null;
+  const near = depth.near / unit;
+  const far = depth.far / unit;
+  if (!(near > 0 && far > near && Number.isFinite(far))) return null;
+  return { near, far };
+}
+
+/** The height three reads from a PMREM's image when it keys a program; null for anything else. */
+function cubeUvHeight(texture: THREE.Texture): number | null {
+  if (texture.mapping !== THREE.CubeUVReflectionMapping) return null;
+  const height = (texture.image as { height?: unknown } | null | undefined)?.height;
+  return typeof height === 'number' ? height : null;
+}
+
+/**
+ * True when a material drawn with either environment map uses the same
+ * program. Three keys a standard material's program on its map's mapping and,
+ * for a PMREM, on the map's height (`envMapCubeUVHeight` in WebGLPrograms),
+ * never on the texture itself. Two PMREMs of one size share every program.
+ * Anything else three converts to a PMREM of its own size first, or skips
+ * while the image loads: either way, another program.
+ */
+export function sharesPrograms(a: THREE.Texture, b: THREE.Texture): boolean {
+  const height = cubeUvHeight(a);
+  return height !== null && height === cubeUvHeight(b);
+}
+
 export class SentinelView {
   /** Read every frame: change it freely, nothing compiles. */
   look: SentinelLook = defaultLook();
@@ -177,6 +244,8 @@ export class SentinelView {
   private readonly ownsEnvScene: boolean;
   private readonly glow: SentinelGlow | null;
   private envTarget: THREE.WebGLRenderTarget | null = null;
+  /** A space's environment, lent while the Sentinel walks in it: drawn with, never disposed. */
+  private lent: THREE.Texture | null = null;
   private body: Body | null = null;
   private tier: Tier;
   private warming: Promise<void> | null = null;
@@ -242,7 +311,7 @@ export class SentinelView {
     this.body = body;
     if (this.floatColor) {
       this.envTarget = bakeEnvironment(this.renderer, this.envScene, 256);
-      this.scene.environment = this.envTarget.texture;
+      this.applyEnvironment();
     }
     this.sync(body);
 
@@ -329,17 +398,62 @@ export class SentinelView {
   }
 
   /**
+   * Reflects a space's own environment instead of the hangar, so the metal
+   * shows the space it walks in; null goes back to the hangar. The space keeps
+   * the texture: the view never disposes it, and the space takes it back
+   * (null, or its successor's) before disposing it.
+   *
+   * Lend a PMREM of the hangar's size, 256, baked with this renderer: what
+   * `bakeEnvironment` makes by default. Swapping between two of those compiles
+   * nothing (see `sharesPrograms`). Any other size or kind of map recompiles
+   * every Sentinel material on the next frame, mid-walk; in development the
+   * view says so.
+   *
+   * A lent map shows the space around the creature, so it is world-locked: it
+   * does not turn with the viewer as the hangar does. Without float colour
+   * there is no environment map, lent or not; the sky stands in.
+   */
+  setEnvironment(texture: THREE.Texture | null): void {
+    if (this.disposed || texture === this.lent) return;
+    this.lent = texture;
+    this.applyEnvironment();
+  }
+
+  /** The lent map if there is one, else the hangar once it is baked. */
+  private applyEnvironment(): void {
+    if (!this.floatColor) return;
+    const hangar = this.envTarget?.texture ?? null;
+    const lent = this.lent;
+    if (process.env.NODE_ENV !== 'production' && lent && hangar && !sharesPrograms(lent, hangar)) {
+      console.warn(
+        'Sentinel: the lent environment is not a 256 PMREM like the hangar, so every material recompiles.',
+      );
+    }
+    this.scene.environment = lent ?? hangar;
+  }
+
+  /**
    * Draws one frame of the Sentinel over what the canvas holds. `cam`, `vp`
    * and `dpr` are the graph's: the same view, the same drawing buffer. Does
    * nothing before warmup, or when the creature is off screen.
+   *
+   * With `opts.depth`, the space that drew first shares its depth: nothing
+   * is cleared, and whatever the space put in front of the creature hides it.
    */
-  render(pose: SentinelPose, cam: Camera, vp: Viewport, dpr: number): void {
+  render(
+    pose: SentinelPose,
+    cam: Camera,
+    vp: Viewport,
+    dpr: number,
+    opts: SentinelRenderOptions = {},
+  ): void {
     this.drawn = { calls: 0, triangles: 0 };
     const body = this.body;
     if (!this.isReady || this.disposed || !body) return;
     if (!(pose.unit > 0) || !pose.anchor.every(Number.isFinite)) return;
     if (!(vp.width > 0 && vp.height > 0)) return;
-    if (!this.aim(pose, cam, vp)) return;
+    const shared = creatureDepthRange(opts.depth, pose.unit);
+    if (!this.aim(pose, cam, vp, shared)) return;
     this.place(body, pose, cam);
     this.sync(body);
 
@@ -351,10 +465,13 @@ export class SentinelView {
       r.info.reset();
       r.setRenderTarget(null);
       r.autoClear = false;
-      // The graph writes no depth, but nothing may hide the creature behind a stale value.
-      // A clear honours the depth mask, and the graph's last draw left writes off.
-      r.state.buffers.depth.setMask(true);
-      r.clearDepth();
+      // A space's depth is fresh, cleared and written by it this frame: kept, so its pipes hide us.
+      if (!shared) {
+        // The graph writes no depth, but nothing may hide the creature behind a stale value.
+        // A clear honours the depth mask, and the graph's last draw left writes off.
+        r.state.buffers.depth.setMask(true);
+        r.clearDepth();
+      }
       r.toneMapping = THREE.AgXToneMapping;
       r.toneMappingExposure = look.exposure;
       r.render(this.scene, this.camera);
@@ -367,9 +484,16 @@ export class SentinelView {
 
   /**
    * Places the camera in creature space, as the graph's camera sees the
-   * world. False when the creature's bounds are off screen or behind.
+   * world. False when the creature's bounds are off screen or behind, or,
+   * sharing a space's depth range, wholly outside it. Its near and far planes
+   * hug the creature, or are the space's own when it shares its depth.
    */
-  private aim(pose: SentinelPose, cam: Camera, vp: Viewport): boolean {
+  private aim(
+    pose: SentinelPose,
+    cam: Camera,
+    vp: Viewport,
+    shared: { near: number; far: number } | null,
+  ): boolean {
     const { position, up, right, forward } = basis(cam);
     const [ax, ay, az] = pose.anchor;
     const inv = 1 / pose.unit;
@@ -395,8 +519,16 @@ export class SentinelView {
     if ((Math.abs(upward) - depth * TAN_HALF_FOV) / Math.hypot(1, TAN_HALF_FOV) > radius) {
       return false;
     }
-    const near = Math.max(0.01, depth - radius * 1.05);
-    const far = Math.max(near * 2, depth + radius * 1.05);
+    let near: number;
+    let far: number;
+    if (shared) {
+      // Wholly before the space's near plane or past its far one: the clip would leave nothing.
+      if (depth + radius < shared.near || depth - radius > shared.far) return false;
+      ({ near, far } = shared);
+    } else {
+      near = Math.max(0.01, depth - radius * 1.05);
+      far = Math.max(near * 2, depth + radius * 1.05);
+    }
     if (
       this.camera.near !== near ||
       this.camera.far !== far ||
@@ -445,7 +577,10 @@ export class SentinelView {
       0.75 * forward[2] + 0.55 * up[2] - 0.35 * right[2],
     );
     // The hangar turns with the viewer, so its strips stay overhead and behind.
-    this.scene.environmentRotation.set(0, cam.yaw + this.look.envYawOffset, 0);
+    // A space's map is the world around the creature, which creature space
+    // does not rotate: it stays put.
+    const yaw = this.lent ? 0 : cam.yaw + this.look.envYawOffset;
+    this.scene.environmentRotation.set(0, yaw, 0);
   }
 
   /** The look into uniforms and light settings: every frame, all of it live. */
@@ -496,6 +631,8 @@ export class SentinelView {
       if (this.compiling) this.compiling.then(free, free);
       else free();
     }
+    // A lent map is the space's to free: only let go of it.
+    this.lent = null;
     this.scene.environment = null;
     this.envTarget?.dispose();
     this.envTarget = null;
