@@ -19,6 +19,15 @@
 // Candidates are the threads within two hops of the stretch being walked at
 // each event — a local window, never every thread of the leg at once: on a
 // long leg through a hub the naive version cost milliseconds in one frame.
+// Most are then rejected cheaply by their chord, bent as far as the brain's
+// curve can bend, before the exact closest point.
+//
+// A field that knows what lies near a point (`nearby`, a spatial hash over a
+// space's pipes) answers that question itself, exactly: the threads drawn
+// within reach of a slot's spot. That replaces both the window and the chord
+// test, which assumed the brain's gentle curve and dropped a pipe whose elbow
+// came near while its ends were far. A thread found that way is planned like
+// any other, linked to the walk or not.
 //
 // Pure: no three, no document. Distances in parameters are in creature units
 // (the vault's typical link), positions in world units.
@@ -315,8 +324,13 @@ class Planner {
     return h ? this.ahead(h.q) : Infinity;
   }
 
-  /** Threads around these notes that can be held: the local window an event looks in. */
+  /**
+   * Threads around these notes that can be held: the local window an event
+   * looks in. Empty over a field that has `nearby`, which `reachable` asks
+   * instead.
+   */
   window(ids: readonly string[]): Candidate[] {
+    if (this.field.nearby) return [];
     const id = ids.join('\u0000');
     const hit = this.windows.get(id);
     if (hit) return hit;
@@ -351,6 +365,24 @@ class Planner {
     }
     this.threads.set(key, c);
     return c;
+  }
+
+  /**
+   * The threads that may come within `reach` of a slot's spot, worth the
+   * exact closest point: what the field finds near it when it can, else the
+   * window's threads whose bent chord comes that close.
+   */
+  private reachable(
+    natural: Vec3,
+    reach: number,
+    window: readonly Candidate[],
+  ): readonly ThreadKey[] {
+    if (this.field.nearby) return this.field.nearby(natural, reach, this.p.maxCandidates);
+    const out: ThreadKey[] = [];
+    for (const c of window) {
+      if (segmentDistance(natural, c.a, c.b) - c.bow <= reach) out.push(c.key);
+    }
+    return out;
   }
 
   private cost(slot: number, key: ThreadKey, q: Vec3, holding: boolean): number {
@@ -404,16 +436,15 @@ class Planner {
       probe = [natural[0] - f[0] * behind, natural[1] - f[1] * behind, natural[2] - f[2] * behind];
     }
     let best: Choice | null = null;
-    for (const c of candidates) {
-      if (c.key === walked) continue;
-      if (segmentDistance(natural, c.a, c.b) - c.bow > reach) continue;
-      const hit = this.field.closest(c.key, probe, p.uMin, p.uMax);
+    for (const key of this.reachable(natural, reach, candidates)) {
+      if (key === walked) continue;
+      const hit = this.field.closest(key, probe, p.uMin, p.uMax);
       if (!hit || d2(hit.p, natural) > reach * reach) continue;
       const q = hit.p;
       if (d2(q, anchor) > fromAnchor * fromAnchor) continue;
       if (walking && this.ahead(q) < -p.takeBehind * this.unit) continue;
-      const cost = this.cost(slot, c.key, q, false);
-      if (!best || cost < best.cost) best = { key: c.key, u: hit.u, q, cost };
+      const cost = this.cost(slot, key, q, false);
+      if (!best || cost < best.cost) best = { key, u: hit.u, q, cost };
     }
     return best;
   }

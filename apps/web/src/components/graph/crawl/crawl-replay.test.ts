@@ -8,12 +8,28 @@ import {
   type InputNode,
 } from '@/lib/graph-model';
 
-import type { CrawlResult } from './crawl-plan';
-import { CrawlReplay, voidProgress, walkProgress } from './crawl-replay';
+import { walkable, type CrawlResult } from './crawl-plan';
+import {
+  CrawlReplay,
+  pacedDuration,
+  voidProgress,
+  walkProgress,
+  walkRamp,
+  type ReplayOptions,
+} from './crawl-replay';
 import type { ReplayEvent } from './replay-view';
 import { sampleVault } from './sample-vault';
-import { segmentLength, threadEnds, threadKey, typicalLink } from './threads';
-import type { Vec3 } from './vec';
+import { polylineThreadField, type PolylineField } from './space/polyline-field';
+import {
+  at,
+  segmentLength,
+  threadEnds,
+  threadKey,
+  typicalLink,
+  type ThreadField,
+  type ThreadKey,
+} from './threads';
+import { dist, type Vec3 } from './vec';
 
 type Crawl = keyof ReturnType<typeof sampleVault>['crawls'];
 const CRAWLS: readonly Crawl[] = ['walk', 'gap', 'ask', 'tour'];
@@ -425,6 +441,343 @@ describe('CrawlReplay', () => {
   });
 });
 
+/**
+ * The vault as a space of its own might draw it: each note where the brain
+ * has it, moved by `shift`, and each thread a pipe with one elbow — level
+ * first, then straight up or down to the far note. Lines detour through
+ * `detours` on the threads named there.
+ */
+function pipesOf(
+  model: GraphModel,
+  shift: Vec3 = [0, 0, 0],
+  detours = new Map<ThreadKey, Vec3>(),
+): PolylineField {
+  const nodes = new Map<string, Vec3>();
+  for (const n of model.nodes) {
+    const p = at(n);
+    nodes.set(n.id, [p[0] + shift[0], p[1] + shift[1], p[2] + shift[2]]);
+  }
+  const routes = new Map<ThreadKey, Float32Array>();
+  const adjacency = new Map<string, ThreadKey[]>();
+  for (const e of model.edges) {
+    if (!walkable(e)) continue;
+    const key = threadKey(e.source, e.target);
+    const [first, second] = threadEnds(key);
+    const a = nodes.get(first)!;
+    const b = nodes.get(second)!;
+    const via = detours.get(key);
+    const corners: Vec3[] = via ? [[a[0], via[1], a[2]], via, [b[0], via[1], b[2]]] : [];
+    routes.set(key, Float32Array.from([...a, ...corners.flat(), b[0], a[1], b[2], ...b]));
+    for (const id of [first, second]) adjacency.set(id, [...(adjacency.get(id) ?? []), key]);
+  }
+  return polylineThreadField({ nodes, routes, adjacency, cell: typicalLink(model) });
+}
+
+function pipedReplay(crawl: Crawl, opts: ReplayOptions = {}, shift?: Vec3) {
+  const { model, crawls } = sampleVault();
+  const field = pipesOf(model, shift);
+  const r = new CrawlReplay(() => {});
+  r.load(crawls[crawl], model, { field, unit: typicalLink(model), ...opts });
+  return { r, model, field };
+}
+
+/** Every leg a replay walks, as it begins. */
+function legsOf(r: CrawlReplay, fps = 60) {
+  const legs: Array<{
+    segments: LegSegmentCopy[];
+    total: number;
+    duration: number;
+    void: boolean;
+  }> = [];
+  run(r, fps, (events) => {
+    const w = r.view.walk;
+    if (!events.some((e) => e.kind === 'begin') || !w || w.segments.length === 0) return;
+    legs.push({
+      segments: w.segments.map((s) => ({ ...s })),
+      total: w.total,
+      duration: w.duration,
+      void: w.void,
+    });
+  });
+  return legs;
+}
+
+type LegSegmentCopy = { fromId: string; toId: string; key: ThreadKey | null; length: number };
+
+describe('CrawlReplay over a field of its own', () => {
+  it('measures every stretch as the field draws it: pipes by their length, gaps straight across', () => {
+    let pipes = 0;
+    let gaps = 0;
+    for (const crawl of CRAWLS) {
+      const { r, field } = pipedReplay(crawl);
+      expect(r.view.field).toBe(field);
+      for (const leg of legsOf(r)) {
+        let total = 0;
+        for (const s of leg.segments) {
+          total += s.length;
+          if (s.key) {
+            pipes++;
+            expect(field.has(s.key)).toBe(true);
+            expect(s.length).toBe(field.length(s.key));
+            continue;
+          }
+          gaps++;
+          const a: Vec3 = [0, 0, 0];
+          const b: Vec3 = [0, 0, 0];
+          expect(field.node(s.fromId, a) && field.node(s.toId, b)).toBe(true);
+          expect(s.length).toBeCloseTo(dist(a, b), 9);
+        }
+        expect(leg.total).toBeCloseTo(total, 9);
+      }
+    }
+    expect(pipes).toBeGreaterThan(10);
+    expect(gaps).toBeGreaterThan(0);
+  });
+
+  it('lights the same threads at 24, 60 and 144 frames a second', () => {
+    for (const crawl of CRAWLS) {
+      const lit = [24, 60, 144].map((fps) => {
+        const { r } = pipedReplay(crawl);
+        run(r, fps);
+        expect(r.snapshot.threads).toBe(r.view.lit.size);
+        return { keys: litKeys(r), found: [...r.view.found].sort() };
+      });
+      expect(lit[0]!.keys.length).toBeGreaterThan(0);
+      expect(lit[1]).toEqual(lit[0]);
+      expect(lit[2]).toEqual(lit[0]);
+    }
+  });
+
+  it('jumping to the end lights exactly what the animated replay lights', () => {
+    for (const crawl of CRAWLS) {
+      const animated = pipedReplay(crawl).r;
+      run(animated, 60);
+      const jumped = pipedReplay(crawl).r;
+      jumped.skipToEnd();
+      expect(jumped.view.mode).toBe('done');
+      expect(litKeys(jumped)).toEqual(litKeys(animated));
+      expect(jumped.view.hereId).toBe(animated.view.hereId);
+      expect([...jumped.view.found].sort()).toEqual([...animated.view.found].sort());
+      expect(jumped.snapshot.found).toEqual(animated.snapshot.found);
+      expect(jumped.snapshot.asks).toEqual(animated.snapshot.asks);
+      expect(jumped.snapshot.threads).toBe(animated.snapshot.threads);
+    }
+  });
+
+  it('never walks faster than the pace it is handed, and lights the same threads at any pace', () => {
+    const unit = typicalLink(sampleVault().model);
+    const brisk = (total: number) => Math.max(unit * 4.5, total / 3.4);
+    const free = pipedReplay('tour');
+    const freeLegs = legsOf(free.r);
+    for (const leg of freeLegs) expect(leg.duration).toBeCloseTo(leg.total / brisk(leg.total), 9);
+
+    // The speed a leg cruises at, between easing in and easing out.
+    const cruise = (leg: { total: number; duration: number }) =>
+      leg.total / (leg.duration - walkRamp(leg.duration));
+    // Paces that bind on short legs, where the ramps are a quarter of the
+    // time each, and on long ones, where they are 0.3 s.
+    for (const pace of [unit * 2, unit * 5]) {
+      const slow = pipedReplay('tour', { pace });
+      const slowLegs = legsOf(slow.r);
+      expect(slowLegs.map((l) => l.total)).toEqual(freeLegs.map((l) => l.total));
+      let bound = 0;
+      slowLegs.forEach((leg, i) => {
+        expect(cruise(leg)).toBeLessThanOrEqual(pace * (1 + 1e-9));
+        expect(leg.duration).toBeGreaterThanOrEqual(freeLegs[i]!.duration);
+        // Where the cap slows it, it cruises at the cap exactly.
+        if (leg.duration > freeLegs[i]!.duration + 1e-9) {
+          bound++;
+          expect(cruise(leg)).toBeCloseTo(pace, 6);
+        }
+      });
+      expect(bound).toBeGreaterThan(0);
+      expect(slow.r.view.clock).toBeGreaterThan(free.r.view.clock);
+      expect(litKeys(slow.r)).toEqual(litKeys(free.r));
+    }
+
+    // A pace it never reaches, or none at all, changes nothing.
+    for (const opts of [{ pace: unit * 1e6 }, { pace: null }]) {
+      expect(legsOf(pipedReplay('tour', opts).r)).toEqual(freeLegs);
+    }
+  });
+
+  it('walks the brain as it always has when handed no field, however the options are put', () => {
+    const { model, crawls } = sampleVault();
+    const trace = (opts?: ReplayOptions | (() => number)) => {
+      const r = new CrawlReplay(() => {});
+      r.load(crawls.tour, model, opts);
+      return { events: run(r, 60), lit: litKeys(r), snapshot: r.snapshot };
+    };
+    const plain = trace();
+    for (const opts of [{}, () => 1, { appear: () => 1 }, { pace: null }, { unit: Number.NaN }]) {
+      expect(trace(opts)).toEqual(plain);
+    }
+  });
+
+  it('leaves what is shown to the field: appear changes nothing over it', () => {
+    const { model, crawls } = sampleVault();
+    const field = pipesOf(model);
+    const reference = pipedReplay('walk').r;
+    run(reference, 60);
+    const r = new CrawlReplay(() => {});
+    r.load(crawls.walk, model, { field, appear: () => 0 });
+    const out: Vec3 = [0, 0, 0];
+    expect(r.view.field).toBe(field);
+    expect(field.node(model.nodes[0]!.id, out)).toBe(true);
+    r.setAppear(() => 0);
+    expect(r.view.field).toBe(field);
+    run(r, 60);
+    expect(litKeys(r)).toEqual(litKeys(reference));
+  });
+
+  it('keeps the field it was handed when the model is rebuilt mid-crawl', () => {
+    const reference = pipedReplay('tour').r;
+    run(reference, 60);
+
+    let model = sampleVault().model;
+    const field = pipesOf(model);
+    const r = new CrawlReplay(() => {});
+    r.load(sampleVault().crawls.tour, model, { field, unit: typicalLink(model) });
+    let frame = 0;
+    run(r, 60, () => {
+      if (++frame % 37 !== 0) return;
+      model = rebuild(model);
+      r.rebind(model);
+      expect(r.view.field).toBe(field);
+    });
+    expect(litKeys(r)).toEqual(litKeys(reference));
+  });
+
+  it("takes the way that is shortest along the field's pipes, not across the brain", () => {
+    // A diamond: through c is shorter as the brain draws it, but the space
+    // routes c's pipes far out of the way.
+    const notes: Array<[string, Vec3]> = [
+      ['a', [0, 0, 0]],
+      ['b', [28, 28, 0]],
+      ['c', [28, -20, 0]],
+      ['d', [56, 0, 0]],
+    ];
+    const nodes: InputNode[] = notes.map(([name], i) => ({
+      id: `me/${name}.md`,
+      path: `${name}.md`,
+      title: name,
+      ownerId: 'me',
+      project: { id: 'me|p', label: 'P' },
+      createdAt: i,
+      updatedAt: i,
+    }));
+    const edges: InputEdge[] = [
+      ['a', 'b'],
+      ['b', 'd'],
+      ['a', 'c'],
+      ['c', 'd'],
+    ].map(([a, b]) => ({ source: `me/${a}.md`, target: `me/${b}.md`, weight: 1 }));
+    const model = buildGraphModel({
+      nodes,
+      edges,
+      affinity: null,
+      layers: DEFAULT_LAYERS,
+      viewerId: 'me',
+      vaultNames: new Map(),
+      cache: new Map(),
+    });
+    for (const n of model.nodes) {
+      const p = notes.find(([name]) => n.id === `me/${name}.md`)![1];
+      Object.assign(n, { x: p[0], y: p[1], z: p[2] });
+    }
+    const seed = (name: string, kind: 'named' | 'search'): CrawlResult['notes'][number] => ({
+      path: `${name}.md`,
+      title: name,
+      isDecision: false,
+      via: kind === 'named' ? { kind, text: name, count: 1 } : { kind, term: name, rank: 0 },
+    });
+    const result: CrawlResult = {
+      notes: [seed('a', 'named'), seed('d', 'search')],
+      unresolved: [],
+      coverage: { resolved: 2, total: 2 },
+    };
+    const way = (opts?: ReplayOptions) => {
+      const r = new CrawlReplay(() => {});
+      r.load(result, model, opts);
+      return legsOf(r).map((leg) => leg.segments.map((s) => s.toId));
+    };
+    const far: Vec3 = [28, -400, 0];
+    const detours = new Map([
+      [threadKey({ id: 'me/a.md' }, { id: 'me/c.md' }), far],
+      [threadKey({ id: 'me/c.md' }, { id: 'me/d.md' }), far],
+    ]);
+    expect(way()).toEqual([['me/c.md', 'me/d.md']]);
+    expect(way({ field: pipesOf(model, [0, 0, 0], detours), unit: 10 })).toEqual([
+      ['me/b.md', 'me/d.md'],
+    ]);
+  });
+
+  it('follows and frames the notes where the space puts them, not where the brain does', () => {
+    const shift: Vec3 = [5000, -300, 2000];
+    const { r, field } = pipedReplay('walk', {}, shift);
+    const unit = r.unit;
+    let followed = 0;
+    run(r, 60, () => {
+      const f = r.follow();
+      if (!f || r.view.mode !== 'walk') return;
+      // On the pipe it walks, where the space is: the brain sits around the origin.
+      expect(f.x).toBeGreaterThan(4000);
+      expect(f.z).toBeGreaterThan(1500);
+      followed++;
+    });
+    expect(followed).toBeGreaterThan(0);
+    const pts = [...r.view.found.keys()].map((id) => {
+      const p: Vec3 = [0, 0, 0];
+      expect(field.node(id, p)).toBe(true);
+      return p;
+    });
+    const c = [0, 1, 2].map((i) => pts.reduce((s, p) => s + p[i]!, 0) / pts.length);
+    const f = r.follow()!;
+    expect(Math.abs(f.x - c[0]!) + Math.abs(f.y - c[1]!) + Math.abs(f.z - c[2]!)).toBeLessThan(
+      1e-6,
+    );
+
+    // A reference nothing settled hangs off the note where the space has it.
+    const asked = pipedReplay('ask', {}, shift);
+    run(asked.r, 60);
+    const label = asked.r.labels.find((l) => l.text.startsWith('? the Q3 roadmap'))!;
+    const here: Vec3 = [0, 0, 0];
+    asked.field.node(asked.r.view.hereId!, here);
+    expect(dist(label.point!, here)).toBeLessThan(unit * 5);
+  });
+});
+
+/** A field that only says what it holds: no lengths of its own, nothing nearby. */
+function bare(field: ThreadField): ThreadField {
+  return {
+    has: (k) => field.has(k),
+    point: (k, u, out) => field.point(k, u, out),
+    closest: (k, q, uMin, uMax) => field.closest(k, q, uMin, uMax),
+    node: (id, out) => field.node(id, out),
+    around: (ids, hops, max) => field.around(ids, hops, max),
+    up: (p, out) => field.up(p, out),
+  };
+}
+
+describe('CrawlReplay over a field without lengths', () => {
+  it('measures each thread along the field itself', () => {
+    const { model, crawls } = sampleVault();
+    const pipes = pipesOf(model);
+    const r = new CrawlReplay(() => {});
+    r.load(crawls.walk, model, { field: bare(pipes), unit: typicalLink(model) });
+    const legs = legsOf(r);
+    expect(legs.length).toBeGreaterThan(0);
+    for (const leg of legs) {
+      for (const s of leg.segments) {
+        // Eight chords of a pipe with one elbow: a little short of it, never longer.
+        if (!s.key) continue;
+        expect(s.length).toBeLessThanOrEqual(pipes.length(s.key) + 1e-6);
+        expect(s.length).toBeGreaterThan(pipes.length(s.key) * 0.85);
+      }
+    }
+  });
+});
+
 describe('walkProgress', () => {
   it('starts and stops at rest yet arrives exactly when the walk ends', () => {
     for (const duration of [0.37, 1.2, 3.4]) {
@@ -450,6 +803,31 @@ describe('walkProgress', () => {
         prev = s;
         prevSpeed = speed;
       }
+    }
+  });
+});
+
+describe('pacedDuration', () => {
+  it('lets a walk cruise at its pace and no faster, short or long', () => {
+    // Short walks ease in and out over a quarter of their time each; long ones over 0.3 s.
+    for (const [total, pace] of [
+      [0.5, 2],
+      [1.7, 2],
+      [1.8, 2],
+      [6, 2],
+      [40, 7],
+    ] as const) {
+      const duration = pacedDuration(total, pace);
+      const ramp = walkRamp(duration);
+      let fastest = 0;
+      const h = duration / 4000;
+      for (let t = 0; t < duration; t += h) {
+        const v =
+          (walkProgress(t + h, total, duration, ramp) - walkProgress(t, total, duration, ramp)) / h;
+        fastest = Math.max(fastest, v);
+      }
+      expect(fastest, `${total} at ${pace}`).toBeLessThanOrEqual(pace * (1 + 1e-6));
+      expect(fastest, `${total} at ${pace}`).toBeGreaterThan(pace * 0.999);
     }
   });
 });

@@ -21,6 +21,15 @@
 // The graph builds new edge objects whenever it is rebuilt (a layer toggled, a
 // note added), and a Map keyed by edge counted the same thread twice after
 // every rebuild.
+//
+// By default it walks the brain: the threads graph-scene draws, measured along
+// the brain's curve, in units of its typical link. A space of Crawl's own
+// (space/space.ts) puts the notes elsewhere and draws its threads as pipes or
+// arcs, so it hands the replay its own field, unit and pace instead. Then
+// every length, every place and the way between two notes come from that
+// field, and — given its unit too — the brain's positions in the model are
+// never read: they say nothing about where a note stands in the space, or
+// which way is short there.
 
 import type { GraphEdge, GraphModel, GraphNode } from '@/lib/graph-model';
 
@@ -57,7 +66,7 @@ import {
   type ThreadField,
   type ThreadKey,
 } from './threads';
-import type { Vec3 } from './vec';
+import { dist, type Vec3 } from './vec';
 
 /**
  * Distance walked `t` seconds into a leg of `duration`: it speeds up over
@@ -76,8 +85,22 @@ export function walkProgress(t: number, total: number, duration: number, ramp: n
   return total - (v * left * left) / (2 * r);
 }
 
+/** Seconds a walk of any length but the shortest takes to reach cruising speed, and to stop. */
+const RAMP = 0.3;
+
 /** Seconds a walk takes to reach cruising speed, and to stop. */
-export const walkRamp = (duration: number): number => Math.min(0.3, duration / 4);
+export const walkRamp = (duration: number): number => Math.min(RAMP, duration / 4);
+
+/**
+ * How long a walk of `total` takes when it cruises at exactly `pace`:
+ * `walkProgress` cruises at total / (duration − ramp), and the ramp itself
+ * depends on the duration, so this solves for it on each side of where the
+ * ramp stops growing (a duration of 4 × RAMP).
+ */
+export function pacedDuration(total: number, pace: number): number {
+  const long = total / pace + RAMP;
+  return long >= 4 * RAMP ? long : (4 * total) / (3 * pace);
+}
 
 /** Of a crossing through the void, the first 40 % of the time covers 25 % of the distance: feeling the way. */
 const VOID_SPLIT = 0.4;
@@ -130,6 +153,71 @@ const EXPLORER = TENTACLE_SPECS.find((t) => t.role === 'explorer')!;
 const CONTACT_REACH = EXPLORER.length * EXPLORER.maxStretch;
 /** Events kept for a reader that stopped draining them. */
 const MAX_EVENTS = 256;
+
+/**
+ * What a replay may be handed besides the crawl and its model, to walk a
+ * space of its own instead of the brain. Each is optional: with none of them
+ * it walks the brain exactly as it always has.
+ */
+export interface ReplayOptions {
+  /**
+   * How far each note has faded in, 0 to 1: the brain's field hides a note
+   * below 0.6. An injected `field` never reads it — whoever built the field
+   * decides what it shows — so alongside one, `appear` and `setAppear` change
+   * nothing.
+   */
+  appear?: (n: GraphNode) => number;
+  /**
+   * The notes and threads to walk. Lengths come from its `length` when it has
+   * one (measured along it otherwise), places from its `node`, and each leg
+   * takes the way that is shortest along its threads. Kept across `rebind`
+   * until a `load` without one.
+   */
+  field?: ThreadField;
+  /** World units per creature unit; the brain's typical link by default. Ignored unless positive. */
+  unit?: number;
+  /**
+   * The fastest a walk may go, world units a second: its cruising speed,
+   * between easing in and out, never passes it. At the brain's pace a long
+   * leg rushes through a pipe's elbows; a space with sharp ones slows it
+   * down. A crossing of the void takes as long as a walk of its length would.
+   * Null or absent: no limit.
+   */
+  pace?: number | null;
+}
+
+/** How far each note has faded in, as the scene draws it. */
+type Appear = (n: GraphNode) => number;
+
+/** `load` and `rebind` used to take an appear function alone, and still do. */
+function optionsOf(opts: ReplayOptions | Appear | undefined): ReplayOptions {
+  return typeof opts === 'function' ? { appear: opts } : (opts ?? {});
+}
+
+/** A positive, finite number, or null: a unit or a pace the replay can divide by. */
+function positive(v: number | null | undefined): number | null {
+  return typeof v === 'number' && v > 0 && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * A thread's length as a field draws it, world units: its own word when it
+ * has `length`, measured along eight chords otherwise. NaN when it is gone.
+ */
+function drawnLength(field: ThreadField, key: ThreadKey): number {
+  if (field.length) return field.length(key);
+  const a: Vec3 = [0, 0, 0];
+  const b: Vec3 = [0, 0, 0];
+  if (!field.point(key, 0, a)) return Number.NaN;
+  let total = 0;
+  for (let i = 1; i <= 8; i++) {
+    if (!field.point(key, i / 8, b)) return Number.NaN;
+    total += dist(a, b);
+    a[0] = b[0];
+    a[1] = b[1];
+    a[2] = b[2];
+  }
+  return total;
+}
 
 export interface ReplayLabel {
   nodeId: string | null;
@@ -190,8 +278,12 @@ function firstVisit(plan: CrawlPlan): Extract<CrawlStep, { kind: 'visit' }> | un
 
 export class CrawlReplay {
   private model: GraphModel | null = null;
-  private appear: (n: GraphNode) => number = () => 1;
+  private appear: Appear = () => 1;
   private field: ThreadField = NOWHERE;
+  /** A space's own field, handed in; null walks the brain's, built from the model. */
+  private injected: ThreadField | null = null;
+  /** The fastest a walk may go, world units a second; null for no limit. */
+  private pace: number | null = null;
   private byId = new Map<string, GraphNode>();
   private plan: CrawlPlan | null = null;
   private scale = 1;
@@ -266,13 +358,19 @@ export class CrawlReplay {
 
   // -- Loading -------------------------------------------------------------------
 
-  /** Replay a crawl over this model. */
-  load(result: CrawlResult, model: GraphModel, appear?: (n: GraphNode) => number): void {
-    this.appear = appear ?? (() => 1);
+  /**
+   * Replay a crawl over this model: over the brain, or over the field `opts`
+   * hands in. An appear function alone is `{ appear }`.
+   */
+  load(result: CrawlResult, model: GraphModel, opts?: ReplayOptions | Appear): void {
+    const o = optionsOf(opts);
+    this.appear = o.appear ?? (() => 1);
+    this.injected = o.field ?? null;
+    this.pace = positive(o.pace);
     this.bind(model);
     const plan = planCrawl(result, model);
     this.plan = plan;
-    this.scale = typicalLink(model);
+    this.scale = positive(o.unit) ?? typicalLink(model);
     this.reset();
     this.snap = {
       ...emptySnapshot(),
@@ -296,9 +394,16 @@ export class CrawlReplay {
   /**
    * The model was rebuilt (a layer toggled, a note added): find the same notes
    * and threads in it. A grip on a thread the graph no longer draws lets go.
+   * Whatever `opts` hands in replaces what the replay had, and the rest stays:
+   * a field injected at `load` is kept unless a new one comes. A new unit or
+   * pace shapes the legs that begin from now on.
    */
-  rebind(model: GraphModel, appear?: (n: GraphNode) => number): void {
-    if (appear) this.appear = appear;
+  rebind(model: GraphModel, opts?: ReplayOptions | Appear): void {
+    const o = optionsOf(opts);
+    if (o.appear) this.appear = o.appear;
+    if (o.field) this.injected = o.field;
+    this.scale = positive(o.unit) ?? this.scale;
+    if (o.pace !== undefined) this.pace = positive(o.pace);
     this.bind(model);
     if (this.here) this.here = this.node(this.here);
     if (this.target) this.target = this.node(this.target);
@@ -314,9 +419,10 @@ export class CrawlReplay {
    * How far each note has faded in, as of this frame. The scene's appear reads
    * the frame's clock, so the one handed to `load` stops at that moment: a
    * note still fading in then would stay hidden to the replay. Cheap enough
-   * to call every frame.
+   * to call every frame. Over an injected field it changes nothing: that
+   * field's owner decides what it shows, and keeps it up to date itself.
    */
-  setAppear(appear: (n: GraphNode) => number): void {
+  setAppear(appear: Appear): void {
     this.appear = appear;
   }
 
@@ -370,7 +476,8 @@ export class CrawlReplay {
       const pts: Vec3[] = [];
       for (const id of this.found.keys()) {
         const n = this.byId.get(id);
-        if (n) pts.push(at(n));
+        const p = n ? this.where(n) : null;
+        if (p) pts.push(p);
       }
       if (pts.length === 0) return null;
       const c: Vec3 = [0, 0, 0];
@@ -447,7 +554,7 @@ export class CrawlReplay {
     return this.crossed;
   }
 
-  /** World units per creature unit: the vault's typical link. */
+  /** World units per creature unit: the vault's typical link, or the unit a space handed in. */
   get unit(): number {
     return this.scale;
   }
@@ -456,14 +563,99 @@ export class CrawlReplay {
 
   private bind(model: GraphModel): void {
     this.model = model;
-    // Through `this`, so `setAppear` reaches the field without rebuilding its maps.
-    this.field = graphThreadField(model, (n) => this.appear(n));
+    // Through `this`, so `setAppear` reaches the brain's field without rebuilding its maps.
+    this.field = this.injected ?? graphThreadField(model, (n) => this.appear(n));
     this.byId = new Map(model.nodes.map((n) => [n.id, n]));
   }
 
   /** The same note in the current model: a plan made before a rebuild still names the old objects. */
   private node(n: GraphNode): GraphNode {
     return this.byId.get(n.id) ?? n;
+  }
+
+  /**
+   * Where a note stands: where the brain draws it, or where an injected
+   * field puts it — null when that field does not show it.
+   */
+  private where(n: GraphNode): Vec3 | null {
+    if (!this.injected) return at(n);
+    const p: Vec3 = [0, 0, 0];
+    return this.injected.node(n.id, p) ? p : null;
+  }
+
+  /**
+   * How far silk across the void sags at its middle, world units. In a space
+   * of its own a crossing is measured as the straight way across, so it is
+   * walked straight too.
+   */
+  private get voidSag(): number {
+    return this.injected ? 0 : this.scale * SILK_SAG;
+  }
+
+  /**
+   * How long a stretch of a leg is: along the brain's curve or its silk, or
+   * along an injected field's thread, or straight across between where that
+   * field puts the two notes. NaN when a note has no place yet.
+   */
+  private stretchLength(from: GraphNode, to: GraphNode, edge: GraphEdge | null): number {
+    const field = this.injected;
+    if (!field) return segmentLength({ from, to, edge }, this.scale);
+    if (edge) return Math.max(drawnLength(field, threadKey(from, to)), 1e-6);
+    const a: Vec3 = [0, 0, 0];
+    const b: Vec3 = [0, 0, 0];
+    if (!field.node(from.id, a) || !field.node(to.id, b)) return Number.NaN;
+    return Math.max(dist(a, b), 1e-6);
+  }
+
+  /**
+   * The shortest walk along an injected field's threads, by their drawn
+   * length: `findWalk`, with the space's lengths instead of the brain's
+   * distances, and only over threads the field draws. Threads already lit cost
+   * a little less, as there, so it keeps to its own path when one is as good.
+   * Null when no drawn thread joins them.
+   */
+  private fieldWalk(
+    model: GraphModel,
+    field: ThreadField,
+    from: GraphNode,
+    to: GraphNode,
+  ): GraphNode[] | null {
+    if (from === to) return [from];
+    const best = new Map<GraphNode, number>([[from, 0]]);
+    const prev = new Map<GraphNode, GraphNode>();
+    const done = new Set<GraphNode>();
+    // A linear scan for the next note, as `findWalk` does: a few thousand notes at most.
+    const open = new Set<GraphNode>([from]);
+    while (open.size > 0) {
+      let u: GraphNode | null = null;
+      let du = Infinity;
+      for (const n of open) {
+        const d = best.get(n)!;
+        if (d < du) {
+          du = d;
+          u = n;
+        }
+      }
+      if (!u || u === to) break;
+      open.delete(u);
+      done.add(u);
+      for (const { node: v, edge } of model.adjacency.get(u) ?? []) {
+        if (!walkable(edge) || done.has(v)) continue;
+        const key = threadKey(u, v);
+        if (!field.has(key)) continue;
+        const w = drawnLength(field, key) * (this.lit.has(key) ? 0.8 : 1);
+        if (!(w >= 0)) continue;
+        if (du + w < (best.get(v) ?? Infinity)) {
+          best.set(v, du + w);
+          prev.set(v, u);
+          open.add(v);
+        }
+      }
+    }
+    if (!prev.has(to)) return null;
+    const path = [to];
+    while (path[0] !== from) path.unshift(prev.get(path[0]!)!);
+    return path;
   }
 
   private reset(): void {
@@ -528,7 +720,9 @@ export class CrawlReplay {
     this.touched = false;
     if (st.kind === 'visit' && st.at.id !== this.here.id) {
       const target = this.node(st.at);
-      const path = findWalk(model, this.here, target, this.walkedEdges(model));
+      const path = this.injected
+        ? this.fieldWalk(model, this.injected, this.here, target)
+        : findWalk(model, this.here, target, this.walkedEdges(model));
       const nodes = path ?? [this.here, target];
       const stretches: LegSegment[] = [];
       for (let i = 0; i + 1 < nodes.length; i++) {
@@ -542,7 +736,7 @@ export class CrawlReplay {
           fromId: from.id,
           toId: to.id,
           key: edge ? threadKey(from, to) : null,
-          length: segmentLength({ from, to, edge }, this.scale),
+          length: this.stretchLength(from, to, edge),
         });
       }
       // A note the layout has not placed yet (every note starts at NaN, and a
@@ -569,8 +763,14 @@ export class CrawlReplay {
     this.total = total;
     this.k = 0;
     this.travelled = 0;
-    const walkSpeed = Math.max(this.scale * 4.5, total / 3.4);
-    this.duration = this.segments.length > 0 ? total / walkSpeed : EMPTY_WAIT;
+    // A long leg goes faster, so no walk takes more than 3.4 s — unless the
+    // space caps the pace. Then it takes at least as long as cruising at that
+    // pace would: its average, capped instead, let it cruise up to a third
+    // faster than the cap on a short leg, the ramps being part of its time.
+    const brisk = Math.max(this.scale * 4.5, total / 3.4);
+    const duration =
+      this.pace === null ? total / brisk : Math.max(total / brisk, pacedDuration(total, this.pace));
+    this.duration = this.segments.length > 0 ? duration : EMPTY_WAIT;
     this.t = 0;
     this.phaseStart = this.clock;
     this.mode = 'walk';
@@ -726,14 +926,7 @@ export class CrawlReplay {
         this.k++;
         this.light(this.segments[this.k]!.key, 1.2, 'walk');
       }
-      legPoint(
-        this.segments,
-        this.travelled,
-        this.field,
-        this.scale * SILK_SAG,
-        this.scratch,
-        this.dir,
-      );
+      legPoint(this.segments, this.travelled, this.field, this.voidSag, this.scratch, this.dir);
       this.run(this.t);
       if (
         this.crossing &&
@@ -823,7 +1016,7 @@ export class CrawlReplay {
 
   /** A reference nothing settled: reach to the notes it could mean, or into the void. */
   private ask(st: Extract<CrawlStep, { kind: 'ask' }>): void {
-    const here = this.here ? at(this.here) : ([0, 0, 0] as Vec3);
+    const here = (this.here && this.where(this.here)) ?? ([0, 0, 0] as Vec3);
     const up: Vec3 = [0, 1, 0];
     this.field.up(here, up);
     const text = `? ${st.term} · ${st.why}`;
@@ -933,10 +1126,10 @@ export class CrawlReplay {
     if (
       this.mode === 'walk' &&
       this.segments.length > 0 &&
-      legPoint(this.segments, this.travelled, this.field, this.scale * SILK_SAG, this.scratch)
+      legPoint(this.segments, this.travelled, this.field, this.voidSag, this.scratch)
     )
       return this.scratch;
-    return this.here ? at(this.here) : null;
+    return this.here ? this.where(this.here) : null;
   }
 
   private push(e: ReplayEvent): void {

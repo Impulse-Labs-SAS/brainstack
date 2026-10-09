@@ -255,6 +255,17 @@ export interface ThreadField {
   around(ids: readonly string[], hops: 1 | 2, max: number): ThreadKey[];
   /** Which way is up at a point: the Sentinel floats above its threads along it. */
   up(p: Vec3, out: Vec3): void;
+  /**
+   * A thread's length as drawn, world units. A field whose threads are not the
+   * brain's gentle curve — pipes with elbows, arcs, bridges — says how long
+   * they are; without it a walk measures the brain's curve.
+   */
+  length?(key: ThreadKey): number;
+  /**
+   * Threads drawn within `r` of `q`, nearest first, at most `max`: what lies at
+   * hand, whatever the links say. Without it, grips search around the walk.
+   */
+  nearby?(q: Vec3, r: number, max: number): ThreadKey[];
 }
 
 /** A note is shown once it has appeared this far; the scene hides threads below it. */

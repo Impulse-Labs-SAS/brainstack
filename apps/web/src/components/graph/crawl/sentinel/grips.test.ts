@@ -11,6 +11,7 @@ import {
 import { findWalk } from '../crawl-plan';
 import type { Hold } from '../replay-view';
 import { sampleVault } from '../sample-vault';
+import { polylineThreadField } from '../space/polyline-field';
 import {
   graphThreadField,
   segmentLength,
@@ -252,6 +253,222 @@ describe('planWalkGrips', () => {
         lit: new Set(),
         held: none,
       });
+    expect(plan()).toEqual(plan());
+  });
+});
+
+/**
+ * A field of pipes: notes by name, and lines from one note to another through
+ * the corners given, whichever way round the key names them.
+ */
+function pipes(
+  notes: ReadonlyArray<[string, Vec3]>,
+  lines: ReadonlyArray<[string, string, Vec3[]]>,
+) {
+  const nodes = new Map(notes.map(([name, p]) => [id(name), p]));
+  const routes = new Map<ThreadKey, Float32Array>();
+  const adjacency = new Map<string, ThreadKey[]>();
+  for (const [a, b, corners] of lines) {
+    const k = key(a, b);
+    const points = [nodes.get(id(a))!, ...corners, nodes.get(id(b))!];
+    if (threadEnds(k)[0] !== id(a)) points.reverse();
+    routes.set(k, Float32Array.from(points.flat()));
+    for (const end of [id(a), id(b)]) adjacency.set(end, [...(adjacency.get(end) ?? []), k]);
+  }
+  return polylineThreadField({ nodes, routes, adjacency, cell: UNIT });
+}
+
+/** A walk along the spine `s0` → `s{n}` of a field, each stretch as long as the field draws it. */
+function spineLeg(field: ReturnType<typeof pipes>, n: number) {
+  const leg: LegStretch[] = [];
+  for (let k = 0; k < n; k++) {
+    const thread = key(`s${k}`, `s${k + 1}`);
+    leg.push({
+      fromId: id(`s${k}`),
+      toId: id(`s${k + 1}`),
+      key: thread,
+      length: field.length(thread),
+    });
+  }
+  return { leg, total: leg.reduce((s, x) => s + x.length, 0) };
+}
+
+/**
+ * The ladder as a space draws it, in pipes with elbows: the spine jogs from
+ * side to side, each stretch of it an L — along z, then across — and the
+ * rails and rungs that run beside it are Ls too.
+ */
+function pipeLadder(length = 12) {
+  const notes: Array<[string, Vec3]> = [];
+  const lines: Array<[string, string, Vec3[]]> = [];
+  const jog = (k: number) => (k % 2 === 0 ? 0 : 0.3 * UNIT);
+  const low = -0.1 * UNIT;
+  const side = 0.8 * UNIT;
+  for (let k = 0; k <= length; k++) {
+    const x = jog(k);
+    const z = k * UNIT;
+    notes.push([`s${k}`, [x, 0, z]], [`l${k}`, [x - side, low, z]], [`r${k}`, [x + side, low, z]]);
+    // Rungs: down, then out to the rail.
+    lines.push([`s${k}`, `l${k}`, [[x, low, z]]], [`s${k}`, `r${k}`, [[x, low, z]]]);
+    if (k === 0) continue;
+    const px = jog(k - 1);
+    lines.push(
+      [`s${k - 1}`, `s${k}`, [[px, 0, z]]],
+      [`l${k - 1}`, `l${k}`, [[px - side, low, z]]],
+      [`r${k - 1}`, `r${k}`, [[px + side, low, z]]],
+    );
+  }
+  const field = pipes(notes, lines);
+  return { field, ...spineLeg(field, length) };
+}
+
+/** Which stretch of a leg `s` falls on. */
+function stretchOf(leg: readonly LegStretch[], s: number): LegStretch {
+  let d = s;
+  let k = 0;
+  while (k < leg.length - 1 && d > leg[k]!.length) d -= leg[k++]!.length;
+  return leg[k]!;
+}
+
+describe('planWalkGrips over pipes', () => {
+  it('grips pipes with elbows within reach, the sides taking turns, never the one it walks', () => {
+    const { field, leg, total } = pipeLadder();
+    const events = planWalkGrips({ leg, total, field, unit: UNIT, lit: new Set(), held: none });
+    const grips = events.filter((e) => e.key !== null);
+    expect(grips.length).toBeGreaterThan(10);
+    // Each event position is one side's turn, and the sides alternate.
+    const step = total / Math.round(total / ((DEFAULT_GRIP.holdSpan * UNIT) / GRIP_SLOTS.length));
+    const turn = (e: GripEvent) => Math.round(e.s / step - 0.5) % 2;
+    const sideOnTurn = new Map<number, number>();
+    for (const e of grips) {
+      expect(sideOf(e.slot)).toBe(sideOnTurn.get(turn(e)) ?? sideOf(e.slot));
+      sideOnTurn.set(turn(e), sideOf(e.slot));
+    }
+    expect(new Set(sideOnTurn.values())).toEqual(new Set([-1, 1]));
+    for (const e of grips) {
+      expect(e.key).not.toBe(stretchOf(leg, e.s).key);
+      const p: Vec3 = [0, 0, 0];
+      expect(field.point(e.key!, e.u, p)).toBe(true);
+      expect(e.u).toBeGreaterThanOrEqual(DEFAULT_GRIP.uMin - 1e-9);
+      expect(e.u).toBeLessThanOrEqual(DEFAULT_GRIP.uMax + 1e-9);
+      // Near where the walk is: the leg runs along z, 1.3 units of it to each unit of z.
+      expect(Math.abs(p[2] - (e.s / total) * leg.length * UNIT)).toBeLessThan(2 * UNIT);
+    }
+
+    // Holding the pipe it is about to walk, it lets go of it at once.
+    const held: (Hold | null)[] = [...none];
+    held[1] = { key: leg[0]!.key!, u: 0.3, since: 0 };
+    held[4] = { key: leg[0]!.key!, u: 0.4, since: 0 };
+    const first = planWalkGrips({ leg, total, field, unit: UNIT, lit: new Set(), held });
+    expect(holdsAfter(first, positions(first)[0]!, held)).not.toContain(leg[0]!.key);
+  });
+
+  it('keeps two pipes held on each side while walking, taking hold again on its next turn after an elbow', () => {
+    const { field, leg, total } = pipeLadder();
+    const events = planWalkGrips({ leg, total, field, unit: UNIT, lit: new Set(), held: none });
+    const count = Math.round(total / ((DEFAULT_GRIP.holdSpan * UNIT) / GRIP_SLOTS.length));
+    const at = (i: number) => ((i + 0.5) * total) / count;
+    const heldOn = (i: number, side: number) =>
+      holdsAfter(events, at(i)).filter((k, g) => k !== null && sideOf(g) === side).length;
+    let short = 0;
+    // From empty, each side needs two of its turns to take two grips.
+    for (let i = 4; i < count; i++) {
+      for (const side of [-1, 1]) {
+        const n = heldOn(i, side);
+        expect(n).toBeGreaterThanOrEqual(1);
+        if (n >= DEFAULT_GRIP.minPerSide) continue;
+        // Round one of the walk's own elbows the body turns on the spot, and
+        // what it held behind it is out of reach: the side's next turn — one
+        // of the next two events — makes it up.
+        short++;
+        const next = [i + 1, i + 2].filter((j) => j < count);
+        if (next.length === 2) {
+          expect(Math.max(...next.map((j) => heldOn(j, side)))).toBeGreaterThanOrEqual(
+            DEFAULT_GRIP.minPerSide,
+          );
+        }
+      }
+    }
+    // Rare: two dozen elbows on this walk, and a side falls short at one or two.
+    expect(short).toBeLessThanOrEqual(3);
+  });
+
+  it('takes hold of a pipe whose elbow comes near though its ends are far, linked to the walk or not', () => {
+    // A straight walk along z, and on its left a pipe it is not linked to:
+    // up from far below, along beside the walk, then on up far above. The
+    // middle of its line lies on its chord, so the chord says it is far from
+    // everywhere but the middle of the walk.
+    const x = -0.75 * UNIT;
+    const y = -0.3 * UNIT;
+    const notes: Array<[string, Vec3]> = [
+      ['za', [x, y - 6 * UNIT, UNIT]],
+      ['zb', [x, y + 6 * UNIT, 5 * UNIT]],
+    ];
+    const lines: Array<[string, string, Vec3[]]> = [
+      [
+        'za',
+        'zb',
+        [
+          [x, y, UNIT],
+          [x, y, 5 * UNIT],
+        ],
+      ],
+    ];
+    for (let k = 0; k <= 6; k++) {
+      notes.push([`s${k}`, [0, 0, k * UNIT]]);
+      if (k > 0) lines.push([`s${k - 1}`, `s${k}`, []]);
+    }
+    const field = pipes(notes, lines);
+    const { leg, total } = spineLeg(field, 6);
+    const elbowed = key('za', 'zb');
+    /** Where along z each grip on the elbowed pipe lands. */
+    const gripsOnIt = (f: ThreadField) =>
+      planWalkGrips({ leg, total, field: f, unit: UNIT, lit: new Set(), held: none })
+        .filter((e) => e.key === elbowed)
+        .map((e) => {
+          const p: Vec3 = [0, 0, 0];
+          field.point(elbowed, e.u, p);
+          return p[2];
+        });
+
+    const near = gripsOnIt(field);
+    expect(near.length).toBeGreaterThan(0);
+    // Taken by its elbow, where the walk first comes alongside it.
+    expect(Math.min(...near)).toBeLessThan(1.8 * UNIT);
+
+    // The same pipes without `nearby`, every one of them a candidate: the
+    // chord test lets the pipe be held only around its middle.
+    const chordOnly: ThreadField = {
+      has: (k) => field.has(k),
+      point: (k, u, out) => field.point(k, u, out),
+      closest: (k, q, uMin, uMax) => field.closest(k, q, uMin, uMax),
+      node: (n, out) => field.node(n, out),
+      around: () => [elbowed, ...leg.map((s) => s.key!)],
+      up: (p, out) => field.up(p, out),
+    };
+    for (const z of gripsOnIt(chordOnly)) expect(z).toBeGreaterThan(1.8 * UNIT);
+  });
+
+  it('plans a forty-unit leg through pipes in well under two milliseconds', () => {
+    const { field, leg, total } = pipeLadder(31);
+    expect(total).toBeGreaterThan(40 * UNIT);
+    const plan = () => planWalkGrips({ leg, total, field, unit: UNIT, lit: new Set(), held: none });
+    // Warmed up, as it is a few legs into a crawl: about a millisecond then.
+    // The fastest of a few runs is what planning costs; a busy test machine
+    // slows the others, so it keeps timing until one run fits, up to two hundred.
+    for (let i = 0; i < 60; i++) plan();
+    let fastest = Infinity;
+    for (let i = 0; i < 200 && fastest >= 2; i++) {
+      const t0 = performance.now();
+      plan();
+      fastest = Math.min(fastest, performance.now() - t0);
+    }
+    expect(fastest).toBeLessThan(2);
+  });
+
+  it('plans the same grips for the same walk', () => {
+    const { field, leg, total } = pipeLadder();
+    const plan = () => planWalkGrips({ leg, total, field, unit: UNIT, lit: new Set(), held: none });
     expect(plan()).toEqual(plan());
   });
 });
