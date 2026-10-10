@@ -1,7 +1,8 @@
 'use client';
 
-// The prompt at the centre of Crawl: one line to ask the brain something, a
-// send button, and under it, discreetly, the last few crawls to watch again.
+// The prompt at the centre of the Sentinel view: one line to ask the brain
+// something, a send button, and under it, discreetly, the last few searches to
+// watch again.
 // The Sentinel clings to the frame round this box, drawn in the stage below
 // it, so the box is measured from outside (`boxRef`) and the frame is fitted
 // to its rectangle every frame it shows. That is why the box itself is never
@@ -30,13 +31,18 @@
 // the box and on the recents, never on the root.
 //
 // Whoever drives it says when it takes text (`interactive`) and when it should
-// take focus again (`focusKey`, bumped on every return): while the scene runs
-// its transition the whole of it is inert. It is hidden from everyone only once
-// its level reaches 0 (`--crawl-prompt-visibility`, set by the stage), never the
-// instant the scene turns away, or the fade out would be cut.
+// take focus again (`focusKey`, bumped on every return; 0 asks for nothing, so
+// a driver can let a return pass without taking focus from wherever the person
+// put it): while the scene runs its transition the whole of it is inert. It is
+// hidden from everyone only once its level reaches 0
+// (`--crawl-prompt-visibility`, set by the stage), never the instant the scene
+// turns away, or the fade out would be cut.
+//
+// A send that fails says so in a line under the box (`error`), above the
+// recents, in the same block under the frame, so they move down to make room.
 //
 // It takes its recents and callbacks as props, and knows nothing of what plays
-// them: the lab hands it the sample crawls, Crawl its own history.
+// them: the lab hands it the sample crawls, the Sentinel view its own history.
 
 import { ArrowUp } from 'lucide-react';
 import {
@@ -60,12 +66,14 @@ export interface CrawlPromptProps {
   shown: boolean;
   /** It takes text and a send: false while a transition runs, or in the crawl. */
   interactive: boolean;
-  /** Changes each time the input should take focus — every return to the prompt — and empties it. */
+  /** Changes each time the input should take focus — every return to the prompt — and empties it. 0 asks for nothing. */
   focusKey: number;
   onSubmit(text: string): void;
   onRecent(id: string): void;
-  /** A send is on its way (Crawl: the gather): the button waits. */
+  /** A send is on its way (the Sentinel view: the gather): the button waits. */
   pending?: boolean;
+  /** Why the last send or recent failed, said under the box; null or absent when nothing did. */
+  error?: string | null;
 }
 
 /**
@@ -100,11 +108,12 @@ export function CrawlPrompt({
   onSubmit,
   onRecent,
   pending = false,
+  error = null,
 }: CrawlPromptProps) {
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
-  /** The last focus request answered: a change of `interactive` alone takes no focus. */
-  const answered = useRef<number | null>(null);
+  /** The last focus request answered: a change of `interactive` alone takes no focus, nor does key 0. */
+  const answered = useRef(0);
   const recentLabel = useId();
 
   // After `inert` is gone, or the focus would not take.
@@ -179,7 +188,7 @@ export function CrawlPrompt({
         </div>
 
         {/* Below the box and its frame, out of its flow, so the box itself stays centred; no taller than the room left under it. */}
-        {recents.length > 0 && (
+        {(recents.length > 0 || error) && (
           <div
             className="absolute inset-x-0 top-full grid content-start gap-1 overflow-y-auto px-1 pb-1"
             style={{
@@ -188,37 +197,48 @@ export function CrawlPrompt({
               maxHeight: RECENTS_ROOM,
             }}
           >
-            <span
-              id={recentLabel}
-              className="px-1.5 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted"
-            >
-              Recent
-            </span>
-            <ul aria-labelledby={recentLabel} className="grid gap-px">
-              {recents.map((r) => (
-                <li key={r.id} className="min-w-0">
-                  <Button
-                    onPress={() => onRecent(r.id)}
-                    className={`flex w-full min-w-0 items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-[12.5px] text-fg-secondary hover:text-fg-primary ${FOCUS_RING}`}
-                  >
-                    <span className="min-w-0 truncate">{r.prompt}</span>
-                    <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">{r.meta}</span>
-                    {r.fresh && (
-                      <>
-                        <span
-                          aria-hidden
-                          className="shrink-0 rounded-full bg-accent/15 px-1.5 font-mono text-[10px] leading-4 text-accent"
-                        >
-                          new
+            {error && (
+              <p role="alert" className="px-1.5 pb-1 text-[12px] leading-4 text-danger">
+                {error}
+              </p>
+            )}
+            {recents.length > 0 && (
+              <>
+                <span
+                  id={recentLabel}
+                  className="px-1.5 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted"
+                >
+                  Recent
+                </span>
+                <ul aria-labelledby={recentLabel} className="grid gap-px">
+                  {recents.map((r) => (
+                    <li key={r.id} className="min-w-0">
+                      <Button
+                        onPress={() => onRecent(r.id)}
+                        className={`flex w-full min-w-0 items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-[12.5px] text-fg-secondary hover:text-fg-primary ${FOCUS_RING}`}
+                      >
+                        <span className="min-w-0 truncate">{r.prompt}</span>
+                        <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">
+                          {r.meta}
                         </span>
-                        {/* In the button's own name: a label on a span inside it would be ignored. */}
-                        <span className="sr-only">, new, not watched yet</span>
-                      </>
-                    )}
-                  </Button>
-                </li>
-              ))}
-            </ul>
+                        {r.fresh && (
+                          <>
+                            <span
+                              aria-hidden
+                              className="shrink-0 rounded-full bg-accent/15 px-1.5 font-mono text-[10px] leading-4 text-accent"
+                            >
+                              new
+                            </span>
+                            {/* In the button's own name: a label on a span inside it would be ignored. */}
+                            <span className="sr-only">, new, not watched yet</span>
+                          </>
+                        )}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
           </div>
         )}
       </form>

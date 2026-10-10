@@ -1,27 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ago, madeBy, newAssistantCrawl, type RecentCrawl } from './crawl-history';
-
-const crawl = (id: string, createdAt: number, source: RecentCrawl['source']): RecentCrawl => ({
-  id,
-  createdAt,
-  source,
-  client: null,
-  prompt: id,
-  notes: 1,
-});
-
-describe('newAssistantCrawl', () => {
-  it('picks the newest crawl an assistant made that the view has not seen', () => {
-    const items = [crawl('c', 3, 'web'), crawl('b', 2, 'assistant'), crawl('a', 1, 'assistant')];
-    expect(newAssistantCrawl(items, new Set(['a']))?.id).toBe('b');
-  });
-
-  it('leaves crawls made by hand, and seen ones, alone', () => {
-    const items = [crawl('c', 3, 'web'), crawl('b', 2, 'assistant')];
-    expect(newAssistantCrawl(items, new Set(['b']))).toBeNull();
-  });
-});
+import { ago, madeBy } from './crawl-history';
 
 describe('ago', () => {
   const now = 1_000_000_000;

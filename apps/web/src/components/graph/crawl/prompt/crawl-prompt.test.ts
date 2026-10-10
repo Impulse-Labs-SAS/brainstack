@@ -3,7 +3,7 @@ import { createElement, createRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { CrawlPrompt } from './crawl-prompt';
+import { CrawlPrompt, type CrawlPromptProps } from './crawl-prompt';
 import type { PromptRecent } from './recents';
 
 // The app compiles its JSX itself (tsconfig's `jsx: preserve`); under Vitest
@@ -17,7 +17,7 @@ const RECENT: PromptRecent = {
   fresh: false,
 };
 
-function render(recents: readonly PromptRecent[]): string {
+function render(recents: readonly PromptRecent[], more: Partial<CrawlPromptProps> = {}): string {
   return renderToStaticMarkup(
     createElement(CrawlPrompt, {
       boxRef: createRef<HTMLDivElement>(),
@@ -27,6 +27,7 @@ function render(recents: readonly PromptRecent[]): string {
       focusKey: 0,
       onSubmit: () => {},
       onRecent: () => {},
+      ...more,
     }),
   );
 }
@@ -71,5 +72,29 @@ describe('CrawlPrompt', () => {
     const html = render([]);
     expect(html).not.toContain('top-full');
     expect(html).not.toContain('--crawl-frame-below');
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it('says why a send failed under the box, above the recents, in the same block under the frame', () => {
+    const html = render([RECENT], { error: 'That search is no longer kept.' });
+    const block = html.slice(html.indexOf(tagWith(html, 'top-full')));
+    const alert = tagWith(block, 'text-danger');
+    expect(alert).toContain('role="alert"');
+    // Inside the block that starts under the frame, and before the recents it pushes down.
+    expect(block.indexOf(alert)).toBeLessThan(block.indexOf('Recent'));
+    expect(block).toContain('That search is no longer kept.');
+    // Not inside the box the frame is fitted to: its height stays the layout's.
+    const box = html.slice(
+      html.indexOf(tagWith(html, 'h-14')),
+      html.indexOf(tagWith(html, 'top-full')),
+    );
+    expect(box).not.toContain('role="alert"');
+    // Without recents the block is there for the error alone.
+    const alone = render([], { error: 'Something failed.' });
+    expect(tagWith(alone, 'top-full')).toContain(
+      'margin-top:calc(var(--crawl-frame-below, 0px) + 1rem)',
+    );
+    expect(alone).toContain('role="alert"');
+    expect(alone).not.toContain('Recent');
   });
 });

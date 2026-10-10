@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { ago, type RecentCrawl } from '../crawl-history';
 
-import { RECENT_MOST, promptRecents } from './recents';
+import {
+  RECENT_MOST,
+  SEEN_MOST,
+  addSeen,
+  promptRecents,
+  readSeen,
+  writeSeen,
+  type SeenStore,
+} from './recents';
 
 const NOW = 1_700_000_000_000;
 const MIN = 60_000;
@@ -58,5 +66,57 @@ describe('promptRecents', () => {
     expect(b!.meta).toBe('You · now · 1 note');
     expect(c!.meta).toBe(`Assistant · ${ago(NOW - 200 * MIN, NOW)} · 0 notes`);
     expect(a!.prompt).toBe('What about a?');
+  });
+});
+
+describe('the ids played in this browser', () => {
+  const memory = (): SeenStore & { map: Map<string, string> } => {
+    const map = new Map<string, string>();
+    return { map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => void map.set(k, v) };
+  };
+
+  it('come back as they were written, so a mark goes for good once played', () => {
+    const store = memory();
+    const seen = readSeen(store);
+    expect(seen.size).toBe(0);
+    addSeen(seen, 'theirs');
+    writeSeen(store, seen);
+    const items = [crawl('theirs', 2, { source: 'assistant', client: 'Claude' })];
+    expect(promptRecents(items, readSeen(store), NOW)[0]!.fresh).toBe(false);
+    expect(promptRecents(items, readSeen(memory()), NOW)[0]!.fresh).toBe(true);
+  });
+
+  it('keep the newest at most, a replayed id moved to the newest end', () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < SEEN_MOST + 5; i++) addSeen(seen, `c${i}`);
+    expect(seen.size).toBe(SEEN_MOST);
+    expect(seen.has('c0')).toBe(false);
+    expect(seen.has(`c${SEEN_MOST + 4}`)).toBe(true);
+    addSeen(seen, 'c5');
+    addSeen(seen, 'new');
+    expect(seen.has('c5')).toBe(true);
+    expect(seen.has('c6')).toBe(false);
+    expect([...seen].slice(-2)).toEqual(['c5', 'new']);
+  });
+
+  it('start empty from a store that throws or holds something else, and never throw', () => {
+    const throwing: SeenStore = {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+      setItem: () => {
+        throw new Error('blocked');
+      },
+    };
+    expect(readSeen(throwing).size).toBe(0);
+    expect(readSeen(null).size).toBe(0);
+    expect(() => writeSeen(throwing, new Set(['a']))).not.toThrow();
+    const odd = memory();
+    odd.map.set('brainstack.graph.sentinel.seen', '{"a":1}');
+    expect(readSeen(odd).size).toBe(0);
+    odd.map.set('brainstack.graph.sentinel.seen', '["a",2,null,"b"]');
+    expect([...readSeen(odd)]).toEqual(['a', 'b']);
+    odd.map.set('brainstack.graph.sentinel.seen', 'not json');
+    expect(readSeen(odd).size).toBe(0);
   });
 });
