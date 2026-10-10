@@ -4,8 +4,9 @@
 // answering its own question — Brain (3D, inside a brain), Network (how it
 // connects) and Territories (what there is and where it is filed) — and one
 // behaviour across all of them: a click brings the camera to a note and opens
-// its preview without leaving the graph. A fourth tab, the Sentinel, opens by
-// default: what the brain hands an assistant, walked before your eyes.
+// its preview without leaving the graph. One more tab, the Sentinel, comes
+// first and opens by default: what the brain hands an assistant, walked before
+// your eyes.
 //
 // The heavy lifting lives outside React: graph-controller runs the loop,
 // graph-engine the layout, graph-scene the WebGL, graph-overlay the text.
@@ -406,9 +407,10 @@ export function GraphView({
     const t = e.target as HTMLElement;
     // Popovers render through a portal but their key events still bubble here.
     if (/^(INPUT|TEXTAREA)$/.test(t.tagName) || t.closest('[role=dialog]')) return;
+    // The keys follow the tabs: the Sentinel first, then the three layouts.
     const index = ['1', '2', '3', '4'].indexOf(e.key);
     if (index >= 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      choose(index === 3 ? 'sentinel' : GRAPH_VIEWS[index]!);
+      choose(index === 0 ? 'sentinel' : GRAPH_VIEWS[index - 1]!);
       e.preventDefault();
       return;
     }
@@ -470,6 +472,18 @@ export function GraphView({
           }}
           className={cn(GLASS, 'pointer-events-auto flex gap-0.5 rounded-lg p-[3px]')}
         >
+          <ToggleButton
+            id="sentinel"
+            isDisabled={!webgl}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
+              'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
+              'selected:bg-bg-elevated selected:text-fg-primary selected:shadow-[inset_0_0_0_1px_var(--border-strong)]',
+            )}
+          >
+            <ScanEye size={14} aria-hidden />
+            Sentinel
+          </ToggleButton>
           {VIEWS.map((v) => (
             <ToggleButton
               key={v.id}
@@ -485,18 +499,6 @@ export function GraphView({
               {v.label}
             </ToggleButton>
           ))}
-          <ToggleButton
-            id="sentinel"
-            isDisabled={!webgl}
-            className={cn(
-              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
-              'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
-              'selected:bg-bg-elevated selected:text-fg-primary selected:shadow-[inset_0_0_0_1px_var(--border-strong)]',
-            )}
-          >
-            <ScanEye size={14} aria-hidden />
-            Sentinel
-          </ToggleButton>
         </ToggleButtonGroup>
 
         {/* The brain's own tools: the Sentinel keeps the layers, the views, zoom and Fit. */}

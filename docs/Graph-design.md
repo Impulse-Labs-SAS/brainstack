@@ -8,15 +8,16 @@ shows, how it behaves, how it is built, and the decisions worth not undoing.
 Two independent choices, kept apart on purpose.
 
 **A view is the shape of the map, and each one answers its own question.** A segmented
-control in the toolbar, each tab an icon and a name; the keys `1` to `4` switch views too,
-without a number printed on the tabs to say so:
+control in the toolbar, each tab an icon and a name. The Sentinel's tab comes first, since it is
+the view `/graph` opens on. The keys `1` to `4` switch views too, in the tabs' order, without a
+number printed on the tabs to say so:
 
 | View        | Question                              | Shape                                                                                                                                                                    |
 | ----------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Sentinel    | What did the vault give an assistant? | The dormant network: a cluster of your notes, dark until the Sentinel wakes it, walked as it replays a `gather_context` search (see [Sentinel](#sentinel)). Needs WebGL. |
 | Brain       | —                                     | 3D. Notes live inside a brain; each visible vault settles in its own lobe, yours in the frontal one.                                                                     |
 | Network     | How does it connect?                  | Flat. Links alone decide where notes sit.                                                                                                                                |
 | Territories | What is there, and where is it filed? | Flat. A map: each project a country, each vault a continent. Links move nothing.                                                                                         |
-| Sentinel    | What did the vault give an assistant? | The dormant network: a cluster of your notes, dark until the Sentinel wakes it, walked as it replays a `gather_context` search (see [Sentinel](#sentinel)). Needs WebGL. |
 
 Network and Territories used to be one layout with a pull per vault on top, so with a single
 vault — anyone who uses BrainStack alone — they were the same picture. They are now built on
