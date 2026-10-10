@@ -1,4 +1,9 @@
-# BrainStack
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/brainstack-horizontal-dark.svg">
+    <img alt="BrainStack" src="docs/brand/brainstack-horizontal-light.svg" height="48">
+  </picture>
+</h1>
 
 > Shared second brain for humans and AI assistants. Self-hostable. MCP-native.
 
@@ -124,6 +129,16 @@ Start with [CLAUDE.md](CLAUDE.md). It holds the stack, the workspaces, and the n
 ## License
 
 BrainStack is copyright Impulse Labs SAS. It is free software, released under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). You can use it, modify it and self-host it, for yourself or for your company, commercially or not. If you run a modified version as a service for other people, you must offer them its source code under the same license.
+
+### Name and logo
+
+The AGPL covers the code, not the brand. The BrainStack name and logo are trademarks of Impulse Labs SAS and are not licensed under the AGPL. That covers the files in [`docs/brand/`](docs/brand/), the icons in `apps/web/src/app/` (`favicon.ico`, `icon.svg`, `apple-icon.png`) and the logo drawn in `apps/web/src/components/ui/brand.tsx`.
+
+- You may use the name to refer to the project, say that your work is based on BrainStack, or link to it.
+- You may run BrainStack unmodified, logo included, for yourself or your company.
+- If you distribute a modified version, or offer one as a service, give it another name and replace the logo. It must not look like the official project or an Impulse Labs product.
+
+For anything else, ask us first.
 
 ## Contributing
 
