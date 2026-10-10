@@ -118,16 +118,35 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
 - **The camera** follows the walk until the user drags, zooms or clicks; _Follow the Sentinel_
   re-attaches it, and Fit shows the whole cluster and stops following. At the prompt the scene
   holds the camera still: drags, the wheel, `+`/`−` and Fit change nothing there.
-- **The side panel** keeps everything it had before the prompt: its own field, Pause, Replay and
-  Follow, the Sentinel switch, the recent searches, and what was found, left to ask, handed over
-  (the Response) and walked (the Log).
+- **The side panel** (`crawl-panel.tsx`, `panel/`) is there for one thing: a prompt to paste into an
+  assistant or an IDE, with the notes that answer the question (`brief.ts`). **Copy prompt** stays
+  in reach — at the foot of the column, on the low row of the phone's sheet — and works from the
+  first moment: the walk replays an answer that has already come. Two formats, remembered per
+  browser (`brainstack.graph.sentinel.brief`): _References_ lists the notes by path (with the
+  `ownerId` of a shared one) for an assistant connected to BrainStack, which opens them with
+  `get_note`; _Full text_ carries each note's body, so it works pasted anywhere — the excerpts of a
+  search run here, or, for a search from the history or a note added by hand, bodies read with
+  `notes.get` and cut to the engine's own budget. Three tabs. **Context** lists the notes by folder
+  as the walk reaches them (`reached` in the snapshot), each ticked in or out of the prompt; a
+  reference the text left ambiguous is settled there by picking the note meant, and one left open
+  goes into the prompt as a question for the assistant to ask; what the budget left out can be put
+  back (`answer.ts`). Pointing at a note rings it on the stage. **Prompt** shows the text exactly as
+  it is copied. **Activity** holds the walk's counts, its log and the raw answer an assistant
+  receives over MCP. The question is edited in place to search again; the recent searches sit
+  behind the clock, the Sentinel switch behind the dots. Pause, Replay, Skip to the end and Follow
+  ride on a bar over the stage: they play the replay, not the search.
+- **On a phone** the panel is a sheet from the bottom with three heights. It comes in low — the
+  walk's state and Copy prompt — leaving the stage to the walk, and rises only when the person
+  drags or taps its handle, never on its own, not even when the walk ends. On a wide screen the
+  column folds to a strip.
 - **The Sentinel switch** (`brainstack.graph.sentinel`, per browser): off, the cluster still
   wakes, lit by a stand-in eye that rides the walk, and no creature is drawn. The spider switch's
   old choice (`brainstack.graph.spider`) carries over once: off stays off.
 - **Recent searches.** Every `gather_context` call — an assistant's over MCP or one tried here —
   is kept per user in `crawl_history` (`CrawlHistoryService`): the start of the prompt and the
-  replay (paths, titles, `via`), never the excerpts. The view polls `crawls.list` every few
-  seconds, so an assistant's search shows up under the prompt without a reload, marked **new**
+  replay (paths, titles, `via`), and the notes the budget left out, never the excerpts. The view
+  polls `crawls.list` every few seconds, so an assistant's search shows up under the prompt and
+  behind the panel's clock without a reload, marked **new**
   until it is played in this browser. It never plays by itself: what to watch is the person's
   call. Pruned on every write, by age (`CRAWL_HISTORY_DAYS`, default 30, 0 = off) and to the
   newest 50 per user. Only the user who searched lists them; a folder share never reaches them.
@@ -153,7 +172,8 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
   Territories never download them (`crawl/lazy-imports.test.ts`). Until the stage has built the
   cluster and compiled its shaders — half a second to a couple — the brain shows under an inert
   prompt; then the stage fades in. In the Sentinel the brain's own tools are hidden (search,
-  filters, Replay growth, the angles and Spin); zoom, Fit, the layers and the views stay.
+  filters, Replay growth, the angles and Spin), and in its walk the legend too, whose colours the
+  panel counts; zoom, Fit, the layers and the views stay.
 - **Quality.** One governor per stage starts from what the GPU says it can do and from the last
   tier that held, steps down when frames at rest slip, and remembers where it ended. It times
   the Sentinel alone, never the cluster or the brain's layout settling.
@@ -227,7 +247,10 @@ of `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` 
 | `components/graph/crawl/crawl-replay.ts`         | Pure: the replay — where the walk is, what it lit and found, what each of the Sentinel's grips holds — over the brain or a space. Tested.                    |
 | `components/graph/crawl/crawl-draw.ts`           | The 2D part: labels over the stage; threads, halos and the point of light of the trail. Tested.                                                              |
 | `components/graph/crawl/crawl-plugin.ts`         | The Sentinel view's `GraphPlugin`: the replay, the prompt scene, the stage or the trail, the camera between them. Tested with a fake stage.                  |
-| `components/graph/crawl/crawl-panel.tsx`         | React chrome for the Sentinel: the prompt and its recents; the side panel with its own field, the Sentinel switch, recent searches, what was found.          |
+| `components/graph/crawl/crawl-panel.tsx`         | React chrome for the Sentinel: the prompt and its recents; the side panel — a column, or a sheet on a phone — and the replay's controls over the stage.       |
+| `components/graph/crawl/panel/`                  | The panel's parts: its head, the Context, Prompt and Activity tabs, the phone's sheet, the replay bar, copying, and the bodies a full-text prompt reads.      |
+| `components/graph/crawl/brief.ts`                | Pure: the prompt the panel copies, by reference or in full text. Tested.                                                                                     |
+| `components/graph/crawl/answer.ts`               | Pure: a search as the panel reads it, what the person kept, settled and put back, and what the prompt carries from that. Tested.                            |
 | `components/graph/crawl/crawl-history.ts`        | Pure: how a recent search's age and author read. Tested.                                                                                                     |
 | `components/graph/crawl/prompt/`                 | The prompt scene: the frame round the input, the Sentinel's perch on it, the way into the walk and back, the recents. Pure but for the React prompt. Tested. |
 | `components/graph/crawl/stage/sentinel-stage.ts` | The stage: its renderer, the dormant network, the creature, the frame's bezel, the quality governor. Loaded only in the view.                                |
