@@ -81,7 +81,13 @@ export interface GraphLayers {
   /** Territories: every link drawn faintly over the map, not only the routes of what you point at. */
   routes: boolean;
 }
-export const DEFAULT_LAYERS: GraphLayers = { hiddenVaults: [], affinity: true, indexes: true, topics: false, routes: false };
+export const DEFAULT_LAYERS: GraphLayers = {
+  hiddenVaults: [],
+  affinity: true,
+  indexes: true,
+  topics: false,
+  routes: false,
+};
 
 export interface GraphNode {
   id: string;
@@ -211,7 +217,8 @@ export function shortLabel(title: string, projectLabel: string | null): string {
     const at = title.lastIndexOf(sep);
     if (at <= 0) continue;
     const tail = fold(title.slice(at + sep.length)).trim();
-    if (tail && project && (project.includes(tail) || tail.includes(project))) return title.slice(0, at);
+    if (tail && project && (project.includes(tail) || tail.includes(project)))
+      return title.slice(0, at);
   }
   return title;
 }
@@ -247,7 +254,9 @@ export function isActive(updatedAt: number, now: number): boolean {
   return now - updatedAt <= 7 * DAY_MS;
 }
 
-export function nodeRadius(node: Pick<GraphNode, 'kind' | 'isIndex' | 'size' | 'carriers'>): number {
+export function nodeRadius(
+  node: Pick<GraphNode, 'kind' | 'isIndex' | 'size' | 'carriers'>,
+): number {
   if (node.kind === 'topic') return 3 + Math.sqrt(node.carriers) * 0.9;
   return (node.isIndex ? 3.2 : 2.4) + Math.sqrt(node.size) * 1.55;
 }
@@ -318,11 +327,19 @@ const folderName = (path: string) => path.split('/').filter(Boolean).pop() ?? pa
  * file tree does, with the person beside them. One person may share several.
  */
 export function sharedVaultNames(
-  roots: readonly { ownerId: string; folderPath: string; ownerDisplayName: string | null; ownerEmail: string }[],
+  roots: readonly {
+    ownerId: string;
+    folderPath: string;
+    ownerDisplayName: string | null;
+    ownerEmail: string;
+  }[],
 ): Map<string, SharedVaultName> {
   const byOwner = new Map<string, { folders: Set<string>; owner: string }>();
   for (const r of roots) {
-    const entry = byOwner.get(r.ownerId) ?? { folders: new Set<string>(), owner: r.ownerDisplayName ?? r.ownerEmail.split('@')[0] ?? r.ownerEmail };
+    const entry = byOwner.get(r.ownerId) ?? {
+      folders: new Set<string>(),
+      owner: r.ownerDisplayName ?? r.ownerEmail.split('@')[0] ?? r.ownerEmail,
+    };
     entry.folders.add(folderName(r.folderPath));
     byOwner.set(r.ownerId, entry);
   }
@@ -352,19 +369,47 @@ export function summariseVaults(
   const hidden = new Set(hiddenVaults);
   const shared = [...totals.keys()]
     .filter((v) => v !== OWN_VAULT)
-    .map((id) => ({ id, label: vaultNames.get(id)?.label ?? 'Shared vault', owner: vaultNames.get(id)?.owner ?? null }))
-    .sort((a, b) => (a.owner ?? '').localeCompare(b.owner ?? '') || a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+    .map((id) => ({
+      id,
+      label: vaultNames.get(id)?.label ?? 'Shared vault',
+      owner: vaultNames.get(id)?.owner ?? null,
+    }))
+    .sort(
+      (a, b) =>
+        (a.owner ?? '').localeCompare(b.owner ?? '') ||
+        a.label.localeCompare(b.label) ||
+        a.id.localeCompare(b.id),
+    );
   const out: VaultSummary[] = [];
   if (totals.has(OWN_VAULT)) {
-    out.push({ id: OWN_VAULT, label: 'Your vault', owner: null, own: true, total: totals.get(OWN_VAULT)!, hidden: hidden.has(OWN_VAULT), color: OWN_VAULT_COLOR });
+    out.push({
+      id: OWN_VAULT,
+      label: 'Your vault',
+      owner: null,
+      own: true,
+      total: totals.get(OWN_VAULT)!,
+      hidden: hidden.has(OWN_VAULT),
+      color: OWN_VAULT_COLOR,
+    });
   }
   shared.forEach(({ id, label, owner }, i) => {
-    out.push({ id, label, owner, own: false, total: totals.get(id)!, hidden: hidden.has(id), color: SHARED_VAULT_COLORS[i] ?? OTHER_VAULT_COLOR });
+    out.push({
+      id,
+      label,
+      owner,
+      own: false,
+      total: totals.get(id)!,
+      hidden: hidden.has(id),
+      color: SHARED_VAULT_COLORS[i] ?? OTHER_VAULT_COLOR,
+    });
   });
   return out;
 }
 
-export function colorOf(model: Pick<GraphModel, 'vaults'>, node: Pick<GraphNode, 'kind' | 'vault'>): VaultColor {
+export function colorOf(
+  model: Pick<GraphModel, 'vaults'>,
+  node: Pick<GraphNode, 'kind' | 'vault'>,
+): VaultColor {
   if (node.kind === 'topic') return TOPIC_COLOR;
   return model.vaults.find((v) => v.id === node.vault)?.color ?? OTHER_VAULT_COLOR;
 }
@@ -470,7 +515,8 @@ export function buildGraphModel(input: {
       node.topics = [];
       node.carriers = carriers.length;
       map.set(node.id, node);
-      for (const c of carriers) out.push({ source: c, target: node, kind: 'topic', weight: 1, shared: [label] });
+      for (const c of carriers)
+        out.push({ source: c, target: node, kind: 'topic', weight: 1, shared: [label] });
     }
   }
 
@@ -496,7 +542,12 @@ export function buildGraphModel(input: {
     n.radius = nodeRadius(n);
     n.drawRadius = n.radius;
     if (!n.project) continue;
-    const group = projects.get(n.project.id) ?? { id: n.project.id, label: n.project.label, vault: n.vault, nodes: [] };
+    const group = projects.get(n.project.id) ?? {
+      id: n.project.id,
+      label: n.project.label,
+      vault: n.vault,
+      nodes: [],
+    };
     group.nodes.push(n);
     projects.set(n.project.id, group);
   }
@@ -519,7 +570,9 @@ export function buildGraphModel(input: {
  */
 export function noteHref(node: Pick<GraphNode, 'path' | 'foreign' | 'ownerId'>): string {
   const route = node.path.replace(/\.md$/i, '').split('/').map(encodeURIComponent).join('/');
-  return node.foreign && node.ownerId ? `/notes/shared/${encodeURIComponent(node.ownerId)}/${route}` : `/notes/${route}`;
+  return node.foreign && node.ownerId
+    ? `/notes/shared/${encodeURIComponent(node.ownerId)}/${route}`
+    : `/notes/${route}`;
 }
 
 /**
@@ -527,7 +580,12 @@ export function noteHref(node: Pick<GraphNode, 'path' | 'foreign' | 'ownerId'>):
  * for walking links with the arrow keys. Uses the last projected screen
  * positions; ignores neighbours more than ~70° off the direction.
  */
-export function neighbourToward(model: Pick<GraphModel, 'adjacency'>, from: GraphNode, dx: number, dy: number): GraphNode | null {
+export function neighbourToward(
+  model: Pick<GraphModel, 'adjacency'>,
+  from: GraphNode,
+  dx: number,
+  dy: number,
+): GraphNode | null {
   let best: GraphNode | null = null;
   let bestScore = 0.35;
   for (const { node } of model.adjacency.get(from) ?? []) {
@@ -544,7 +602,11 @@ export function neighbourToward(model: Pick<GraphModel, 'adjacency'>, from: Grap
 }
 
 /** Every node within `max` hops of `start`, with its distance. */
-export function hopsFrom(model: Pick<GraphModel, 'adjacency'>, start: GraphNode, max = 2): Map<GraphNode, number> {
+export function hopsFrom(
+  model: Pick<GraphModel, 'adjacency'>,
+  start: GraphNode,
+  max = 2,
+): Map<GraphNode, number> {
   const hops = new Map<GraphNode, number>([[start, 0]]);
   let frontier = [start];
   for (let h = 1; h <= max; h++) {
@@ -568,7 +630,12 @@ export interface GraphPath {
   implicit: boolean;
 }
 
-function breadthFirst(model: Pick<GraphModel, 'adjacency'>, a: GraphNode, b: GraphNode, kinds: ReadonlySet<EdgeKind> | null): GraphPath | null {
+function breadthFirst(
+  model: Pick<GraphModel, 'adjacency'>,
+  a: GraphNode,
+  b: GraphNode,
+  kinds: ReadonlySet<EdgeKind> | null,
+): GraphPath | null {
   const prev = new Map<GraphNode, { from: GraphNode; edge: GraphEdge } | null>([[a, null]]);
   const queue = [a];
   for (let i = 0; i < queue.length; i++) {
@@ -592,6 +659,13 @@ function breadthFirst(model: Pick<GraphModel, 'adjacency'>, a: GraphNode, b: Gra
 }
 
 /** The shortest path through what people wrote; failing that, through anything drawn. */
-export function findPath(model: Pick<GraphModel, 'adjacency'>, a: GraphNode, b: GraphNode): GraphPath | null {
-  return breadthFirst(model, a, b, new Set<EdgeKind>(['link', 'structure'])) ?? breadthFirst(model, a, b, null);
+export function findPath(
+  model: Pick<GraphModel, 'adjacency'>,
+  a: GraphNode,
+  b: GraphNode,
+): GraphPath | null {
+  return (
+    breadthFirst(model, a, b, new Set<EdgeKind>(['link', 'structure'])) ??
+    breadthFirst(model, a, b, null)
+  );
 }

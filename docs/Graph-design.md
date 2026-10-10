@@ -11,12 +11,12 @@ Two independent choices, kept apart on purpose.
 control in the toolbar, each tab an icon and a name; the keys `1` to `4` switch views too,
 without a number printed on the tabs to say so:
 
-| View | Question | Shape |
-|---|---|---|
-| Brain | — | 3D. Notes live inside a brain; each visible vault settles in its own lobe, yours in the frontal one. |
-| Network | How does it connect? | Flat. Links alone decide where notes sit. |
-| Territories | What is there, and where is it filed? | Flat. A map: each project a country, each vault a continent. Links move nothing. |
-| Crawl | What did the vault give an assistant? | The Brain, with a `gather_context` crawl replayed on it (see [Crawl](#crawl)). Needs WebGL. |
+| View        | Question                              | Shape                                                                                                |
+| ----------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Brain       | —                                     | 3D. Notes live inside a brain; each visible vault settles in its own lobe, yours in the frontal one. |
+| Network     | How does it connect?                  | Flat. Links alone decide where notes sit.                                                            |
+| Territories | What is there, and where is it filed? | Flat. A map: each project a country, each vault a continent. Links move nothing.                     |
+| Crawl       | What did the vault give an assistant? | The Brain, with a `gather_context` crawl replayed on it (see [Crawl](#crawl)). Needs WebGL.          |
 
 Network and Territories used to be one layout with a pull per vault on top, so with a single
 vault — anyone who uses BrainStack alone — they were the same picture. They are now built on
@@ -96,7 +96,7 @@ Removing that folder and the tab leaves the graph exactly as it was.
   Body and legs are computed in 3D and drawn by the 2D overlay, for the same reason labels are:
   WebGL lines are one pixel wide.
 - **Spider off** (a switch, remembered per browser) replays the same walk as a trail of light.
-- The camera follows the replay until the user drags, zooms or clicks; *Follow* re-attaches it.
+- The camera follows the replay until the user drags, zooms or clicks; _Follow_ re-attaches it.
 - With `prefers-reduced-motion` the replay jumps to its end state.
 - **Recent crawls.** Every `gather_context` call — an assistant's over MCP or one tried in the
   panel — is kept per user in `crawl_history` (`CrawlHistoryService`): the start of the prompt and
@@ -108,16 +108,16 @@ Removing that folder and the tab leaves the graph exactly as it was.
 
 ## Behaviour in every view
 
-| Gesture | Effect |
-|---|---|
-| Click a note | The camera flies to it and a preview opens beside the graph: path, dates, topics, connections. |
-| Double click, or `Enter` | Opens the note (a shared note opens under `/notes/shared/<owner>/…`). |
-| Shift+click two notes | The shortest path between them, with a pulse travelling along it. Links first; shared topics only when no link path exists, and the panel says so. |
-| Arrow keys | With a note selected, move to the neighbour in that direction on screen. |
-| `/` | Focus search. Matches light up; `Enter` flies to the best one. |
-| Hover | The note fires: its neighbours light up at one and two hops, with pulses along the edges. On the map, a country fires the same way along the routes that leave it. |
-| Zoom out | Semantic zoom: note labels give way to project names and clouds; on the map, to country names. |
-| Drag the background | Pans the flat views; turns the brain (Shift+drag pans it). |
+| Gesture                  | Effect                                                                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Click a note             | The camera flies to it and a preview opens beside the graph: path, dates, topics, connections.                                                                     |
+| Double click, or `Enter` | Opens the note (a shared note opens under `/notes/shared/<owner>/…`).                                                                                              |
+| Shift+click two notes    | The shortest path between them, with a pulse travelling along it. Links first; shared topics only when no link path exists, and the panel says so.                 |
+| Arrow keys               | With a note selected, move to the neighbour in that direction on screen.                                                                                           |
+| `/`                      | Focus search. Matches light up; `Enter` flies to the best one.                                                                                                     |
+| Hover                    | The note fires: its neighbours light up at one and two hops, with pulses along the edges. On the map, a country fires the same way along the routes that leave it. |
+| Zoom out                 | Semantic zoom: note labels give way to project names and clouds; on the map, to country names.                                                                     |
+| Drag the background      | Pans the flat views; turns the brain (Shift+drag pans it).                                                                                                         |
 
 The brain spins slowly until the user touches anything; side, top and front presets reorient
 it. With `prefers-reduced-motion`, nothing spins, pulses or fades in.
@@ -154,21 +154,21 @@ most of its length and then drop everything at once.
 All of it is client-side. The server adds `createdAt` and `updatedAt` to each node of
 `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` (`sharedVaultNames`).
 
-| File | Role |
-|---|---|
-| `lib/graph-model.ts` | Pure: nodes and edges from what the server sent, filtered by layers; vaults; paths and hops. Tested. |
-| `lib/graph-brain.ts` | Pure: the brain's distance field, its surface mesh and the container force. Tested. |
-| `lib/graph-camera.ts` | Pure: orbit camera, projection, fitting, zoom and pan. The overlay projects with the same maths three.js renders with. Tested. |
-| `lib/graph-map.ts` | Pure: Territories — where each note belongs on the map, and the land, coasts, borders and folder lines under the notes. Tested. |
-| `components/graph/graph-engine.ts` | The layout per view: a `d3-force-3d` simulation for Brain and Network, places on the map for Territories. Tested. |
-| `components/graph/graph-scene.ts` | three.js: notes, edges, nebulae and the brain mesh, additive blending on a flat background; the map's land, translucent, under them. |
-| `components/graph/graph-overlay.ts` | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap. |
-| `components/graph/graph-controller.ts` | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates. |
-| `components/graph/graph-view.tsx` | React chrome: toolbar, layers, preview, legend; preferences. |
-| `components/graph/crawl/crawl-plan.ts` | Pure: a `gather_context` answer turned into replay steps, and the walk along threads between two notes. Tested. |
-| `components/graph/crawl/crawl-history.ts` | Pure: which recent crawl plays by itself, and how its age reads. Tested. |
-| `components/graph/crawl/crawl-layer.ts` | The Crawl view's `GraphPlugin`: the spider, lit threads, silk, labels; asks the camera to follow. |
-| `components/graph/crawl/crawl-panel.tsx` | React chrome for Crawl: try a prompt, the spider switch, recent crawls, what was found. |
+| File                                      | Role                                                                                                                                 |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `lib/graph-model.ts`                      | Pure: nodes and edges from what the server sent, filtered by layers; vaults; paths and hops. Tested.                                 |
+| `lib/graph-brain.ts`                      | Pure: the brain's distance field, its surface mesh and the container force. Tested.                                                  |
+| `lib/graph-camera.ts`                     | Pure: orbit camera, projection, fitting, zoom and pan. The overlay projects with the same maths three.js renders with. Tested.       |
+| `lib/graph-map.ts`                        | Pure: Territories — where each note belongs on the map, and the land, coasts, borders and folder lines under the notes. Tested.      |
+| `components/graph/graph-engine.ts`        | The layout per view: a `d3-force-3d` simulation for Brain and Network, places on the map for Territories. Tested.                    |
+| `components/graph/graph-scene.ts`         | three.js: notes, edges, nebulae and the brain mesh, additive blending on a flat background; the map's land, translucent, under them. |
+| `components/graph/graph-overlay.ts`       | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap.                |
+| `components/graph/graph-controller.ts`    | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates.                            |
+| `components/graph/graph-view.tsx`         | React chrome: toolbar, layers, preview, legend; preferences.                                                                         |
+| `components/graph/crawl/crawl-plan.ts`    | Pure: a `gather_context` answer turned into replay steps, and the walk along threads between two notes. Tested.                      |
+| `components/graph/crawl/crawl-history.ts` | Pure: which recent crawl plays by itself, and how its age reads. Tested.                                                             |
+| `components/graph/crawl/crawl-layer.ts`   | The Crawl view's `GraphPlugin`: the spider, lit threads, silk, labels; asks the camera to follow.                                    |
+| `components/graph/crawl/crawl-panel.tsx`  | React chrome for Crawl: try a prompt, the spider switch, recent crawls, what was found.                                              |
 
 **The brain** is generated, not loaded: eleven ellipsoids blended smoothly (hemispheres,
 frontal, temporal and occipital lobes, cerebellum, brainstem), a shallow groove between the

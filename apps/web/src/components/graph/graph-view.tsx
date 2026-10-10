@@ -39,7 +39,13 @@ import {
   type SharedVaultName,
 } from '@/lib/graph-model';
 import { DEFAULT_FILTERS, searchGraph, type SearchFilters } from '@/lib/graph-search';
-import { BRIDGE_COLOR, LABEL_COLORS, OWN_VAULT_COLOR, SHARED_VAULT_COLORS, TOPIC_COLOR } from '@/lib/graph-palette';
+import {
+  BRIDGE_COLOR,
+  LABEL_COLORS,
+  OWN_VAULT_COLOR,
+  SHARED_VAULT_COLORS,
+  TOPIC_COLOR,
+} from '@/lib/graph-palette';
 import { cn } from '@/lib/utils';
 
 import { CrawlPanel } from './crawl/crawl-panel';
@@ -67,7 +73,12 @@ const LAYERS_KEY = 'brainstack.graph.layers';
 const LAYOUT_KEY = 'brainstack.graph.layout';
 
 const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }> = [
-  { id: 'brain', label: 'Brain', icon: Brain, hint: 'Drag to turn the brain, Shift+drag to move it. Click a note to focus it.' },
+  {
+    id: 'brain',
+    label: 'Brain',
+    icon: Brain,
+    hint: 'Drag to turn the brain, Shift+drag to move it. Click a note to focus it.',
+  },
   {
     id: 'network',
     label: 'Network',
@@ -84,7 +95,8 @@ const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }
 
 // Crawl is not a fourth layout: it is the Brain view with a crawl replayed on
 // top (components/graph/crawl). The engine never hears of it.
-const CRAWL_HINT = 'The brain, with a crawl replayed on it: the spider walks the links to every note a prompt refers to, and lights each thread it steps on. Drag to look around.';
+const CRAWL_HINT =
+  'The brain, with a crawl replayed on it: the spider walks the links to every note a prompt refers to, and lights each thread it steps on. Drag to look around.';
 
 // Preferences are per-browser conveniences: a blocked or private store just
 // means starting from the defaults.
@@ -116,7 +128,15 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includeShared, onIncludeSharedChange }: GraphViewProps) {
+export function GraphView({
+  nodes,
+  edges,
+  affinity,
+  viewerId,
+  vaultNames,
+  includeShared,
+  onIncludeSharedChange,
+}: GraphViewProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -195,7 +215,8 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
     const fromHash = GRAPH_VIEWS.find((v) => `#${v}` === window.location.hash);
     let initial: View = fromHash ?? readPref<View>(VIEW_KEY) ?? 'brain';
-    if (!GRAPH_VIEWS.includes(initial) || (initial === 'brain' && !controller.webgl)) initial = controller.webgl ? 'brain' : 'network';
+    if (!GRAPH_VIEWS.includes(initial) || (initial === 'brain' && !controller.webgl))
+      initial = controller.webgl ? 'brain' : 'network';
     if (window.location.hash === '#crawl' && controller.webgl) {
       initial = 'brain';
       setCrawl(true);
@@ -218,9 +239,23 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
-  const modelLayers = useMemo(() => (view === 'territories' && layers.topics ? { ...layers, topics: false } : layers), [view, layers]);
+  const modelLayers = useMemo(
+    () => (view === 'territories' && layers.topics ? { ...layers, topics: false } : layers),
+    [view, layers],
+  );
   const model = useMemo(
-    () => (ready ? buildGraphModel({ nodes, edges, affinity, layers: modelLayers, viewerId, vaultNames, cache: cacheRef.current }) : null),
+    () =>
+      ready
+        ? buildGraphModel({
+            nodes,
+            edges,
+            affinity,
+            layers: modelLayers,
+            viewerId,
+            vaultNames,
+            cache: cacheRef.current,
+          })
+        : null,
     [ready, nodes, edges, affinity, modelLayers, viewerId, vaultNames],
   );
 
@@ -231,10 +266,14 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     builtRef.current = { nodes, edges };
     if (!previous) {
       // First layout: start from where the notes were last time, if it was this view.
-      const stored = readPref<{ view: View; positions: Record<string, [number, number, number]> }>(LAYOUT_KEY);
+      const stored = readPref<{ view: View; positions: Record<string, [number, number, number]> }>(
+        LAYOUT_KEY,
+      );
       const saved =
         stored?.view === c.view
-          ? new Map(Object.entries(stored.positions).map(([id, [x, y, z]]) => [id, { x, y, z }] as const))
+          ? new Map(
+              Object.entries(stored.positions).map(([id, [x, y, z]]) => [id, { x, y, z }] as const),
+            )
           : undefined;
       c.setModel(model, 'init', saved);
     } else {
@@ -259,11 +298,15 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
   }, [layers, ready]);
 
   // "Edited this week" is measured from when the search last changed, which is close enough for a filter.
-  const matches = useMemo(() => (model ? searchGraph(model.nodes, query, filters, Date.now()) : null), [model, query, filters]);
+  const matches = useMemo(
+    () => (model ? searchGraph(model.nodes, query, filters, Date.now()) : null),
+    [model, query, filters],
+  );
   useEffect(() => {
     controllerRef.current?.setMatches(matches);
   }, [matches]);
-  const currentMatch = selection?.kind === 'note' && matches?.includes(selection.node) ? selection.node : null;
+  const currentMatch =
+    selection?.kind === 'note' && matches?.includes(selection.node) ? selection.node : null;
 
   useEffect(() => {
     if (!toast) return;
@@ -306,7 +349,8 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
       e.preventDefault();
       return;
     }
-    if (t === overlayRef.current && controllerRef.current?.keyDown(e.nativeEvent)) e.preventDefault();
+    if (t === overlayRef.current && controllerRef.current?.keyDown(e.nativeEvent))
+      e.preventDefault();
   };
 
   const c = () => controllerRef.current;
@@ -428,7 +472,9 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
         {model && <FilterChips model={model} filters={filters} onChange={setFilters} />}
       </div>
 
-      {crawl && model && <CrawlPanel controller={controllerRef.current} model={model} reduceMotion={reduceMotion} />}
+      {crawl && model && (
+        <CrawlPanel controller={controllerRef.current} model={model} reduceMotion={reduceMotion} />
+      )}
 
       {selection && model && (
         <GraphPreview
@@ -451,9 +497,17 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
         )}
       >
         {hovered ? (
-          <Tooltip node={hovered} vaultLabel={model?.vaults.find((v) => v.id === hovered.vault)?.label ?? ''} />
+          <Tooltip
+            node={hovered}
+            vaultLabel={model?.vaults.find((v) => v.id === hovered.vault)?.label ?? ''}
+          />
         ) : (
-          hoveredCountry && <CountryTooltip country={hoveredCountry} vaultLabel={model?.vaults.find((v) => v.id === hoveredCountry.vault)?.label ?? ''} />
+          hoveredCountry && (
+            <CountryTooltip
+              country={hoveredCountry}
+              vaultLabel={model?.vaults.find((v) => v.id === hoveredCountry.vault)?.label ?? ''}
+            />
+          )
         )}
       </div>
 
@@ -461,7 +515,10 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
         ref={chipRef}
         hidden
         aria-live="polite"
-        className={cn(GLASS, 'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary')}
+        className={cn(
+          GLASS,
+          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary',
+        )}
       />
 
       <div
@@ -477,39 +534,130 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
         </p>
         <ul className="flex flex-wrap gap-x-3.5 gap-y-1">
           {visibleVaults.map((v) => (
-            <LegendItem key={v.id} glyph={<span className="h-2 w-2 rounded-full" style={{ background: v.color.hue, boxShadow: `0 0 6px ${v.color.hue}` }} />}>
+            <LegendItem
+              key={v.id}
+              glyph={
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ background: v.color.hue, boxShadow: `0 0 6px ${v.color.hue}` }}
+                />
+              }
+            >
               {v.label}
             </LegendItem>
           ))}
-          <LegendItem glyph={<span className="flex gap-[3px]">{[0.35, 0.6, 1].map((o) => <span key={o} className="h-1.5 w-1.5 rounded-full" style={{ opacity: o, background: OWN_VAULT_COLOR.core }} />)}</span>}>
+          <LegendItem
+            glyph={
+              <span className="flex gap-[3px]">
+                {[0.35, 0.6, 1].map((o) => (
+                  <span
+                    key={o}
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ opacity: o, background: OWN_VAULT_COLOR.core }}
+                  />
+                ))}
+              </span>
+            }
+          >
             brightness = recent activity
           </LegendItem>
-          {layers.indexes && <LegendItem glyph={<span className="h-2 w-2 rounded-[2px]" style={{ background: LABEL_COLORS.index }} />}>index</LegendItem>}
+          {layers.indexes && (
+            <LegendItem
+              glyph={
+                <span
+                  className="h-2 w-2 rounded-[2px]"
+                  style={{ background: LABEL_COLORS.index }}
+                />
+              }
+            >
+              index
+            </LegendItem>
+          )}
           {visibleVaults.some((v) => !v.own) && (
-            <LegendItem glyph={<span className="h-2 w-2 rounded-full border-2" style={{ borderColor: SHARED_VAULT_COLORS[0]!.hue }} />}>
+            <LegendItem
+              glyph={
+                <span
+                  className="h-2 w-2 rounded-full border-2"
+                  style={{ borderColor: SHARED_VAULT_COLORS[0]!.hue }}
+                />
+              }
+            >
               someone else&apos;s note
             </LegendItem>
           )}
           {view === 'territories' ? (
             <>
               <LegendItem
-                glyph={<span className="h-2.5 w-4 rounded-[3px] border" style={{ borderColor: OWN_VAULT_COLOR.hue, background: `${OWN_VAULT_COLOR.hue}40` }} />}
+                glyph={
+                  <span
+                    className="h-2.5 w-4 rounded-[3px] border"
+                    style={{
+                      borderColor: OWN_VAULT_COLOR.hue,
+                      background: `${OWN_VAULT_COLOR.hue}40`,
+                    }}
+                  />
+                }
               >
                 project
               </LegendItem>
-              <LegendItem glyph={<span className="w-4 border-t border-dashed" style={{ borderColor: OWN_VAULT_COLOR.hue }} />}>folder</LegendItem>
-              <LegendItem glyph={<span className="w-4 border-t border-white/80" />}>route, on hover</LegendItem>
+              <LegendItem
+                glyph={
+                  <span
+                    className="w-4 border-t border-dashed"
+                    style={{ borderColor: OWN_VAULT_COLOR.hue }}
+                  />
+                }
+              >
+                folder
+              </LegendItem>
+              <LegendItem glyph={<span className="w-4 border-t border-white/80" />}>
+                route, on hover
+              </LegendItem>
             </>
           ) : (
             <>
-              <LegendItem glyph={<span className="w-4 border-t" style={{ borderColor: OWN_VAULT_COLOR.hue }} />}>link</LegendItem>
+              <LegendItem
+                glyph={
+                  <span className="w-4 border-t" style={{ borderColor: OWN_VAULT_COLOR.hue }} />
+                }
+              >
+                link
+              </LegendItem>
               {view === 'network' && (
-                <LegendItem glyph={<span className="w-4 border-t-2" style={{ borderColor: BRIDGE_COLOR.hue }} />}>link between projects</LegendItem>
+                <LegendItem
+                  glyph={
+                    <span className="w-4 border-t-2" style={{ borderColor: BRIDGE_COLOR.hue }} />
+                  }
+                >
+                  link between projects
+                </LegendItem>
               )}
-              {layers.affinity && <LegendItem glyph={<span className="w-4 border-t-2 border-dotted border-[#a7a4b8]" />}>shared topic</LegendItem>}
-              {layers.topics && <LegendItem glyph={<span className="text-[11px] leading-none" style={{ color: TOPIC_COLOR.hue }}>⬡</span>}>topic</LegendItem>}
+              {layers.affinity && (
+                <LegendItem
+                  glyph={<span className="w-4 border-t-2 border-dotted border-[#a7a4b8]" />}
+                >
+                  shared topic
+                </LegendItem>
+              )}
+              {layers.topics && (
+                <LegendItem
+                  glyph={
+                    <span className="text-[11px] leading-none" style={{ color: TOPIC_COLOR.hue }}>
+                      ⬡
+                    </span>
+                  }
+                >
+                  topic
+                </LegendItem>
+              )}
               {view === 'network' && (
-                <LegendItem glyph={<span className="h-2.5 w-2.5 rounded-full border border-dashed border-fg-muted" />}>outer ring: no links</LegendItem>
+                <LegendItem
+                  glyph={
+                    <span className="h-2.5 w-2.5 rounded-full border border-dashed border-fg-muted" />
+                  }
+                >
+                  outer ring: no links
+                </LegendItem>
               )}
             </>
           )}
@@ -522,7 +670,10 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
           hidden={is3D}
           aria-label="Minimap. Click to move there."
           // A class, not only the attribute: md:block would override [hidden].
-          className={cn('h-[116px] w-[176px] cursor-crosshair rounded-lg border border-border-subtle', is3D ? 'hidden' : 'hidden md:block')}
+          className={cn(
+            'h-[116px] w-[176px] cursor-crosshair rounded-lg border border-border-subtle',
+            is3D ? 'hidden' : 'hidden md:block',
+          )}
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId);
             c()?.minimapPoint(e.nativeEvent);
@@ -532,7 +683,11 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
           }}
         />
         {is3D && (
-          <div className={cn(GLASS, 'flex gap-0.5 rounded-lg p-[3px]')} role="group" aria-label="Brain orientation">
+          <div
+            className={cn(GLASS, 'flex gap-0.5 rounded-lg p-[3px]')}
+            role="group"
+            aria-label="Brain orientation"
+          >
             {(['side', 'top', 'front'] as const).map((a) => (
               <ToggleButton
                 key={a}
@@ -568,7 +723,13 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
       </div>
 
       {toast && (
-        <div role="status" className={cn(GLASS, 'absolute bottom-6 left-1/2 z-30 max-w-[min(520px,calc(100%-2rem))] -translate-x-1/2 rounded-lg px-3.5 py-2 text-center text-sm text-fg-primary')}>
+        <div
+          role="status"
+          className={cn(
+            GLASS,
+            'absolute bottom-6 left-1/2 z-30 max-w-[min(520px,calc(100%-2rem))] -translate-x-1/2 rounded-lg px-3.5 py-2 text-center text-sm text-fg-primary',
+          )}
+        >
           {toast}
         </div>
       )}
@@ -622,10 +783,13 @@ function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultL
       <b className="text-[13px] font-semibold text-fg-primary">{country.label}</b>
       <span className="text-fg-secondary">
         {country.notes} {country.notes === 1 ? 'note' : 'notes'}
-        {country.folders > 0 && ` · ${country.folders} ${country.folders === 1 ? 'folder' : 'folders'}`} · {vaultLabel}
+        {country.folders > 0 &&
+          ` · ${country.folders} ${country.folders === 1 ? 'folder' : 'folders'}`}{' '}
+        · {vaultLabel}
       </span>
       <span className="font-mono text-[11px] text-fg-muted">
-        {country.routes} {country.routes === 1 ? 'route' : 'routes'} to other projects · click to zoom in
+        {country.routes} {country.routes === 1 ? 'route' : 'routes'} to other projects · click to
+        zoom in
       </span>
     </>
   );
@@ -642,7 +806,15 @@ function LegendItem({ glyph, children }: { glyph: ReactNode; children: ReactNode
   );
 }
 
-function ZoomButton({ label, onPress, children }: { label: string; onPress(): void; children: ReactNode }) {
+function ZoomButton({
+  label,
+  onPress,
+  children,
+}: {
+  label: string;
+  onPress(): void;
+  children: ReactNode;
+}) {
   return (
     <Button
       aria-label={label}

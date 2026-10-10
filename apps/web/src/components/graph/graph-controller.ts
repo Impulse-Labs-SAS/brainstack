@@ -23,7 +23,16 @@ import {
   type Camera,
   type Viewport,
 } from '@/lib/graph-camera';
-import { findPath, hopsFrom, neighbourToward, type GraphEdge, type GraphModel, type GraphNode, type GraphPath, type GraphView } from '@/lib/graph-model';
+import {
+  findPath,
+  hopsFrom,
+  neighbourToward,
+  type GraphEdge,
+  type GraphModel,
+  type GraphNode,
+  type GraphPath,
+  type GraphView,
+} from '@/lib/graph-model';
 
 import { GraphEngine, type RebuildReason } from './graph-engine';
 import {
@@ -238,12 +247,20 @@ export class GraphController {
 
   // -- Inputs from React ----------------------------------------------------------
 
-  setModel(model: GraphModel, reason: RebuildReason, saved?: ReadonlyMap<string, { x: number; y: number; z: number }>): void {
+  setModel(
+    model: GraphModel,
+    reason: RebuildReason,
+    saved?: ReadonlyMap<string, { x: number; y: number; z: number }>,
+  ): void {
     this.growing = false;
     this.engine.setModel(model, reason, performance.now(), saved);
     this.scene?.setModel(model);
     if (reason === 'init') {
-      this.cam = { ...this.cam, ...this.fitTarget(), ...(this.engine.is3D ? ANGLES.threeQuarter : { yaw: 0, pitch: 0 }) };
+      this.cam = {
+        ...this.cam,
+        ...this.fitTarget(),
+        ...(this.engine.is3D ? ANGLES.threeQuarter : { yaw: 0, pitch: 0 }),
+      };
       this.setSpin(this.engine.is3D);
     }
     const keep = (n: GraphNode | null) => (n && model.nodes.includes(n) ? n : null);
@@ -282,7 +299,13 @@ export class GraphController {
     if (rescale) {
       // The layout was rescaled into the brain; the camera follows so the first frame matches.
       const { k, cx, cy, oy } = rescale;
-      this.cam = { ...this.cam, tx: (this.cam.tx - cx) * k, ty: (this.cam.ty - cy) * k + oy, tz: 0, dist: this.cam.dist * k };
+      this.cam = {
+        ...this.cam,
+        tx: (this.cam.tx - cx) * k,
+        ty: (this.cam.ty - cy) * k + oy,
+        tz: 0,
+        dist: this.cam.dist * k,
+      };
       this.animateTo({ ...this.cam, ...this.fitTarget(), ...ANGLES.threeQuarter }, 1300);
       this.setSpin(true);
     } else if (was3D || this.engine.isMap) {
@@ -307,7 +330,11 @@ export class GraphController {
     this.matched = matches ? new Set(matches) : null;
     this.searchT0 = performance.now();
     this.edgesDirty = true;
-    this.scene?.lightCountries(matches ? new Set(matches.map((n) => n.project?.id).filter((id): id is string => !!id)) : null);
+    this.scene?.lightCountries(
+      matches
+        ? new Set(matches.map((n) => n.project?.id).filter((id): id is string => !!id))
+        : null,
+    );
 
     const now = this.searchT0;
     const lift = this.reduceMotion ? [] : (matches ?? []).slice(0, MAX_LIFTED);
@@ -337,10 +364,18 @@ export class GraphController {
     }
     this.setSpin(false);
     // Where they are drawn, sprung out of the brain, not where they live.
-    const b = boundsOf(nodes.map((n) => ({ x: n.x + n.ox, y: n.y + n.oy, z: (n.z || 0) + n.oz, radius: n.radius })));
+    const b = boundsOf(
+      nodes.map((n) => ({ x: n.x + n.ox, y: n.y + n.oy, z: (n.z || 0) + n.oz, radius: n.radius })),
+    );
     // In the brain, as close as a click on one note would go; flat, the usual cap.
-    const maxScale = this.engine.is3D ? this.vp.height / 2 / (TAN_HALF_FOV * this.engine.brainScale * 1.9) : 1.6;
-    if (b) this.animateTo({ ...this.cam, ...fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D }) });
+    const maxScale = this.engine.is3D
+      ? this.vp.height / 2 / (TAN_HALF_FOV * this.engine.brainScale * 1.9)
+      : 1.6;
+    if (b)
+      this.animateTo({
+        ...this.cam,
+        ...fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D }),
+      });
     this.userMoved = true;
   }
 
@@ -420,9 +455,23 @@ export class GraphController {
     this.el.overlay.setPointerCapture(e.pointerId);
     const { x, y } = this.local(e);
     const node = pickNode(model, x, y, (n) => this.engine.appear(n, performance.now()));
-    const kind = node ? 'node' : this.engine.is3D && !e.shiftKey && e.button === 0 ? 'orbit' : 'pan';
+    const kind = node
+      ? 'node'
+      : this.engine.is3D && !e.shiftKey && e.button === 0
+        ? 'orbit'
+        : 'pan';
     this.plugin?.onUserCamera();
-    this.drag = { kind, node, startX: x, startY: y, lastX: x, lastY: y, travel: 0, shift: e.shiftKey, origin: node ? { x: node.x, y: node.y, z: node.z } : null };
+    this.drag = {
+      kind,
+      node,
+      startX: x,
+      startY: y,
+      lastX: x,
+      lastY: y,
+      travel: 0,
+      shift: e.shiftKey,
+      origin: node ? { x: node.x, y: node.y, z: node.z } : null,
+    };
   }
 
   pointerMove(e: PointerEvent): void {
@@ -545,7 +594,12 @@ export class GraphController {
       this.events.onOpen(selected);
       return true;
     }
-    const dirs: Record<string, [number, number]> = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const dirs: Record<string, [number, number]> = {
+      ArrowRight: [1, 0],
+      ArrowLeft: [-1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    };
     const dir = dirs[e.key];
     if (!dir) return false;
     const next = neighbourToward(this.model, selected, dir[0], dir[1]);
@@ -557,7 +611,11 @@ export class GraphController {
     const t = this.minimapTransform;
     if (!t) return;
     const r = this.el.minimap.getBoundingClientRect();
-    this.cam = { ...this.cam, tx: (e.clientX - r.left - t.ox) / t.scale, ty: -(e.clientY - r.top - t.oy) / t.scale };
+    this.cam = {
+      ...this.cam,
+      tx: (e.clientX - r.left - t.ox) / t.scale,
+      ty: -(e.clientY - r.top - t.oy) / t.scale,
+    };
     this.userMoved = true;
     this.tween = null;
   }
@@ -601,7 +659,10 @@ export class GraphController {
   private countryAt(x: number, y: number): string | null {
     if (!this.engine.isMap || this.landAlpha < 0.5) return null;
     const p = pixelsPerUnit(this.cam, this.vp);
-    return this.engine.countryAt(this.cam.tx + (x - this.vp.width / 2) / p, this.cam.ty - (y - this.vp.height / 2) / p);
+    return this.engine.countryAt(
+      this.cam.tx + (x - this.vp.width / 2) / p,
+      this.cam.ty - (y - this.vp.height / 2) / p,
+    );
   }
 
   private setHotCountry(id: string | null): void {
@@ -614,7 +675,9 @@ export class GraphController {
       this.events.onHoverCountry(null);
       return;
     }
-    this.countryRoutes = model.edges.filter((e) => (e.source.project?.id === id) !== (e.target.project?.id === id) && e.kind !== 'topic');
+    this.countryRoutes = model.edges.filter(
+      (e) => (e.source.project?.id === id) !== (e.target.project?.id === id) && e.kind !== 'topic',
+    );
     this.focusT0 = performance.now();
     const group = model.projects.find((p) => p.id === id);
     const country = t.countries.find((c) => c.id === id);
@@ -636,7 +699,10 @@ export class GraphController {
     this.userMoved = true;
   }
 
-  private fitTarget(nodes?: GraphNode[], maxScale?: number): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
+  private fitTarget(
+    nodes?: GraphNode[],
+    maxScale?: number,
+  ): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
     if (this.engine.is3D && !nodes) return fitBrain(this.engine.brainScale, this.vp);
     const map = !nodes && !this.engine.growth ? this.engine.mapBounds() : null;
     if (map) return fitBounds(map, this.vp);
@@ -649,7 +715,11 @@ export class GraphController {
   private withPreviewOffset(cam: Camera): Camera {
     if (this.vp.width <= 760) return cam;
     const shift = PREVIEW_OFFSET / pixelsPerUnit(cam, this.vp);
-    return { ...cam, tx: cam.tx + Math.cos(cam.yaw) * shift, tz: cam.tz - Math.sin(cam.yaw) * shift };
+    return {
+      ...cam,
+      tx: cam.tx + Math.cos(cam.yaw) * shift,
+      tz: cam.tz - Math.sin(cam.yaw) * shift,
+    };
   }
 
   private flyTo(node: GraphNode): void {
@@ -657,12 +727,25 @@ export class GraphController {
       ? Math.min(this.cam.dist, this.engine.brainScale * 1.9)
       : Math.min(this.cam.dist, this.vp.height / 2 / (TAN_HALF_FOV * 1.35));
     // Where it is drawn: a search match may have sprung out of its place.
-    this.animateTo(this.withPreviewOffset({ ...this.cam, tx: node.x + node.ox, ty: node.y + node.oy, tz: (node.z || 0) + node.oz, dist }));
+    this.animateTo(
+      this.withPreviewOffset({
+        ...this.cam,
+        tx: node.x + node.ox,
+        ty: node.y + node.oy,
+        tz: (node.z || 0) + node.oz,
+        dist,
+      }),
+    );
     this.userMoved = true;
   }
 
   private animateTo(to: Camera, duration = 700): void {
-    this.tween = { from: { ...this.cam }, to, t0: performance.now(), duration: this.reduceMotion ? 1 : duration };
+    this.tween = {
+      from: { ...this.cam },
+      to,
+      t0: performance.now(),
+      duration: this.reduceMotion ? 1 : duration,
+    };
   }
 
   private zoomAt(x: number, y: number, factor: number): void {
@@ -673,7 +756,10 @@ export class GraphController {
       this.cam = { ...this.cam, dist: clamp(this.cam.dist / factor, s * 0.25, s * 7) };
       return;
     }
-    const limits: [number, number] = [this.vp.height / 2 / (TAN_HALF_FOV * 6), this.vp.height / 2 / (TAN_HALF_FOV * 0.04)];
+    const limits: [number, number] = [
+      this.vp.height / 2 / (TAN_HALF_FOV * 6),
+      this.vp.height / 2 / (TAN_HALF_FOV * 0.04),
+    ];
     this.cam = zoomFlatAt(this.cam, this.vp, x, y, factor, limits);
   }
 
@@ -700,7 +786,10 @@ export class GraphController {
     const n = this.model?.nodes.length ?? 0;
     // The map has its own way of zooming out: country names over the land.
     if (this.engine.isMap) return 0;
-    if (this.engine.is3D) return clamp((this.cam.dist / this.engine.brainScale - 2.1) / 0.9, 0, 1) * (n > 150 ? 1 : 0.5);
+    if (this.engine.is3D)
+      return (
+        clamp((this.cam.dist / this.engine.brainScale - 2.1) / 0.9, 0, 1) * (n > 150 ? 1 : 0.5)
+      );
     return clamp((0.62 - pixelsPerUnit(this.cam, this.vp)) / 0.3, 0, 1);
   }
 
@@ -714,7 +803,8 @@ export class GraphController {
     const map = this.engine.isMap;
     const rate = (ms: number) => (this.reduceMotion ? 1 : 1 - Math.exp(-dt / ms));
     const k = rate(220);
-    const ease = (value: number, target: number, step = k) => (Math.abs(target - value) < 0.004 ? target : value + (target - value) * step);
+    const ease = (value: number, target: number, step = k) =>
+      Math.abs(target - value) < 0.004 ? target : value + (target - value) * step;
     // The land leaves faster than it comes: the notes start moving off it at once.
     const landTarget = map && !this.engine.moving ? 1 : 0;
     this.landAlpha = ease(this.landAlpha, landTarget, landTarget ? k : rate(80));
@@ -764,7 +854,10 @@ export class GraphController {
     const tweening = this.liftTweens.size > 0;
     const target = this.engine.is3D ? 1 : 0;
     const reachBefore = this.liftReach;
-    this.liftReach = Math.abs(target - this.liftReach) < 0.004 ? target : this.liftReach + (target - this.liftReach) * (1 - Math.exp(-dt / 220));
+    this.liftReach =
+      Math.abs(target - this.liftReach) < 0.004
+        ? target
+        : this.liftReach + (target - this.liftReach) * (1 - Math.exp(-dt / 220));
     const active = this.lifted.size > 0 || tweening;
     const c = this.cam;
     const camKey = `${c.tx},${c.ty},${c.tz},${c.yaw},${c.pitch},${c.dist},${this.engine.brainScale}`;
@@ -775,9 +868,14 @@ export class GraphController {
     this.hadLift = active;
     // Offsets depend on the lift, the reach and the camera: if none changed, neither did they.
     const reachMoving = reachBefore !== this.liftReach;
-    if (!settling && !(active && (tweening || reachMoving || (camMoved && this.liftReach > 0)))) return false;
+    if (!settling && !(active && (tweening || reachMoving || (camMoved && this.liftReach > 0))))
+      return false;
     // Fewer matches go further: one note should leap out, fifty should not become a cloud.
-    const reach = this.engine.brainScale * LIFT_REACH * clamp(1.15 - this.lifted.size / 80, 0.35, 1) * this.liftReach;
+    const reach =
+      this.engine.brainScale *
+      LIFT_REACH *
+      clamp(1.15 - this.lifted.size / 80, 0.35, 1) *
+      this.liftReach;
     const center: [number, number, number] = [0, -0.05 * this.engine.brainScale, 0];
     const axes = basis(this.cam);
     for (const n of this.model?.nodes ?? []) {
@@ -833,7 +931,15 @@ export class GraphController {
       };
     }
     // A search pauses the spin: what it found should stay where you saw it.
-    if (this.spin && !this.tween && !this.hover && !this.selected && !this.path && !this.drag && !this.matches) {
+    if (
+      this.spin &&
+      !this.tween &&
+      !this.hover &&
+      !this.selected &&
+      !this.path &&
+      !this.drag &&
+      !this.matches
+    ) {
       this.cam = { ...this.cam, yaw: this.cam.yaw + dt * SPIN_PER_MS };
     }
 
@@ -937,7 +1043,15 @@ export class GraphController {
       reduceMotion: this.reduceMotion,
       fonts: this.fonts,
     });
-    this.plugin?.draw(this.ctx, { now, dt, cam: this.cam, vp: this.vp, dpr: this.dpr, model, reduceMotion: this.reduceMotion });
+    this.plugin?.draw(this.ctx, {
+      now,
+      dt,
+      cam: this.cam,
+      vp: this.vp,
+      dpr: this.dpr,
+      model,
+      reduceMotion: this.reduceMotion,
+    });
 
     if (!is3D && this.frameNo % 3 === 0 && !this.el.minimap.hidden) {
       const dpr = this.dpr;
@@ -945,7 +1059,14 @@ export class GraphController {
         this.el.minimap.width = 176 * dpr;
         this.el.minimap.height = 116 * dpr;
       }
-      this.minimapTransform = drawMinimap(this.minimapCtx, { width: 176, height: 116, dpr }, model, this.cam, this.vp, appear);
+      this.minimapTransform = drawMinimap(
+        this.minimapCtx,
+        { width: 176, height: 116, dpr },
+        model,
+        this.cam,
+        this.vp,
+        appear,
+      );
     }
 
     const moving = this.engine.moving;
