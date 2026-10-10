@@ -2,7 +2,7 @@
 
 > Shared second brain for humans and AI assistants. Self-hostable. MCP-native.
 
-BrainStack keeps your notes as Markdown in Postgres. It exposes them to any MCP-compatible AI assistant: Claude Code, Claude Desktop and claude.ai, Cursor, Codex, Gemini CLI, Continue, Cline and others. People use the web app, which covers what Obsidian did: a file tree, a Markdown editor with wikilinks, full-text search, a graph, and import of the `.md` files you already have. Assistants read and write the same notes through the MCP server, and can gather everything a question refers to in a single call; the graph's Sentinel view replays what they read.
+BrainStack keeps your notes as Markdown in Postgres. It exposes them to any MCP-compatible AI assistant: Claude Code, Claude Desktop and claude.ai, Cursor, Codex, Gemini CLI, Continue, Cline and others. People use the web app, which covers what Obsidian did: a file tree, a Markdown editor with wikilinks, full-text search, a graph, and import of the `.md` files you already have. Assistants read and write the same notes through the MCP server, and can gather everything a question refers to in a single call; the graph's Sentinel view replays what they read, and turns a question of your own into a prompt, with the notes it needs, to paste into an assistant or an IDE.
 
 Every account has its own vault, and any folder can be shared with other people, read-only or with write access.
 

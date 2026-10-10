@@ -131,6 +131,45 @@ function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing):
 }
 
 /**
+ * The note the person points at in the side panel, at (`x`, `y`) in CSS
+ * pixels: a ring round it and its title beside, so a row of the panel and the
+ * note it names can be found together. Still under reduced motion.
+ */
+export function drawMark(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  mark: { title: string; font: string; width: number; time: number; still: boolean; alpha?: number },
+): void {
+  const r = 13 + (mark.still ? 0 : 1.5 * Math.sin(mark.time * 5));
+  ctx.globalAlpha = mark.alpha ?? 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = 'rgba(237,237,237,0.9)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.font = `500 12px ${mark.font}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const w = ctx.measureText(mark.title).width + 14;
+  const h = 22;
+  let lx = x + r + 6;
+  if (lx + w > mark.width - 6) lx = x - r - 6 - w;
+  lx = Math.max(6, lx);
+  const ly = y - h / 2;
+  ctx.fillStyle = 'rgba(6,6,10,0.92)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(lx, ly, w, h, 4);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#ededed';
+  ctx.fillText(mark.title, lx + 7, ly + 15);
+  ctx.globalAlpha = 1;
+}
+
+/**
  * The walker as light alone, at (`x`, `y`) in CSS pixels: a soft point that
  * breathes, still under reduced motion. What shows where the walk is when no
  * creature is drawn — the trail over the brain, when the stage cannot run.

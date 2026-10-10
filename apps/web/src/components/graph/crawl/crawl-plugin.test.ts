@@ -97,14 +97,16 @@ class FakeStage implements StageHandle {
 }
 
 /** A 2D context that does nothing and remembers what was called. */
-function fakeCtx(): CanvasRenderingContext2D & { calls: string[] } {
+function fakeCtx(): CanvasRenderingContext2D & { calls: string[]; texts: string[] } {
   const calls: string[] = [];
-  const props: Record<string | symbol, unknown> = { calls };
+  const texts: string[] = [];
+  const props: Record<string | symbol, unknown> = { calls, texts };
   return new Proxy(props, {
     get(t, key) {
       if (key in t) return t[key];
       return (...args: unknown[]) => {
         calls.push(String(key));
+        if (key === 'fillText') texts.push(String(args[0]));
         if (key === 'measureText') return { width: String(args[0]).length * 6 };
         if (key === 'createRadialGradient') return { addColorStop() {} };
         return undefined;
@@ -114,7 +116,7 @@ function fakeCtx(): CanvasRenderingContext2D & { calls: string[] } {
       t[key] = value;
       return true;
     },
-  }) as unknown as CanvasRenderingContext2D & { calls: string[] };
+  }) as unknown as CanvasRenderingContext2D & { calls: string[]; texts: string[] };
 }
 
 /** The page's prompt: a box in the middle of the stage, and the chrome the levels are written on. */
@@ -501,6 +503,41 @@ describe('CrawlPlugin in the Sentinel view', () => {
     expect(s.ui()).toMatchObject({ status: 'trail', failure: 'a frame failed', scene: 'prompt' });
     s.host.frame();
     expect(s.host.staged).toBeNull();
+  });
+
+  it('skips to the end of the walk on request, and does nothing at the prompt', async () => {
+    const s = await ready();
+    s.plugin.skipToEnd();
+    expect(s.snap().state).toBe('idle');
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => s.snap().state === 'walking');
+    s.plugin.skipToEnd();
+    expect(s.snap().state).toBe('done');
+    const { found, reached } = s.snap();
+    expect(reached).toHaveLength(found.named + found.linked + found.decision);
+    expect(reached.length).toBeGreaterThan(0);
+  });
+
+  it('rings the note the panel points at, over the trail, and lets it go', async () => {
+    const s = setup({ loadStage: () => Promise.reject(new Error('offline')) });
+    await flush();
+    s.host.frame();
+    expect(s.plugin.play(s.vault.crawls.walk, 'a question')).toBe(true);
+    s.host.until(() => s.snap().reached.length > 0);
+    const key = s.snap().reached[0]!;
+    const title = s.vault.model.nodes.find((n) => n.path === key)!.label;
+    s.plugin.mark(key);
+    s.host.ctx.texts.length = 0;
+    s.host.frame();
+    // The mark says the bare title; the walk's own labels say why it was found.
+    expect(s.host.ctx.texts).toContain(title);
+    s.plugin.mark(null);
+    s.host.ctx.texts.length = 0;
+    s.host.frame();
+    expect(s.host.ctx.texts).not.toContain(title);
+    // A key the graph does not show rings nothing, and breaks nothing.
+    s.plugin.mark('no/such/note.md');
+    expect(() => s.host.frame()).not.toThrow();
   });
 
   it('changes nothing when reduced motion is set to what it already is', async () => {

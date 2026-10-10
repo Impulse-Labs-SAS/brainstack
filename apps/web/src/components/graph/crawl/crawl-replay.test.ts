@@ -128,6 +128,25 @@ describe('CrawlReplay', () => {
       expect(jumped.snapshot.found).toEqual(animated.snapshot.found);
       expect(jumped.snapshot.asks).toEqual(animated.snapshot.asks);
       expect(jumped.snapshot.threads).toBe(animated.snapshot.threads);
+      expect(jumped.snapshot.reached).toEqual(animated.snapshot.reached);
+    }
+  });
+
+  it('names every note it found, once, in the order it found them, by where the note is', () => {
+    for (const crawl of CRAWLS) {
+      const model = sampleVault().model;
+      const r = replayOf(crawl, model);
+      const seen: string[][] = [];
+      run(r, 60, () => {
+        if (seen.at(-1)?.length !== r.snapshot.reached.length) seen.push([...r.snapshot.reached]);
+      });
+      const { reached, found } = r.snapshot;
+      expect(reached).toHaveLength(found.named + found.linked + found.decision);
+      expect(new Set(reached).size).toBe(reached.length);
+      const byId = new Map(model.nodes.map((n) => [n.id, n]));
+      expect(new Set(reached)).toEqual(new Set([...r.view.found.keys()].map((id) => byId.get(id)!.path)));
+      // Each snapshot only adds to the last: the panel lists what the walk reached so far.
+      for (let i = 1; i < seen.length; i++) expect(seen[i]!.slice(0, seen[i - 1]!.length)).toEqual(seen[i - 1]);
     }
   });
 

@@ -5,7 +5,7 @@ import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ApiKeyService } from './ApiKeyService.js';
-import { CrawlHistoryService, MAX_CRAWLS_PER_USER } from './CrawlHistoryService.js';
+import { CrawlHistoryService, MAX_CRAWLS_PER_USER, toReplay } from './CrawlHistoryService.js';
 import { NoteService } from './NoteService.js';
 import { OAuthProviderService } from './OAuthProviderService.js';
 import { SearchService } from './SearchService.js';
@@ -80,6 +80,26 @@ describe('CrawlHistoryService', () => {
       { path: 'ledger.md', title: 'Ledger service', isDecision: false, via: expect.objectContaining({ kind: 'linked' }) },
     ]);
     expect(JSON.stringify(one.replay)).not.toContain('Invoices');
+  });
+
+  it('keeps the notes the budget left out, where they are and why, without a body', async () => {
+    const result = await crawl('Roadmap Q4');
+    const replay = toReplay({
+      ...result,
+      leftOut: [
+        { path: 'plans/atlas.md', title: 'Atlas', reason: 'matches "plans"' },
+        { path: 'shared/orbit.md', ownerId: SOMEONE_ELSE, title: 'Orbit', reason: 'linked from Atlas' },
+      ],
+    });
+    expect(replay.leftOut).toEqual([
+      { path: 'plans/atlas.md', title: 'Atlas', reason: 'matches "plans"' },
+      { path: 'shared/orbit.md', ownerId: SOMEONE_ELSE, title: 'Orbit', reason: 'linked from Atlas' },
+    ]);
+    const crawls = history();
+    await crawls.record(ME, { source: 'web', text: 'Roadmap Q4', result });
+    const [kept] = await crawls.list(ME);
+    // Through the database and back, as it was written.
+    expect((await crawls.get(ME, kept!.id)).replay.leftOut).toEqual(toReplay(result).leftOut);
   });
 
   it('never lists or hands over another user’s crawls', async () => {

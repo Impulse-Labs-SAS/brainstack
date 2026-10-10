@@ -51,7 +51,6 @@ import {
 } from '@/lib/graph-palette';
 import { cn } from '@/lib/utils';
 
-import { CRAWL_COLORS } from './crawl/crawl-colors';
 import {
   CHOICE_KEY,
   LEGACY_VIEW_KEY,
@@ -195,6 +194,8 @@ export function GraphView({
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>('brain');
   const [sentinel, setSentinel] = useState(false);
+  /** The Sentinel walking, its panel on screen: the panel carries the legend of what lights up. */
+  const [sentinelWalk, setSentinelWalk] = useState(false);
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_LAYERS);
   const [webgl, setWebgl] = useState(true);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -529,7 +530,11 @@ export function GraphView({
 
       {sentinel && model && controllerRef.current && (
         <SentinelBoundary onError={leaveSentinel}>
-          <SentinelPanel controller={controllerRef.current} reduceMotion={reduceMotion} />
+          <SentinelPanel
+            controller={controllerRef.current}
+            reduceMotion={reduceMotion}
+            onCrawl={setSentinelWalk}
+          />
         </SentinelBoundary>
       )}
 
@@ -584,6 +589,8 @@ export function GraphView({
           'absolute bottom-3 left-3 z-10 grid max-w-[calc(100%-1.5rem)] gap-1.5 rounded-lg px-3 py-2.5 text-xs text-fg-secondary md:max-w-[min(560px,calc(100%-15rem))]',
           // On a phone the Sentinel's recents need the room under the prompt.
           (selection || sentinel) && 'max-md:hidden',
+          // In the walk, the panel takes the whole height and counts what lit up in its colours.
+          sentinel && sentinelWalk && 'hidden',
         )}
       >
         <p className="text-[12.5px] leading-snug text-fg-primary">
@@ -604,18 +611,8 @@ export function GraphView({
               {v.label}
             </LegendItem>
           ))}
-          {sentinel ? (
-            <>
-              <LegendItem glyph={<Dot color={CRAWL_COLORS.named} />}>
-                named in your question
-              </LegendItem>
-              <LegendItem glyph={<Dot color={CRAWL_COLORS.linked} />}>
-                reached over a link
-              </LegendItem>
-              <LegendItem glyph={<Dot color={CRAWL_COLORS.decision} />}>decision</LegendItem>
-              <LegendItem glyph={<Dot color={CRAWL_COLORS.ask} />}>to ask you</LegendItem>
-            </>
-          ) : (
+          {/* At the Sentinel's prompt nothing has lit up yet; in its walk, the panel says what did. */}
+          {!sentinel && (
             <>
               <LegendItem
                 glyph={
@@ -871,15 +868,6 @@ function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultL
         zoom in
       </span>
     </>
-  );
-}
-
-function Dot({ color }: { color: string }) {
-  return (
-    <span
-      className="h-2 w-2 rounded-full"
-      style={{ background: color, boxShadow: `0 0 6px ${color}` }}
-    />
   );
 }
 
