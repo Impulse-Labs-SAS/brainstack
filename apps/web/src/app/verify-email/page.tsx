@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
+import { BrandLockup } from '@/components/ui/brand';
+
 function VerifyInner() {
   const params = useSearchParams();
   const error = params.get('error');
@@ -11,7 +13,7 @@ function VerifyInner() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-base px-6">
       <div className="w-full max-w-sm rounded-lg border border-border bg-bg-surface p-6 shadow-lg">
-        <div className="mb-1 font-mono text-xs text-fg-muted">brainstack</div>
+        <BrandLockup className="mb-5 block h-5 text-fg-primary" />
         <h1 className="mb-3 text-xl font-medium text-fg-primary">
           {error ? 'Verification failed' : 'Email verified'}
         </h1>

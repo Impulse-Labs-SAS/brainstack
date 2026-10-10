@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 
+import { BrandLockup } from '@/components/ui/brand';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AuthApiError, authFetch } from '@/lib/authApi';
@@ -69,7 +70,7 @@ function LoginInner() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-base px-6">
       <div className="w-full max-w-sm rounded-lg border border-border bg-bg-surface p-6 shadow-lg">
-        <div className="mb-1 font-mono text-xs text-fg-muted">brainstack</div>
+        <BrandLockup className="mb-5 block h-5 text-fg-primary" />
         <h1 className="mb-6 text-xl font-medium text-fg-primary">Sign in</h1>
         <form onSubmit={submit} className="space-y-4">
           <div>

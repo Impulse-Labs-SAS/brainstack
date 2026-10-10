@@ -28,6 +28,7 @@ import { authFetch } from '@/lib/authApi';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { CommandPalette } from '@/components/search/command-palette';
+import { BrandLockup, BrandMark } from '@/components/ui/brand';
 import { BugReportDialog } from '@/components/support/bug-report-dialog';
 import { ConnectMcpDialog } from '@/components/support/connect-mcp-dialog';
 import { SkillDialog } from '@/components/support/skill-dialog';
@@ -136,15 +137,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         >
           <div className="flex h-12 w-full items-center px-4 md:justify-center md:px-0">
-            <span
-              aria-hidden
-              className="grid h-7 w-7 place-items-center rounded-lg border border-accent/45 bg-accent/15 font-mono text-[13px] font-bold text-accent-hover"
-            >
-              B
-            </span>
-            <span className="ml-2.5 font-mono text-sm font-medium text-fg-primary md:sr-only">
-              BrainStack
-            </span>
+            {/* The drawer has room for the name; the 48 px rail only for the isotype. */}
+            <BrandLockup className="h-[15px] text-fg-primary md:hidden" />
+            <BrandMark className="hidden h-[21px] text-fg-primary md:block" />
           </div>
           <nav className="flex w-full flex-1 flex-col gap-1 p-2 md:items-center md:px-0 md:py-1.5">
             {links.map((link) => {
