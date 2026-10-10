@@ -50,6 +50,7 @@ import { hash01, type GraphEdge, type GraphModel, type GraphNode } from '@/lib/g
 
 import {
   findWalk,
+  nodePlace,
   planCrawl,
   walkable,
   type CrawlPlan,
@@ -1691,7 +1692,7 @@ export class CrawlReplay {
     });
     const found = { ...this.snap.found };
     found[f.kind]++;
-    this.snap = { ...this.snap, found };
+    this.snap = { ...this.snap, found, reached: [...this.snap.reached, nodePlace(f.node)] };
     this.log(
       f.kind,
       f.kind === 'named' ? 'read' : f.kind === 'linked' ? 'link' : 'decision',

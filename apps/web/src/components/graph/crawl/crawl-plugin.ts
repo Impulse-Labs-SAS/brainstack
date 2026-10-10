@@ -37,8 +37,8 @@ import type { GraphModel, GraphNode } from '@/lib/graph-model';
 
 import type { GraphPlugin, PluginFrame, PluginStage } from '../graph-controller';
 
-import { drawCrawl, drawSignal, type Project } from './crawl-draw';
-import { decisionIds, type CrawlResult } from './crawl-plan';
+import { drawCrawl, drawMark, drawSignal, type Project } from './crawl-draw';
+import { decisionIds, notesByPlace, type CrawlResult } from './crawl-plan';
 import { CrawlReplay } from './crawl-replay';
 import type { CrawlSnapshot } from './crawl-snapshot';
 import type { PerchShot } from './prompt/perch-geometry';
@@ -134,6 +134,10 @@ export class CrawlPlugin implements GraphPlugin {
   private still: boolean;
   private model: GraphModel | null = null;
   private byId = new Map<string, GraphNode>();
+  /** The model's notes by where they are, made when a mark first needs them. */
+  private byPlace: Map<string, GraphNode> | null = null;
+  /** The note the panel points at, as `place` keys it: ringed over the walk. */
+  private marked: string | null = null;
   /** The crawl on screen, or last shown: what a rebuild or a fallback plays again. */
   private crawl: { result: CrawlResult; asked: string } | null = null;
 
@@ -313,14 +317,20 @@ export class CrawlPlugin implements GraphPlugin {
 
   /** The crawl from its first note again; nothing at the prompt, where there is no crawl to replay. */
   replay(): void {
-    const inCrawl =
-      this.status === 'ready'
-        ? this.scene.available && this.scene.name === 'crawl'
-        : this.status === 'trail' && this.fallbackScene === 'crawl';
-    if (!inCrawl || !this.crawl) return;
+    if (!this.inCrawl()) return;
     this.player.replay();
     this.gl?.snap(this.player.view);
     if (this.still) this.settleAtEnd();
+  }
+
+  /** The crawl at its end at once, everything it finds found; nothing at the prompt. */
+  skipToEnd(): void {
+    if (this.inCrawl()) this.settleAtEnd();
+  }
+
+  /** Rings a note over the walk — the one the panel points at, by `place` key — or none. */
+  mark(key: string | null): void {
+    this.marked = key;
   }
 
   setPlaying(on: boolean): void {
@@ -519,6 +529,7 @@ export class CrawlPlugin implements GraphPlugin {
     const model = f.model;
     this.model = model;
     this.byId = new Map(model.nodes.map((n) => [n.id, n]));
+    this.byPlace = null;
     this.player.rebind(model);
     this.scene.setModel(model);
     this.refreshDecisions();
@@ -680,6 +691,15 @@ export class CrawlPlugin implements GraphPlugin {
     return true;
   }
 
+  /** In the crawl with a crawl to show, on the stage or on the trail. */
+  private inCrawl(): boolean {
+    const inCrawl =
+      this.status === 'ready'
+        ? this.scene.available && this.scene.name === 'crawl'
+        : this.status === 'trail' && this.fallbackScene === 'crawl';
+    return inCrawl && this.crawl !== null;
+  }
+
   /** The end of the crawl, at once, and the creature's still pose there. */
   private settleAtEnd(): void {
     this.player.skipToEnd();
@@ -834,7 +854,8 @@ export class CrawlPlugin implements GraphPlugin {
     const alpha = this.sf ? this.sf.levels.cluster : 1;
     if (!(alpha > 0)) return;
     ctx.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
-    drawCrawl(ctx, this.project(f), {
+    const P = this.project(f);
+    drawCrawl(ctx, P, {
       view: this.player.view,
       labels: this.player.labels,
       note: () => null,
@@ -844,6 +865,27 @@ export class CrawlPlugin implements GraphPlugin {
       font: this.fontOf(),
       threads: false,
       halos: false,
+      alpha,
+    });
+    this.drawMarked(ctx, f, P, alpha);
+  }
+
+  /** The note the panel points at, ringed, if the walk's field places it. */
+  private drawMarked(ctx: CanvasRenderingContext2D, f: PluginFrame, P: Project, alpha: number): void {
+    const model = this.model;
+    if (!this.marked || !model) return;
+    this.byPlace ??= notesByPlace(model);
+    const node = this.byPlace.get(this.marked);
+    const at: Vec3 = [0, 0, 0];
+    if (!node || !this.player.view.field.node(node.id, at)) return;
+    const p = P(at);
+    if (!p) return;
+    drawMark(ctx, p.x, p.y, {
+      title: node.label,
+      font: this.fontOf(),
+      width: f.vp.width,
+      time: f.now / 1000,
+      still: this.still,
       alpha,
     });
   }
@@ -877,6 +919,7 @@ export class CrawlPlugin implements GraphPlugin {
       halos: true,
       alpha: 1,
     });
+    this.drawMarked(ctx, f, P, 1);
     if (view.mode !== 'walk' && view.mode !== 'dwell') return;
     const c = this.player.cursor;
     const p = c ? P(c) : null;

@@ -71,15 +71,20 @@ export interface CrawlPlan {
  * and its owner for a note in a folder somebody shared. Two vaults may both
  * hold `plan.md`.
  */
-function place(path: string, ownerId?: string | null): string {
+export function place(path: string, ownerId?: string | null): string {
   return ownerId ? `${ownerId}\u0000${path}` : path;
 }
 
+/** Where a note of the graph is, as `place` keys it. */
+export function nodePlace(n: GraphNode): string {
+  return place(n.path, n.foreign ? n.ownerId : null);
+}
+
 /** Every note the graph shows, by where it is. */
-function notesByPlace(model: GraphModel): Map<string, GraphNode> {
+export function notesByPlace(model: GraphModel): Map<string, GraphNode> {
   const map = new Map<string, GraphNode>();
   for (const n of model.nodes) {
-    if (n.kind === 'note') map.set(place(n.path, n.foreign ? n.ownerId : null), n);
+    if (n.kind === 'note') map.set(nodePlace(n), n);
   }
   return map;
 }
