@@ -3,8 +3,9 @@
 // the web app would otherwise never hear about.
 //
 // What is kept is the replay, not the answer: paths, titles and why each note
-// was reached. The excerpts the assistant was handed are not stored; they are
-// the notes themselves, and a second copy would outlive an edit or a delete.
+// was reached, and the notes the budget left out. The excerpts the assistant
+// was handed are not stored; they are the notes themselves, and a second copy
+// would outlive an edit or a delete.
 //
 // Rows belong to the user who crawled, who is always the vault's owner here —
 // `gather_context` reads the caller's own vault only. Nobody else lists them,
@@ -40,6 +41,12 @@ export interface CrawlReplay {
   unresolved: GatherContextResult['unresolved'];
   coverage: GatherContextResult['coverage'];
   notesLeftOut: number;
+  /**
+   * The strongest notes the budget left out — where they are, their title and
+   * why they were candidates, never a body — so the web app can offer them
+   * back. Absent from crawls kept before it was.
+   */
+  leftOut?: Array<Pick<GatherContextResult['leftOut'][number], 'path' | 'ownerId' | 'title' | 'reason'>>;
 }
 
 export interface CrawlSummary {
@@ -78,6 +85,12 @@ export function toReplay(result: GatherContextResult): CrawlReplay {
     unresolved: result.unresolved,
     coverage: result.coverage,
     notesLeftOut: result.budget.notesLeftOut,
+    leftOut: result.leftOut.map(({ path, ownerId, title, reason }) => ({
+      path,
+      ...(ownerId ? { ownerId } : {}),
+      title,
+      reason,
+    })),
   };
 }
 

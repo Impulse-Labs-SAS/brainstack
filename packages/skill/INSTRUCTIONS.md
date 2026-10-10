@@ -105,7 +105,7 @@ For any question or task about the user's notes, call `gather_context` **first**
 
 It reads the user's own vault and every folder somebody shared with them. A note from a shared folder comes with its `ownerId` and a `path` relative to that owner's root — pass both to `get_note` to open it.
 
-Each call is kept in the user's crawl history, so they can replay it in the web app: the start of `text` and which notes it reached, never their contents. Pass the user's request, not secrets you happen to hold.
+Each call is kept in the user's crawl history, so they can replay it in the web app: the start of `text`, which notes it reached and which it left out, never their contents. Pass the user's request, not secrets you happen to hold.
 
 ## Shared folders
 
