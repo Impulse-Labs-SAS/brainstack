@@ -130,6 +130,54 @@ describe('PromptScene', () => {
     expect(scene.frame(0, false).gaze).toBeNull();
   });
 
+  it('comes out of the dark behind the frame as the view opens, to the input already shown', () => {
+    const { build, vault } = space();
+    const replay = new CrawlReplay(() => {});
+    const scene = new PromptScene(replay);
+    scene.setSpace(build, vault.model);
+    scene.layout(layoutOf(build, LAPTOP));
+    expect(scene.enter(0, false)).toBe(true);
+    const shot = scene.shot!;
+    const first = scene.frame(0, false);
+    expect(first).toMatchObject({ scene: 'prompt', moving: true, interactive: false });
+    expect(first.levels).toEqual(AT_PROMPT);
+    expect(first.camera).toEqual(shot.cam);
+    // Out along the camera's axis, behind the frame: further from the viewer than the box.
+    const at = replay.cursor!;
+    const fromViewer = (p: readonly number[]) =>
+      Math.hypot(p[0]! - shot.viewer[0], p[1]! - shot.viewer[1], p[2]! - shot.viewer[2]);
+    expect(fromViewer(at)).toBeGreaterThan(fromViewer(shot.box) + scene.knobs.entrance * shot.unit * 0.5);
+
+    const { frames } = play({ scene, replay }, 0, (f) => f.interactive);
+    expect(frames.every((f) => f.camera !== null && f.handoff === null)).toBe(true);
+    // Never a blink: the input shown all the way.
+    expect(frames.every((f) => f.levels.prompt === 1)).toBe(true);
+    const last = frames.at(-1)!;
+    expect(last.levels).toEqual(AT_PROMPT);
+    expect(last.atRest).toBe(true);
+    expect(replay.resting).toBe(true);
+    expect(replay.view.hereId).toBe(PERCH_ID);
+    // Nothing was walked: the snapshot never said so.
+    expect(replay.snapshot.state).toBe('idle');
+  });
+
+  it('is found on the frame at once without an entrance, or under reduced motion', () => {
+    for (const [entrance, still] of [
+      [0, false],
+      [16, true],
+    ] as const) {
+      const { build, vault } = space();
+      const replay = new CrawlReplay(() => {});
+      const scene = new PromptScene(replay);
+      scene.knobs.entrance = entrance;
+      scene.setSpace(build, vault.model);
+      scene.layout(layoutOf(build, LAPTOP));
+      expect(scene.enter(0, still)).toBe(true);
+      const f = scene.frame(0, still);
+      expect(f).toMatchObject({ interactive: true, atRest: true, levels: AT_PROMPT });
+    }
+  });
+
   it('takes hold of the frame with every claw at the defaults, on a phone, a laptop and a wide screen', () => {
     for (const vp of [PHONE, LAPTOP, WIDE]) {
       const { replay } = atPrompt(vp);

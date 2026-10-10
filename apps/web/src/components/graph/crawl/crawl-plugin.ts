@@ -161,6 +161,8 @@ export class CrawlPlugin implements GraphPlugin {
   private layoutDirty: 'move' | 'regrip' | null = null;
   /** To rest on the frame as soon as the box has a place. */
   private pendingRest = false;
+  /** The next rest is the view opening: the creature comes to the frame rather than being found on it. */
+  private entering = false;
   /** The cluster as last built: kept after a failure, for a facade the controller still holds. */
   private build: SpaceBuild | null = null;
   private reach: { build: SpaceBuild; radius: number } | null = null;
@@ -446,8 +448,10 @@ export class CrawlPlugin implements GraphPlugin {
         if (this.status === 'warming') {
           this.status = 'ready';
           this.facade ??= this.makeFacade(gl.canvas);
-          // At the prompt as soon as the box is placed, the claws taking hold anew.
+          // At the prompt as soon as the box is placed: the first time, coming
+          // out of the dark to take hold of the frame (`PromptScene.enter`).
           this.pendingRest = true;
+          this.entering = true;
           this.layoutDirty = 'regrip';
           this.tell();
         }
@@ -635,7 +639,10 @@ export class CrawlPlugin implements GraphPlugin {
         this.layoutDirty = null;
       }
     }
-    if (this.pendingRest && this.scene.available && this.restAtPrompt()) this.pendingRest = false;
+    if (this.pendingRest && this.scene.available) {
+      const placed = this.entering ? this.enterAtPrompt() : this.restAtPrompt();
+      if (placed) this.pendingRest = this.entering = false;
+    }
     const sf = this.scene.available ? this.scene.frame(this.clock, this.still) : null;
     this.sf = sf;
     // Still waiting for a place: the prompt, inert.
@@ -690,6 +697,16 @@ export class CrawlPlugin implements GraphPlugin {
       tz: c.tz + (t.z - c.tz) * k,
       dist: c.dist + (t.dist - c.dist) * k,
     };
+  }
+
+  /** The view opening: the creature set out from behind the frame, on its way to take hold of it. */
+  private enterAtPrompt(): boolean {
+    if (!this.scene.enter(this.clock, this.still)) return false;
+    this.chase = null;
+    const view = this.player.view;
+    if (this.still) this.gl?.finalPose(view);
+    else this.gl?.snap(view);
+    return true;
   }
 
   /** At the prompt, resting on the frame, the creature placed there at once: a cut. */
