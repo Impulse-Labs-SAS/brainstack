@@ -1,17 +1,17 @@
-// The Crawl view's replay, apart from anything that draws it: where the walk
+// The Sentinel view's replay, apart from anything that draws it: where the walk
 // is, which threads it has lit, which notes it has found, what the panel says
 // — and what each of the Sentinel's grip slots holds. Pure: no document, no
 // three, so it runs the same in a test as in the view.
 //
-// CrawlLayer used to keep all of this beside a 2D spider whose feet lit the
-// threads they landed on, so what a crawl lit depended on the frame rate and
-// on the spider being drawn at all. Here grips are planned by distance along
-// each leg (sentinel/grips.ts), all of them as the leg begins, and land on the
-// replay's own clock: the light trail, the Sentinel and a jump to the end all
-// light exactly the same threads. While the layout still moves, a leg is
-// planned from where the notes were in the frame that began it — its way and
-// its grips alike — so what it lights can differ by a thread from one frame
-// rate to another; at rest it never does.
+// The 2D spider the Sentinel replaced kept all of this beside its legs, whose
+// feet lit the threads they landed on, so what a crawl lit depended on the
+// frame rate and on the spider being drawn at all. Here grips are planned by
+// distance along each leg (sentinel/grips.ts), all of them as the leg begins,
+// and land on the replay's own clock: the light trail, the Sentinel and a
+// jump to the end all light exactly the same threads. While the layout still
+// moves, a leg is planned from where the notes were in the frame that began
+// it — its way and its grips alike — so what it lights can differ by a thread
+// from one frame rate to another; at rest it never does.
 //
 // A leg's distance follows a profile in time — a walk eases in and out, a
 // crossing of the void feels its way first — but it lasts exactly as long as
@@ -31,7 +31,7 @@
 // every rebuild.
 //
 // By default it walks the brain: the threads graph-scene draws, measured along
-// the brain's curve, in units of its typical link. A space of Crawl's own
+// the brain's curve, in units of its typical link. A space of the Sentinel's own
 // (space/space.ts) puts the notes elsewhere and draws its threads as pipes or
 // arcs, so it hands the replay its own field, unit and pace instead. Then
 // every length, every place and the way between two notes come from that
@@ -48,7 +48,6 @@
 
 import { hash01, type GraphEdge, type GraphModel, type GraphNode } from '@/lib/graph-model';
 
-import type { CrawlSnapshot } from './crawl-layer';
 import {
   findWalk,
   planCrawl,
@@ -59,6 +58,7 @@ import {
   type Reach as PlannedReach,
   type ReachKind,
 } from './crawl-plan';
+import { emptySnapshot, type CrawlSnapshot } from './crawl-snapshot';
 import type {
   Hold,
   LegSegment,
@@ -371,20 +371,6 @@ const NOWHERE: ThreadField = {
     out[2] = 0;
   },
 };
-
-function emptySnapshot(): CrawlSnapshot {
-  return {
-    state: 'idle',
-    phase: 0,
-    log: [],
-    found: { named: 0, linked: 0, decision: 0 },
-    asks: [],
-    threads: 0,
-    coverage: null,
-    offGraph: 0,
-    following: true,
-  };
-}
 
 function firstVisit(plan: CrawlPlan): Extract<CrawlStep, { kind: 'visit' }> | undefined {
   return plan.steps.find((s): s is Extract<CrawlStep, { kind: 'visit' }> => s.kind === 'visit');
@@ -840,6 +826,17 @@ export class CrawlReplay {
   /** World units per creature unit: the vault's typical link, or the unit a space handed in. */
   get unit(): number {
     return this.scale;
+  }
+
+  /**
+   * Where the walk is this moment, world units: along the leg it walks, on the
+   * perch it holds, or on the note it stands on; null with nowhere to be. What
+   * shows the walker as light alone, when no creature is drawn, reads it every
+   * frame. A copy: the replay's own point is reused.
+   */
+  get cursor(): Vec3 | null {
+    const p = this.cursorPoint();
+    return p ? [p[0], p[1], p[2]] : null;
   }
 
   // -- The replay ----------------------------------------------------------------

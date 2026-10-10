@@ -67,8 +67,9 @@ import {
 } from '@/lib/graph-camera';
 import { hash01 } from '@/lib/graph-model';
 
-import type { CrawlSnapshot } from '../../crawl-layer';
+import { drawCrawl, type Project } from '../../crawl-draw';
 import { CrawlReplay } from '../../crawl-replay';
+import type { CrawlSnapshot } from '../../crawl-snapshot';
 import { PERCH_RAIL_SET } from '../../prompt/perch-field';
 import type { PerchShot } from '../../prompt/perch-geometry';
 import { PromptScene, type IdleLife, type PromptFrame } from '../../prompt/prompt-scene';
@@ -79,7 +80,8 @@ import { sampleVault, type SampleVault } from '../../sample-vault';
 import { largeVault } from '../../space/large-vault';
 import type { SpaceBuild } from '../../space/space';
 import { PromptBezel } from '../../stage/bezel';
-import { notesReach, overviewCamera } from '../../stage/overview';
+import { blankEye, sentinelEye, standInEye, type SpaceEye } from '../../stage/eye';
+import { OVERVIEW_YAW, notesReach, overviewCamera, stageZoomRange } from '../../stage/overview';
 import { Veil } from '../../stage/veil';
 import { typicalLink } from '../../threads';
 import type { Vec3 } from '../../vec';
@@ -96,18 +98,14 @@ import { TIERS, type Tier } from '../tiers';
 import { SentinelView, creatureBounds } from '../view';
 
 import { LabBackdrop } from './backdrop';
-import { drawCrawl, drawDebug, drawNotes, drawPerch, type Project } from './lab-overlay';
+import { drawDebug, drawNotes, drawPerch } from './lab-overlay';
 import { LAB_ASKED, labRecents } from './lab-prompt';
 import {
   DEFAULT_SPACE,
   LAB_SPACES,
-  blankEye,
   labDecisions,
-  sentinelEye,
-  standInEye,
   type LabSpace,
   type LabSpaceReport,
-  type SpaceEye,
 } from './lab-spaces';
 
 export type Preset = keyof SampleVault['crawls'];
@@ -338,8 +336,6 @@ const STATS_FRAMES = 240;
 const STATS_EVERY_MS = 500;
 /** How long dispose waits for a shader compile still polling before freeing the renderer. */
 const COMPILE_WAIT_MS = 5000;
-/** The lab's angle, at first and after every change of space: one view to compare them by. */
-const LAB_YAW = 0.5;
 const BRAIN_PITCH = 0.16;
 /** A found note's halo over a space, creature units: about a brain note's size beside its links. */
 const SPACE_NOTE_RADIUS = 0.3;
@@ -487,7 +483,7 @@ export class LabHost {
   private rebuilding = false;
   private disposed = false;
 
-  private cam: Camera = { tx: 0, ty: 0, tz: 0, yaw: LAB_YAW, pitch: BRAIN_PITCH, dist: 1 };
+  private cam: Camera = { tx: 0, ty: 0, tz: 0, yaw: OVERVIEW_YAW, pitch: BRAIN_PITCH, dist: 1 };
   private vp: Viewport = { width: 1, height: 1 };
   private dpr = 1;
   private resized = true;
@@ -1374,17 +1370,21 @@ export class LabHost {
     const bounds = s.kind === 'space' ? s.build.bounds : boundsOf(this.vault.model.nodes);
     const whole =
       s.kind === 'space'
-        ? overviewCamera(s.build.bounds, this.vp, LAB_YAW, s.build.camera.pitch).dist
+        ? overviewCamera(s.build.bounds, this.vp, OVERVIEW_YAW, s.build.camera.pitch).dist
         : this.unit * 20;
     this.cam = {
       tx: bounds?.cx ?? 0,
       ty: bounds?.cy ?? 0,
       tz: bounds?.cz ?? 0,
-      yaw: LAB_YAW,
+      yaw: OVERVIEW_YAW,
       pitch: s.kind === 'space' ? s.build.camera.pitch : BRAIN_PITCH,
       dist: whole,
     };
-    this.farthest = Math.max(this.unit * 150, whole * 1.5);
+    // Over a space, the Sentinel view's wheel limits; the brain stand-in keeps the lab's own.
+    this.farthest =
+      s.kind === 'space'
+        ? stageZoomRange(s.build, this.vp).max
+        : Math.max(this.unit * 150, whole * 1.5);
   }
 
   /**
@@ -1523,7 +1523,7 @@ export class LabHost {
     this.promptRects = rects;
     const [left, top, width, height] = rects as [number, number, number, number];
     const radius = parseFloat(getComputedStyle(p.box).borderTopLeftRadius) || 0;
-    const overview = overviewCamera(s.build.bounds, this.vp, LAB_YAW, s.build.camera.pitch);
+    const overview = overviewCamera(s.build.bounds, this.vp, OVERVIEW_YAW, s.build.camera.pitch);
     const placed = this.scene.layout(
       {
         vp: this.vp,

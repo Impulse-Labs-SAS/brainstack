@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { CrawlReplay } from '../../crawl-replay';
-import { sampleVault } from '../../sample-vault';
-import { legPoint } from '../../threads';
-import { add, dot, len, mul, norm, type Vec3 } from '../../vec';
-import { LENS_POINT } from '../geometry';
-import { createPose } from '../pose';
+import { CrawlReplay } from '../crawl-replay';
+import { sampleVault } from '../sample-vault';
+import { LENS_POINT } from '../sentinel/geometry';
+import { createPose } from '../sentinel/pose';
+import { legPoint } from '../threads';
+import { add, dot, len, mul, norm, type Vec3 } from '../vec';
 
-import { blankEye, sentinelEye, standInEye } from './lab-spaces';
+import { blankEye, sentinelEye, standInEye } from './eye';
 
 const UNIT = 10;
 

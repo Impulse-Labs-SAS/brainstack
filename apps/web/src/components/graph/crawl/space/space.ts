@@ -1,6 +1,6 @@
-// A space of Crawl's own: where the notes stand, what the threads look like,
-// and how it is drawn — instead of the brain the other views share. The lab
-// tries several; the Crawl view will show one.
+// A space of the Sentinel view's own: where the notes stand, what the threads
+// look like, and how it is drawn — instead of the brain the other views share.
+// The lab tries several; the view shows one, the dormant network.
 //
 // A space builds from the graph model (positions are its own, never the
 // brain's) and hands the crawl a ThreadField, the only thing the replay and

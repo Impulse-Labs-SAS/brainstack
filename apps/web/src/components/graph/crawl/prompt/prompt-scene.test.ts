@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { boundsOf, type Camera, type Viewport } from '@/lib/graph-camera';
 
@@ -384,6 +384,30 @@ describe('PromptScene', () => {
       expect(f.moving).toBe(false);
       expect(crossed).toBe(true);
     }
+  });
+
+  it('plans over the model it is handed after a rebuild, with nothing cut or laid out again', () => {
+    const { scene, replay, vault, layout } = atPrompt();
+    const shot = scene.shot;
+    // The same vault built again: the same notes, as new objects.
+    const rebuilt = sampleVault().model;
+    scene.setModel(rebuilt);
+    expect(scene.shot).toBe(shot);
+    expect(scene.name).toBe('prompt');
+    expect(scene.frame(0, false).interactive).toBe(true);
+    const rest = vi.spyOn(replay, 'rest');
+    expect(scene.layout(layout, true)).toBe(true);
+    expect(rest.mock.calls.at(-1)![0]).toBe(rebuilt);
+    const load = vi.spyOn(replay, 'load');
+    expect(scene.submit(vault.crawls.walk, 0, false)).toBe(true);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load.mock.calls[0]![1]).toBe(rebuilt);
+    const first = rebuilt.nodes.find((n) => n.id === replay.view.nextId);
+    expect(first).toBeDefined();
+    // Without a space it is ignored: the next space brings its own model.
+    scene.setSpace(null, null);
+    scene.setModel(vault.model);
+    expect(scene.field).toBeNull();
   });
 
   it('cuts a transition to where it was going when the space changes under it', () => {

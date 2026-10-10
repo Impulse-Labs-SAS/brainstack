@@ -26,7 +26,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-import type { CrawlSnapshot } from '../../crawl-layer';
+import type { CrawlSnapshot } from '../../crawl-snapshot';
 import { CrawlPrompt } from '../../prompt/crawl-prompt';
 import { GAP_MIN } from '../../prompt/perch-geometry';
 import { GAZES } from '../../prompt/prompt-scene';

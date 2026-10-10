@@ -22,7 +22,7 @@ import { Button } from 'react-aria-components';
 import { cn } from '@/lib/utils';
 
 import { GLASS } from '../../../graph-preview';
-import type { CrawlSnapshot } from '../../crawl-layer';
+import type { CrawlSnapshot } from '../../crawl-snapshot';
 
 export interface LabPanelProps {
   /** The crawl is the scene, or is becoming it. */

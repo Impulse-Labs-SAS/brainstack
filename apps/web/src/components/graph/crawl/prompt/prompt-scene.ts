@@ -1,7 +1,7 @@
 // The prompt scene, and the way from it to the crawl and back, apart from
 // anything that draws: where the frame round the input is, who holds the
 // camera, how much of each part shows, and what the replay is told. The lab
-// and Crawl drive the same tested object; each draws it its own way.
+// and the Sentinel view drive the same tested object; each draws it its own way.
 //
 // At the prompt the Sentinel rests on the frame round the input (the replay's
 // `rest` over the space's field with the frame in it), and the scene holds
@@ -200,6 +200,18 @@ export class PromptScene {
     this.build = build;
     this.model = model;
     this.perched = withPerch(build.field, null);
+  }
+
+  /**
+   * The graph rebuilt over the same layout — a title edited, a layer the
+   * cluster does not read toggled: the notes are new objects, nowhere new. Only
+   * the model is swapped, so the next send or rest plans over the notes the
+   * graph now holds; nothing is cut and nothing is laid out again. A model
+   * the layout reads differently comes with a new space instead (`setSpace`).
+   * Without a space there is nothing to plan over, and it is ignored.
+   */
+  setModel(model: GraphModel): void {
+    if (this.build) this.model = model;
   }
 
   /**

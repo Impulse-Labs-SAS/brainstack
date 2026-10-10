@@ -818,6 +818,39 @@ describe('CrawlReplay over a field without lengths', () => {
   });
 });
 
+describe("CrawlReplay's cursor", () => {
+  it('stands on the note it reads, rides the leg it walks, and hands out a copy', () => {
+    const { model, crawls } = sampleVault();
+    const r = new CrawlReplay(() => {});
+    expect(r.cursor).toBeNull();
+    r.load(crawls.walk, model);
+    // Reading a note: on it.
+    for (let i = 0; i < 10_000 && r.view.mode !== 'dwell'; i++) r.update(1 / 60);
+    expect(r.view.mode).toBe('dwell');
+    const here = model.nodes.find((n) => n.id === r.view.hereId)!;
+    expect(r.cursor).toEqual(at(here));
+    // Partway along a leg: on it, where the camera follows, and at neither end.
+    const midLeg = () => {
+      const w = r.view.walk;
+      return !!w && w.travelled > 0.3 * w.total && w.travelled < 0.7 * w.total;
+    };
+    for (let i = 0; i < 10_000 && !midLeg(); i++) r.update(1 / 60);
+    expect(midLeg()).toBe(true);
+    const c = r.cursor!;
+    const f = r.follow()!;
+    expect(dist(c, [f.x, f.y, f.z])).toBeLessThan(1e-9);
+    const leg = r.view.walk!.segments;
+    const from = model.nodes.find((n) => n.id === leg[0]!.fromId)!;
+    const to = model.nodes.find((n) => n.id === leg.at(-1)!.toId)!;
+    expect(dist(c, at(from))).toBeGreaterThan(0);
+    expect(dist(c, at(to))).toBeGreaterThan(0);
+    c[0] += 1000;
+    expect(r.cursor![0]).toBeCloseTo(c[0] - 1000, 9);
+    r.clear();
+    expect(r.cursor).toBeNull();
+  });
+});
+
 describe('walkProgress', () => {
   it('starts and stops at rest yet arrives exactly when the walk ends', () => {
     for (const duration of [0.37, 1.2, 3.4]) {
