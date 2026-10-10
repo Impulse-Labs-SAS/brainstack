@@ -13,8 +13,9 @@
 // creature: far too much for the graph's own chunk, so it is imported only
 // when the view opens, and this module knows it by its types alone
 // (stage/stage-handle.ts). Until it has loaded, built the cluster and
-// compiled its shaders, the brain stays on screen under an inert prompt; then
-// `stage` returns the facade the controller steps aside for. Anything that
+// compiled its shaders, the prompt shows inert over the dark — the brain kept
+// out of sight (`veil`), so nothing else flashes first; then `stage` returns
+// the facade the controller steps aside for. Anything that
 // stops it — the chunk, no WebGL, a software rasteriser, a build or a shader
 // that fails, the context lost, a frame that throws, or a start that takes too
 // long — sends the view to the trail for the rest of this plugin's life, said
@@ -160,6 +161,8 @@ export class CrawlPlugin implements GraphPlugin {
   private layoutDirty: 'move' | 'regrip' | null = null;
   /** To rest on the frame as soon as the box has a place. */
   private pendingRest = false;
+  /** The next rest is the view opening: the creature comes to the frame rather than being found on it. */
+  private entering = false;
   /** The cluster as last built: kept after a failure, for a facade the controller still holds. */
   private build: SpaceBuild | null = null;
   private reach: { build: SpaceBuild; radius: number } | null = null;
@@ -213,6 +216,16 @@ export class CrawlPlugin implements GraphPlugin {
     this.css = { prompt: '', panel: '', visibility: '', below: '' };
     this.rects = [];
     if (this.layoutDirty !== 'regrip') this.layoutDirty = 'move';
+  }
+
+  /**
+   * While the stage starts — its code loading, the cluster building, the shaders compiling —
+   * the brain stays out of sight: the view opens on the prompt over the dark, and the stage
+   * fades in over that, never over a brain shown for a second. On the trail the brain is
+   * what the walk is drawn over, so it shows.
+   */
+  get veil(): boolean {
+    return !this.disposed && this.status !== 'ready' && this.status !== 'trail';
   }
 
   /** The facade while the stage is ready, else null: the controller enters and leaves stage mode by it. */
@@ -435,8 +448,10 @@ export class CrawlPlugin implements GraphPlugin {
         if (this.status === 'warming') {
           this.status = 'ready';
           this.facade ??= this.makeFacade(gl.canvas);
-          // At the prompt as soon as the box is placed, the claws taking hold anew.
+          // At the prompt as soon as the box is placed: the first time, coming
+          // out of the dark to take hold of the frame (`PromptScene.enter`).
           this.pendingRest = true;
+          this.entering = true;
           this.layoutDirty = 'regrip';
           this.tell();
         }
@@ -624,7 +639,10 @@ export class CrawlPlugin implements GraphPlugin {
         this.layoutDirty = null;
       }
     }
-    if (this.pendingRest && this.scene.available && this.restAtPrompt()) this.pendingRest = false;
+    if (this.pendingRest && this.scene.available) {
+      const placed = this.entering ? this.enterAtPrompt() : this.restAtPrompt();
+      if (placed) this.pendingRest = this.entering = false;
+    }
     const sf = this.scene.available ? this.scene.frame(this.clock, this.still) : null;
     this.sf = sf;
     // Still waiting for a place: the prompt, inert.
@@ -679,6 +697,16 @@ export class CrawlPlugin implements GraphPlugin {
       tz: c.tz + (t.z - c.tz) * k,
       dist: c.dist + (t.dist - c.dist) * k,
     };
+  }
+
+  /** The view opening: the creature set out from behind the frame, on its way to take hold of it. */
+  private enterAtPrompt(): boolean {
+    if (!this.scene.enter(this.clock, this.still)) return false;
+    this.chase = null;
+    const view = this.player.view;
+    if (this.still) this.gl?.finalPose(view);
+    else this.gl?.snap(view);
+    return true;
   }
 
   /** At the prompt, resting on the frame, the creature placed there at once: a cut. */

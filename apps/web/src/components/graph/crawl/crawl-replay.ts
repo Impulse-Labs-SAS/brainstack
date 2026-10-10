@@ -645,6 +645,33 @@ export class CrawlReplay {
     if (this.restingNow || !this.placed(perch)) return false;
     const cursor = this.cursorPoint();
     const from: Vec3 | null = cursor ? [cursor[0], cursor[1], cursor[2]] : null;
+    if (!this.home(from, perch, crossing)) return true;
+    this.snap = { ...this.snap, state: 'walking' };
+    this.log('walk', 'go back', 'to the prompt');
+    return true;
+  }
+
+  /**
+   * The view opening: from `from` — out in the dark behind the frame — across
+   * the void to `perch`, landing as a recall lands. Resting or not; false if
+   * the perch is not in the field. Whatever it held lets go first. No walk
+   * is reported: nothing was asked, and the snapshot stays idle.
+   */
+  arriveFrom(from: Vec3, perch: ReplayPerch, crossing?: number | CrossingPace | null): boolean {
+    if (!this.placed(perch)) return false;
+    this.home([from[0], from[1], from[2]], perch, crossing);
+    return true;
+  }
+
+  /**
+   * Across the void from `from` to `perch` — true — or there at once, with
+   * nowhere to come from — false.
+   */
+  private home(
+    from: Vec3 | null,
+    perch: ReplayPerch,
+    crossing?: number | CrossingPace | null,
+  ): boolean {
     this.cut();
     this.perch = perch;
     this.reaching = [];
@@ -656,7 +683,7 @@ export class CrawlReplay {
       // Nowhere to come back from — nothing was loaded: it is simply there.
       this.settleOnPerch(this.clock, 0, true);
       this.emit();
-      return true;
+      return false;
     }
     // A step the plan has not: there is no step to read, and the motion sees a new phase.
     this.stepIndex = Math.max(this.stepIndex + 1, this.plan?.steps.length ?? 0);
@@ -687,8 +714,7 @@ export class CrawlReplay {
     this.mode = 'walk';
     this.push({ kind: 'begin', clock: this.clock, stepIndex: this.stepIndex, nextId: perch.id });
     this.letGo();
-    this.snap = { ...this.snap, state: 'walking' };
-    this.log('walk', 'go back', 'to the prompt');
+    this.emit();
     return true;
   }
 

@@ -268,6 +268,9 @@ export function GraphView({
       void import('./crawl/crawl-panel').catch(() => {});
       void import('./crawl/stage/sentinel-stage').catch(() => {});
     }
+    // Before the first frame: opening on the Sentinel, the brain must not show while its panel's
+    // code arrives and its stage starts.
+    controller.awaitPlugin(opening.sentinel);
     controller.initView(opening.view);
     setView(opening.view);
     setSentinel(opening.sentinel);
@@ -347,6 +350,13 @@ export function GraphView({
     setView(choice === 'sentinel' ? 'brain' : choice);
     writePref(CHOICE_KEY, choice);
   };
+
+  // Into the Sentinel from another view, the brain goes dark at once rather than stay under an
+  // inert prompt until the stage is ready; out of it (or when it fails to load), it comes back.
+  // Not before `ready`: the opening view was set in the mount effect, before the first frame.
+  useEffect(() => {
+    if (ready) controllerRef.current?.awaitPlugin(sentinel);
+  }, [sentinel, ready]);
 
   const leaveSentinel = useCallback((error: unknown) => {
     console.warn('Sentinel: the view failed to load; the brain shows instead.', error);

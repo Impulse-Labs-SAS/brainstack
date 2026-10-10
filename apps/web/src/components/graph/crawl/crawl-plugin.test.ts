@@ -230,7 +230,10 @@ function setup(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage } = {}) {
   return { vault, stage, factory, plugin, host, uis, snaps, dom, ui, snap };
 }
 
-/** Set up, the stage loaded, built and compiled, and the first stage frame drawn: at the prompt. */
+/**
+ * Set up, the stage loaded, built and compiled, and the creature come out of
+ * the dark to the frame: at the prompt, taking text.
+ */
 async function ready(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage } = {}) {
   const s = setup(opts);
   await flush();
@@ -238,6 +241,7 @@ async function ready(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage } =
   s.stage.warm();
   await flush();
   s.host.frame();
+  s.host.until(() => s.ui().interactive);
   return s;
 }
 
@@ -285,16 +289,56 @@ describe('CrawlPlugin starting', () => {
     expect(facade!.locked).toBe(true);
     s.host.frame();
     expect(s.host.entered).toBe(1);
-    expect(s.ui()).toMatchObject({ status: 'sentinel', scene: 'prompt', interactive: true });
-    expect(s.ui().focus).toBe(1);
-    const f = s.stage.frame!;
-    expect(f.scene!.atRest).toBe(true);
+    // The creature comes out of the dark behind the frame: the input shows, and waits for it.
+    expect(s.ui()).toMatchObject({ status: 'sentinel', scene: 'prompt', interactive: false });
+    let f = s.stage.frame!;
+    expect(f.scene!.atRest).toBe(false);
     expect(f.sentinel).toBe(true);
-    // The prompt scene holds the camera on the perch shot.
+    expect(s.dom.vars.get('--crawl-prompt')).toBe('1.0000');
+    // The prompt scene holds the camera on the perch shot all the way.
     expect(s.host.cam).toEqual(f.scene!.camera);
-    expect(s.dom.vars.get('--crawl-frame-below')).toMatch(/px$/);
     expect(s.stage.log).toContain('snap');
+    s.host.until(() => s.ui().interactive);
+    expect(s.ui().focus).toBe(1);
+    f = s.stage.frame!;
+    expect(f.scene!.atRest).toBe(true);
+    expect(s.host.cam).toEqual(f.scene!.camera);
+    expect(s.dom.vars.get('--crawl-prompt')).toBe('1.0000');
+    expect(s.dom.vars.get('--crawl-frame-below')).toMatch(/px$/);
+    // It walked nothing anyone asked for.
+    expect(s.snaps.every((snap) => snap.state === 'idle' && snap.log.length === 0)).toBe(true);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('is found on the frame at once under reduced motion', async () => {
+    const s = setup({ still: true });
+    await flush();
+    s.host.frame();
+    s.stage.warm();
+    await flush();
+    s.host.frame();
+    expect(s.ui()).toMatchObject({ scene: 'prompt', interactive: true });
+    expect(s.stage.frame!.scene!.atRest).toBe(true);
+  });
+
+  it('keeps the brain out of sight while the stage starts, and not once it is ready', async () => {
+    const s = setup();
+    expect(s.plugin.veil).toBe(true);
+    await flush();
+    s.host.frame();
+    expect(s.plugin.veil).toBe(true);
+    s.stage.warm();
+    await flush();
+    expect(s.plugin.veil).toBe(false);
+    s.plugin.dispose();
+    expect(s.plugin.veil).toBe(false);
+  });
+
+  it('shows the brain on the trail: the walk is drawn over it', async () => {
+    const s = setup({ loadStage: () => Promise.reject(new Error('offline')) });
+    await flush();
+    expect(s.ui().status).toBe('trail');
+    expect(s.plugin.veil).toBe(false);
   });
 
   it('plays nothing unless it is asked to', async () => {

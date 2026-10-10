@@ -97,6 +97,9 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
 - **The prompt.** The view opens on one line at the centre — "Ask your brain something" — with
   the Sentinel clinging to a dark frame round it (`prompt/`): its claws hold the frame's rails,
   its body rests behind the box, its eye looks over the top. Under it, the last few searches.
+  It is not found there: as the stage comes in, it crosses the void from behind the box, along
+  the camera's axis, and takes hold (`PromptScene.enter`, `entrance` creature units back), the
+  input taking focus as it lands. Under reduced motion it is simply there.
 - **A search.** A prompt goes to `notes.gatherContext`; the answer says why each note is there
   (`via`), and that is enough to replay it: the notes the text names, then what could not be
   resolved, then out along the links from each note in turn (`crawl-plan.ts`, tested). On a
@@ -170,8 +173,10 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
 - **Loading.** The panel comes with `next/dynamic` and the stage with `import()`, both only when
   the view opens (fetched alongside the graph when the page opens on it), so Brain, Network and
   Territories never download them (`crawl/lazy-imports.test.ts`). Until the stage has built the
-  cluster and compiled its shaders — half a second to a couple — the brain shows under an inert
-  prompt; then the stage fades in. In the Sentinel the brain's own tools are hidden (search,
+  cluster and compiled its shaders — half a second to a couple — the brain is kept out of sight
+  (the plugin's `veil`, and before the panel's code has even arrived, `awaitPlugin`): the inert
+  prompt shows over the dark, and the stage fades in over that. Only on the trail does the brain
+  come back, since the walk is drawn over it. In the Sentinel the brain's own tools are hidden (search,
   filters, Replay growth, the angles and Spin), and in its walk the legend too, whose colours the
   panel counts; zoom, Fit, the layers and the views stay.
 - **Quality.** One governor per stage starts from what the GPU says it can do and from the last

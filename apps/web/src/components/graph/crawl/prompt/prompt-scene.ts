@@ -72,6 +72,12 @@ export interface PromptKnobs extends PerchKnobs {
   frameReach: number;
   /** Seconds it holds still on the frame, letting go, before it crosses: it is seen to let go. */
   release: number;
+  /**
+   * How far behind the frame it comes from as the view opens, creature units
+   * along the camera's axis: out of the dark, across the void, to take hold.
+   * 0: it is found on the frame, as before.
+   */
+  entrance: number;
   idle: IdleLife;
   times: TransitionTimes;
 }
@@ -83,6 +89,7 @@ export function defaultPromptKnobs(): PromptKnobs {
     gaze: 'viewer',
     frameReach: 1,
     release: 0.35,
+    entrance: 16,
     // No hum: on a creature at rest it read as a tremor. Breath and bob are slow.
     idle: { breathing: 0.008, humAmplitude: 0, bob: 0.02 },
     times: defaultTimes(),
@@ -249,6 +256,36 @@ export class PromptScene {
     if (!this.replay.resting) return false;
     this.scene = 'prompt';
     this.levels = { ...AT_PROMPT };
+    return true;
+  }
+
+  /**
+   * The view opening: the creature comes out of the dark behind the frame,
+   * along the camera's axis, crosses the void and takes hold — the way back
+   * from a crawl, from nowhere. The input and its frame stay as they are: the
+   * page showed the input while the stage started, and taking it away to
+   * bring it back would blink. The camera holds the perch shot throughout. Under reduced
+   * motion, or with no `entrance`, it is found resting there (`reset`). False
+   * without a space or a shot.
+   */
+  enter(now: number, still: boolean): boolean {
+    const shot = this.current;
+    if (still || !(this.knobs.entrance > 0) || !shot) return this.reset();
+    if (!this.build) return false;
+    this.running = null;
+    this.rest();
+    const perch = this.perch();
+    const at = perch.at;
+    const ax = shot.box[0] - shot.viewer[0];
+    const ay = shot.box[1] - shot.viewer[1];
+    const az = shot.box[2] - shot.viewer[2];
+    const len = Math.hypot(ax, ay, az);
+    if (!this.replay.resting || !at || !(len > 1e-9)) return this.reset();
+    const back = (this.knobs.entrance * shot.unit) / len;
+    const from: Vec3 = [at[0] + ax * back, at[1] + ay * back, at[2] + az * back];
+    if (!this.replay.arriveFrom(from, perch, this.knobs.times.leave.crossing)) return this.reset();
+    this.levels = { ...AT_PROMPT };
+    this.start('prompt', now, still, shot.cam);
     return true;
   }
 

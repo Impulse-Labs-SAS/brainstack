@@ -68,6 +68,12 @@ export interface GraphPlugin {
    * as it does. Absent: drawn over the graph, as ever.
    */
   readonly stage?: PluginStage | null;
+  /**
+   * The graph kept out of sight while true: a plugin whose stage is on its way would otherwise
+   * show the brain for the second or two it takes to start. Read once a frame; the layout
+   * still settles and the plugin still draws. Absent or false: the graph shows, as ever.
+   */
+  readonly veil?: boolean;
 }
 
 export interface PluginStage {
@@ -235,6 +241,10 @@ export class GraphController {
   private growing = false;
   private chipTimer = 0;
   private plugin: GraphPlugin | null = null;
+  /** A plugin is on its way (`awaitPlugin`): the graph stays out of sight until it comes. */
+  private awaiting = false;
+  /** The graph's canvas hidden, as the last frame left it. */
+  private hidden = false;
 
   // Stage mode: a plugin's stage drawn instead of the graph (see `syncStage`).
   private staged: PluginStage | null = null;
@@ -310,6 +320,36 @@ export class GraphController {
     this.setSpin(false);
     this.spinAfter = spin;
     this.plugin = plugin;
+  }
+
+  /**
+   * A plugin is on its way, or no longer: the page knows it opens on a view that brings one
+   * before the plugin's code has even arrived, and the graph should not show meanwhile. Once a
+   * plugin is attached, its own `veil` decides.
+   */
+  awaitPlugin(on: boolean): void {
+    this.awaiting = on;
+    // At once, not at the next frame with a model: nothing may show before that frame comes.
+    this.syncVeil();
+  }
+
+  /** The graph's canvas hidden or shown as `veiled` says; true while it is hidden. */
+  private syncVeil(): boolean {
+    const veiled = this.veiled;
+    if (veiled !== this.hidden) {
+      this.hidden = veiled;
+      this.el.gl.style.visibility = veiled ? 'hidden' : '';
+      if (!veiled) {
+        this.reupload = true;
+        this.edgesDirty = true;
+      }
+    }
+    return veiled;
+  }
+
+  /** The graph kept out of sight: a plugin on its way, or an attached one starting. */
+  private get veiled(): boolean {
+    return this.plugin ? this.plugin.veil === true : this.awaiting;
   }
 
   dispose(): void {
@@ -1241,6 +1281,32 @@ export class GraphController {
     this.cam = { ...this.cam, dist: clamp(this.cam.dist / factor, r.min, r.max) };
   }
 
+  /**
+   * A frame with the graph out of sight, or false to draw it. Its canvas is hidden rather than
+   * cleared (a WebGL canvas keeps showing its last frame until it draws again) and the overlay
+   * holds only what the plugin draws; the layout settles meanwhile. Coming back, everything
+   * is uploaded again, as after a stage.
+   */
+  private veiledFrame(now: number, dt: number, model: GraphModel, moved: boolean): boolean {
+    if (!this.syncVeil()) return false;
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.el.overlay.width, this.el.overlay.height);
+    this.plugin?.draw(this.ctx, {
+      now,
+      dt,
+      cam: this.cam,
+      vp: this.vp,
+      dpr: this.dpr,
+      model,
+      reduceMotion: this.reduceMotion,
+      settled: !moved && !this.engine.warming,
+    });
+    const moving = this.engine.moving;
+    if (this.wasMoving && !moving) this.events.onSettled();
+    this.wasMoving = moving;
+    return true;
+  }
+
   private readonly frame = (now: number): void => {
     this.raf = requestAnimationFrame(this.frame);
     const model = this.model;
@@ -1298,6 +1364,8 @@ export class GraphController {
         dist: this.cam.dist + (follow.dist - this.cam.dist) * k,
       };
     }
+
+    if (this.veiledFrame(now, dt, model, moved)) return;
 
     const focus = this.hover ?? this.previewed ?? this.selected;
     if (focus !== this.focus) {
