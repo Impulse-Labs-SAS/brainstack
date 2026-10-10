@@ -13,8 +13,9 @@
 // creature: far too much for the graph's own chunk, so it is imported only
 // when the view opens, and this module knows it by its types alone
 // (stage/stage-handle.ts). Until it has loaded, built the cluster and
-// compiled its shaders, the brain stays on screen under an inert prompt; then
-// `stage` returns the facade the controller steps aside for. Anything that
+// compiled its shaders, the prompt shows inert over the dark — the brain kept
+// out of sight (`veil`), so nothing else flashes first; then `stage` returns
+// the facade the controller steps aside for. Anything that
 // stops it — the chunk, no WebGL, a software rasteriser, a build or a shader
 // that fails, the context lost, a frame that throws, or a start that takes too
 // long — sends the view to the trail for the rest of this plugin's life, said
@@ -213,6 +214,16 @@ export class CrawlPlugin implements GraphPlugin {
     this.css = { prompt: '', panel: '', visibility: '', below: '' };
     this.rects = [];
     if (this.layoutDirty !== 'regrip') this.layoutDirty = 'move';
+  }
+
+  /**
+   * While the stage starts — its code loading, the cluster building, the shaders compiling —
+   * the brain stays out of sight: the view opens on the prompt over the dark, and the stage
+   * fades in over that, never over a brain shown for a second. On the trail the brain is
+   * what the walk is drawn over, so it shows.
+   */
+  get veil(): boolean {
+    return !this.disposed && this.status !== 'ready' && this.status !== 'trail';
   }
 
   /** The facade while the stage is ready, else null: the controller enters and leaves stage mode by it. */

@@ -297,6 +297,26 @@ describe('CrawlPlugin starting', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('keeps the brain out of sight while the stage starts, and not once it is ready', async () => {
+    const s = setup();
+    expect(s.plugin.veil).toBe(true);
+    await flush();
+    s.host.frame();
+    expect(s.plugin.veil).toBe(true);
+    s.stage.warm();
+    await flush();
+    expect(s.plugin.veil).toBe(false);
+    s.plugin.dispose();
+    expect(s.plugin.veil).toBe(false);
+  });
+
+  it('shows the brain on the trail: the walk is drawn over it', async () => {
+    const s = setup({ loadStage: () => Promise.reject(new Error('offline')) });
+    await flush();
+    expect(s.ui().status).toBe('trail');
+    expect(s.plugin.veil).toBe(false);
+  });
+
   it('plays nothing unless it is asked to', async () => {
     const s = await ready();
     s.host.frames(600);

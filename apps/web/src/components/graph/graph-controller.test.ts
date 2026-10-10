@@ -747,6 +747,7 @@ function fakeStage(h: Harness, locked = false) {
 /** A plugin whose stage is whatever the test sets, and that follows `target`. */
 class FakePlugin implements GraphPlugin {
   stage: PluginStage | null = null;
+  veil = false;
   target: { x: number; y: number; z: number; dist: number } | null = null;
   userCamera = 0;
   readonly frames: PluginFrame[] = [];
@@ -832,6 +833,46 @@ describe('GraphController with a plugin', () => {
     expect(eventsSince(h, detached)).toEqual(['onSpin true']);
     h.step(2);
     expect(renders().at(-1)!.cam.yaw).toBeGreaterThan(renders().at(-2)!.cam.yaw);
+  });
+
+  it('keeps the graph out of sight while a plugin is on its way, and while it asks to', () => {
+    const { h, c } = restingBrain();
+    const renderCalls = () => scene.calls.filter((s) => s.name === 'render').length;
+    const ops = () => h.overlayOps!.map((o) => o.op);
+
+    // Opening on a view that brings a plugin: nothing of the brain before it comes, from the call on.
+    c.awaitPlugin(true);
+    expect(h.el.gl.style.visibility).toBe('hidden');
+    let rendered = renderCalls();
+    h.overlayOps!.length = 0;
+    h.step(3);
+    expect(renderCalls()).toBe(rendered);
+    expect(h.el.gl.style.visibility).toBe('hidden');
+    expect(ops().every((op) => op === 'setTransform' || op === 'clearRect')).toBe(true);
+
+    // Attached and starting: still dark, and the plugin draws (its prompt, its start-up).
+    const plugin = fakePlugin(h);
+    plugin.veil = true;
+    c.setPlugin(plugin);
+    h.overlayOps!.length = 0;
+    h.step(3);
+    expect(renderCalls()).toBe(rendered);
+    expect(plugin.frames).toHaveLength(3);
+    expect(ops().filter((op) => op === 'plugin.draw')).toHaveLength(3);
+
+    // It falls back to drawing over the brain: the brain comes back, uploaded whole.
+    plugin.veil = false;
+    h.step(1);
+    expect(renderCalls()).toBe(rendered + 1);
+    expect(h.el.gl.style.visibility).toBe('');
+    expect(renders().at(-1)!.moved).toBe(true);
+
+    // Leaving the view: no plugin, nothing awaited, the brain as ever.
+    c.setPlugin(null);
+    c.awaitPlugin(false);
+    rendered = renderCalls();
+    h.step(2);
+    expect(renderCalls()).toBe(rendered + 2);
   });
 
   it('draws the stage instead of the graph once it is ready', () => {
