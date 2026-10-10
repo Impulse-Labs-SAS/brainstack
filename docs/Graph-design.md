@@ -11,12 +11,12 @@ Two independent choices, kept apart on purpose.
 control in the toolbar, each tab an icon and a name; the keys `1` to `4` switch views too,
 without a number printed on the tabs to say so:
 
-| View        | Question                              | Shape                                                                                                |
-| ----------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Brain       | —                                     | 3D. Notes live inside a brain; each visible vault settles in its own lobe, yours in the frontal one. |
-| Network     | How does it connect?                  | Flat. Links alone decide where notes sit.                                                            |
-| Territories | What is there, and where is it filed? | Flat. A map: each project a country, each vault a continent. Links move nothing.                     |
-| Crawl       | What did the vault give an assistant? | The Brain, with a `gather_context` crawl replayed on it (see [Crawl](#crawl)). Needs WebGL.          |
+| View        | Question                              | Shape                                                                                                                                                                    |
+| ----------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Brain       | —                                     | 3D. Notes live inside a brain; each visible vault settles in its own lobe, yours in the frontal one.                                                                     |
+| Network     | How does it connect?                  | Flat. Links alone decide where notes sit.                                                                                                                                |
+| Territories | What is there, and where is it filed? | Flat. A map: each project a country, each vault a continent. Links move nothing.                                                                                         |
+| Sentinel    | What did the vault give an assistant? | The dormant network: a cluster of your notes, dark until the Sentinel wakes it, walked as it replays a `gather_context` search (see [Sentinel](#sentinel)). Needs WebGL. |
 
 Network and Territories used to be one layout with a pull per vault on top, so with a single
 vault — anyone who uses BrainStack alone — they were the same picture. They are now built on
@@ -25,8 +25,13 @@ and nothing else.
 
 Switching views never jumps: the same notes flow to their new places. Entering Brain rescales
 the flat layout into the brain's side view and lets the forces inflate it into the volume.
-The chosen view is remembered per browser and written to the URL hash (`#brain`, `#network`,
-`#territories`, `#crawl`). The first visit opens in Brain; without WebGL, in Network.
+The view on screen is written to the URL hash (`#brain`, `#network`, `#territories`,
+`#sentinel`; the old `#crawl` still works and is rewritten), so a reload stays on it. The first
+visit opens in Sentinel; without WebGL, in Network. A view chosen before — with a tab or a key —
+is respected: the choice is remembered per browser (`brainstack.graph.choice`) only when it is
+made. The key that held the view before was written on every visit, so of it only Network and
+Territories count; its Brain, which nearly every browser holds, says nothing
+(`crawl/view-choice.ts`).
 
 ### Network
 
@@ -78,33 +83,85 @@ on the button that says the layers were changed counts only what the current vie
 This replaced the four old connection modes (links, affinity, topics, projects). The projects
 mode is gone because zooming out now shows projects (below).
 
-### Crawl
+### Sentinel
 
-Not a fourth layout: the Brain view with a crawl replayed on it. The engine never hears of it —
-`graph-view` shows the Brain and mounts `components/graph/crawl/`, which plugs into the
-controller as a `GraphPlugin` (draws over the overlay, may ask the camera to follow a point).
-Removing that folder and the tab leaves the graph exactly as it was.
+**"Sentinel" names two things that are one:** the engine behind `gather_context` and
+`search_brain` (`@brainstack/core/sentinel`), and its figure in this view — a creature that walks
+your notes the way the engine read them. The view was called Crawl; its code keeps that name
+(`components/graph/crawl/`, `CrawlReplay`, `crawl_history`, the `crawls.*` router).
 
-- A prompt goes to `notes.gatherContext`; the answer says why each note is there (`via`), and
-  that is enough to replay it: the notes the text names, then what could not be resolved, then
-  out along the links from each note in turn (`crawl-plan.ts`, tested).
-- **The spider only walks threads the graph draws** — links and structure edges — along the same
-  curve the scene draws them with. Its feet hold the threads around the note it stands on; each
-  thread it steps on lights up and stays lit, so the path remains on the brain. Where no thread
-  joins two notes it spins a strand of silk rather than walking through the void.
-- It is sized from the vault's median link, so it reads the same at ten notes or ten thousand.
-  Body and legs are computed in 3D and drawn by the 2D overlay, for the same reason labels are:
-  WebGL lines are one pixel wide.
-- **Spider off** (a switch, remembered per browser) replays the same walk as a trail of light.
-- The camera follows the replay until the user drags, zooms or clicks; _Follow_ re-attaches it.
-- With `prefers-reduced-motion` the replay jumps to its end state.
-- **Recent crawls.** Every `gather_context` call — an assistant's over MCP or one tried in the
-  panel — is kept per user in `crawl_history` (`CrawlHistoryService`): the start of the prompt and
-  the replay (paths, titles, `via`), never the excerpts. The panel polls `crawls.list` every few
-  seconds, so an assistant's crawl shows up without a reload and plays by itself unless another
-  replay is under way; clicking one replays it. Pruned on every write, by age
-  (`CRAWL_HISTORY_DAYS`, default 30, 0 = off) and to the newest 50 per user. Only the user who
-  crawled lists them; a folder share never reaches them.
+It is not a fourth layout: under it the engine shows the Brain and never hears of the rest.
+`graph-view` mounts `components/graph/crawl/`, which plugs into the controller as a `GraphPlugin`
+with a **stage** of its own. Removing that folder and the tab leaves the graph exactly as it was.
+
+- **The prompt.** The view opens on one line at the centre — "Ask your brain something" — with
+  the Sentinel clinging to a dark frame round it (`prompt/`): its claws hold the frame's rails,
+  its body rests behind the box, its eye looks over the top. Under it, the last few searches.
+- **A search.** A prompt goes to `notes.gatherContext`; the answer says why each note is there
+  (`via`), and that is enough to replay it: the notes the text names, then what could not be
+  resolved, then out along the links from each note in turn (`crawl-plan.ts`, tested). On a
+  send, or a recent touched, the side panel slides in, the cluster wakes, the camera backs out to
+  the whole of it, and the Sentinel lets go of the frame, crosses the void to the first note and
+  walks the rest (`prompt/transition.ts`). **New search** in the panel runs the way back. Both
+  run on the scene's own clock — the replay's steps added up, never wall time — so a pause holds
+  them too, and either way the plugin resumes it.
+- **The dormant network** (`space/`): every note a crystal in one cluster — a hub with lobes
+  round it, the biggest projects a lobe each, the rest regions of the hub — and every link a
+  faint thread between them. It stays dark until the walk wakes it: the threads it takes become
+  tubes of light and stay lit, and each note it finds ignites in the colour of why it was handed
+  over (named, linked, a decision). It is laid out from the model, never from the brain's
+  positions, which it leaves untouched — the brain's saved layout included.
+- **Decisions.** `notes.graph` marks each note that records a decision (`isDecision`: a
+  `decisión`/`decision` tag or `status: decidido`, with the same scope as everything else it
+  returns, shared notes included); the cluster shows those, and every note the search itself
+  handed over as one (`decisionIds` in `crawl-plan.ts`).
+- **The camera** follows the walk until the user drags, zooms or clicks; _Follow the Sentinel_
+  re-attaches it, and Fit shows the whole cluster and stops following. At the prompt the scene
+  holds the camera still: drags, the wheel, `+`/`−` and Fit change nothing there.
+- **The side panel** keeps everything it had before the prompt: its own field, Pause, Replay and
+  Follow, the Sentinel switch, the recent searches, and what was found, left to ask, handed over
+  (the Response) and walked (the Log).
+- **The Sentinel switch** (`brainstack.graph.sentinel`, per browser): off, the cluster still
+  wakes, lit by a stand-in eye that rides the walk, and no creature is drawn. The spider switch's
+  old choice (`brainstack.graph.spider`) carries over once: off stays off.
+- **Recent searches.** Every `gather_context` call — an assistant's over MCP or one tried here —
+  is kept per user in `crawl_history` (`CrawlHistoryService`): the start of the prompt and the
+  replay (paths, titles, `via`), never the excerpts. The view polls `crawls.list` every few
+  seconds, so an assistant's search shows up under the prompt without a reload, marked **new**
+  until it is played in this browser. It never plays by itself: what to watch is the person's
+  call. Pruned on every write, by age (`CRAWL_HISTORY_DAYS`, default 30, 0 = off) and to the
+  newest 50 per user. Only the user who searched lists them; a folder share never reaches them.
+- **The stage** (`stage/sentinel-stage.ts`) has its own canvas and WebGL renderer, laid between
+  the graph's canvas and the overlay; the overlay still takes every gesture and draws the labels.
+  While it covers the graph, the graph's drawing buffer is parked at 1×1, so two full-size
+  canvases never hold GPU memory at once. On leaving, the stage's context is freed
+  (`forceContextLoss`), the graph's buffer comes back with a full upload, and the brain's camera
+  and spin are given back as they were.
+- **The trail.** Where the stage cannot run, the same walk is drawn as a trail of light over the
+  brain: threads lit along the brain's curves, the notes found haloed, labels, and a point of
+  light where the walk is. The reasons, each said once on the console and in the panel: the
+  stage's code failed to load, no WebGL for it, a software renderer, the space failed to build,
+  a shader failed to compile, the stage took too long to start (ten seconds of frames), the
+  WebGL context was lost, or a frame failed. A crawl on screen carries on over the brain — at
+  its end if it had finished. The next visit tries the stage again.
+- **When the notes change.** The graph rebuilds its model on every change; the cluster is laid
+  out again only when what its layout reads changed (`space/space-key.ts`: notes and their
+  folders, vaults, projects, indexes, walkable links) and the model has held still for 300 ms. A
+  search that had finished then shows its end; one still walking starts over from its first note.
+- **Loading.** The panel comes with `next/dynamic` and the stage with `import()`, both only when
+  the view opens (fetched alongside the graph when the page opens on it), so Brain, Network and
+  Territories never download them (`crawl/lazy-imports.test.ts`). Until the stage has built the
+  cluster and compiled its shaders — half a second to a couple — the brain shows under an inert
+  prompt; then the stage fades in. In the Sentinel the brain's own tools are hidden (search,
+  filters, Replay growth, the angles and Spin); zoom, Fit, the layers and the views stay.
+- **Quality.** One governor per stage starts from what the GPU says it can do and from the last
+  tier that held, steps down when frames at rest slip, and remembers where it ended. It times
+  the Sentinel alone, never the cluster or the brain's layout settling.
+- With `prefers-reduced-motion` every transition is a cut, a search jumps to its end, and the
+  Sentinel holds still.
+- **The lab** at `/dev/sentinel` (a `page.dev.tsx`, which exists under `next dev` only) assembles
+  the same parts with every knob that shapes the creature's look, motion and cost, the cluster's
+  and the prompt scene's; it is where the look is judged and the values that ship are chosen.
 
 ## Behaviour in every view
 
@@ -151,24 +208,32 @@ most of its length and then drop everything at once.
 
 ## How it is built
 
-All of it is client-side. The server adds `createdAt` and `updatedAt` to each node of
-`notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` (`sharedVaultNames`).
+All of it is client-side. The server adds `createdAt`, `updatedAt` and `isDecision` to each node
+of `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` (`sharedVaultNames`).
 
-| File                                      | Role                                                                                                                                 |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `lib/graph-model.ts`                      | Pure: nodes and edges from what the server sent, filtered by layers; vaults; paths and hops. Tested.                                 |
-| `lib/graph-brain.ts`                      | Pure: the brain's distance field, its surface mesh and the container force. Tested.                                                  |
-| `lib/graph-camera.ts`                     | Pure: orbit camera, projection, fitting, zoom and pan. The overlay projects with the same maths three.js renders with. Tested.       |
-| `lib/graph-map.ts`                        | Pure: Territories — where each note belongs on the map, and the land, coasts, borders and folder lines under the notes. Tested.      |
-| `components/graph/graph-engine.ts`        | The layout per view: a `d3-force-3d` simulation for Brain and Network, places on the map for Territories. Tested.                    |
-| `components/graph/graph-scene.ts`         | three.js: notes, edges, nebulae and the brain mesh, additive blending on a flat background; the map's land, translucent, under them. |
-| `components/graph/graph-overlay.ts`       | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap.                |
-| `components/graph/graph-controller.ts`    | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates.                            |
-| `components/graph/graph-view.tsx`         | React chrome: toolbar, layers, preview, legend; preferences.                                                                         |
-| `components/graph/crawl/crawl-plan.ts`    | Pure: a `gather_context` answer turned into replay steps, and the walk along threads between two notes. Tested.                      |
-| `components/graph/crawl/crawl-history.ts` | Pure: which recent crawl plays by itself, and how its age reads. Tested.                                                             |
-| `components/graph/crawl/crawl-layer.ts`   | The Crawl view's `GraphPlugin`: the spider, lit threads, silk, labels; asks the camera to follow.                                    |
-| `components/graph/crawl/crawl-panel.tsx`  | React chrome for Crawl: try a prompt, the spider switch, recent crawls, what was found.                                              |
+| File                                             | Role                                                                                                                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lib/graph-model.ts`                             | Pure: nodes and edges from what the server sent, filtered by layers; vaults; paths and hops. Tested.                                                         |
+| `lib/graph-brain.ts`                             | Pure: the brain's distance field, its surface mesh and the container force. Tested.                                                                          |
+| `lib/graph-camera.ts`                            | Pure: orbit camera, projection, fitting, zoom and pan. The overlay projects with the same maths three.js renders with. Tested.                               |
+| `lib/graph-map.ts`                               | Pure: Territories — where each note belongs on the map, and the land, coasts, borders and folder lines under the notes. Tested.                              |
+| `components/graph/graph-engine.ts`               | The layout per view: a `d3-force-3d` simulation for Brain and Network, places on the map for Territories. Tested.                                            |
+| `components/graph/graph-scene.ts`                | three.js: notes, edges, nebulae and the brain mesh, additive blending on a flat background; the map's land, translucent, under them.                         |
+| `components/graph/graph-overlay.ts`              | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap.                                        |
+| `components/graph/graph-controller.ts`           | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates.                                                    |
+| `components/graph/graph-view.tsx`                | React chrome: toolbar, layers, preview, legend; preferences.                                                                                                 |
+| `components/graph/crawl/view-choice.ts`          | Pure: which view `/graph` opens on, and what counts as a choice. Tested.                                                                                     |
+| `components/graph/crawl/crawl-plan.ts`           | Pure: a `gather_context` answer turned into replay steps, the walk along threads between two notes, and which notes are decisions. Tested.                   |
+| `components/graph/crawl/crawl-replay.ts`         | Pure: the replay — where the walk is, what it lit and found, what each of the Sentinel's grips holds — over the brain or a space. Tested.                    |
+| `components/graph/crawl/crawl-draw.ts`           | The 2D part: labels over the stage; threads, halos and the point of light of the trail. Tested.                                                              |
+| `components/graph/crawl/crawl-plugin.ts`         | The Sentinel view's `GraphPlugin`: the replay, the prompt scene, the stage or the trail, the camera between them. Tested with a fake stage.                  |
+| `components/graph/crawl/crawl-panel.tsx`         | React chrome for the Sentinel: the prompt and its recents; the side panel with its own field, the Sentinel switch, recent searches, what was found.          |
+| `components/graph/crawl/crawl-history.ts`        | Pure: how a recent search's age and author read. Tested.                                                                                                     |
+| `components/graph/crawl/prompt/`                 | The prompt scene: the frame round the input, the Sentinel's perch on it, the way into the walk and back, the recents. Pure but for the React prompt. Tested. |
+| `components/graph/crawl/stage/sentinel-stage.ts` | The stage: its renderer, the dormant network, the creature, the frame's bezel, the quality governor. Loaded only in the view.                                |
+| `components/graph/crawl/space/`                  | The dormant network: the cluster's layout (`volume/`) and how it is drawn (`dormant/`). Layout tested.                                                       |
+| `components/graph/crawl/space/space-key.ts`      | Pure: what the cluster's layout reads of a model, as one key, so a model rebuilt the same way is not laid out again. Tested.                                 |
+| `components/graph/crawl/sentinel/`               | The creature: anatomy, grips, motion, geometry, materials, quality tiers; and the lab (`sentinel/lab/`). Motion tested.                                      |
 
 **The brain** is generated, not loaded: eleven ellipsoids blended smoothly (hemispheres,
 frontal, temporal and occipital lobes, cerebellum, brainstem), a shallow groove between the
