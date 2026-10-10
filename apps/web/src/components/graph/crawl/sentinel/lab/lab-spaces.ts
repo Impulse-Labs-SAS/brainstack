@@ -1,6 +1,6 @@
 // The spaces the Sentinel lab offers beside the brain stand-in, in the order
 // its picker lists them — spaces of Crawl's own, built far enough to judge with
-// the creature walking inside before the Crawl view shows one — and the few
+// the creature walking inside before the Sentinel view shows one — and the few
 // pure pieces the lab needs to drive them.
 //
 // The lab drives a space through the CrawlSpace contract and a few things more
@@ -8,7 +8,7 @@
 // metal reflects the space it walks in; the plain object its knobs live on,
 // which the lab's "export settings" copies; a way to ask the lab to build it
 // again when a knob changes the layout; and a line or two for the Stats
-// folder. None of them belongs in the contract yet: the Crawl view takes
+// folder. None of them belongs in the contract yet: the Sentinel view takes
 // whatever the chosen space settles on.
 //
 // The rest is what the lab hands a space beside the eye (stage/eye.ts, which

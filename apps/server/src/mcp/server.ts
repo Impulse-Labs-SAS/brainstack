@@ -47,7 +47,7 @@ export interface BuildMcpServerOptions {
   auth: AuthService;
   /** Used when that email has no account yet. */
   invites: InviteService;
-  /** Where `gather_context` leaves each crawl for the Crawl view to replay. */
+  /** Where `gather_context` leaves each crawl for the Sentinel view to replay. */
   crawls: CrawlHistoryService;
   logger: Logger;
   /**

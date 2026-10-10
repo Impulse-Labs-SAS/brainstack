@@ -85,7 +85,7 @@ async function boot(): Promise<Hono<never>> {
   // Turning the history off, or shortening it, takes effect now rather than
   // at the next crawl.
   await services.crawls.applyRetention();
-  if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Crawl view');
+  if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
 
   // Notes written before ownership existed belong to nobody and are listed by
   // nobody. Claiming them before the first listing keeps them from vanishing.

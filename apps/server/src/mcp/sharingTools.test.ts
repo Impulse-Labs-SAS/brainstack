@@ -450,7 +450,7 @@ describe('the listing tools answer with their rows, not with a pending promise',
       coverage: { resolved: 1, total: 2 },
     });
 
-    // And leaves it for the Crawl view: Frodo's history, nobody else's.
+    // And leaves it for the Sentinel view: Frodo's history, nobody else's.
     const crawls = new CrawlHistoryService({ db: database.db, retentionDays: 30 });
     expect(await crawls.list(FRODO.id)).toMatchObject([
       { source: 'assistant', prompt: 'Compare Atlas with Erebor.', notes: 2 },

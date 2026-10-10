@@ -416,7 +416,7 @@ const facets: PgMigration = {
 };
 
 /**
- * What `gather_context` gave each user, for the Crawl view to list and replay.
+ * What `gather_context` gave each user, for the Sentinel view to list and replay.
  * Pruned on every write, so the table stays a window rather than a log.
  */
 const crawlHistory: PgMigration = {

@@ -213,7 +213,7 @@ export const appRouter = t.router({
             text: input.text,
             result,
           });
-          // The id lets the Crawl view mark this crawl as the one playing.
+          // The id lets the Sentinel view mark this crawl as the one playing.
           return { ...result, crawlId };
         }),
       ),

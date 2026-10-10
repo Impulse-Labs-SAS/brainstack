@@ -183,7 +183,7 @@ export interface LabControls {
   /** Over a space, the overlay's halos on found notes as well as the space's own light on them. */
   spaceHalos: boolean;
   /**
-   * Lit threads, found notes and labels, as the Crawl view's overlay draws
+   * Lit threads, found notes and labels, as the Sentinel view's overlay draws
    * them. Over a space, labels only (and halos when asked): it lights its own.
    */
   overlay: boolean;

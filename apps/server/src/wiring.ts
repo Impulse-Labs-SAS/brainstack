@@ -31,7 +31,7 @@ export interface Services {
   totp: TotpService;
   oauthProvider: OAuthProviderService;
   crossOwner: CrossOwnerReader;
-  /** What `gather_context` gave each user, for the Crawl view. */
+  /** What `gather_context` gave each user, for the Sentinel view. */
   crawls: CrawlHistoryService;
   /** Present only when Google credentials are configured. */
   google?: GoogleOAuthService;
@@ -54,7 +54,7 @@ export interface BuildServicesOptions {
   googleClientId?: string | undefined;
   googleClientSecret?: string | undefined;
   googleRedirectUri?: string | undefined;
-  /** Days crawls are kept for the Crawl view; 0 turns the history off. Default 30. */
+  /** Days crawls are kept for the Sentinel view; 0 turns the history off. Default 30. */
   crawlHistoryDays?: number;
 }
 
