@@ -113,13 +113,12 @@ describe('what the graph page loads up front', () => {
     expect(staticImports(src).sort()).toEqual(['./a', './e', './g', './side-effect', '@/j']);
   });
 
-  it('takes nothing of the Sentinel into the graph view but the choice of view and the legend’s colours', () => {
+  it('takes nothing of the Sentinel into the graph view but the choice of view', () => {
     const reached = reach(join(SRC, 'components/graph/graph-view.tsx'));
     expect(reached.files.size).toBeGreaterThan(10);
     expect(laterIn(reached)).toEqual([]);
     // The panel, and the plugin behind it, come only through next/dynamic.
     expect([...reached.files].filter((f) => f.includes('/crawl/')).sort()).toEqual([
-      'components/graph/crawl/crawl-colors.ts',
       'components/graph/crawl/view-choice.ts',
     ]);
   });

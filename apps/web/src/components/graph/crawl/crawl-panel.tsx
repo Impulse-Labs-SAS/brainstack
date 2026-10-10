@@ -10,11 +10,22 @@
 // round it, the recent searches under it — an assistant's marked new until it
 // is played in this browser, and never started by itself. A send, or a recent
 // touched, takes the view into the walk and brings the side panel in; "New
-// search" there takes it back. The side panel keeps every option it had before
-// the prompt came: its own field, Pause, Replay and Follow, the Sentinel
-// switch, the recent searches, and what was found, left to ask, handed over and
-// walked. It is reworked on its own later; here it changes only as far as the
-// prompt needs.
+// search" there takes it back.
+//
+// The panel is there for one thing: a prompt to paste into an assistant or an
+// IDE, with the notes that answer what was asked (brief.ts). So Copy prompt is
+// always in reach, and works from the first moment — the walk replays an
+// answer that has already come, and nobody should wait for it to end. Around
+// it, three tabs: Context, to check what was found — settle what the text
+// left ambiguous, take notes out, put back what the budget left out
+// (answer.ts); Prompt, the text exactly as it is copied, in either format;
+// and Activity, the walk's log and the raw answer an assistant receives over
+// MCP. The walk's own controls ride over the stage (panel/transport.tsx): they
+// play the replay, not the search.
+//
+// On a wide screen it is a column at the left that can fold to a strip; on a
+// phone, a sheet from the bottom that comes in low, leaving the stage to the
+// walk (panel/phone-sheet.tsx).
 //
 // The plugin writes the scene's levels on one element (`chrome`), ancestor of
 // both the prompt and the panel, as CSS variables, every frame, without React:
@@ -23,9 +34,17 @@
 // the glass's blur would sample nothing. The live region sits outside the
 // panel: inside an inert one it would not speak.
 
-import { Bot, Crosshair, Pause, Play, RotateCcw, Search, User } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Switch, TextArea, TextField } from 'react-aria-components';
+import { Check, ChevronRight, Copy } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from 'react';
+import { Button, Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -33,19 +52,37 @@ import { cn } from '@/lib/utils';
 import type { GraphController } from '../graph-controller';
 import { GLASS } from '../graph-preview';
 
+import {
+  NO_CURATION,
+  answerOf,
+  rowsOf,
+  type Answer,
+  type AnswerSource,
+  type Curation,
+} from './answer';
+import type { BriefFormat } from './brief';
+import { readBriefFormat, writeBriefFormat } from './brief-pref';
 import { CRAWL_COLORS } from './crawl-colors';
-import { ago, madeBy } from './crawl-history';
-import type { CrawlResult } from './crawl-plan';
 import { CrawlPlugin, type SentinelUi } from './crawl-plugin';
-import type { CrawlSnapshot } from './crawl-snapshot';
+import { walkOver, type CrawlSnapshot } from './crawl-snapshot';
+import { ActivityTab } from './panel/activity-tab';
+import { ContextTab } from './panel/context-tab';
+import { copyText } from './panel/copy-text';
+import { PanelHead, type HistoryProps } from './panel/panel-head';
+import { CopyButton, Eyebrow, FOCUS_RING, IconButton, type CopyState } from './panel/panel-ui';
+import { PhoneSheet, type SheetSize } from './panel/phone-sheet';
+import { PromptTab } from './panel/prompt-tab';
+import { Transport } from './panel/transport';
+import { useBrief } from './panel/use-brief';
+import { useWide } from './panel/use-wide';
 import { CrawlPrompt } from './prompt/crawl-prompt';
 import { addSeen, promptRecents, readSeen, writeSeen } from './prompt/recents';
 import { readSentinelPref, writeSentinelPref } from './sentinel-pref';
 
 /** How often the recent searches are asked for while the view is open. */
 const POLL_MS = 4_000;
-/** Recent searches the side panel lists; the prompt shows fewer (`RECENT_MOST`). */
-const RECENT_SHOWN = 8;
+/** How long Copy prompt says it copied. */
+const COPIED_MS = 1_800;
 
 /** Until the plugin's first word: the prompt, inert, the stage on its way. */
 const STARTING: SentinelUi = {
@@ -59,15 +96,12 @@ const STARTING: SentinelUi = {
 const GONE = 'That search is no longer kept.';
 /** A search back from the server with the view already elsewhere: nothing could take it. */
 const NOT_NOW = 'The Sentinel could not take that search just now. Try again.';
+const NO_COPY =
+  'This browser did not let the page copy. The prompt is selected: copy it with Ctrl+C (⌘C on a Mac).';
 
-const VERB_COLOR: Record<CrawlSnapshot['log'][number]['kind'], string> = {
-  named: CRAWL_COLORS.named,
-  linked: CRAWL_COLORS.linked,
-  decision: CRAWL_COLORS.decision,
-  ask: CRAWL_COLORS.ask,
-  walk: 'var(--fg-muted)',
-  done: 'var(--fg-primary)',
-};
+const PHASE = ['reading the question', 'following links', 'context ready'] as const;
+
+type PanelTab = 'context' | 'prompt' | 'activity';
 
 /** The browser's store, or null where touching it throws (a sandboxed frame, blocked storage). */
 function storage(): Storage | null {
@@ -83,32 +117,52 @@ type From = 'prompt' | 'panel';
 export function CrawlPanel({
   controller,
   reduceMotion,
+  onCrawl,
 }: {
   controller: GraphController;
   reduceMotion: boolean;
+  /** Told when the walk comes on screen and when it goes: the page hides what the panel replaces. */
+  onCrawl?(inCrawl: boolean): void;
 }) {
   const chrome = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const peekStatus = useRef<HTMLDivElement>(null);
+  /** The folded strip: where focus goes in when the column is folded and has no heading. */
+  const strip = useRef<HTMLDivElement>(null);
+  const briefText = useRef<HTMLPreElement>(null);
   const pluginRef = useRef<CrawlPlugin | null>(null);
   /** A send or a recent on its way: one at a time, or two would race to play. */
   const busy = useRef(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wide = useWide();
 
   const [ui, setUi] = useState<SentinelUi>(STARTING);
   const [snap, setSnap] = useState<CrawlSnapshot | null>(null);
-  const [text, setText] = useState('');
   const [sentinelOn, setSentinelOn] = useState(() => readSentinelPref(storage()));
   const [playing, setPlaying] = useState(true);
-  const [asked, setAsked] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   const [promptError, setPromptError] = useState<string | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
-  const [openError, setOpenError] = useState<string | null>(null);
   /** The last of the plugin's focus requests the prompt was let answer (see the effect below). */
   const [promptFocus, setPromptFocus] = useState(0);
-  /** What the assistant was handed, as the panel last saw it. */
-  const [response, setResponse] = useState<{ json: unknown; whole: boolean } | null>(null);
+  /** The search on screen, as the panel reads it. */
+  const [answer, setAnswer] = useState<Answer | null>(null);
+  /** What the assistant was handed, as gather_context returned it or the history kept it. */
+  const [raw, setRaw] = useState<{ json: unknown; whole: boolean } | null>(null);
+  const [curation, setCuration] = useState<Curation>(NO_CURATION);
+  const [tab, setTab] = useState<PanelTab>('context');
+  const [format, setFormat] = useState<BriefFormat>(() => readBriefFormat(storage()));
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [folded, setFolded] = useState(false);
+  const [sheet, setSheet] = useState<SheetSize>('peek');
+  const [copied, setCopied] = useState(false);
+  /** Bumped to select the prompt's text, once it is on screen, for a copy by hand. */
+  const [selectBrief, setSelectBrief] = useState(0);
+  const selectPending = useRef(false);
+  const [announce, setAnnounce] = useState('');
   /** Searches played in this browser: an assistant's reads new until it is one of them. */
   const [seen, setSeen] = useState<ReadonlySet<string>>(() => readSeen(storage()));
   const seenAtStart = useRef(seen);
@@ -118,6 +172,7 @@ export function CrawlPanel({
   // Polled, so a search an assistant makes over MCP shows up without a reload.
   // React Query pauses the interval while the tab is hidden.
   const recent = trpc.crawls.list.useQuery(undefined, { refetchInterval: POLL_MS });
+  const brief = useBrief(answer, curation, format);
 
   // One plugin per controller, for as long as the view is open. Not remade when
   // reduced motion changes: that would throw a WebGL context away.
@@ -146,10 +201,23 @@ export function CrawlPanel({
     pluginRef.current?.setReducedMotion(reduceMotion);
   }, [reduceMotion]);
 
-  // Into the walk, focus goes to the panel's heading: the prompt went inert under the caret.
+  const inCrawl = ui.scene === 'crawl';
+
+  // Into the walk, focus goes to the panel: the prompt went inert under the caret.
   useEffect(() => {
-    if (ui.scene === 'crawl') heading.current?.focus({ preventScroll: true });
-  }, [ui.scene]);
+    if (!inCrawl) {
+      pluginRef.current?.mark(null);
+      return;
+    }
+    (wide ? (heading.current ?? strip.current) : peekStatus.current)?.focus({ preventScroll: true });
+    // Only on the way in: a turned phone must not pull focus from where the person put it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inCrawl]);
+
+  useEffect(() => {
+    onCrawl?.(inCrawl);
+  }, [inCrawl, onCrawl]);
+  useEffect(() => () => onCrawl?.(false), [onCrawl]);
 
   // The plugin asks for the prompt's focus each time it takes text again — the
   // first time a second or two after the page loads. Taken only from nowhere,
@@ -171,6 +239,28 @@ export function CrawlPanel({
     if (seen !== seenAtStart.current) writeSeen(storage(), seen);
   }, [seen]);
 
+  // A copy the browser refused: the prompt's text selected, for Ctrl+C, once
+  // the Prompt tab — opened for it, the panel unfolded — has it on screen.
+  useEffect(() => {
+    const pre = briefText.current;
+    if (!selectPending.current || !pre) return;
+    selectPending.current = false;
+    pre.focus({ preventScroll: true });
+    pre.scrollIntoView({ block: 'nearest' });
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, [selectBrief, tab, folded, sheet]);
+
+  useEffect(
+    () => () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
+
   const remember = (id: string) =>
     setSeen((prev) => {
       const next = new Set(prev);
@@ -183,33 +273,47 @@ export function CrawlPanel({
     else setPanelError(message);
   };
 
-  /** Plays what came back; false if the view could not take it (left, or on its way elsewhere). */
-  const play = (plugin: CrawlPlugin, result: CrawlResult, prompt: string): boolean => {
+  /** Plays what came back, and the panel shows it; false if the view could not take it. */
+  const show = (
+    plugin: CrawlPlugin,
+    result: AnswerSource,
+    prompt: string,
+    handed: { json: unknown; whole: boolean },
+  ): boolean => {
     if (pluginRef.current !== plugin || !plugin.play(result, prompt)) return false;
     // The plugin plays from here: a pause left from the last walk is gone.
     setPlaying(true);
-    setAsked(prompt);
+    setAnswer(answerOf(prompt, result));
+    setRaw(handed);
+    setCuration(NO_CURATION);
+    setTab('context');
+    setEditing(false);
+    setSheet('peek');
+    setCopied(false);
+    setAnnounce('');
     return true;
   };
 
-  const run = async (raw: string, from: From) => {
-    const plugin = pluginRef.current;
-    const prompt = raw.trim();
-    if (!plugin || !prompt || busy.current) return;
-    busy.current = true;
+  const clearErrors = () => {
     setPromptError(null);
     setPanelError(null);
-    setOpenError(null);
+  };
+
+  const run = async (text: string, from: From) => {
+    const plugin = pluginRef.current;
+    const prompt = text.trim();
+    if (!plugin || !prompt || busy.current) return;
+    busy.current = true;
+    clearErrors();
     try {
       const result = await gather.mutateAsync({ text: prompt, depth: 1 });
       // The id is the panel's, not part of what an assistant receives.
       const { crawlId, ...handedOver } = result;
       void utils.crawls.list.invalidate();
-      if (!play(plugin, result, prompt)) {
+      if (!show(plugin, result, prompt, { json: handedOver, whole: true })) {
         failed(from, NOT_NOW);
         return;
       }
-      setResponse({ json: handedOver, whole: true });
       setActiveId(crawlId);
       if (crawlId) remember(crawlId);
     } catch (error) {
@@ -224,23 +328,19 @@ export function CrawlPanel({
     if (!plugin || busy.current) return;
     busy.current = true;
     setOpening(true);
-    setPromptError(null);
-    setPanelError(null);
-    setOpenError(null);
+    clearErrors();
     try {
       let kept: Awaited<ReturnType<typeof utils.crawls.get.fetch>>;
       try {
         kept = await utils.crawls.get.fetch({ id });
       } catch {
-        if (from === 'prompt') setPromptError(GONE);
-        else setOpenError(GONE);
+        failed(from, GONE);
         return;
       }
-      if (!play(plugin, kept.replay, kept.prompt)) {
+      if (!show(plugin, kept.replay, kept.prompt, { json: kept.replay, whole: false })) {
         failed(from, NOT_NOW);
         return;
       }
-      setResponse({ json: kept.replay, whole: false });
       setActiveId(id);
       remember(id);
     } finally {
@@ -253,6 +353,7 @@ export function CrawlPanel({
     if (!pluginRef.current?.newSearch()) return;
     // The way back runs on the walk's clock, so the plugin resumes it.
     setPlaying(true);
+    setEditing(false);
     setPromptError(null);
   };
 
@@ -262,6 +363,34 @@ export function CrawlPanel({
     writeSentinelPref(storage(), on);
   };
 
+  const chooseFormat = (next: BriefFormat) => {
+    setFormat(next);
+    writeBriefFormat(storage(), next);
+  };
+
+  const copy = async () => {
+    if (!answer || brief.reading > 0) return;
+    const ok = await copyText(brief.text);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    if (ok) {
+      setPanelError(null);
+      setCopied(true);
+      setAnnounce(
+        `Prompt copied: ${brief.notes} ${brief.notes === 1 ? 'note' : 'notes'}, ${brief.tokens}. Paste it into your assistant.`,
+      );
+      copiedTimer.current = setTimeout(() => setCopied(false), COPIED_MS);
+      return;
+    }
+    setTab('prompt');
+    setFolded(false);
+    if (!wide && sheet === 'peek') setSheet('half');
+    setPanelError(NO_COPY);
+    selectPending.current = true;
+    setSelectBrief((n) => n + 1);
+  };
+
+  const mark = useCallback((key: string | null) => pluginRef.current?.mark(key), []);
+
   const items = recent.data?.items;
   const now = recent.data?.now;
   const recents = useMemo(
@@ -269,9 +398,163 @@ export function CrawlPanel({
     [items, seen, now],
   );
 
-  const inCrawl = ui.scene === 'crawl';
-  const total = snap ? snap.found.named + snap.found.linked + snap.found.decision : 0;
-  const refs = total + (snap?.asks.length ?? 0);
+  // While the Sentinel walks, the panel lists what it has reached; once it is done, everything.
+  const done = walkOver(snap);
+  const reachedKeys = snap?.reached;
+  const reached = useMemo(() => (done ? null : new Set(reachedKeys ?? [])), [done, reachedKeys]);
+  const askedTerms = useMemo(
+    () => (done ? null : new Set((snap?.asks ?? []).map((a) => a.term))),
+    [done, snap?.asks],
+  );
+  const rows = useMemo(
+    () => (answer ? rowsOf(answer, curation, reached) : []),
+    [answer, curation, reached],
+  );
+  const unresolved = useMemo(
+    () => (answer ? answer.unresolved.filter((u) => !askedTerms || askedTerms.has(u.term)) : []),
+    [answer, askedTerms],
+  );
+  const open = answer ? answer.unresolved.filter((u) => !curation.settled.has(u.term)).length : 0;
+  const copyState: CopyState = copied ? 'copied' : brief.reading > 0 ? 'reading' : 'ready';
+  const onGraph = answer ? Math.max(0, answer.notes.length - (snap?.offGraph ?? 0)) : 0;
+
+  const status = answer && (
+    <div className="grid gap-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[12.5px] tabular-nums text-fg-primary">
+          {done ? (
+            <>
+              <b className="font-medium">{brief.notes}</b> {brief.notes === 1 ? 'note' : 'notes'} ready
+              {open > 0 && <span style={{ color: CRAWL_COLORS.ask }}> · {open} to clarify</span>}
+            </>
+          ) : (
+            <>
+              Walking your notes ·{' '}
+              <span className="whitespace-nowrap">
+                <b className="font-medium">{reached?.size ?? 0}</b> of {onGraph}
+              </span>
+            </>
+          )}
+        </span>
+        {/* On a phone it shares the row with Copy prompt: the bar says as much. */}
+        <span className="shrink-0 font-mono text-[11px] text-fg-muted max-md:hidden">
+          {PHASE[snap?.phase ?? 0]}
+        </span>
+      </div>
+      <div className="h-0.5 overflow-hidden rounded-full bg-border">
+        <div
+          className={cn('h-full transition-[width] duration-300', done ? 'bg-success' : 'bg-accent')}
+          style={{ width: `${done ? 100 : onGraph > 0 ? Math.round(((reached?.size ?? 0) / onGraph) * 100) : 0}%` }}
+        />
+      </div>
+    </div>
+  );
+
+  const history: HistoryProps = {
+    items,
+    now: now ?? Date.now(),
+    seen,
+    activeId,
+    enabled: recent.data?.enabled ?? true,
+    onOpen: (id) => void openRecent(id, 'panel'),
+  };
+
+  const head = (withStatus: boolean) => (
+    <PanelHead
+      headingRef={heading}
+      question={answer?.question ?? ''}
+      editing={editing}
+      draft={draft}
+      busy={gather.isPending || opening}
+      onDraft={setDraft}
+      onEdit={() => {
+        setDraft(answer?.question ?? '');
+        setEditing(true);
+      }}
+      onCancelEdit={() => setEditing(false)}
+      onRun={() => void run(draft, 'panel')}
+      onNew={newSearch}
+      history={history}
+      sentinelOn={sentinelOn}
+      onSentinel={toggleSentinel}
+      trail={ui.status === 'trail' ? (ui.failure ?? 'it did not start') : null}
+      onCollapse={wide ? () => setFolded(true) : undefined}
+      status={withStatus ? status : null}
+      error={panelError}
+    />
+  );
+
+  const tabs = (scroll: 'panel' | 'whole') =>
+    answer &&
+    raw && (
+      <Tabs
+        selectedKey={tab}
+        onSelectionChange={(key) => setTab(key as PanelTab)}
+        className={cn('flex flex-col', scroll === 'panel' && 'min-h-0 flex-1')}
+      >
+        <TabList
+          aria-label="Panel sections"
+          className={cn(
+            'flex shrink-0 gap-1 border-b border-border-subtle px-2.5',
+            scroll === 'whole' && 'sticky top-0 z-10 bg-bg-surface',
+          )}
+        >
+          <PanelTabName id="context">
+            Context
+            <span className="rounded bg-bg-elevated px-1.5 font-mono text-[10.5px] tabular-nums text-fg-muted">
+              {rows.length}
+            </span>
+          </PanelTabName>
+          <PanelTabName id="prompt">Prompt</PanelTabName>
+          <PanelTabName id="activity">Activity</PanelTabName>
+        </TabList>
+        {(['context', 'prompt', 'activity'] as const).map((id) => (
+          <TabPanel
+            key={id}
+            id={id}
+            className={cn(
+              'p-3 outline-none',
+              scroll === 'panel' && 'min-h-0 flex-1 overflow-y-auto',
+              scroll === 'whole' && 'pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]',
+            )}
+          >
+            {id === 'context' ? (
+              <ContextTab
+                answer={answer}
+                rows={rows}
+                unresolved={unresolved}
+                curation={curation}
+                walking={!done}
+                onCuration={setCuration}
+                onMark={mark}
+              />
+            ) : id === 'prompt' ? (
+              <PromptTab format={format} onFormat={chooseFormat} brief={brief} textRef={briefText} />
+            ) : (
+              <ActivityTab snap={snap} answer={answer} raw={raw} />
+            )}
+          </TabPanel>
+        ))}
+      </Tabs>
+    );
+
+  const transport = snap && snap.state !== 'idle' && (
+    <Transport
+      snap={snap}
+      playing={playing}
+      onPlaying={(on) => {
+        setPlaying(on);
+        pluginRef.current?.setPlaying(on);
+      }}
+      onReplay={() => {
+        pluginRef.current?.replay();
+        setPlaying(true);
+        pluginRef.current?.setPlaying(true);
+      }}
+      onSkip={() => pluginRef.current?.skipToEnd()}
+      onFollow={() => pluginRef.current?.followAgain()}
+    />
+  );
 
   return (
     <div ref={chrome} className="pointer-events-none absolute inset-0 z-10">
@@ -287,289 +570,154 @@ export function CrawlPanel({
         onRecent={(id) => void openRecent(id, 'prompt')}
       />
 
-      <aside
-        aria-label="Sentinel"
-        inert={!inCrawl}
-        aria-hidden={!inCrawl}
-        className={cn(
-          GLASS,
-          'pointer-events-auto absolute inset-x-3 top-16 z-10 flex max-h-[45%] flex-col gap-3 overflow-y-auto rounded-lg p-3 text-sm md:inset-x-auto md:left-3 md:max-h-[calc(100%-12.5rem)] md:w-[320px]',
-        )}
-        style={{ transform: 'translateX(calc((var(--crawl-panel, 0) - 1) * 120%))' }}
-      >
-        <div className="grid gap-2">
-          <h2
-            ref={heading}
-            tabIndex={-1}
-            className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted outline-none"
+      {/* A turn across the breakpoint swaps one layout for the other: what the search
+          found and what the person made of it live here and carry over; a disclosure
+          left open inside a tab does not. */}
+      {wide ? (
+        <>
+          <aside
+            aria-label="Sentinel"
+            inert={!inCrawl}
+            aria-hidden={!inCrawl}
+            className={cn(
+              GLASS,
+              'pointer-events-auto absolute left-3 top-16 z-10 flex flex-col rounded-lg text-sm shadow-2xl',
+              folded ? 'w-14' : 'bottom-3 w-[360px]',
+            )}
+            style={{ transform: 'translateX(calc((var(--crawl-panel, 0) - 1) * 120%))' }}
           >
-            Sentinel
-          </h2>
-          <p className="line-clamp-3 text-[13px] leading-5 text-fg-primary">{asked || '—'}</p>
-          <Button
-            onPress={newSearch}
-            className="flex h-8 items-center justify-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg outline-none hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
-          >
-            <Search size={14} aria-hidden />
-            New search
-          </Button>
-        </div>
-
-        <TextField
-          value={text}
-          onChange={setText}
-          aria-label="Prompt"
-          className="grid gap-1.5 border-t border-border-subtle pt-3"
-        >
-          <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
-            Try a prompt
-          </span>
-          <TextArea
-            rows={4}
-            placeholder="Paste what you would ask an assistant. The Sentinel walks your notes to find what it refers to."
-            className="w-full resize-y rounded-md border border-border-default bg-bg-surface px-2.5 py-2 text-[13px] leading-5 text-fg-primary outline-none placeholder:text-fg-muted focus:border-accent"
-          />
-        </TextField>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            onPress={() => void run(text, 'panel')}
-            isDisabled={!text.trim() || gather.isPending || opening}
-            className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg outline-none hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
-          >
-            <Search size={14} aria-hidden />
-            {gather.isPending ? 'Searching…' : 'Search'}
-          </Button>
-          {snap && snap.state !== 'idle' && (
-            <>
-              <IconButton
-                label={playing ? 'Pause' : 'Resume'}
-                onPress={() => {
-                  const next = !playing;
-                  setPlaying(next);
-                  pluginRef.current?.setPlaying(next);
-                }}
-              >
-                {playing ? <Pause size={14} /> : <Play size={14} />}
-              </IconButton>
-              <IconButton
-                label="Replay"
-                onPress={() => {
-                  pluginRef.current?.replay();
-                  setPlaying(true);
-                  pluginRef.current?.setPlaying(true);
-                }}
-              >
-                <RotateCcw size={14} />
-              </IconButton>
-              {!snap.following && (
-                <IconButton
-                  label="Follow the Sentinel"
-                  onPress={() => pluginRef.current?.followAgain()}
-                >
-                  <Crosshair size={14} />
-                </IconButton>
-              )}
-            </>
-          )}
-        </div>
-        {panelError && <p className="text-[12.5px] text-danger">{panelError}</p>}
-
-        <Switch
-          isSelected={sentinelOn}
-          onChange={toggleSentinel}
-          className="group flex cursor-pointer items-center justify-between gap-3 outline-none"
-        >
-          <span className="grid">
-            <span className="text-[13px] text-fg-primary">Sentinel</span>
-            <span className="text-[11.5px] leading-4 text-fg-muted">
-              Off, the walk shows as light alone.
-            </span>
-          </span>
-          <span className="relative h-5 w-9 shrink-0 rounded-full bg-bg-hover transition-colors group-selected:bg-accent group-focus-visible:ring-2 group-focus-visible:ring-accent/40">
-            <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-fg-primary transition-transform group-selected:translate-x-4" />
-          </span>
-        </Switch>
-        {ui.status === 'trail' && (
-          <p className="text-[11.5px] leading-4 text-fg-muted">
-            The Sentinel cannot run here ({ui.failure ?? 'it did not start'}), so the walk shows as
-            a trail of light.
-          </p>
-        )}
-
-        {recent.data && !recent.data.enabled && (
-          <p className="text-[11.5px] leading-4 text-fg-muted">
-            Search history is off on this server: assistants’ searches are not kept.
-          </p>
-        )}
-        {items && items.length > 0 && (
-          <div className="grid gap-1.5 border-t border-border-subtle pt-3">
-            <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
-              Recent
-            </span>
-            <ul className="grid max-h-56 gap-1 overflow-y-auto">
-              {items.slice(0, RECENT_SHOWN).map((c) => (
-                <li key={c.id}>
-                  <Button
-                    onPress={() => void openRecent(c.id, 'panel')}
-                    aria-current={c.id === activeId ? 'true' : undefined}
-                    className={cn(
-                      'grid w-full gap-0.5 rounded-md border px-2 py-1.5 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40',
-                      c.id === activeId ? 'border-accent/60 bg-accent/10' : 'border-border-subtle',
-                    )}
-                  >
-                    <span className="flex items-center gap-1.5 font-mono text-[10.5px] text-fg-muted">
-                      {c.source === 'assistant' ? (
-                        <Bot size={12} aria-hidden />
-                      ) : (
-                        <User size={12} aria-hidden />
-                      )}
-                      <span className="truncate">{madeBy(c)}</span>
-                      <span aria-hidden>·</span>
-                      <span className="shrink-0">{ago(c.createdAt, now ?? c.createdAt)}</span>
-                      <span aria-hidden>·</span>
-                      <span className="shrink-0 tabular-nums">
-                        {c.notes} {c.notes === 1 ? 'note' : 'notes'}
+            {folded ? (
+              <Folded
+                stripRef={strip}
+                notes={brief.notes}
+                copyState={copyState}
+                onUnfold={() => setFolded(false)}
+                onCopy={() => void copy()}
+              />
+            ) : (
+              <>
+                {head(true)}
+                {tabs('panel')}
+                {answer && (
+                  <div className="grid gap-1.5 border-t border-border-subtle p-3">
+                    <CopyButton state={copyState} onPress={() => void copy()} className="w-full" />
+                    <div className="flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums text-fg-muted">
+                      <span>
+                        {brief.notes} {brief.notes === 1 ? 'note' : 'notes'} · {brief.tokens}
                       </span>
-                    </span>
-                    <span className="line-clamp-2 text-[12.5px] leading-[17px] text-fg-primary">
-                      {c.prompt}
-                    </span>
-                  </Button>
-                </li>
-              ))}
-            </ul>
-            {openError && <p className="text-[12px] text-danger">{openError}</p>}
-          </div>
-        )}
-
-        {snap && snap.state !== 'idle' && (
-          <>
-            <div className="grid gap-1 border-t border-border-subtle pt-3">
-              <div className="flex items-baseline justify-between">
-                <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
-                  Found
-                </span>
-                <span className="font-mono text-[11px] text-fg-muted">
-                  {['reading the prompt', 'following links', 'context ready'][snap.phase]}
-                </span>
-              </div>
-              <p className="text-[13px] text-fg-primary">
-                <span className="font-mono text-lg tabular-nums">{total}</span>{' '}
-                {total === 1 ? 'note' : 'notes'} for the assistant
-                {snap.state === 'done' && refs > 0 && (
-                  <span className="text-fg-muted">
-                    {' '}
-                    · {total} of {refs} references resolved
-                  </span>
-                )}
-              </p>
-              <dl className="grid grid-cols-[1fr_auto] gap-x-3 font-mono text-[11.5px] text-fg-muted">
-                <dt>named in the text</dt>
-                <dd className="tabular-nums text-fg-primary">{snap.found.named}</dd>
-                <dt>linked</dt>
-                <dd className="tabular-nums text-fg-primary">{snap.found.linked}</dd>
-                <dt>decisions</dt>
-                <dd className="tabular-nums text-fg-primary">{snap.found.decision}</dd>
-                <dt>threads walked</dt>
-                <dd className="tabular-nums text-fg-primary">{snap.threads}</dd>
-              </dl>
-              {snap.offGraph > 0 && (
-                <p className="text-[11.5px] text-fg-muted">
-                  {snap.offGraph} more not shown: hidden by a layer.
-                </p>
-              )}
-            </div>
-
-            {snap.asks.length > 0 && (
-              <div className="grid gap-1.5 border-t border-border-subtle pt-3">
-                <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
-                  To ask you · {snap.asks.length}
-                </span>
-                {snap.asks.map((a) => (
-                  <div
-                    key={a.term}
-                    className="rounded-md border px-2 py-1.5 text-[12.5px]"
-                    style={{
-                      borderColor: `${CRAWL_COLORS.ask}55`,
-                      background: `${CRAWL_COLORS.ask}10`,
-                    }}
-                  >
-                    “{a.term}”<span className="block text-[11.5px] text-fg-muted">{a.why}</span>
+                      <Button
+                        onPress={() => setTab('prompt')}
+                        className={cn('flex items-center gap-0.5 hover:text-fg-primary', FOCUS_RING)}
+                      >
+                        {format === 'refs' ? 'References' : 'Full text'}
+                        <ChevronRight size={11} aria-hidden />
+                      </Button>
+                    </div>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
-
-            {/* Before the log: what the assistant got matters more than how the replay walked it. */}
-            {response && (
-              <details
-                open
-                className="group grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 border-t border-border-subtle pt-3"
-              >
-                <summary className="flex cursor-pointer list-none items-baseline justify-between outline-none focus-visible:text-fg-primary">
-                  <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-secondary">
-                    <span className="mr-1 inline-block transition-transform group-open:rotate-90">
-                      ›
-                    </span>
-                    Response
-                  </span>
-                  <span className="font-mono text-[11px] text-accent">what the assistant got</span>
-                </summary>
-                <p className="text-[11.5px] leading-4 text-fg-muted">
-                  {response.whole
-                    ? 'What gather_context returns to the assistant, as it receives it.'
-                    : 'From the history: the note bodies (excerpt) are not kept, so they are missing here.'}
-                </p>
-                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-accent/30 bg-bg-base p-2 font-mono text-[10.5px] leading-[15px] text-fg-secondary">
-                  {JSON.stringify(response.json, null, 2)}
-                </pre>
-              </details>
-            )}
-
-            <div className="grid gap-1 border-t border-border-subtle pt-3">
-              <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
-                Log
-              </span>
-              <ol className="grid max-h-40 gap-px overflow-hidden font-mono text-[11px] leading-[17px]">
-                {snap.log.slice(0, 12).map((l, i) => (
-                  <li
-                    key={`${l.t}-${i}`}
-                    className="grid grid-cols-[40px_64px_minmax(0,1fr)] gap-1.5 whitespace-nowrap"
-                  >
-                    <span className="tabular-nums text-fg-disabled">{l.t.toFixed(1)}s</span>
-                    <span style={{ color: VERB_COLOR[l.kind] }}>{l.verb}</span>
-                    <span className="truncate text-fg-secondary">{l.text}</span>
-                  </li>
-                ))}
-              </ol>
+          </aside>
+          {transport && (
+            <div
+              className="pointer-events-none absolute bottom-3 z-10 transition-[left] duration-300 motion-reduce:transition-none"
+              style={{
+                left: folded ? '5rem' : '24rem',
+                transform: 'translateY(calc((1 - var(--crawl-panel, 0)) * 200%))',
+              }}
+            >
+              {transport}
             </div>
-          </>
-        )}
-      </aside>
+          )}
+        </>
+      ) : (
+        <PhoneSheet
+          open={inCrawl}
+          size={sheet}
+          onSize={setSheet}
+          above={transport || undefined}
+          peek={
+            <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border-subtle px-3.5 pb-3">
+              <div ref={peekStatus} tabIndex={-1} className="min-w-0 outline-none">
+                {status}
+              </div>
+              <CopyButton state={copyState} onPress={() => void copy()} />
+            </div>
+          }
+        >
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {head(false)}
+            {tabs('whole')}
+          </div>
+        </PhoneSheet>
+      )}
 
       <span aria-live="polite" className="sr-only">
-        {inCrawl && asked ? `Searching your brain: ${asked}` : ''}
+        {announce || (inCrawl && answer ? `Searching your brain: ${answer.question}` : '')}
       </span>
     </div>
   );
 }
 
-function IconButton({
-  label,
-  onPress,
-  children,
-}: {
-  label: string;
-  onPress(): void;
-  children: React.ReactNode;
-}) {
+function PanelTabName({ id, children }: { id: PanelTab; children: ReactNode }) {
   return (
-    <Button
-      aria-label={label}
-      onPress={onPress}
-      className="flex h-8 w-8 items-center justify-center rounded-md border border-border-default text-fg-secondary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40"
+    <Tab
+      id={id}
+      className={cn(
+        '-mb-px flex cursor-pointer items-center gap-1.5 border-b-2 border-transparent px-1.5 pb-2 pt-2.5 text-[12.5px] text-fg-secondary hover:text-fg-primary',
+        'selected:border-accent selected:text-fg-primary',
+        FOCUS_RING,
+      )}
     >
       {children}
-    </Button>
+    </Tab>
+  );
+}
+
+/** The panel folded to a strip: how many notes, Copy prompt, and the way back. */
+function Folded({
+  stripRef,
+  notes,
+  copyState,
+  onUnfold,
+  onCopy,
+}: {
+  stripRef: Ref<HTMLDivElement>;
+  notes: number;
+  copyState: CopyState;
+  onUnfold(): void;
+  onCopy(): void;
+}) {
+  return (
+    <div
+      ref={stripRef}
+      tabIndex={-1}
+      className="flex flex-col items-center gap-2.5 py-2 outline-none"
+    >
+      <IconButton label="Unfold the panel" onPress={onUnfold}>
+        <ChevronRight size={15} aria-hidden />
+      </IconButton>
+      <span className="rotate-180 [writing-mode:vertical-rl]">
+        <Eyebrow>Sentinel</Eyebrow>
+      </span>
+      <span className="grid justify-items-center">
+        <span className="font-mono text-[15px] tabular-nums text-fg-primary">{notes}</span>
+        <span className="font-mono text-[10px] text-fg-muted">notes</span>
+      </span>
+      <Button
+        aria-label={copyState === 'copied' ? 'Copied' : 'Copy prompt'}
+        onPress={onCopy}
+        isDisabled={copyState === 'reading'}
+        className={cn(
+          'flex h-9 w-9 items-center justify-center rounded-md disabled:opacity-60',
+          copyState === 'copied'
+            ? 'bg-[rgba(34,197,94,0.14)] text-success'
+            : 'bg-accent text-accent-fg hover:bg-accent-hover',
+          FOCUS_RING,
+        )}
+      >
+        {copyState === 'copied' ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
+      </Button>
+    </div>
   );
 }
