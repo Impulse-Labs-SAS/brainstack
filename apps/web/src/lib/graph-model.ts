@@ -47,6 +47,8 @@ export interface InputNode {
   project: ProjectRef;
   createdAt: number;
   updatedAt: number;
+  /** Records a decision (`notes.graph`). Optional: fixtures and the lab's vaults leave it out. */
+  isDecision?: boolean;
 }
 export interface InputEdge {
   source: string;
@@ -101,6 +103,8 @@ export interface GraphNode {
   /** Somebody else's note: drawn with a ring, opened under the shared route. */
   foreign: boolean;
   isIndex: boolean;
+  /** Records a decision, as the server says: tag or status. Only the Sentinel view reads it. */
+  isDecision: boolean;
   /** The project a note belongs to. Null for a topic. */
   project: ProjectRef | null;
   createdAt: number;
@@ -287,6 +291,7 @@ function cached(cache: Map<string, GraphNode>, id: string): GraphNode {
     vault: OWN_VAULT,
     foreign: false,
     isIndex: false,
+    isDecision: false,
     project: null,
     createdAt: 0,
     updatedAt: 0,
@@ -453,6 +458,7 @@ export function buildGraphModel(input: {
     node.vault = vault;
     node.foreign = vault !== OWN_VAULT;
     node.isIndex = isIndex;
+    node.isDecision = n.isDecision ?? false;
     node.project = n.project;
     node.createdAt = n.createdAt;
     node.updatedAt = n.updatedAt;
@@ -508,6 +514,7 @@ export function buildGraphModel(input: {
       node.vault = OWN_VAULT;
       node.foreign = false;
       node.isIndex = false;
+      node.isDecision = false;
       node.project = null;
       // A topic connects nothing until a second note carries it: that is when it is born.
       node.createdAt = carriers.map((c) => c.createdAt).sort((a, b) => a - b)[1]!;
