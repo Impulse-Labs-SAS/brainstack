@@ -478,7 +478,7 @@ export const oauthTokens = pgTable(
 
 /**
  * The crawls `gather_context` made for a user — by an assistant over MCP or by
- * hand in the Crawl view — so the view can list and replay them.
+ * hand in the Sentinel view — so the view can list and replay them.
  *
  * `result` is the replay, not the answer: paths, titles and why each note was
  * reached, never the excerpts the assistant was handed. Rows are pruned by age

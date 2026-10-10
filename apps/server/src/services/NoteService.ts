@@ -59,6 +59,14 @@ import {
 
 const { facets, folders, links, notes, tags } = pgSchema;
 
+/**
+ * What makes a note a decision, for every reader that asks: a `decisión` or
+ * `decision` tag, or `status: decidido` in its frontmatter. One place, so the
+ * decisions list, `gather_context`'s digests and the graph never disagree.
+ */
+const DECISION_TAGS = ['decisión', 'decision'];
+const DECISION_STATUS = { key: 'status', value: 'decidido' } as const;
+
 export interface NoteRowDto {
   path: string;
   title: string;
@@ -277,7 +285,10 @@ export class NoteService {
    * rather than trusted to a `LIKE`: a pattern that widens by accident is a
    * note shown to someone it was never shared with.
    */
-  private inScope(ownerId: string, sharedScopes: SharedScope[] = []): (physical: string) => boolean {
+  private inScope(
+    ownerId: string,
+    sharedScopes: SharedScope[] = [],
+  ): (physical: string) => boolean {
     const prefixes = [ownerId, ...sharedScopes.map((s) => `${s.ownerId}/${s.folderPath}`)].map(
       (p) => `${p}/`,
     );
@@ -436,7 +447,12 @@ export class NoteService {
         ? this.opts.db
             .select({ tag: tags.tag, count: sql<number>`count(*)::int` })
             .from(tags)
-            .where(inArray(tags.tag, targetTags.map((t) => t.tag)))
+            .where(
+              inArray(
+                tags.tag,
+                targetTags.map((t) => t.tag),
+              ),
+            )
             .groupBy(tags.tag)
         : [],
       facetSignals.length
@@ -444,9 +460,7 @@ export class NoteService {
             .select({ key: facets.key, value: facets.value, count: sql<number>`count(*)::int` })
             .from(facets)
             .where(
-              or(
-                ...targetFacets.map((f) => and(eq(facets.key, f.key), eq(facets.value, f.value))),
-              ),
+              or(...targetFacets.map((f) => and(eq(facets.key, f.key), eq(facets.value, f.value)))),
             )
             .groupBy(facets.key, facets.value)
         : [],
@@ -468,7 +482,10 @@ export class NoteService {
             .where(
               and(
                 scopeWhere,
-                inArray(tags.tag, targetTags.map((t) => t.tag)),
+                inArray(
+                  tags.tag,
+                  targetTags.map((t) => t.tag),
+                ),
                 sql`${notes.path} != ${physical}`,
               ),
             )
@@ -1190,12 +1207,16 @@ export class NoteService {
         .leftJoin(tags, eq(tags.notePath, notes.path))
         .leftJoin(
           facets,
-          and(eq(facets.notePath, notes.path), eq(facets.key, 'status'), eq(facets.value, 'decidido')),
+          and(
+            eq(facets.notePath, notes.path),
+            eq(facets.key, DECISION_STATUS.key),
+            eq(facets.value, DECISION_STATUS.value),
+          ),
         )
         .where(
           and(
             inArray(notes.path, physical),
-            or(inArray(tags.tag, ['decisión', 'decision']), sql`${facets.value} IS NOT NULL`),
+            or(inArray(tags.tag, DECISION_TAGS), sql`${facets.value} IS NOT NULL`),
           ),
         ),
     ]);
@@ -1233,12 +1254,20 @@ export class NoteService {
         .from(facets)
         .innerJoin(notes, eq(notes.path, facets.notePath))
         .where(owned),
-      this.opts.db.select({ count: sql<number>`count(*)::int` }).from(notes).where(owned),
+      this.opts.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(notes)
+        .where(owned),
     ]);
 
     const rows: TopicRow[] = [
       ...tagRows.map((r) => ({ path: r.path, kind: 'tag' as const, value: r.value })),
-      ...facetRows.map((r) => ({ path: r.path, kind: 'facet' as const, key: r.key, value: r.value })),
+      ...facetRows.map((r) => ({
+        path: r.path,
+        kind: 'facet' as const,
+        key: r.key,
+        value: r.value,
+      })),
     ];
     const topics = buildTopics(rows, Number(total?.count ?? 0));
     return { topics, edges: affinityEdges(topics) };
@@ -1268,13 +1297,15 @@ export class NoteService {
       /** Epoch ms. The graph replays growth by the first and lights up activity by the second. */
       createdAt: number;
       updatedAt: number;
+      /** Records a decision: a decision tag or status: decidido. */
+      isDecision: boolean;
     }>;
     edges: Array<{ source: string; target: string; weight: number }>;
   }> {
     const where = this.scopeWhere(viewerId, opts.sharedScopes);
     const inScope = this.inScope(viewerId, opts.sharedScopes);
 
-    const [scopedNodeRows, scopedTagRows] = await Promise.all([
+    const [scopedNodeRows, scopedTagRows, decisionTagRows, decisionFacetRows] = await Promise.all([
       this.opts.db
         .select({
           path: notes.path,
@@ -1291,9 +1322,27 @@ export class NoteService {
         .from(tags)
         .innerJoin(notes, eq(notes.path, tags.notePath))
         .where(and(where, like(tags.tag, 'proyecto/%'))),
+      // Decisions, one narrow join per signal: each can use its own index, where
+      // one left join over both would join every tag of every note before it
+      // filtered. Unioned below.
+      this.opts.db
+        .selectDistinct({ path: tags.notePath })
+        .from(tags)
+        .innerJoin(notes, eq(notes.path, tags.notePath))
+        .where(and(where, inArray(tags.tag, DECISION_TAGS))),
+      this.opts.db
+        .selectDistinct({ path: facets.notePath })
+        .from(facets)
+        .innerJoin(notes, eq(notes.path, facets.notePath))
+        .where(
+          and(where, eq(facets.key, DECISION_STATUS.key), eq(facets.value, DECISION_STATUS.value)),
+        ),
     ]);
     const nodeRows = scopedNodeRows.filter((r) => inScope(r.path));
     const tagRows = scopedTagRows.filter((r) => inScope(r.path));
+    const decisions = new Set(
+      [...decisionTagRows, ...decisionFacetRows].map((r) => r.path).filter(inScope),
+    );
     const tagsByPath = new Map<string, string[]>();
     for (const row of tagRows) {
       const list = tagsByPath.get(row.path) ?? [];
@@ -1337,6 +1386,7 @@ export class NoteService {
         project: projects.get(r.path)!,
         createdAt: Number(r.createdAt),
         updatedAt: Number(r.updatedAt),
+        isDecision: decisions.has(r.path),
       })),
       // An edge to a note nobody can see would draw a line into nothing.
       edges: edgeRows
@@ -1372,12 +1422,16 @@ export class NoteService {
       .leftJoin(tags, eq(tags.notePath, notes.path))
       .leftJoin(
         facets,
-        and(eq(facets.notePath, notes.path), eq(facets.key, 'status'), eq(facets.value, 'decidido')),
+        and(
+          eq(facets.notePath, notes.path),
+          eq(facets.key, DECISION_STATUS.key),
+          eq(facets.value, DECISION_STATUS.value),
+        ),
       )
       .where(
         and(
           this.ownedBy(ownerId),
-          or(inArray(tags.tag, ['decisión', 'decision']), sql`${facets.value} IS NOT NULL`),
+          or(inArray(tags.tag, DECISION_TAGS), sql`${facets.value} IS NOT NULL`),
           ...(scope ? [like(notes.path, `${escapeLike(scope)}/%`)] : []),
         ),
       )
@@ -1423,9 +1477,7 @@ export class NoteService {
 
     // A MOC is not its own index: `_ideas.md` created inside `ideas/` used to
     // come back listing itself, inviting a link from the note to the note.
-    return found
-      .map((r) => this.toLogical(ownerId, r.path))
-      .filter((moc) => moc !== logicalPath);
+    return found.map((r) => this.toLogical(ownerId, r.path)).filter((moc) => moc !== logicalPath);
   }
 
   /** Feeds `rewriteLinkTargets` from the store, in stored-path terms. */

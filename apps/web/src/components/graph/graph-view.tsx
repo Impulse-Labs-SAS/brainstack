@@ -4,15 +4,18 @@
 // answering its own question — Brain (3D, inside a brain), Network (how it
 // connects) and Territories (what there is and where it is filed) — and one
 // behaviour across all of them: a click brings the camera to a note and opens
-// its preview without leaving the graph.
+// its preview without leaving the graph. A fourth tab, the Sentinel, opens by
+// default: what the brain hands an assistant, walked before your eyes.
 //
 // The heavy lifting lives outside React: graph-controller runs the loop,
 // graph-engine the layout, graph-scene the WebGL, graph-overlay the text.
 // This file owns what React is good at: the toolbar, panels and preferences.
 
-import { Brain, Bug, Map as MapIcon, Network, Play, Square } from 'lucide-react';
+import { Brain, Map as MapIcon, Network, Play, ScanEye, Square } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import {
+  Component,
   useCallback,
   useEffect,
   useMemo,
@@ -39,10 +42,23 @@ import {
   type SharedVaultName,
 } from '@/lib/graph-model';
 import { DEFAULT_FILTERS, searchGraph, type SearchFilters } from '@/lib/graph-search';
-import { BRIDGE_COLOR, LABEL_COLORS, OWN_VAULT_COLOR, SHARED_VAULT_COLORS, TOPIC_COLOR } from '@/lib/graph-palette';
+import {
+  BRIDGE_COLOR,
+  LABEL_COLORS,
+  OWN_VAULT_COLOR,
+  SHARED_VAULT_COLORS,
+  TOPIC_COLOR,
+} from '@/lib/graph-palette';
 import { cn } from '@/lib/utils';
 
-import { CrawlPanel } from './crawl/crawl-panel';
+import { CRAWL_COLORS } from './crawl/crawl-colors';
+import {
+  CHOICE_KEY,
+  LEGACY_VIEW_KEY,
+  openingView,
+  rememberedChoice,
+  type ViewChoice,
+} from './crawl/view-choice';
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
 import { GraphLayersMenu } from './graph-layers';
 import { GLASS, GraphPreview, edited } from './graph-preview';
@@ -62,12 +78,16 @@ interface GraphViewProps {
   onIncludeSharedChange(include: boolean): void;
 }
 
-const VIEW_KEY = 'brainstack.graph.view';
 const LAYERS_KEY = 'brainstack.graph.layers';
 const LAYOUT_KEY = 'brainstack.graph.layout';
 
 const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }> = [
-  { id: 'brain', label: 'Brain', icon: Brain, hint: 'Drag to turn the brain, Shift+drag to move it. Click a note to focus it.' },
+  {
+    id: 'brain',
+    label: 'Brain',
+    icon: Brain,
+    hint: 'Drag to turn the brain, Shift+drag to move it. Click a note to focus it.',
+  },
   {
     id: 'network',
     label: 'Network',
@@ -82,9 +102,43 @@ const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }
   },
 ];
 
-// Crawl is not a fourth layout: it is the Brain view with a crawl replayed on
-// top (components/graph/crawl). The engine never hears of it.
-const CRAWL_HINT = 'The brain, with a crawl replayed on it: the spider walks the links to every note a prompt refers to, and lights each thread it steps on. Drag to look around.';
+// The Sentinel is not a fourth layout. Under it the engine shows the brain,
+// and components/graph/crawl plugs into the controller (a GraphPlugin) with a
+// stage of its own — the dormant network of your notes, which the Sentinel
+// walks — that the graph steps aside for, and gives back as it was on leaving.
+// The engine never hears of it. The folder is loaded only when the view opens
+// (SentinelPanel below), so the other three never download it.
+const SENTINEL_HINT =
+  'Ask your brain something and watch the Sentinel look for it: it walks the links to every note your question refers to, and lights each thread it takes. Drag to look around while it walks.';
+const GRAPH_LABEL =
+  'Graph of your notes. With a note selected, arrow keys move along its links and Enter opens it.';
+const SENTINEL_LABEL =
+  'The Sentinel walking your notes. Drag to turn the view, Shift+drag to move it; the wheel zooms.';
+
+const SentinelPanel = dynamic(() => import('./crawl/crawl-panel').then((m) => m.CrawlPanel), {
+  ssr: false,
+});
+
+/**
+ * The Sentinel's chunk is fetched when the view opens, from the build the tab
+ * was loaded with: after a deploy that chunk may be gone. Failing, it takes the
+ * Sentinel down, never the page — the brain stays, with a toast.
+ */
+class SentinelBoundary extends Component<
+  { onError(error: unknown): void; children: ReactNode },
+  { failed: boolean }
+> {
+  override state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  override componentDidCatch(error: unknown) {
+    this.props.onError(error);
+  }
+  override render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 // Preferences are per-browser conveniences: a blocked or private store just
 // means starting from the defaults.
@@ -116,7 +170,15 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includeShared, onIncludeSharedChange }: GraphViewProps) {
+export function GraphView({
+  nodes,
+  edges,
+  affinity,
+  viewerId,
+  vaultNames,
+  includeShared,
+  onIncludeSharedChange,
+}: GraphViewProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -132,7 +194,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>('brain');
-  const [crawl, setCrawl] = useState(false);
+  const [sentinel, setSentinel] = useState(false);
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_LAYERS);
   const [webgl, setWebgl] = useState(true);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -193,15 +255,21 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     controllerRef.current = controller;
     setWebgl(controller.webgl);
 
-    const fromHash = GRAPH_VIEWS.find((v) => `#${v}` === window.location.hash);
-    let initial: View = fromHash ?? readPref<View>(VIEW_KEY) ?? 'brain';
-    if (!GRAPH_VIEWS.includes(initial) || (initial === 'brain' && !controller.webgl)) initial = controller.webgl ? 'brain' : 'network';
-    if (window.location.hash === '#crawl' && controller.webgl) {
-      initial = 'brain';
-      setCrawl(true);
+    const opening = openingView(
+      window.location.hash,
+      rememberedChoice(readPref(CHOICE_KEY), readPref(LEGACY_VIEW_KEY)),
+      controller.webgl,
+    );
+    if (opening.sentinel) {
+      // Fetched alongside the graph: the panel renders once there is a model and imports the
+      // stage when it mounts, so in series the brain would wait under an inert prompt. The same
+      // chunks either way; a failure here is the panel's to report, when it imports them itself.
+      void import('./crawl/crawl-panel').catch(() => {});
+      void import('./crawl/stage/sentinel-stage').catch(() => {});
     }
-    controller.initView(initial);
-    setView(initial);
+    controller.initView(opening.view);
+    setView(opening.view);
+    setSentinel(opening.sentinel);
     const storedLayers = readPref<GraphLayers>(LAYERS_KEY);
     if (storedLayers) setLayers({ ...DEFAULT_LAYERS, ...storedLayers });
     setReady(true);
@@ -218,9 +286,23 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
-  const modelLayers = useMemo(() => (view === 'territories' && layers.topics ? { ...layers, topics: false } : layers), [view, layers]);
+  const modelLayers = useMemo(
+    () => (view === 'territories' && layers.topics ? { ...layers, topics: false } : layers),
+    [view, layers],
+  );
   const model = useMemo(
-    () => (ready ? buildGraphModel({ nodes, edges, affinity, layers: modelLayers, viewerId, vaultNames, cache: cacheRef.current }) : null),
+    () =>
+      ready
+        ? buildGraphModel({
+            nodes,
+            edges,
+            affinity,
+            layers: modelLayers,
+            viewerId,
+            vaultNames,
+            cache: cacheRef.current,
+          })
+        : null,
     [ready, nodes, edges, affinity, modelLayers, viewerId, vaultNames],
   );
 
@@ -231,10 +313,14 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     builtRef.current = { nodes, edges };
     if (!previous) {
       // First layout: start from where the notes were last time, if it was this view.
-      const stored = readPref<{ view: View; positions: Record<string, [number, number, number]> }>(LAYOUT_KEY);
+      const stored = readPref<{ view: View; positions: Record<string, [number, number, number]> }>(
+        LAYOUT_KEY,
+      );
       const saved =
         stored?.view === c.view
-          ? new Map(Object.entries(stored.positions).map(([id, [x, y, z]]) => [id, { x, y, z }] as const))
+          ? new Map(
+              Object.entries(stored.positions).map(([id, [x, y, z]]) => [id, { x, y, z }] as const),
+            )
           : undefined;
       c.setModel(model, 'init', saved);
     } else {
@@ -242,16 +328,30 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     }
   }, [model, nodes, edges]);
 
+  // The hash follows the view, so a reload stays on it; the choice is remembered only when picked (`choose`).
   useEffect(() => {
     if (!ready) return;
     controllerRef.current?.setView(view);
-    writePref(VIEW_KEY, view);
     try {
-      history.replaceState(null, '', `#${crawl ? 'crawl' : view}`);
+      history.replaceState(null, '', `#${sentinel ? 'sentinel' : view}`);
     } catch {
-      // a sandboxed frame may refuse; the preference still holds
+      // a sandboxed frame may refuse; the hash is a convenience
     }
-  }, [view, crawl, ready]);
+  }, [view, sentinel, ready]);
+
+  /** A tab or a key: the view, and the choice remembered for the next visit. Brain and the Sentinel need WebGL. */
+  const choose = (choice: ViewChoice) => {
+    if ((choice === 'brain' || choice === 'sentinel') && !webgl) return;
+    setSentinel(choice === 'sentinel');
+    setView(choice === 'sentinel' ? 'brain' : choice);
+    writePref(CHOICE_KEY, choice);
+  };
+
+  const leaveSentinel = useCallback((error: unknown) => {
+    console.warn('Sentinel: the view failed to load; the brain shows instead.', error);
+    setSentinel(false);
+    setToast('The Sentinel could not load. Reload the page to try again.');
+  }, []);
 
   useEffect(() => {
     if (ready) writePref(LAYERS_KEY, layers);
@@ -259,11 +359,16 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
   }, [layers, ready]);
 
   // "Edited this week" is measured from when the search last changed, which is close enough for a filter.
-  const matches = useMemo(() => (model ? searchGraph(model.nodes, query, filters, Date.now()) : null), [model, query, filters]);
+  const matches = useMemo(
+    () => (model ? searchGraph(model.nodes, query, filters, Date.now()) : null),
+    [model, query, filters],
+  );
+  // Search and filters are hidden in the Sentinel, so what they left lit in the brain goes dark there.
   useEffect(() => {
-    controllerRef.current?.setMatches(matches);
-  }, [matches]);
-  const currentMatch = selection?.kind === 'note' && matches?.includes(selection.node) ? selection.node : null;
+    controllerRef.current?.setMatches(sentinel ? null : matches);
+  }, [matches, sentinel]);
+  const currentMatch =
+    selection?.kind === 'note' && matches?.includes(selection.node) ? selection.node : null;
 
   useEffect(() => {
     if (!toast) return;
@@ -277,8 +382,10 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
       if (e.key !== '/' || e.metaKey || e.ctrlKey) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      // The Sentinel has no search box: the key is left alone there.
+      if (!searchRef.current) return;
       e.preventDefault();
-      searchRef.current?.focus();
+      searchRef.current.focus();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -288,31 +395,20 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
     const t = e.target as HTMLElement;
     // Popovers render through a portal but their key events still bubble here.
     if (/^(INPUT|TEXTAREA)$/.test(t.tagName) || t.closest('[role=dialog]')) return;
-    if (e.key === '4' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      if (webgl) {
-        setCrawl(true);
-        setView('brain');
-      }
-      e.preventDefault();
-      return;
-    }
-    const index = ['1', '2', '3'].indexOf(e.key);
+    const index = ['1', '2', '3', '4'].indexOf(e.key);
     if (index >= 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      const next = GRAPH_VIEWS[index]!;
-      if (next !== 'brain' || webgl) {
-        setCrawl(false);
-        setView(next);
-      }
+      choose(index === 3 ? 'sentinel' : GRAPH_VIEWS[index]!);
       e.preventDefault();
       return;
     }
-    if (t === overlayRef.current && controllerRef.current?.keyDown(e.nativeEvent)) e.preventDefault();
+    if (t === overlayRef.current && controllerRef.current?.keyDown(e.nativeEvent))
+      e.preventDefault();
   };
 
   const c = () => controllerRef.current;
   const is3D = view === 'brain';
   const visibleVaults = model?.vaults.filter((v) => !v.hidden) ?? [];
-  const hint = crawl ? CRAWL_HINT : VIEWS.find((v) => v.id === view)!.hint;
+  const hint = sentinel ? SENTINEL_HINT : VIEWS.find((v) => v.id === view)!.hint;
 
   return (
     <div
@@ -324,7 +420,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
       <canvas
         ref={overlayRef}
         tabIndex={0}
-        aria-label="Graph of your notes. With a note selected, arrow keys move along its links and Enter opens it."
+        aria-label={sentinel ? SENTINEL_LABEL : GRAPH_LABEL}
         className="absolute inset-0 block h-full w-full outline-none"
         style={{ touchAction: 'none', cursor: 'grab' }}
         onPointerDown={(e) => {
@@ -356,12 +452,10 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
           aria-label="View"
           selectionMode="single"
           disallowEmptySelection
-          selectedKeys={[crawl ? 'crawl' : view]}
+          selectedKeys={[sentinel ? 'sentinel' : view]}
           onSelectionChange={(keys) => {
-            const next = [...keys][0] as View | 'crawl' | undefined;
-            if (!next) return;
-            setCrawl(next === 'crawl');
-            setView(next === 'crawl' ? 'brain' : next);
+            const next = [...keys][0] as ViewChoice | undefined;
+            if (next) choose(next);
           }}
           className={cn(GLASS, 'pointer-events-auto flex gap-0.5 rounded-lg p-[3px]')}
         >
@@ -381,7 +475,7 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
             </ToggleButton>
           ))}
           <ToggleButton
-            id="crawl"
+            id="sentinel"
             isDisabled={!webgl}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
@@ -389,12 +483,13 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
               'selected:bg-bg-elevated selected:text-fg-primary selected:shadow-[inset_0_0_0_1px_var(--border-strong)]',
             )}
           >
-            <Bug size={14} aria-hidden />
-            Crawl
+            <ScanEye size={14} aria-hidden />
+            Sentinel
           </ToggleButton>
         </ToggleButtonGroup>
 
-        {model && (
+        {/* The brain's own tools: the Sentinel keeps the layers, the views, zoom and Fit. */}
+        {model && !sentinel && (
           <GraphSearch
             model={model}
             query={query}
@@ -412,23 +507,31 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
 
         <span className="flex-1" />
 
-        <Button
-          onPress={() => (growing ? c()?.stopGrowth() : c()?.startGrowth())}
-          isDisabled={!model?.nodes.length}
-          className={cn(
-            GLASS,
-            'pointer-events-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-fg-primary outline-none',
-            'hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
-          )}
-        >
-          {growing ? <Square size={12} aria-hidden /> : <Play size={12} aria-hidden />}
-          {growing ? 'Stop' : 'Replay growth'}
-        </Button>
+        {!sentinel && (
+          <Button
+            onPress={() => (growing ? c()?.stopGrowth() : c()?.startGrowth())}
+            isDisabled={!model?.nodes.length}
+            className={cn(
+              GLASS,
+              'pointer-events-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-fg-primary outline-none',
+              'hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
+            )}
+          >
+            {growing ? <Square size={12} aria-hidden /> : <Play size={12} aria-hidden />}
+            {growing ? 'Stop' : 'Replay growth'}
+          </Button>
+        )}
 
-        {model && <FilterChips model={model} filters={filters} onChange={setFilters} />}
+        {model && !sentinel && (
+          <FilterChips model={model} filters={filters} onChange={setFilters} />
+        )}
       </div>
 
-      {crawl && model && <CrawlPanel controller={controllerRef.current} model={model} reduceMotion={reduceMotion} />}
+      {sentinel && model && controllerRef.current && (
+        <SentinelBoundary onError={leaveSentinel}>
+          <SentinelPanel controller={controllerRef.current} reduceMotion={reduceMotion} />
+        </SentinelBoundary>
+      )}
 
       {selection && model && (
         <GraphPreview
@@ -451,9 +554,17 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
         )}
       >
         {hovered ? (
-          <Tooltip node={hovered} vaultLabel={model?.vaults.find((v) => v.id === hovered.vault)?.label ?? ''} />
+          <Tooltip
+            node={hovered}
+            vaultLabel={model?.vaults.find((v) => v.id === hovered.vault)?.label ?? ''}
+          />
         ) : (
-          hoveredCountry && <CountryTooltip country={hoveredCountry} vaultLabel={model?.vaults.find((v) => v.id === hoveredCountry.vault)?.label ?? ''} />
+          hoveredCountry && (
+            <CountryTooltip
+              country={hoveredCountry}
+              vaultLabel={model?.vaults.find((v) => v.id === hoveredCountry.vault)?.label ?? ''}
+            />
+          )
         )}
       </div>
 
@@ -461,14 +572,18 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
         ref={chipRef}
         hidden
         aria-live="polite"
-        className={cn(GLASS, 'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary')}
+        className={cn(
+          GLASS,
+          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary',
+        )}
       />
 
       <div
         className={cn(
           GLASS,
           'absolute bottom-3 left-3 z-10 grid max-w-[calc(100%-1.5rem)] gap-1.5 rounded-lg px-3 py-2.5 text-xs text-fg-secondary md:max-w-[min(560px,calc(100%-15rem))]',
-          selection && 'max-md:hidden',
+          // On a phone the Sentinel's recents need the room under the prompt.
+          (selection || sentinel) && 'max-md:hidden',
         )}
       >
         <p className="text-[12.5px] leading-snug text-fg-primary">
@@ -477,39 +592,151 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
         </p>
         <ul className="flex flex-wrap gap-x-3.5 gap-y-1">
           {visibleVaults.map((v) => (
-            <LegendItem key={v.id} glyph={<span className="h-2 w-2 rounded-full" style={{ background: v.color.hue, boxShadow: `0 0 6px ${v.color.hue}` }} />}>
+            <LegendItem
+              key={v.id}
+              glyph={
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ background: v.color.hue, boxShadow: `0 0 6px ${v.color.hue}` }}
+                />
+              }
+            >
               {v.label}
             </LegendItem>
           ))}
-          <LegendItem glyph={<span className="flex gap-[3px]">{[0.35, 0.6, 1].map((o) => <span key={o} className="h-1.5 w-1.5 rounded-full" style={{ opacity: o, background: OWN_VAULT_COLOR.core }} />)}</span>}>
-            brightness = recent activity
-          </LegendItem>
-          {layers.indexes && <LegendItem glyph={<span className="h-2 w-2 rounded-[2px]" style={{ background: LABEL_COLORS.index }} />}>index</LegendItem>}
-          {visibleVaults.some((v) => !v.own) && (
-            <LegendItem glyph={<span className="h-2 w-2 rounded-full border-2" style={{ borderColor: SHARED_VAULT_COLORS[0]!.hue }} />}>
-              someone else&apos;s note
-            </LegendItem>
-          )}
-          {view === 'territories' ? (
+          {sentinel ? (
             <>
-              <LegendItem
-                glyph={<span className="h-2.5 w-4 rounded-[3px] border" style={{ borderColor: OWN_VAULT_COLOR.hue, background: `${OWN_VAULT_COLOR.hue}40` }} />}
-              >
-                project
+              <LegendItem glyph={<Dot color={CRAWL_COLORS.named} />}>
+                named in your question
               </LegendItem>
-              <LegendItem glyph={<span className="w-4 border-t border-dashed" style={{ borderColor: OWN_VAULT_COLOR.hue }} />}>folder</LegendItem>
-              <LegendItem glyph={<span className="w-4 border-t border-white/80" />}>route, on hover</LegendItem>
+              <LegendItem glyph={<Dot color={CRAWL_COLORS.linked} />}>
+                reached over a link
+              </LegendItem>
+              <LegendItem glyph={<Dot color={CRAWL_COLORS.decision} />}>decision</LegendItem>
+              <LegendItem glyph={<Dot color={CRAWL_COLORS.ask} />}>to ask you</LegendItem>
             </>
           ) : (
             <>
-              <LegendItem glyph={<span className="w-4 border-t" style={{ borderColor: OWN_VAULT_COLOR.hue }} />}>link</LegendItem>
-              {view === 'network' && (
-                <LegendItem glyph={<span className="w-4 border-t-2" style={{ borderColor: BRIDGE_COLOR.hue }} />}>link between projects</LegendItem>
+              <LegendItem
+                glyph={
+                  <span className="flex gap-[3px]">
+                    {[0.35, 0.6, 1].map((o) => (
+                      <span
+                        key={o}
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ opacity: o, background: OWN_VAULT_COLOR.core }}
+                      />
+                    ))}
+                  </span>
+                }
+              >
+                brightness = recent activity
+              </LegendItem>
+              {layers.indexes && (
+                <LegendItem
+                  glyph={
+                    <span
+                      className="h-2 w-2 rounded-[2px]"
+                      style={{ background: LABEL_COLORS.index }}
+                    />
+                  }
+                >
+                  index
+                </LegendItem>
               )}
-              {layers.affinity && <LegendItem glyph={<span className="w-4 border-t-2 border-dotted border-[#a7a4b8]" />}>shared topic</LegendItem>}
-              {layers.topics && <LegendItem glyph={<span className="text-[11px] leading-none" style={{ color: TOPIC_COLOR.hue }}>⬡</span>}>topic</LegendItem>}
-              {view === 'network' && (
-                <LegendItem glyph={<span className="h-2.5 w-2.5 rounded-full border border-dashed border-fg-muted" />}>outer ring: no links</LegendItem>
+              {visibleVaults.some((v) => !v.own) && (
+                <LegendItem
+                  glyph={
+                    <span
+                      className="h-2 w-2 rounded-full border-2"
+                      style={{ borderColor: SHARED_VAULT_COLORS[0]!.hue }}
+                    />
+                  }
+                >
+                  someone else&apos;s note
+                </LegendItem>
+              )}
+              {view === 'territories' ? (
+                <>
+                  <LegendItem
+                    glyph={
+                      <span
+                        className="h-2.5 w-4 rounded-[3px] border"
+                        style={{
+                          borderColor: OWN_VAULT_COLOR.hue,
+                          background: `${OWN_VAULT_COLOR.hue}40`,
+                        }}
+                      />
+                    }
+                  >
+                    project
+                  </LegendItem>
+                  <LegendItem
+                    glyph={
+                      <span
+                        className="w-4 border-t border-dashed"
+                        style={{ borderColor: OWN_VAULT_COLOR.hue }}
+                      />
+                    }
+                  >
+                    folder
+                  </LegendItem>
+                  <LegendItem glyph={<span className="w-4 border-t border-white/80" />}>
+                    route, on hover
+                  </LegendItem>
+                </>
+              ) : (
+                <>
+                  <LegendItem
+                    glyph={
+                      <span className="w-4 border-t" style={{ borderColor: OWN_VAULT_COLOR.hue }} />
+                    }
+                  >
+                    link
+                  </LegendItem>
+                  {view === 'network' && (
+                    <LegendItem
+                      glyph={
+                        <span
+                          className="w-4 border-t-2"
+                          style={{ borderColor: BRIDGE_COLOR.hue }}
+                        />
+                      }
+                    >
+                      link between projects
+                    </LegendItem>
+                  )}
+                  {layers.affinity && (
+                    <LegendItem
+                      glyph={<span className="w-4 border-t-2 border-dotted border-[#a7a4b8]" />}
+                    >
+                      shared topic
+                    </LegendItem>
+                  )}
+                  {layers.topics && (
+                    <LegendItem
+                      glyph={
+                        <span
+                          className="text-[11px] leading-none"
+                          style={{ color: TOPIC_COLOR.hue }}
+                        >
+                          ⬡
+                        </span>
+                      }
+                    >
+                      topic
+                    </LegendItem>
+                  )}
+                  {view === 'network' && (
+                    <LegendItem
+                      glyph={
+                        <span className="h-2.5 w-2.5 rounded-full border border-dashed border-fg-muted" />
+                      }
+                    >
+                      outer ring: no links
+                    </LegendItem>
+                  )}
+                </>
               )}
             </>
           )}
@@ -522,7 +749,10 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
           hidden={is3D}
           aria-label="Minimap. Click to move there."
           // A class, not only the attribute: md:block would override [hidden].
-          className={cn('h-[116px] w-[176px] cursor-crosshair rounded-lg border border-border-subtle', is3D ? 'hidden' : 'hidden md:block')}
+          className={cn(
+            'h-[116px] w-[176px] cursor-crosshair rounded-lg border border-border-subtle',
+            is3D ? 'hidden' : 'hidden md:block',
+          )}
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId);
             c()?.minimapPoint(e.nativeEvent);
@@ -531,8 +761,12 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
             if (e.buttons) c()?.minimapPoint(e.nativeEvent);
           }}
         />
-        {is3D && (
-          <div className={cn(GLASS, 'flex gap-0.5 rounded-lg p-[3px]')} role="group" aria-label="Brain orientation">
+        {is3D && !sentinel && (
+          <div
+            className={cn(GLASS, 'flex gap-0.5 rounded-lg p-[3px]')}
+            role="group"
+            aria-label="Brain orientation"
+          >
             {(['side', 'top', 'front'] as const).map((a) => (
               <ToggleButton
                 key={a}
@@ -568,7 +802,13 @@ export function GraphView({ nodes, edges, affinity, viewerId, vaultNames, includ
       </div>
 
       {toast && (
-        <div role="status" className={cn(GLASS, 'absolute bottom-6 left-1/2 z-30 max-w-[min(520px,calc(100%-2rem))] -translate-x-1/2 rounded-lg px-3.5 py-2 text-center text-sm text-fg-primary')}>
+        <div
+          role="status"
+          className={cn(
+            GLASS,
+            'absolute bottom-6 left-1/2 z-30 max-w-[min(520px,calc(100%-2rem))] -translate-x-1/2 rounded-lg px-3.5 py-2 text-center text-sm text-fg-primary',
+          )}
+        >
           {toast}
         </div>
       )}
@@ -622,12 +862,24 @@ function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultL
       <b className="text-[13px] font-semibold text-fg-primary">{country.label}</b>
       <span className="text-fg-secondary">
         {country.notes} {country.notes === 1 ? 'note' : 'notes'}
-        {country.folders > 0 && ` · ${country.folders} ${country.folders === 1 ? 'folder' : 'folders'}`} · {vaultLabel}
+        {country.folders > 0 &&
+          ` · ${country.folders} ${country.folders === 1 ? 'folder' : 'folders'}`}{' '}
+        · {vaultLabel}
       </span>
       <span className="font-mono text-[11px] text-fg-muted">
-        {country.routes} {country.routes === 1 ? 'route' : 'routes'} to other projects · click to zoom in
+        {country.routes} {country.routes === 1 ? 'route' : 'routes'} to other projects · click to
+        zoom in
       </span>
     </>
+  );
+}
+
+function Dot({ color }: { color: string }) {
+  return (
+    <span
+      className="h-2 w-2 rounded-full"
+      style={{ background: color, boxShadow: `0 0 6px ${color}` }}
+    />
   );
 }
 
@@ -642,7 +894,15 @@ function LegendItem({ glyph, children }: { glyph: ReactNode; children: ReactNode
   );
 }
 
-function ZoomButton({ label, onPress, children }: { label: string; onPress(): void; children: ReactNode }) {
+function ZoomButton({
+  label,
+  onPress,
+  children,
+}: {
+  label: string;
+  onPress(): void;
+  children: ReactNode;
+}) {
   return (
     <Button
       aria-label={label}

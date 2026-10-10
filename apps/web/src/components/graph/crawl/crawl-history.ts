@@ -1,9 +1,10 @@
-// The recent-crawls list in the Crawl view — pure, tested directly.
+// How a recent search reads in the Sentinel view — its age and who ran it.
+// Pure, tested directly.
 //
-// The list is polled while the view is open, so a crawl an assistant makes
-// over MCP shows up within seconds. A new one plays by itself, as long as the
-// view is not in the middle of another: the point of the view is to watch an
-// assistant read the brain, not to go looking for what it read.
+// The list is polled while the view is open, so a search an assistant makes
+// over MCP shows up within seconds — under the prompt, marked new until it is
+// played here (prompt/recents.ts). It never plays by itself: what to watch is
+// the person's to decide, and a walk under way is never cut off by another.
 
 export interface RecentCrawl {
   id: string;
@@ -12,22 +13,6 @@ export interface RecentCrawl {
   client: string | null;
   prompt: string;
   notes: number;
-}
-
-/**
- * The newest crawl an assistant made that this view has not seen yet, if any.
- * A crawl made by hand never qualifies: whoever made it is already watching it.
- */
-export function newAssistantCrawl(
-  items: readonly RecentCrawl[],
-  seen: ReadonlySet<string>,
-): RecentCrawl | null {
-  let newest: RecentCrawl | null = null;
-  for (const c of items) {
-    if (c.source !== 'assistant' || seen.has(c.id)) continue;
-    if (!newest || c.createdAt > newest.createdAt) newest = c;
-  }
-  return newest;
 }
 
 const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto', style: 'short' });

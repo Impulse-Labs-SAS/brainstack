@@ -1,7 +1,7 @@
 // What a crawl replay does, step by step — pure and DB-free, tested directly
 // like graph-engine.
 //
-// `gather_context` answers in milliseconds, so what the Crawl view shows is a
+// `gather_context` answers in milliseconds, so what the Sentinel view shows is a
 // replay, rebuilt from its answer: each note says why it is there (`via`) —
 // the text named it, a search found it, or it was reached from another note.
 // That is enough to walk it again in order: first every note the text names,
@@ -160,7 +160,28 @@ export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
   return { steps, offGraph, coverage: result.coverage };
 }
 
-/** Threads a spider walks: links someone wrote, and structure edges to an index. */
+/**
+ * The notes that record a decision, by node id: every note the graph marks
+ * (from the server's tag and facet test), and every note `result` hands over
+ * as one that the graph shows — matched by path and owner, as planCrawl
+ * matches them. The union, because either side may know what the other does
+ * not: the graph every decision in the vault, the crawl one it flagged since
+ * the graph was fetched.
+ */
+export function decisionIds(result: CrawlResult | null, model: GraphModel): Set<string> {
+  const ids = new Set<string>();
+  for (const n of model.nodes) if (n.kind === 'note' && n.isDecision) ids.add(n.id);
+  if (!result) return ids;
+  const byPlace = notesByPlace(model);
+  for (const n of result.notes) {
+    if (!n.isDecision) continue;
+    const node = byPlace.get(place(n.path, n.ownerId));
+    if (node) ids.add(node.id);
+  }
+  return ids;
+}
+
+/** Threads a walk takes: links someone wrote, and structure edges to an index. */
 export function walkable(e: GraphEdge): boolean {
   return e.kind === 'link' || e.kind === 'structure';
 }
@@ -171,7 +192,7 @@ export function distance(a: GraphNode, b: GraphNode): number {
 
 /**
  * The shortest walk along threads from `from` to `to`, weighted by length;
- * threads already walked cost a little less, so the spider keeps to its own
+ * threads already walked cost a little less, so the walk keeps to its own
  * path when one is as good. Null when no thread joins them.
  */
 export function findWalk(

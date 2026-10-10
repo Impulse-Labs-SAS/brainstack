@@ -1,6 +1,8 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { PHASE_DEVELOPMENT_SERVER } from 'next/constants.js';
+
 /*
  * Set by the Dockerfile, and nowhere else.
  *
@@ -33,4 +35,20 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+/*
+ * Pages named `page.dev.tsx` exist only under `next dev` — the Sentinel lab at
+ * /dev/sentinel, say. In a build they are plain modules: typechecked and
+ * linted, never routed, never shipped. Next calls a config function with the
+ * phase it runs in; keying on that rather than on NODE_ENV matters, because a
+ * shell can set NODE_ENV to anything and would put a dev tool on the internet.
+ */
+export default (phase) => ({
+  ...nextConfig,
+  pageExtensions: [
+    'tsx',
+    'ts',
+    'jsx',
+    'js',
+    ...(phase === PHASE_DEVELOPMENT_SERVER ? ['dev.tsx'] : []),
+  ],
+});

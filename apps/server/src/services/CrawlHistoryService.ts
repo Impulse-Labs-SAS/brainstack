@@ -1,4 +1,4 @@
-// The crawls `gather_context` made for each user, so the Crawl view can list
+// The crawls `gather_context` made for each user, so the Sentinel view can list
 // them and replay one — including the ones an assistant made over MCP, which
 // the web app would otherwise never hear about.
 //

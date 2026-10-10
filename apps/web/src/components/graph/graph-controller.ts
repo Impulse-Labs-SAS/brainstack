@@ -1,7 +1,9 @@
 // Ties the layout (graph-engine), the WebGL scene (graph-scene) and the 2D
 // overlay (graph-overlay) together: camera, pointer and keyboard, focus and
 // paths, growth replay and the frame loop. React owns the chrome around the
-// canvas and hears about selection, hover and the rest through `events`.
+// canvas and hears about selection, hover and the rest through `events`. A
+// feature built over the graph plugs in as a GraphPlugin, and may bring a
+// stage of its own that the graph steps aside for (stage mode, below).
 //
 // Nothing here re-renders React while the graph animates: the loop runs on
 // refs and plain objects, and only changes a panel shows go through events.
@@ -23,7 +25,16 @@ import {
   type Camera,
   type Viewport,
 } from '@/lib/graph-camera';
-import { findPath, hopsFrom, neighbourToward, type GraphEdge, type GraphModel, type GraphNode, type GraphPath, type GraphView } from '@/lib/graph-model';
+import {
+  findPath,
+  hopsFrom,
+  neighbourToward,
+  type GraphEdge,
+  type GraphModel,
+  type GraphNode,
+  type GraphPath,
+  type GraphView,
+} from '@/lib/graph-model';
 
 import { GraphEngine, type RebuildReason } from './graph-engine';
 import {
@@ -39,19 +50,44 @@ import {
 import { GraphScene } from './graph-scene';
 
 /**
- * Something drawn on top of a view by a feature built over it — the Crawl view. It sees
- * the frame, never the controller: it draws over the overlay and may ask the camera to keep
- * a point in view. The views themselves know nothing about it, so removing one leaves the
- * graph exactly as it was.
+ * Something a feature built over the graph draws — the Sentinel view. It sees the frame, never
+ * the controller: it draws over the overlay, may ask the camera to keep a point in view, and
+ * may bring a stage of its own that the graph steps aside for. Removing it leaves the graph
+ * exactly as it was.
  */
 export interface GraphPlugin {
-  /** Every frame, after the overlay. */
+  /** Every frame, after the overlay (or, in stage mode, on the cleared overlay). */
   draw(ctx: CanvasRenderingContext2D, frame: PluginFrame): void;
   /** A point to keep in view and how close to stay, or null to leave the camera alone. */
   follow(): { x: number; y: number; z: number; dist: number } | null;
-  /** The user took the camera: dragged, zoomed or clicked. */
+  /** The user took the camera: dragged, zoomed, clicked or pressed Fit. */
   onUserCamera(): void;
+  /**
+   * A stage drawn instead of the graph while it is non-null. Read once a frame: it appears when
+   * the stage is ready and goes when it fails, and the controller enters and leaves stage mode
+   * as it does. Absent: drawn over the graph, as ever.
+   */
+  readonly stage?: PluginStage | null;
 }
+
+export interface PluginStage {
+  /** Its own canvas. The controller lays it just under the overlay on entering stage mode,
+   *  fades it in and takes it out on leaving; the stage makes, sizes and frees it. */
+  readonly canvas: HTMLCanvasElement;
+  /** It holds the camera still (the prompt): drags, the wheel, + / − and Fit change nothing. */
+  readonly locked: boolean;
+  /** Where Fit goes: the whole of what it draws. */
+  overview(vp: Viewport): Camera;
+  /** The camera distances the wheel and + / − keep between, world units. */
+  zoomRange(vp: Viewport): { min: number; max: number };
+  /** The container's size: on entering, and whenever it changes. */
+  resize(vp: Viewport, dpr: number): void;
+  /** First each frame: the camera it holds this frame, or null to leave it to the controller. */
+  camera(frame: PluginFrame): Camera | null;
+  /** Draws the frame with the camera the controller settled on. */
+  render(frame: PluginFrame): void;
+}
+
 export interface PluginFrame {
   now: number;
   /** Milliseconds since the last frame. */
@@ -61,6 +97,11 @@ export interface PluginFrame {
   dpr: number;
   model: GraphModel;
   reduceMotion: boolean;
+  /**
+   * No layout tick, warm-up or growth this frame: the graph is at rest (what a quality
+   * governor may count).
+   */
+  settled: boolean;
 }
 
 export type Selection = { kind: 'note'; node: GraphNode } | { kind: 'path'; path: GraphPath };
@@ -110,6 +151,8 @@ type Drag = {
   origin: { x: number; y: number; z: number } | null;
 };
 
+type Tween = { from: Camera; to: Camera; t0: number; duration: number };
+
 const CLICK_SLOP = 4;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
 const PREVIEW_OFFSET = 160;
@@ -121,6 +164,10 @@ const MAX_LIFTED = 150;
 const LIFT_MS = 720;
 const LIFT_STAGGER_MS = 30;
 const DROP_MS = 380;
+/** How long a plugin's stage takes to fade in over the graph's last frame. */
+const STAGE_FADE_MS = 400;
+/** The graph's drawing buffer while a stage covers it: none of it shows, so it holds no memory. */
+const PARKED: Viewport = { width: 1, height: 1 };
 
 type LiftTween = { from: number; to: number; t0: number };
 
@@ -143,7 +190,7 @@ export class GraphController {
   private cam: Camera = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, dist: 800 };
   private vp: Viewport = { width: 800, height: 600 };
   private dpr = 1;
-  private tween: { from: Camera; to: Camera; t0: number; duration: number } | null = null;
+  private tween: Tween | null = null;
   private userMoved = false;
   private spin = false;
 
@@ -189,6 +236,28 @@ export class GraphController {
   private chipTimer = 0;
   private plugin: GraphPlugin | null = null;
 
+  // Stage mode: a plugin's stage drawn instead of the graph (see `syncStage`).
+  private staged: PluginStage | null = null;
+  /**
+   * The brain's camera when the stage came; put back when it goes. `resized`: notes came or
+   * went under the stage, so the camera it comes back to was framed for another brain.
+   */
+  private brain: {
+    cam: Camera;
+    tween: Tween | null;
+    userMoved: boolean;
+    resized: boolean;
+  } | null = null;
+  /** Non-null while a plugin is attached: the graph does not spin; this is the spin to resume. */
+  private spinAfter: boolean | null = null;
+  /** The stage canvas's opacity, 0–1. */
+  private fade = 0;
+  /** The graph's drawing buffer is 1×1 (`PARKED`). */
+  private parked = false;
+  /** The next graph frame uploads positions, levels and edges: none were under the stage. */
+  private reupload = false;
+  private disposed = false;
+
   constructor(
     private readonly el: Elements,
     private readonly events: ControllerEvents,
@@ -218,11 +287,34 @@ export class GraphController {
     this.raf = requestAnimationFrame(this.frame);
   }
 
+  /**
+   * Attach a plugin, or detach the one attached. While one is, the graph holds its spin (and
+   * hands it back on detach); its stage, when it has one, comes and goes on its own (see
+   * `syncStage`). The camera is not saved here: the view switches to the brain around the same
+   * commit, and a camera saved now could be the one that switch is about to replace.
+   */
   setPlugin(plugin: GraphPlugin | null): void {
+    if (plugin === this.plugin) return;
+    if (this.plugin) {
+      this.leaveStage();
+      const spin = this.spinAfter ?? false;
+      this.plugin = null;
+      this.spinAfter = null;
+      if (!this.disposed) this.setSpin(spin);
+    }
+    // After dispose (React may clean the panel up after the view) only references go.
+    if (!plugin || this.disposed) return;
+    this.stopGrowth(); // it would play unseen under a stage
+    this.clearSelection(); // closes the preview
+    const spin = this.spin;
+    this.setSpin(false);
+    this.spinAfter = spin;
     this.plugin = plugin;
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.leaveStage();
     cancelAnimationFrame(this.raf);
     this.resizeObserver.disconnect();
     clearTimeout(this.chipTimer);
@@ -238,12 +330,24 @@ export class GraphController {
 
   // -- Inputs from React ----------------------------------------------------------
 
-  setModel(model: GraphModel, reason: RebuildReason, saved?: ReadonlyMap<string, { x: number; y: number; z: number }>): void {
+  setModel(
+    model: GraphModel,
+    reason: RebuildReason,
+    saved?: ReadonlyMap<string, { x: number; y: number; z: number }>,
+  ): void {
     this.growing = false;
     this.engine.setModel(model, reason, performance.now(), saved);
     this.scene?.setModel(model);
     if (reason === 'init') {
-      this.cam = { ...this.cam, ...this.fitTarget(), ...(this.engine.is3D ? ANGLES.threeQuarter : { yaw: 0, pitch: 0 }) };
+      const angle = this.engine.is3D ? ANGLES.threeQuarter : { yaw: 0, pitch: 0 };
+      // Under a stage the framing is the brain's, for when it comes back.
+      if (this.brain)
+        this.brain = {
+          ...this.brain,
+          cam: { ...this.brain.cam, ...this.fitTarget(), ...angle },
+          tween: null,
+        };
+      else this.cam = { ...this.cam, ...this.fitTarget(), ...angle };
       this.setSpin(this.engine.is3D);
     }
     const keep = (n: GraphNode | null) => (n && model.nodes.includes(n) ? n : null);
@@ -261,6 +365,9 @@ export class GraphController {
     this.previewed = keep(this.previewed);
     this.focus = null;
     this.userMoved = false;
+    // Notes came or went: the brain comes back eased to its new size, not where it was left
+    // (a first layout was framed for it above).
+    if (this.brain) this.brain = { ...this.brain, userMoved: false, resized: reason !== 'init' };
     this.edgesDirty = true;
   }
 
@@ -282,7 +389,13 @@ export class GraphController {
     if (rescale) {
       // The layout was rescaled into the brain; the camera follows so the first frame matches.
       const { k, cx, cy, oy } = rescale;
-      this.cam = { ...this.cam, tx: (this.cam.tx - cx) * k, ty: (this.cam.ty - cy) * k + oy, tz: 0, dist: this.cam.dist * k };
+      this.cam = {
+        ...this.cam,
+        tx: (this.cam.tx - cx) * k,
+        ty: (this.cam.ty - cy) * k + oy,
+        tz: 0,
+        dist: this.cam.dist * k,
+      };
       this.animateTo({ ...this.cam, ...this.fitTarget(), ...ANGLES.threeQuarter }, 1300);
       this.setSpin(true);
     } else if (was3D || this.engine.isMap) {
@@ -307,7 +420,11 @@ export class GraphController {
     this.matched = matches ? new Set(matches) : null;
     this.searchT0 = performance.now();
     this.edgesDirty = true;
-    this.scene?.lightCountries(matches ? new Set(matches.map((n) => n.project?.id).filter((id): id is string => !!id)) : null);
+    this.scene?.lightCountries(
+      matches
+        ? new Set(matches.map((n) => n.project?.id).filter((id): id is string => !!id))
+        : null,
+    );
 
     const now = this.searchT0;
     const lift = this.reduceMotion ? [] : (matches ?? []).slice(0, MAX_LIFTED);
@@ -324,11 +441,13 @@ export class GraphController {
 
   /** A result under the pointer in the results list, or null when it leaves. */
   preview(node: GraphNode | null): void {
+    if (this.staged) return;
     this.previewed = node;
   }
 
   /** Bring every match into view. */
   frameMatches(): void {
+    if (this.staged) return;
     const nodes = this.matches?.filter((n) => Number.isFinite(n.x));
     if (!nodes?.length) return;
     if (nodes.length === 1) {
@@ -337,14 +456,23 @@ export class GraphController {
     }
     this.setSpin(false);
     // Where they are drawn, sprung out of the brain, not where they live.
-    const b = boundsOf(nodes.map((n) => ({ x: n.x + n.ox, y: n.y + n.oy, z: (n.z || 0) + n.oz, radius: n.radius })));
+    const b = boundsOf(
+      nodes.map((n) => ({ x: n.x + n.ox, y: n.y + n.oy, z: (n.z || 0) + n.oz, radius: n.radius })),
+    );
     // In the brain, as close as a click on one note would go; flat, the usual cap.
-    const maxScale = this.engine.is3D ? this.vp.height / 2 / (TAN_HALF_FOV * this.engine.brainScale * 1.9) : 1.6;
-    if (b) this.animateTo({ ...this.cam, ...fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D }) });
+    const maxScale = this.engine.is3D
+      ? this.vp.height / 2 / (TAN_HALF_FOV * this.engine.brainScale * 1.9)
+      : 1.6;
+    if (b)
+      this.animateTo({
+        ...this.cam,
+        ...fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D }),
+      });
     this.userMoved = true;
   }
 
   select(node: GraphNode): void {
+    if (this.staged) return;
     this.selected = node;
     this.path = null;
     this.pathFrom = null;
@@ -366,21 +494,39 @@ export class GraphController {
 
   /** Pick the other end of a path with the next click. */
   startPathFrom(node: GraphNode): void {
+    if (this.staged) return;
     this.pathFrom = node;
     this.pathPick = true;
     this.events.onToast('Click the note to trace a path to.');
   }
 
   zoom(factor: number): void {
+    const stage = this.staged;
+    if (stage) {
+      if (stage.locked) return;
+      this.plugin?.onUserCamera();
+      this.zoomStage(stage, factor);
+      return;
+    }
     this.zoomAt(this.vp.width / 2, this.vp.height / 2, factor);
   }
 
   fit(): void {
+    const stage = this.staged;
+    if (stage) {
+      if (stage.locked) return;
+      // The whole of the stage, seen from where the user turned it; and it stops following.
+      this.plugin?.onUserCamera();
+      const o = stage.overview(this.vp);
+      this.animateTo({ ...this.cam, tx: o.tx, ty: o.ty, tz: o.tz, dist: o.dist });
+      return;
+    }
     this.animateTo({ ...this.cam, ...this.fitTarget() });
     this.userMoved = false;
   }
 
   setAngle(angle: AnglePreset): void {
+    if (this.staged) return;
     this.setSpin(false);
     this.animateTo({ ...this.cam, ...this.fitTarget(), ...ANGLES[angle] }, 900);
     this.userMoved = true;
@@ -388,12 +534,17 @@ export class GraphController {
   }
 
   setSpin(on: boolean): void {
+    // A plugin is attached: recorded, and applied when it goes.
+    if (this.spinAfter !== null) {
+      this.spinAfter = on;
+      return;
+    }
     this.spin = on && !this.reduceMotion && this.engine.is3D;
     this.events.onSpin(this.spin);
   }
 
   startGrowth(): void {
-    if (!this.model?.nodes.length) return;
+    if (this.staged || !this.model?.nodes.length) return;
     this.clearSelection();
     this.engine.startGrowth(performance.now());
     this.userMoved = false;
@@ -417,17 +568,39 @@ export class GraphController {
   pointerDown(e: PointerEvent): void {
     const model = this.model;
     if (!model) return;
+    if (this.staged) {
+      this.stageDown(e, this.staged);
+      return;
+    }
     this.el.overlay.setPointerCapture(e.pointerId);
     const { x, y } = this.local(e);
     const node = pickNode(model, x, y, (n) => this.engine.appear(n, performance.now()));
-    const kind = node ? 'node' : this.engine.is3D && !e.shiftKey && e.button === 0 ? 'orbit' : 'pan';
+    const kind = node
+      ? 'node'
+      : this.engine.is3D && !e.shiftKey && e.button === 0
+        ? 'orbit'
+        : 'pan';
     this.plugin?.onUserCamera();
-    this.drag = { kind, node, startX: x, startY: y, lastX: x, lastY: y, travel: 0, shift: e.shiftKey, origin: node ? { x: node.x, y: node.y, z: node.z } : null };
+    this.drag = {
+      kind,
+      node,
+      startX: x,
+      startY: y,
+      lastX: x,
+      lastY: y,
+      travel: 0,
+      shift: e.shiftKey,
+      origin: node ? { x: node.x, y: node.y, z: node.z } : null,
+    };
   }
 
   pointerMove(e: PointerEvent): void {
     const model = this.model;
     if (!model) return;
+    if (this.staged) {
+      this.stageMove(e);
+      return;
+    }
     const { x, y } = this.local(e);
     const drag = this.drag;
     if (!drag) {
@@ -487,6 +660,8 @@ export class GraphController {
     } catch {
       // the pointer was never captured; nothing to release
     }
+    // Over a stage a drag only turns the camera: no click selects, clears or zooms to anything.
+    if (this.staged) return;
     if (!drag) return;
     const click = drag.travel <= CLICK_SLOP && !cancelled;
     if (drag.kind === 'node' && drag.node) {
@@ -502,7 +677,7 @@ export class GraphController {
   }
 
   pointerLeave(): void {
-    if (this.drag) return;
+    if (this.staged || this.drag) return;
     this.setHotCountry(null);
     if (!this.hover) return;
     this.hover = null;
@@ -511,6 +686,13 @@ export class GraphController {
 
   wheel(e: WheelEvent): void {
     e.preventDefault();
+    const stage = this.staged;
+    if (stage) {
+      if (stage.locked) return;
+      this.plugin?.onUserCamera();
+      this.zoomStage(stage, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+      return;
+    }
     this.setSpin(false);
     this.plugin?.onUserCamera();
     const { x, y } = this.local(e);
@@ -519,7 +701,7 @@ export class GraphController {
 
   doubleClick(e: MouseEvent): void {
     const model = this.model;
-    if (!model) return;
+    if (!model || this.staged) return;
     const { x, y } = this.local(e);
     const node = pickNode(model, x, y, (n) => this.engine.appear(n, performance.now()));
     if (node) this.events.onOpen(node);
@@ -527,6 +709,13 @@ export class GraphController {
 
   /** Arrows walk the selected note's links in the direction pressed. Returns whether it handled the key. */
   keyDown(e: KeyboardEvent): boolean {
+    if (this.staged) {
+      // Over a stage there is no selection to clear or walk: only the zoom keys.
+      if (e.key === '+' || e.key === '=') this.zoom(1.25);
+      else if (e.key === '-') this.zoom(0.8);
+      else return false;
+      return true;
+    }
     if (e.key === 'Escape') {
       this.clearSelection();
       return true;
@@ -545,7 +734,12 @@ export class GraphController {
       this.events.onOpen(selected);
       return true;
     }
-    const dirs: Record<string, [number, number]> = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const dirs: Record<string, [number, number]> = {
+      ArrowRight: [1, 0],
+      ArrowLeft: [-1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    };
     const dir = dirs[e.key];
     if (!dir) return false;
     const next = neighbourToward(this.model, selected, dir[0], dir[1]);
@@ -555,9 +749,13 @@ export class GraphController {
 
   minimapPoint(e: PointerEvent): void {
     const t = this.minimapTransform;
-    if (!t) return;
+    if (!t || this.staged) return;
     const r = this.el.minimap.getBoundingClientRect();
-    this.cam = { ...this.cam, tx: (e.clientX - r.left - t.ox) / t.scale, ty: -(e.clientY - r.top - t.oy) / t.scale };
+    this.cam = {
+      ...this.cam,
+      tx: (e.clientX - r.left - t.ox) / t.scale,
+      ty: -(e.clientY - r.top - t.oy) / t.scale,
+    };
     this.userMoved = true;
     this.tween = null;
   }
@@ -601,7 +799,10 @@ export class GraphController {
   private countryAt(x: number, y: number): string | null {
     if (!this.engine.isMap || this.landAlpha < 0.5) return null;
     const p = pixelsPerUnit(this.cam, this.vp);
-    return this.engine.countryAt(this.cam.tx + (x - this.vp.width / 2) / p, this.cam.ty - (y - this.vp.height / 2) / p);
+    return this.engine.countryAt(
+      this.cam.tx + (x - this.vp.width / 2) / p,
+      this.cam.ty - (y - this.vp.height / 2) / p,
+    );
   }
 
   private setHotCountry(id: string | null): void {
@@ -614,7 +815,9 @@ export class GraphController {
       this.events.onHoverCountry(null);
       return;
     }
-    this.countryRoutes = model.edges.filter((e) => (e.source.project?.id === id) !== (e.target.project?.id === id) && e.kind !== 'topic');
+    this.countryRoutes = model.edges.filter(
+      (e) => (e.source.project?.id === id) !== (e.target.project?.id === id) && e.kind !== 'topic',
+    );
     this.focusT0 = performance.now();
     const group = model.projects.find((p) => p.id === id);
     const country = t.countries.find((c) => c.id === id);
@@ -636,7 +839,10 @@ export class GraphController {
     this.userMoved = true;
   }
 
-  private fitTarget(nodes?: GraphNode[], maxScale?: number): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
+  private fitTarget(
+    nodes?: GraphNode[],
+    maxScale?: number,
+  ): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
     if (this.engine.is3D && !nodes) return fitBrain(this.engine.brainScale, this.vp);
     const map = !nodes && !this.engine.growth ? this.engine.mapBounds() : null;
     if (map) return fitBounds(map, this.vp);
@@ -649,7 +855,11 @@ export class GraphController {
   private withPreviewOffset(cam: Camera): Camera {
     if (this.vp.width <= 760) return cam;
     const shift = PREVIEW_OFFSET / pixelsPerUnit(cam, this.vp);
-    return { ...cam, tx: cam.tx + Math.cos(cam.yaw) * shift, tz: cam.tz - Math.sin(cam.yaw) * shift };
+    return {
+      ...cam,
+      tx: cam.tx + Math.cos(cam.yaw) * shift,
+      tz: cam.tz - Math.sin(cam.yaw) * shift,
+    };
   }
 
   private flyTo(node: GraphNode): void {
@@ -657,12 +867,25 @@ export class GraphController {
       ? Math.min(this.cam.dist, this.engine.brainScale * 1.9)
       : Math.min(this.cam.dist, this.vp.height / 2 / (TAN_HALF_FOV * 1.35));
     // Where it is drawn: a search match may have sprung out of its place.
-    this.animateTo(this.withPreviewOffset({ ...this.cam, tx: node.x + node.ox, ty: node.y + node.oy, tz: (node.z || 0) + node.oz, dist }));
+    this.animateTo(
+      this.withPreviewOffset({
+        ...this.cam,
+        tx: node.x + node.ox,
+        ty: node.y + node.oy,
+        tz: (node.z || 0) + node.oz,
+        dist,
+      }),
+    );
     this.userMoved = true;
   }
 
   private animateTo(to: Camera, duration = 700): void {
-    this.tween = { from: { ...this.cam }, to, t0: performance.now(), duration: this.reduceMotion ? 1 : duration };
+    this.tween = {
+      from: { ...this.cam },
+      to,
+      t0: performance.now(),
+      duration: this.reduceMotion ? 1 : duration,
+    };
   }
 
   private zoomAt(x: number, y: number, factor: number): void {
@@ -673,7 +896,10 @@ export class GraphController {
       this.cam = { ...this.cam, dist: clamp(this.cam.dist / factor, s * 0.25, s * 7) };
       return;
     }
-    const limits: [number, number] = [this.vp.height / 2 / (TAN_HALF_FOV * 6), this.vp.height / 2 / (TAN_HALF_FOV * 0.04)];
+    const limits: [number, number] = [
+      this.vp.height / 2 / (TAN_HALF_FOV * 6),
+      this.vp.height / 2 / (TAN_HALF_FOV * 0.04),
+    ];
     this.cam = zoomFlatAt(this.cam, this.vp, x, y, factor, limits);
   }
 
@@ -693,14 +919,19 @@ export class GraphController {
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
     this.el.overlay.width = Math.round(this.vp.width * this.dpr);
     this.el.overlay.height = Math.round(this.vp.height * this.dpr);
-    this.scene?.resize(this.vp, this.dpr);
+    // Parked, the graph's buffer stays 1×1: it takes the new size when the stage goes.
+    if (!this.parked) this.scene?.resize(this.vp, this.dpr);
+    this.staged?.resize(this.vp, this.dpr);
   }
 
   private cloud(): number {
     const n = this.model?.nodes.length ?? 0;
     // The map has its own way of zooming out: country names over the land.
     if (this.engine.isMap) return 0;
-    if (this.engine.is3D) return clamp((this.cam.dist / this.engine.brainScale - 2.1) / 0.9, 0, 1) * (n > 150 ? 1 : 0.5);
+    if (this.engine.is3D)
+      return (
+        clamp((this.cam.dist / this.engine.brainScale - 2.1) / 0.9, 0, 1) * (n > 150 ? 1 : 0.5)
+      );
     return clamp((0.62 - pixelsPerUnit(this.cam, this.vp)) / 0.3, 0, 1);
   }
 
@@ -714,7 +945,8 @@ export class GraphController {
     const map = this.engine.isMap;
     const rate = (ms: number) => (this.reduceMotion ? 1 : 1 - Math.exp(-dt / ms));
     const k = rate(220);
-    const ease = (value: number, target: number, step = k) => (Math.abs(target - value) < 0.004 ? target : value + (target - value) * step);
+    const ease = (value: number, target: number, step = k) =>
+      Math.abs(target - value) < 0.004 ? target : value + (target - value) * step;
     // The land leaves faster than it comes: the notes start moving off it at once.
     const landTarget = map && !this.engine.moving ? 1 : 0;
     this.landAlpha = ease(this.landAlpha, landTarget, landTarget ? k : rate(80));
@@ -764,7 +996,10 @@ export class GraphController {
     const tweening = this.liftTweens.size > 0;
     const target = this.engine.is3D ? 1 : 0;
     const reachBefore = this.liftReach;
-    this.liftReach = Math.abs(target - this.liftReach) < 0.004 ? target : this.liftReach + (target - this.liftReach) * (1 - Math.exp(-dt / 220));
+    this.liftReach =
+      Math.abs(target - this.liftReach) < 0.004
+        ? target
+        : this.liftReach + (target - this.liftReach) * (1 - Math.exp(-dt / 220));
     const active = this.lifted.size > 0 || tweening;
     const c = this.cam;
     const camKey = `${c.tx},${c.ty},${c.tz},${c.yaw},${c.pitch},${c.dist},${this.engine.brainScale}`;
@@ -775,9 +1010,14 @@ export class GraphController {
     this.hadLift = active;
     // Offsets depend on the lift, the reach and the camera: if none changed, neither did they.
     const reachMoving = reachBefore !== this.liftReach;
-    if (!settling && !(active && (tweening || reachMoving || (camMoved && this.liftReach > 0)))) return false;
+    if (!settling && !(active && (tweening || reachMoving || (camMoved && this.liftReach > 0))))
+      return false;
     // Fewer matches go further: one note should leap out, fifty should not become a cloud.
-    const reach = this.engine.brainScale * LIFT_REACH * clamp(1.15 - this.lifted.size / 80, 0.35, 1) * this.liftReach;
+    const reach =
+      this.engine.brainScale *
+      LIFT_REACH *
+      clamp(1.15 - this.lifted.size / 80, 0.35, 1) *
+      this.liftReach;
     const center: [number, number, number] = [0, -0.05 * this.engine.brainScale, 0];
     const axes = basis(this.cam);
     for (const n of this.model?.nodes ?? []) {
@@ -805,6 +1045,202 @@ export class GraphController {
     }, 1600);
   }
 
+  // -- Stage mode ------------------------------------------------------------------
+  //
+  // While the plugin's `stage` is non-null the stage draws instead of the graph: its own canvas
+  // between the graph's and the overlay, the graph's layout still settling unseen, the brain's
+  // camera put aside and handed back when the stage goes. Nothing here runs without a stage.
+
+  /** Enter or leave stage mode as the plugin's stage comes or goes. Once a frame. */
+  private syncStage(): PluginStage | null {
+    const next = (!this.disposed && this.plugin?.stage) || null;
+    if (next !== this.staged) {
+      this.leaveStage();
+      if (next) this.enterStage(next);
+    }
+    return this.staged;
+  }
+
+  private enterStage(stage: PluginStage): void {
+    // Saved now, not at attach: the brain's framing is final by the time a stage is ready.
+    this.brain = {
+      cam: { ...this.cam },
+      tween: this.tween,
+      userMoved: this.userMoved,
+      resized: false,
+    };
+    this.staged = stage;
+    this.tween = null;
+    // A note held while the stage warmed would stay pinned, and a pin keeps the layout from
+    // ever cooling: no `settled` frame for a governor, no onSettled.
+    if (this.drag?.kind === 'node' && this.drag.node) this.engine.release(this.drag.node);
+    this.drag = null;
+    // Nothing of the brain's stays over the stage: no tooltip, no preview, no path being picked.
+    if (this.hover) {
+      this.hover = null;
+      this.events.onHover(null);
+    }
+    this.previewed = null;
+    this.clearSelection();
+    this.hotCountry = null;
+    this.countryRoutes = null;
+    this.events.onHoverCountry(null);
+    // A stage that holds its own camera overrides this at once.
+    this.cam = { ...stage.overview(this.vp) };
+    this.fade = this.reduceMotion ? 1 : 0;
+    stage.canvas.style.opacity = this.fade < 1 ? '0' : '';
+    this.el.overlay.before(stage.canvas);
+    stage.resize(this.vp, this.dpr);
+  }
+
+  /**
+   * Back to the graph: the canvas out, the buffer full size again and everything uploaded, the
+   * brain's camera (and a tween it was in) restored. Leaving from outside a frame — a React
+   * cleanup — may show one dark frame before the next one draws the brain: a cut, accepted.
+   */
+  private leaveStage(): void {
+    const stage = this.staged;
+    if (!stage) return;
+    this.staged = null;
+    stage.canvas.remove();
+    stage.canvas.style.opacity = '';
+    this.drag = null;
+    if (this.parked) {
+      this.parked = false;
+      // Not on the way out: a full-size buffer for a renderer about to be freed is memory
+      // for nothing.
+      if (!this.disposed) this.scene?.resize(this.vp, this.dpr);
+    }
+    this.reupload = true;
+    this.edgesDirty = true;
+    const b = this.brain;
+    this.brain = null;
+    if (b) {
+      // A tween restored with its old start finishes on the next frame: the brain lands
+      // where it was going.
+      this.cam = b.cam;
+      this.tween = b.tween;
+      this.userMoved = b.userMoved;
+      // The frame eases to a new size only while the layout moves, and one that came to rest
+      // unseen never would: it flies there from where it was left, at the angle a tween the
+      // stage cut short was heading for.
+      if (b.resized) this.animateTo({ ...(b.tween?.to ?? b.cam), ...this.fitTarget() });
+    }
+    this.el.overlay.style.cursor = 'grab';
+  }
+
+  /**
+   * A frame in stage mode: the layout advances (it is what comes back), the camera is the
+   * stage's, a tween's (Fit) or the plugin's follow, and only the stage and the plugin draw.
+   * No projection, lift, view easing, focus, growth, graph render, overlay or minimap.
+   */
+  private stageFrame(now: number, dt: number, model: GraphModel, stage: PluginStage): void {
+    const moved = this.engine.advance(now);
+    const frame: PluginFrame = {
+      now,
+      dt,
+      cam: this.cam,
+      vp: this.vp,
+      dpr: this.dpr,
+      model,
+      reduceMotion: this.reduceMotion,
+      settled: !moved && !this.engine.warming,
+    };
+    const held = stage.camera(frame);
+    if (held) {
+      this.cam = held;
+      this.tween = null;
+    } else if (this.tween) {
+      const p = clamp((now - this.tween.t0) / this.tween.duration, 0, 1);
+      this.cam = interpolate(this.tween.from, this.tween.to, p);
+      if (p >= 1) this.tween = null;
+    } else {
+      const f = this.plugin?.follow() ?? null;
+      if (f && !this.drag) {
+        // Reduced motion is the page's, read once like every other motion here: a live OS
+        // toggle reaches the plugin (its `still`, and the cuts its camera makes), not this ease.
+        const k = this.reduceMotion ? 1 : 1 - Math.exp(-dt / 450);
+        this.cam = {
+          ...this.cam,
+          tx: this.cam.tx + (f.x - this.cam.tx) * k,
+          ty: this.cam.ty + (f.y - this.cam.ty) * k,
+          tz: this.cam.tz + (f.z - this.cam.tz) * k,
+          dist: this.cam.dist + (f.dist - this.cam.dist) * k,
+        };
+      }
+    }
+    this.fadeStage(stage, dt);
+    frame.cam = this.cam;
+    stage.render(frame);
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.el.overlay.width, this.el.overlay.height);
+    this.plugin?.draw(this.ctx, frame);
+    const cursor = this.drag ? 'grabbing' : stage.locked ? 'default' : 'grab';
+    if (this.el.overlay.style.cursor !== cursor) this.el.overlay.style.cursor = cursor;
+    // The layout is still saved when it comes to rest.
+    const moving = this.engine.moving;
+    if (this.wasMoving && !moving) this.events.onSettled();
+    this.wasMoving = moving;
+  }
+
+  /**
+   * Fade the stage in over the graph's last frame, which stays on screen under it (the graph
+   * is not drawn in stage mode); once it covers it, park the graph's drawing buffer at 1×1.
+   */
+  private fadeStage(stage: PluginStage, dt: number): void {
+    if (this.fade < 1) {
+      this.fade = this.reduceMotion ? 1 : Math.min(1, this.fade + dt / STAGE_FADE_MS);
+      stage.canvas.style.opacity = this.fade < 1 ? String(this.fade) : '';
+    } else if (!this.parked) {
+      // Two full-size WebGL buffers (and their multisampled copies) on a HiDPI screen is memory
+      // the graph's would hold for nothing.
+      this.parked = true;
+      this.scene?.resize(PARKED, 1);
+    }
+  }
+
+  private stageDown(e: PointerEvent, stage: PluginStage): void {
+    if (stage.locked) return;
+    this.el.overlay.setPointerCapture(e.pointerId);
+    const { x, y } = this.local(e);
+    this.plugin?.onUserCamera();
+    this.tween = null;
+    const kind = e.shiftKey || e.button !== 0 ? 'pan' : 'orbit';
+    this.drag = {
+      kind,
+      node: null,
+      startX: x,
+      startY: y,
+      lastX: x,
+      lastY: y,
+      travel: 0,
+      shift: e.shiftKey,
+      origin: null,
+    };
+  }
+
+  /** A drag over a stage orbits or pans, past the same slop as the graph's; nothing is picked. */
+  private stageMove(e: PointerEvent): void {
+    const drag = this.drag;
+    if (!drag) return;
+    const { x, y } = this.local(e);
+    const dx = x - drag.lastX;
+    const dy = y - drag.lastY;
+    drag.lastX = x;
+    drag.lastY = y;
+    drag.travel = Math.max(drag.travel, Math.hypot(x - drag.startX, y - drag.startY));
+    if (drag.travel <= CLICK_SLOP) return;
+    this.tween = null;
+    this.cam = drag.kind === 'orbit' ? orbitBy(this.cam, dx, dy) : panBy(this.cam, this.vp, dx, dy);
+  }
+
+  /** Orbit zoom between the stage's limits: it is not a flat map to zoom under the pointer. */
+  private zoomStage(stage: PluginStage, factor: number): void {
+    this.tween = null;
+    const r = stage.zoomRange(this.vp);
+    this.cam = { ...this.cam, dist: clamp(this.cam.dist / factor, r.min, r.max) };
+  }
+
   private readonly frame = (now: number): void => {
     this.raf = requestAnimationFrame(this.frame);
     const model = this.model;
@@ -812,6 +1248,11 @@ export class GraphController {
     this.lastFrame = now;
     this.frameNo++;
     if (!model) return;
+    const stage = this.syncStage();
+    if (stage) {
+      this.stageFrame(now, dt, model, stage);
+      return;
+    }
 
     const warming = this.engine.warming;
     const moved = this.engine.advance(now);
@@ -833,7 +1274,15 @@ export class GraphController {
       };
     }
     // A search pauses the spin: what it found should stay where you saw it.
-    if (this.spin && !this.tween && !this.hover && !this.selected && !this.path && !this.drag && !this.matches) {
+    if (
+      this.spin &&
+      !this.tween &&
+      !this.hover &&
+      !this.selected &&
+      !this.path &&
+      !this.drag &&
+      !this.matches
+    ) {
       this.cam = { ...this.cam, yaw: this.cam.yaw + dt * SPIN_PER_MS };
     }
 
@@ -895,13 +1344,14 @@ export class GraphController {
       pathNodes,
       pathEdges: this.path ? new Set(this.path.edges) : null,
       matched: this.matched,
-      moved: moved || !!this.drag || lifting,
+      moved: moved || !!this.drag || lifting || this.reupload,
       edgesDirty: this.relightEdges(now, !!growth) || edgesFading,
       appear,
       flash: (n) => this.engine.flash(n, now),
       reduceMotion: this.reduceMotion,
     });
     this.edgesDirty = false;
+    this.reupload = false;
 
     drawOverlay(this.ctx, {
       now,
@@ -937,7 +1387,16 @@ export class GraphController {
       reduceMotion: this.reduceMotion,
       fonts: this.fonts,
     });
-    this.plugin?.draw(this.ctx, { now, dt, cam: this.cam, vp: this.vp, dpr: this.dpr, model, reduceMotion: this.reduceMotion });
+    this.plugin?.draw(this.ctx, {
+      now,
+      dt,
+      cam: this.cam,
+      vp: this.vp,
+      dpr: this.dpr,
+      model,
+      reduceMotion: this.reduceMotion,
+      settled: !moved && !this.engine.warming && !growth,
+    });
 
     if (!is3D && this.frameNo % 3 === 0 && !this.el.minimap.hidden) {
       const dpr = this.dpr;
@@ -945,7 +1404,14 @@ export class GraphController {
         this.el.minimap.width = 176 * dpr;
         this.el.minimap.height = 116 * dpr;
       }
-      this.minimapTransform = drawMinimap(this.minimapCtx, { width: 176, height: 116, dpr }, model, this.cam, this.vp, appear);
+      this.minimapTransform = drawMinimap(
+        this.minimapCtx,
+        { width: 176, height: 116, dpr },
+        model,
+        this.cam,
+        this.vp,
+        appear,
+      );
     }
 
     const moving = this.engine.moving;
