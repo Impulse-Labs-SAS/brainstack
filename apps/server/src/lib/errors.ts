@@ -1,5 +1,12 @@
 // Common error mapping for HTTP and MCP layers.
 
+import { PathTraversalError } from '@brainstack/core';
+import {
+  PgNoteAlreadyExistsError,
+  PgNoteChangedError,
+  PgNoteNotFoundError,
+} from '@brainstack/core/pg';
+
 export class AppError extends Error {
   override readonly name = 'AppError';
   constructor(
@@ -24,13 +31,38 @@ export class AppError extends Error {
   }
 }
 
-export function toHttpStatus(err: unknown): number {
-  if (err instanceof AppError) return err.status;
-  return 500;
+/**
+ * `err` as an AppError, when it is one or one of core's errors that mean the
+ * same thing — a missing note, a taken path, a path that tries to climb out.
+ * Null for anything else: a failure the caller did not cause and must not be
+ * told the details of.
+ */
+export function toAppError(err: unknown): AppError | null {
+  if (err instanceof AppError) return err;
+  if (err instanceof PgNoteNotFoundError) return new AppError(err.message, 'NOT_FOUND', 404);
+  if (err instanceof PgNoteAlreadyExistsError) {
+    return new AppError(err.message, 'ALREADY_EXISTS', 409);
+  }
+  if (err instanceof PgNoteChangedError) return new AppError(err.message, 'CHANGED', 409);
+  if (err instanceof PathTraversalError) return new AppError(err.message, 'INVALID_INPUT', 400);
+  return null;
 }
 
+export function toHttpStatus(err: unknown): number {
+  return toAppError(err)?.status ?? 500;
+}
+
+/** What a client may be told about a failure. */
+export const INTERNAL_MESSAGE = 'internal error';
+
+/**
+ * What a client may be told about `err`: an AppError's own message (or one of
+ * core's, see `toAppError`), written for whoever asked, and nothing at all about anything else. A driver or SMTP
+ * error names hosts, ports, tables and constraints — useful in the server log,
+ * which is where the caller logs it, and nowhere else.
+ */
 export function describeError(err: unknown): { message: string; code: string } {
-  if (err instanceof AppError) return { message: err.message, code: err.code };
-  if (err instanceof Error) return { message: err.message, code: 'INTERNAL' };
-  return { message: 'Unknown error', code: 'INTERNAL' };
+  const known = toAppError(err);
+  if (known) return { message: known.message, code: known.code };
+  return { message: INTERNAL_MESSAGE, code: 'INTERNAL' };
 }

@@ -47,9 +47,9 @@ export function createTotpRouter(options: TotpRouterOptions): Hono<AuthBindings>
       );
       return c.json({ backupCodes: result.backupCodes });
     } catch (err) {
-      const status = err instanceof AppError ? err.status : 500;
-      const message = err instanceof Error ? err.message : 'failed';
-      return c.json({ error: message }, status as 401 | 429 | 500);
+      // Anything but an AppError goes to the app's error handler.
+      if (!(err instanceof AppError)) throw err;
+      return c.json({ error: err.message }, err.status as 401 | 429 | 500);
     }
   });
 
@@ -65,9 +65,9 @@ export function createTotpRouter(options: TotpRouterOptions): Hono<AuthBindings>
       await options.totp.disable(principal.user.id, parsed.data.code);
       return c.json({ ok: true });
     } catch (err) {
-      const status = err instanceof AppError ? err.status : 500;
-      const message = err instanceof Error ? err.message : 'failed';
-      return c.json({ error: message }, status as 401 | 429 | 500);
+      // Anything but an AppError goes to the app's error handler.
+      if (!(err instanceof AppError)) throw err;
+      return c.json({ error: err.message }, err.status as 401 | 429 | 500);
     }
   });
 

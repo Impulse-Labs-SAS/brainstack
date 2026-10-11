@@ -157,7 +157,10 @@ export class PgSearchService {
 export function tokenize(input: string): string[] {
   return input
     .split(/\s+/)
-    .map((t) => t.replace(/[&|!():*'"\\<>]/g, '').trim())
+    // Operators out, and control characters with them: Postgres refuses a NUL
+    // in text, which failed the whole query instead of matching nothing.
+    // eslint-disable-next-line no-control-regex -- stripping them is the point
+    .map((t) => t.replace(/[&|!():*'"\\<>\u0000-\u001f\u007f]/g, '').trim())
     .filter(Boolean);
 }
 

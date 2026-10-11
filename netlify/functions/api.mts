@@ -16,6 +16,7 @@
 // to get wrong.
 
 import { ensurePgSchema, openPgDatabase } from '@brainstack/core/pg';
+import { sql } from 'drizzle-orm';
 
 import { API_BASE_PATH } from '../../apps/server/src/config/api.js';
 import { loadConfig } from '../../apps/server/src/config/env.js';
@@ -86,7 +87,8 @@ async function boot(): Promise<Hono<never>> {
   // Turning the history off, or shortening it, takes effect now rather than
   // at the next crawl.
   await services.crawls.applyRetention();
-  if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
+  if (!services.crawls.enabled)
+    logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
 
   // No process outlives a request here, so expired sessions, links and OAuth
   // rows are cleared whenever a container starts.
@@ -101,6 +103,9 @@ async function boot(): Promise<Hono<never>> {
 
   return buildApp({
     logger,
+    ping: async () => {
+      await db.execute(sql`select 1`);
+    },
     auth: services.auth,
     apiKeys: services.apiKeys,
     notes: services.notes,

@@ -4,6 +4,8 @@
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
+import { HTTPException } from 'hono/http-exception';
+import { secureHeaders } from 'hono/secure-headers';
 import type { Logger } from 'pino';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -18,6 +20,7 @@ import type { TotpService } from '../services/TotpService.js';
 import { MAX_BODY_BYTES, MAX_SMALL_BODY_BYTES } from '../config/limits.js';
 import type { TrustedProxy } from '../lib/clientIp.js';
 import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
+import { describeError, toAppError } from '../lib/errors.js';
 
 import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
 import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
@@ -31,7 +34,7 @@ import {
 } from './routes/oauthProvider.js';
 import { createTotpRouter } from './routes/totp.js';
 import { createTrpcRouter } from './routes/trpc.js';
-import { healthRouter } from './routes/health.js';
+import { createHealthRouter } from './routes/health.js';
 import { createConfigRouter } from './routes/config.js';
 import { createInviteRouter } from './routes/invite.js';
 import { buildOptionalAuthMiddleware } from './middleware/auth.js';
@@ -62,6 +65,11 @@ export interface BuildAppOptions {
   corsOrigins: string[];
   /** First CORS origin or PUBLIC_ORIGIN — where verify/reset redirect lands. */
   appHome: string;
+  /**
+   * Whether the database answers, for `/health/ready`. Without it the
+   * endpoint only says the process is up.
+   */
+  ping?: () => Promise<void>;
   /** Inject a custom limiter (tests). Defaults to an in-memory one. */
   loginLimiter?: LoginRateLimiter;
   /**
@@ -95,8 +103,32 @@ export interface BuildAppOptions {
   basePath?: string;
 }
 
+/** A logged path, with the token an invite link carries in it masked. */
+const loggablePath = (path: string) => path.replace(/(\/invite\/accept\/)[^/]+/, '$1[token]');
+
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const app = new Hono<AuthBindings>();
+
+  // The API answers JSON, plus the OAuth consent page. Nothing here is ever
+  // meant to be framed — the consent page least of all, where a framed
+  // "Allow" is a grant clicked by someone who did not see what they allowed.
+  // The page's only inline content is its stylesheet.
+  app.use(
+    '*',
+    secureHeaders({
+      contentSecurityPolicy: {
+        defaultSrc: ["'none'"],
+        styleSrc: ["'unsafe-inline'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'none'"],
+      },
+      xFrameOptions: 'DENY',
+      // MCP hosts and browser-based clients read the discovery documents
+      // and tokens from other origins; CORS decides who may, not this.
+      crossOriginResourcePolicy: false,
+      crossOriginOpenerPolicy: false,
+    }),
+  );
 
   if (opts.corsOrigins.length > 0) {
     app.use(
@@ -120,13 +152,25 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const carriesNotes = /(?:^|\/)(?:trpc|mcp)(?:\/|$)/;
   app.use('*', (c, next) => (carriesNotes.test(c.req.path) ? noteBodies : smallBodies)(c, next));
 
+  // One line per request: refusals at info and failures at error, so the
+  // default log level shows what went wrong without every success. The id
+  // goes back in a header, for tying a user's report to its line.
   app.use('*', async (c, next) => {
     const start = Date.now();
+    const requestId = crypto.randomUUID();
     await next();
-    opts.logger.debug(
-      { method: c.req.method, path: c.req.path, status: c.res.status, ms: Date.now() - start },
-      'http',
-    );
+    c.header('X-Request-Id', requestId);
+    const status = c.res.status;
+    const line = {
+      requestId,
+      method: c.req.method,
+      path: loggablePath(c.req.path),
+      status,
+      ms: Date.now() - start,
+    };
+    if (status >= 500) opts.logger.error(line, 'http');
+    else if (status >= 400) opts.logger.info(line, 'http');
+    else opts.logger.debug(line, 'http');
   });
 
   const middlewareOpts = {
@@ -162,7 +206,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   app.use('/invite/*', anonymousLimit);
   app.use('/trpc/*', trpcLimit);
 
-  app.route('/health', healthRouter);
+  app.route('/health', createHealthRouter(opts.ping, opts.logger));
   app.route('/config', createConfigRouter());
 
   // /invite/accept/:token corre con optional-auth: el handler maneja
@@ -249,11 +293,13 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       crossOwner: opts.crossOwner,
       crawls: opts.crawls,
       resolveUserForApiKey: opts.resolveUserForApiKey,
+      logger: opts.logger,
       endpoint: `${opts.basePath ?? ''}/trpc`,
     }),
   );
 
   app.notFound((c) => c.json({ error: 'not found' }, 404));
+  app.onError(onError);
 
   // `.well-known` is only well-known at the origin root, so the discovery
   // documents mount outside the API prefix — on whichever Hono answers first.
@@ -275,5 +321,25 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   if (metadata) prefixed.route('/', metadata);
   prefixed.route(opts.basePath, app);
   prefixed.notFound((c) => c.json({ error: 'not found' }, 404));
+  prefixed.onError(onError);
   return prefixed;
+
+  /**
+   * Whatever a handler let escape. Without this Hono printed it with
+   * console.error, outside the log, and answered text/plain; and the routes
+   * that did catch answered with the error's own message, which for a driver
+   * or SMTP failure names hosts, ports and tables.
+   */
+  function onError(err: Error, c: Context): Response {
+    if (err instanceof HTTPException) return err.getResponse();
+    const known = toAppError(err);
+    if (known) {
+      return c.json({ error: known.message, code: known.code }, known.status as 400);
+    }
+    opts.logger.error(
+      { err, method: c.req.method, path: loggablePath(c.req.path) },
+      'unhandled error',
+    );
+    return c.json({ error: describeError(err).message }, 500);
+  }
 }

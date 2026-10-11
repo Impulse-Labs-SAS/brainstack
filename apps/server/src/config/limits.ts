@@ -30,11 +30,21 @@ export const MAX_SMALL_BODY_BYTES = 64 * 1024;
 /** Calls tRPC accepts in one batched request. The web app sends at most a dozen. */
 export const MAX_TRPC_BATCH = 50;
 
+/**
+ * Postgres refuses U+0000 in text, so a NUL that got as far as the store
+ * failed the whole statement with a 500. Refused here as bad input instead.
+ */
+// eslint-disable-next-line no-control-regex -- matching the NUL is the point
+const NO_NUL = /^[^\u0000]*$/;
+const NO_NUL_MESSAGE = 'must not contain a NUL character';
+
 /** A short text field: a path, an id, a tag, a query. */
-export const field = (): z.ZodString => z.string().max(MAX_FIELD_CHARS);
+export const field = (): z.ZodString =>
+  z.string().max(MAX_FIELD_CHARS).regex(NO_NUL, NO_NUL_MESSAGE);
 
 /** A note body. */
-export const noteContent = (): z.ZodString => z.string().max(MAX_NOTE_CHARS);
+export const noteContent = (): z.ZodString =>
+  z.string().max(MAX_NOTE_CHARS).regex(NO_NUL, NO_NUL_MESSAGE);
 
 /** An email address. */
 export const emailField = (): z.ZodString => z.string().email().max(MAX_EMAIL_CHARS);

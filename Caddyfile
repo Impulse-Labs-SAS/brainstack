@@ -30,8 +30,19 @@
 		reverse_proxy web:3000
 	}
 
+	# The access log records each request's URI and response headers, and a
+	# few carry a credential: an email link's `?token=`, and an invitation's
+	# own path, which admits anyone who opens it for as long as it lives — and
+	# which reappears, encoded, in the login redirect of someone signed out.
+	# Masked here, before the line is written: anyone who can read the log
+	# must not be able to use what is in it. One pattern for all three, since
+	# a field takes one filter.
 	log {
 		output stdout
-		format json
+		format filter {
+			request>uri regexp (/invite/accept/|invite%2Faccept%2F|[?&]token=)[^/?&%]+ ${1}REDACTED
+			resp_headers>Location regexp (/invite/accept/|invite%2Faccept%2F|[?&]token=)[^/?&%]+ ${1}REDACTED
+			wrap json
+		}
 	}
 }

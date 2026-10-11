@@ -14,7 +14,7 @@ import {
 } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { approveShareRequest } from '../services/shareRequests.js';
-import { AppError } from '../lib/errors.js';
+import { AppError, INTERNAL_MESSAGE, toAppError } from '../lib/errors.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
 import {
   gatherContext,
@@ -29,14 +29,56 @@ import type { TrpcContext } from './context.js';
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
-  errorFormatter: ({ shape, error }) => ({
-    ...shape,
-    data: {
-      ...shape.data,
-      appCode: error.cause instanceof AppError ? error.cause.code : (shape.data.code as string),
-    },
-  }),
+  errorFormatter: ({ shape, error }) => {
+    // A failure nobody meant the client to read keeps its details in the
+    // server log (the HTTP route's onError writes it there).
+    const internal = error.code === 'INTERNAL_SERVER_ERROR' && !toAppError(error.cause);
+    return {
+      ...shape,
+      message: internal ? INTERNAL_MESSAGE : shape.message,
+      data: {
+        ...shape.data,
+        stack: undefined,
+        appCode: toAppError(error.cause)?.code ?? (shape.data.code as string),
+      },
+    };
+  },
 });
+
+const TRPC_CODES = {
+  NOT_FOUND: 'NOT_FOUND',
+  ALREADY_EXISTS: 'CONFLICT',
+  CHANGED: 'CONFLICT',
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  FORBIDDEN: 'FORBIDDEN',
+  INVALID_INPUT: 'BAD_REQUEST',
+  RATE_LIMITED: 'TOO_MANY_REQUESTS',
+  SIGNUP_CLOSED: 'FORBIDDEN',
+  UNAVAILABLE: 'PRECONDITION_FAILED',
+  INTERNAL: 'INTERNAL_SERVER_ERROR',
+} as const satisfies Record<AppError['code'], TRPCError['code']>;
+
+/** `err` as the TRPCError a client should get, or `err` itself when it is no AppError. */
+function toTrpcError(err: unknown): unknown {
+  const known = toAppError(err);
+  if (!known) return err;
+  return new TRPCError({ code: TRPC_CODES[known.code], message: known.message, cause: known });
+}
+
+/**
+ * Every procedure answers an AppError with its own status. The mapping used
+ * to live in a helper each procedure had to remember to call; those that did
+ * not turned a refusal into a 500.
+ */
+const mapAppErrors = t.middleware(async ({ next }) => {
+  const result = await next();
+  if (!result.ok) {
+    const mapped = toTrpcError(result.error.cause);
+    if (mapped instanceof TRPCError) throw mapped;
+  }
+  return result;
+});
+const procedure = t.procedure.use(mapAppErrors);
 
 const requireUser = t.middleware(({ ctx, next }) => {
   if (!ctx.user) {
@@ -66,32 +108,16 @@ const requireSession = t.middleware(({ ctx, next }) => {
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
 
-export const publicProcedure = t.procedure;
-export const protectedProcedure = t.procedure.use(requireUser);
-export const sessionProcedure = t.procedure.use(requireSession);
+export const publicProcedure = procedure;
+export const protectedProcedure = procedure.use(requireUser);
+export const sessionProcedure = procedure.use(requireSession);
 
+/** Kept for the procedures written with it; `mapAppErrors` does the mapping now. */
 const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
   try {
     return await fn();
   } catch (err) {
-    if (err instanceof AppError) {
-      const trpcCode =
-        err.code === 'NOT_FOUND'
-          ? 'NOT_FOUND'
-          : err.code === 'ALREADY_EXISTS' || err.code === 'CHANGED'
-            ? 'CONFLICT'
-            : err.code === 'UNAUTHORIZED'
-              ? 'UNAUTHORIZED'
-              : err.code === 'FORBIDDEN'
-                ? 'FORBIDDEN'
-                : err.code === 'INVALID_INPUT'
-                  ? 'BAD_REQUEST'
-                  : err.code === 'UNAVAILABLE'
-                    ? 'PRECONDITION_FAILED'
-                    : 'INTERNAL_SERVER_ERROR';
-      throw new TRPCError({ code: trpcCode, message: err.message, cause: err });
-    }
-    throw err;
+    throw toTrpcError(err);
   }
 };
 

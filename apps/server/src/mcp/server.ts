@@ -8,7 +8,7 @@ import type { Logger } from 'pino';
 
 import { emailField, field, frontmatterField, noteContent } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
-import { AppError } from '../lib/errors.js';
+import { AppError, describeError, toAppError } from '../lib/errors.js';
 
 import type { AuthService } from '../services/AuthService.js';
 import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
@@ -61,16 +61,21 @@ const JSON_TEXT = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
 });
 
-function toMcpError(err: unknown): { content: { type: 'text'; text: string }[]; isError: true } {
-  const message =
-    err instanceof AppError
-      ? `[${err.code}] ${err.message}`
-      : err instanceof Error
-        ? err.message
-        : 'Unknown error';
-  return {
-    content: [{ type: 'text' as const, text: message }],
-    isError: true as const,
+/**
+ * A failed tool call, as the assistant reads it. An AppError says what went
+ * wrong in words meant for the caller; anything else — a driver error naming
+ * hosts and tables — is logged here and reaches the model as "internal error".
+ */
+function mcpErrorFor(
+  logger: Logger,
+): (err: unknown) => { content: { type: 'text'; text: string }[]; isError: true } {
+  return (err) => {
+    if (!toAppError(err)) logger.error({ err }, 'MCP tool failed');
+    const { message, code } = describeError(err);
+    return {
+      content: [{ type: 'text' as const, text: `[${code}] ${message}` }],
+      isError: true as const,
+    };
   };
 }
 
@@ -84,6 +89,7 @@ export function buildMcpServer({
   logger,
   principal,
 }: BuildMcpServerOptions): McpServer {
+  const toMcpError = mcpErrorFor(logger);
   // `instructions` reach the assistant on connect, before any tool is called,
   // so the habits that matter most hold even where nobody installed the skill.
   const server = new McpServer(
@@ -213,7 +219,6 @@ export function buildMcpServer({
         logger.debug({ query, hits: hits.length, scope: effectiveScope }, 'search_brain');
         return JSON_TEXT(hits);
       } catch (err) {
-        logger.error({ err }, 'search_brain failed');
         return toMcpError(err);
       }
     },

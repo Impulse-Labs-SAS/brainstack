@@ -4,6 +4,7 @@
 
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { Hono } from 'hono';
+import type { Logger } from 'pino';
 import { getCookie } from 'hono/cookie';
 
 import type { ApiKey, ApiKeyService } from '../../services/ApiKeyService.js';
@@ -15,6 +16,7 @@ import type { InviteService } from '../../services/InviteService.js';
 import type { SearchService } from '../../services/SearchService.js';
 import type { SharingService } from '../../services/SharingService.js';
 import { MAX_TRPC_BATCH } from '../../config/limits.js';
+import { toAppError } from '../../lib/errors.js';
 import { SESSION_COOKIE, type AuthBindings, type Principal } from '../middleware/auth.js';
 import { buildContext } from '../../trpc/context.js';
 import { appRouter } from '../../trpc/router.js';
@@ -29,6 +31,8 @@ export interface TrpcRouterOptions {
   crossOwner: CrossOwnerReader;
   crawls: CrawlHistoryService;
   resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
+  /** Where failures the client is not told about are written. */
+  logger?: Logger;
   /**
    * The URL this router answers on, prefix included.
    *
@@ -52,6 +56,12 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
       // Batched calls run concurrently; without a cap one request could carry
       // hundreds of them past any per-request limit.
       maxBatchSize: MAX_TRPC_BATCH,
+      onError: ({ error, path }) => {
+        // The client gets "internal error"; the self-hoster gets the cause.
+        if (error.code === 'INTERNAL_SERVER_ERROR' && !toAppError(error.cause)) {
+          options.logger?.error({ err: error.cause ?? error, procedure: path }, 'tRPC failed');
+        }
+      },
       createContext: () =>
         buildContext(
           {
