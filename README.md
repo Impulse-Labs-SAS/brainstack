@@ -53,7 +53,7 @@ BrainStack sends email for three things: verifying new accounts, password resets
 - **SMTP**, with any mail server (Gmail with an app password, Outlook, your company's relay, Resend's SMTP): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`.
 - **[Resend](https://resend.com)**'s API: `RESEND_API_KEY`.
 
-Links are only ever sent by email, never written to the log. Without email:
+Links are only ever sent by email, never written to the log; the Caddy access log masks the token in any link that is opened. Without email:
 
 - only the first account can sign up with a password;
 - email invitations are refused, but link invitations still work;

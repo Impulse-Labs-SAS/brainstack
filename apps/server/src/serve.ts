@@ -11,6 +11,7 @@
 
 import { serve } from '@hono/node-server';
 import { ensurePgSchema, openPgDatabase } from '@brainstack/core/pg';
+import { sql } from 'drizzle-orm';
 
 import { API_BASE_PATH } from './config/api.js';
 import { loadConfig } from './config/env.js';
@@ -76,6 +77,9 @@ async function main(): Promise<void> {
 
   const app = buildApp({
     logger,
+    ping: async () => {
+      await db.execute(sql`select 1`);
+    },
     auth: services.auth,
     apiKeys: services.apiKeys,
     notes: services.notes,

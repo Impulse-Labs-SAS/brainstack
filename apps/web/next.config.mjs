@@ -36,6 +36,42 @@ const nextConfig = {
 };
 
 /*
+ * Notes render raw HTML through rehype-sanitize, and that allowlist was the
+ * only thing between a shared-folder writer and script running in a reader's
+ * session. The policy is the second layer: no script from another origin, no
+ * plugins, no <base> rewriting where relative URLs go, and never inside a
+ * frame — so a page cannot be overlaid for clicks. Inline script stays
+ * allowed because Next's App Router bootstraps with it; taking that away
+ * needs a nonce per response, a larger change. Images and connections are
+ * left open: notes embed images from anywhere, and the API may live on
+ * another origin in development.
+ *
+ * HSTS is ignored by browsers over plain http, so a local `:80` install is
+ * unaffected; over https it stops the next visit being downgraded.
+ */
+function securityHeaders(phase) {
+  const scriptSrc = ["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"];
+  // React's development build evaluates code for its error overlay.
+  if (phase === PHASE_DEVELOPMENT_SERVER) scriptSrc.push("'unsafe-eval'");
+  return [
+    {
+      key: 'Content-Security-Policy',
+      value: [
+        `script-src ${scriptSrc.join(' ')}`,
+        "object-src 'none'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+      ].join('; '),
+    },
+    { key: 'X-Frame-Options', value: 'DENY' },
+    { key: 'X-Content-Type-Options', value: 'nosniff' },
+    { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+    { key: 'Strict-Transport-Security', value: 'max-age=31536000' },
+    { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+  ];
+}
+
+/*
  * Pages named `page.dev.tsx` exist only under `next dev` — the Sentinel lab at
  * /dev/sentinel, say. In a build they are plain modules: typechecked and
  * linted, never routed, never shipped. Next calls a config function with the
@@ -44,6 +80,7 @@ const nextConfig = {
  */
 export default (phase) => ({
   ...nextConfig,
+  headers: async () => [{ source: '/:path*', headers: securityHeaders(phase) }],
   pageExtensions: [
     'tsx',
     'ts',

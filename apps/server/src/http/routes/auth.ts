@@ -15,7 +15,7 @@ import type { Logger } from 'pino';
 import { z } from 'zod';
 
 import { clientIp, type TrustedProxy } from '../../lib/clientIp.js';
-import { AppError } from '../../lib/errors.js';
+import { AppError, toAppError } from '../../lib/errors.js';
 import type { LoginRateLimiter } from '../../lib/rateLimitLogin.js';
 import type { AuthService } from '../../services/AuthService.js';
 
@@ -260,12 +260,14 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
 }
 
 function jsonError(c: AuthCtx, err: unknown) {
-  if (err instanceof AppError) {
+  const known = toAppError(err);
+  if (known) {
     return c.json(
-      { error: err.message, code: err.code },
-      err.status as 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503,
+      { error: known.message, code: known.code },
+      known.status as 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503,
     );
   }
-  const message = err instanceof Error ? err.message : 'failed';
-  return c.json({ error: message }, 500);
+  // Anything else is not the caller's to read: the app's error handler logs
+  // it and answers with a fixed message.
+  throw err;
 }

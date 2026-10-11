@@ -512,6 +512,11 @@ describe('PgSearchService', () => {
     await expect(search.search("' OR 1=1 --")).resolves.toBeInstanceOf(Array);
   });
 
+  it('matches nothing, rather than failing, on a query with a NUL in it', async () => {
+    expect(tokenize('a\u0000b')).toEqual(['ab']);
+    await expect(search.search('post\u0000gres')).resolves.toBeInstanceOf(Array);
+  });
+
   it('builds OR-joined prefix terms and strips operators', () => {
     expect(toTsQuery('hola mundo')).toBe('hola:* | mundo:*');
     expect(toTsQuery('a&b !c')).toBe('ab:* | c:*');
