@@ -46,7 +46,7 @@ You interact with BrainStack via these MCP tools:
 **Write / structure (require user approval — see below):**
 
 - \`create_note(path, content, frontmatter?, ownerId?)\` — returns \`{ path, affectedMocs }\`
-- \`update_note(path, content, ownerId?)\`
+- \`update_note(path, content, ownerId?, expectedChecksum?)\` — pass the \`checksum\` from the \`get_note\` you based the edit on. If someone changed the note since, the update fails with \`CHANGED\` instead of overwriting their work: read it again, redo the edit on the new version, and tell the user what changed.
 - \`create_folder(path, ownerId?)\`
 - \`move(from, to, ownerId?)\` — wikilinks pointing at the moved path(s) are rewritten automatically across the vault, including aliases, sections, and attachment embeds. Returns \`{ path, affectedMocs }\`
 - \`move_to_owner(from, to, toOwnerId, fromOwnerId?, userConfirmedOwnershipTransfer?)\` — **transfers ownership** across vaults; without \`userConfirmedOwnershipTransfer: true\` it moves nothing and returns a cost summary. See **Shared folders**.

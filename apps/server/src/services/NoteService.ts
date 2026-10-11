@@ -12,6 +12,7 @@
 import {
   escapeLike,
   PgNoteAlreadyExistsError,
+  PgNoteChangedError,
   PgNoteNotFoundError,
   PgNoteStore,
   pgSchema,
@@ -560,7 +561,20 @@ export class NoteService {
     return { path: logical, affectedMocs: await this.mocsFor(ownerId, logical) };
   }
 
-  async update(ownerId: string, path: string, content: string): Promise<string> {
+  /**
+   * Replace a note's content.
+   *
+   * With `expectedChecksum` — the checksum the caller read — the write only
+   * lands on that version: if someone else saved in the meantime, it fails
+   * with `CHANGED` instead of silently replacing their work. The web editor
+   * always sends it; an assistant may.
+   */
+  async update(
+    ownerId: string,
+    path: string,
+    content: string,
+    opts: { expectedChecksum?: string } = {},
+  ): Promise<{ path: string; checksum: string }> {
     const physical = this.toPhysical(ownerId, path);
     // Preserve existing frontmatter unless the incoming content carries its own.
     const existing = await this.asCaller(ownerId, () => this.store.get(physical));
@@ -570,8 +584,23 @@ export class NoteService {
         ? content
         : serializeNote(existing.frontmatter, content);
 
-    const saved = await this.store.upsert(physical, raw, ownerId);
-    return this.toLogical(ownerId, saved.path);
+    try {
+      const saved = opts.expectedChecksum
+        ? await this.asCaller(ownerId, () =>
+            this.store.replaceIfUnchanged(physical, raw, opts.expectedChecksum!, ownerId),
+          )
+        : await this.store.upsert(physical, raw, ownerId);
+      return { path: this.toLogical(ownerId, saved.path), checksum: saved.checksum };
+    } catch (err) {
+      if (err instanceof PgNoteChangedError) {
+        throw new AppError(
+          `${this.toLogical(ownerId, physical)} was changed by someone else since you read it`,
+          'CHANGED',
+          409,
+        );
+      }
+      throw err;
+    }
   }
 
   /**

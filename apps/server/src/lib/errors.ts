@@ -7,6 +7,8 @@ export class AppError extends Error {
     public readonly code:
       | 'NOT_FOUND'
       | 'ALREADY_EXISTS'
+      /** Someone else changed the note since the caller read it. */
+      | 'CHANGED'
       | 'INVALID_INPUT'
       | 'UNAUTHORIZED'
       | 'FORBIDDEN'

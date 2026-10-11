@@ -39,6 +39,8 @@ let auth: AuthService;
 let oauth: OAuthProviderService;
 let app: ReturnType<typeof buildApp>;
 let sessionCookie: string;
+/** Moves the OAuth provider's clock forward, past windows that hinge on time. */
+let skewMs = 0;
 
 beforeAll(async () => {
   database = await createTestDatabase();
@@ -51,6 +53,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await database.reset();
   const db = database.db;
+  skewMs = 0;
 
   await db.insert(users).values({
     id: 'sam',
@@ -68,7 +71,7 @@ beforeEach(async () => {
     authorizedEmails: new Set(['user@brain.test']),
   });
   const apiKeys = new ApiKeyService({ db });
-  oauth = new OAuthProviderService({ db });
+  oauth = new OAuthProviderService({ db, now: () => Date.now() + skewMs });
   const notes = new NoteService({ db });
   const search = new SearchService({ db });
   const sharing = new SharingService({ db });
@@ -542,7 +545,9 @@ describe('token exchange', () => {
     });
     const second = (await rot.json()) as TokenResponse;
 
-    // A thief replays the now-rotated first refresh token. It must fail…
+    // A thief replays the now-rotated first refresh token, later than a client
+    // racing itself would. It must fail…
+    skewMs = 60_000;
     const replay = await app.request('/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -570,6 +575,33 @@ describe('token exchange', () => {
       headers: { Authorization: `Bearer ${second.access_token}` },
     });
     expect(mcp.status).toBe(401);
+  });
+
+  it('a refresh sent twice at once fails the loser without burning the winner', async () => {
+    const clientId = await registerClient();
+    const code = await obtainCode(clientId);
+    const first = (await (await exchange(clientId, code)).json()) as TokenResponse;
+
+    const refreshWith = (token: string) =>
+      app.request('/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: clientId,
+          refresh_token: token,
+        }),
+      });
+
+    const both = await Promise.all([
+      refreshWith(first.refresh_token),
+      refreshWith(first.refresh_token),
+    ]);
+    expect(both.map((r) => r.status).sort()).toEqual([200, 400]);
+
+    // The winner's pair is alive: it refreshes again.
+    const won = (await both.find((r) => r.status === 200)!.json()) as TokenResponse;
+    expect((await refreshWith(won.refresh_token)).status).toBe(200);
   });
 
   it('revokes a grant via the token, killing access and refresh (RFC 7009)', async () => {

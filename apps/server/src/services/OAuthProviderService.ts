@@ -25,6 +25,11 @@ export const OAUTH_REFRESH_PREFIX = 'bsor_';
 const CODE_TTL_MS = 10 * 60 * 1000;
 const ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+/**
+ * How long after a refresh token is rotated a second use of it counts as the
+ * same client racing itself rather than a replay (RFC 6819 §5.2.2.3).
+ */
+const REFRESH_RACE_GRACE_MS = 30 * 1000;
 const TOKEN_BYTES = 32;
 
 /** The only scope there is. Kept as a list of one so more can exist later. */
@@ -285,11 +290,16 @@ export class OAuthProviderService {
       // token is being replayed after rotation — burn the family it belonged
       // to. (An entirely unknown hash matches nothing here and is a plain no.)
       const [revoked] = await this.opts.db
-        .select({ familyId: oauthTokens.familyId })
+        .select({ familyId: oauthTokens.familyId, revokedAt: oauthTokens.revokedAt })
         .from(oauthTokens)
         .where(and(eq(oauthTokens.tokenHash, tokenHash), eq(oauthTokens.kind, 'refresh')))
         .limit(1);
-      if (revoked) {
+      // Retired moments ago is a client sending the same refresh twice at
+      // once (two tabs, a retry), not a thief: the winner's new pair is the
+      // one it keeps. Burning the family there logged honest users out; this
+      // request just gets nothing.
+      const raced = revoked?.revokedAt != null && now - revoked.revokedAt < REFRESH_RACE_GRACE_MS;
+      if (revoked && !raced) {
         await this.opts.db
           .update(oauthTokens)
           .set({ revokedAt: now })

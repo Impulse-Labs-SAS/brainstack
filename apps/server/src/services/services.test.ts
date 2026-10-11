@@ -52,6 +52,27 @@ describe('NoteService', () => {
     await expect(notes.get(USER, 'Inbox/nota.md')).rejects.toThrow();
   });
 
+  it('refuses an update built on a version someone else has replaced', async () => {
+    await notes.create(USER, 'Inbox/shared.md', '# Shared');
+    const read = await notes.get(USER, 'Inbox/shared.md');
+    const theirs = await notes.update(USER, 'Inbox/shared.md', '# Shared\n\ntheirs', {
+      expectedChecksum: read.checksum,
+    });
+
+    await expect(
+      notes.update(USER, 'Inbox/shared.md', '# Shared\n\nmine', {
+        expectedChecksum: read.checksum,
+      }),
+    ).rejects.toMatchObject({ code: 'CHANGED', status: 409 });
+    expect((await notes.get(USER, 'Inbox/shared.md')).body).toContain('theirs');
+
+    const mine = await notes.update(USER, 'Inbox/shared.md', '# Shared\n\nmine', {
+      expectedChecksum: theirs.checksum,
+    });
+    expect(mine.path).toBe('Inbox/shared.md');
+    expect((await notes.get(USER, 'Inbox/shared.md')).checksum).toBe(mine.checksum);
+  });
+
   it('refuses to create twice on the same path', async () => {
     await notes.create(USER, 'Inbox/dup.md', '# A');
     await expect(notes.create(USER, 'Inbox/dup.md', '# B')).rejects.toThrow();

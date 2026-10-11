@@ -33,6 +33,14 @@ export class NoteAlreadyExistsError extends Error {
   }
 }
 
+/** The note was changed by someone else since the caller read it. */
+export class NoteChangedError extends Error {
+  override readonly name = 'NoteChangedError';
+  constructor(public readonly path: string) {
+    super(`note changed since it was read: ${path}`);
+  }
+}
+
 export interface StoredNote {
   path: string;
   title: string;
@@ -142,8 +150,68 @@ export class PgNoteStore {
    */
   async create(path: string, rawMarkdown: string, ownerId?: string): Promise<StoredNote> {
     const key = normalizeNoteKey(path);
-    if (await this.exists(key)) throw new NoteAlreadyExistsError(key);
-    return this.upsert(key, rawMarkdown, ownerId);
+    const parsed = parseNote(rawMarkdown, { path: key });
+    const now = Date.now();
+
+    // One statement: checking first and then upserting let two creates of the
+    // same path both pass the check, and the second silently replaced the
+    // first one's note.
+    const [row] = await this.db
+      .insert(notes)
+      .values({
+        path: key,
+        title: parsed.title,
+        frontmatter: parsed.frontmatter,
+        body: parsed.body,
+        checksum: parsed.checksum,
+        createdAt: now,
+        updatedAt: now,
+        ownerId: ownerId ?? null,
+      })
+      .onConflictDoNothing({ target: notes.path })
+      .returning(NOTE_COLUMNS);
+    if (!row) throw new NoteAlreadyExistsError(key);
+
+    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId);
+    await this.resolvePendingLinksTo(key);
+    return row as StoredNote;
+  }
+
+  /**
+   * Replace a note only if it is still the version the caller read, named by
+   * its checksum. A note someone else changed in the meantime raises
+   * `NoteChangedError` instead of losing their edit; one that is gone raises
+   * `NoteNotFoundError` instead of coming back to life.
+   */
+  async replaceIfUnchanged(
+    path: string,
+    rawMarkdown: string,
+    expectedChecksum: string,
+    ownerId?: string,
+  ): Promise<StoredNote> {
+    const key = normalizeNoteKey(path);
+    const parsed = parseNote(rawMarkdown, { path: key });
+    const now = Date.now();
+
+    const [row] = await this.db
+      .update(notes)
+      .set({
+        title: parsed.title,
+        frontmatter: parsed.frontmatter,
+        body: parsed.body,
+        checksum: parsed.checksum,
+        updatedAt: sql`CASE WHEN ${notes.checksum} = ${parsed.checksum}
+                            THEN ${notes.updatedAt} ELSE ${now} END`,
+      })
+      .where(and(eq(notes.path, key), eq(notes.checksum, expectedChecksum)))
+      .returning(NOTE_COLUMNS);
+
+    if (!row) {
+      if (await this.exists(key)) throw new NoteChangedError(key);
+      throw new NoteNotFoundError(key);
+    }
+    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId);
+    return row as StoredNote;
   }
 
   /**
@@ -213,6 +281,7 @@ export class PgNoteStore {
         path: notes.path,
         frontmatter: notes.frontmatter,
         body: notes.body,
+        checksum: notes.checksum,
         ownerId: notes.ownerId,
       })
       .from(notes);
@@ -221,7 +290,10 @@ export class PgNoteStore {
       const parsed = parseNote(toMarkdown(row as Pick<StoredNote, 'frontmatter' | 'body'>), {
         path: row.path,
       });
-      await this.db
+      // Only over the version read at the start. A note edited while this runs
+      // was already re-derived by its own write; overwriting it with the
+      // snapshot would quietly undo the edit.
+      const [updated] = await this.db
         .update(notes)
         .set({
           title: parsed.title,
@@ -229,7 +301,9 @@ export class PgNoteStore {
           body: parsed.body,
           checksum: parsed.checksum,
         })
-        .where(eq(notes.path, row.path));
+        .where(and(eq(notes.path, row.path), eq(notes.checksum, row.checksum)))
+        .returning({ path: notes.path });
+      if (!updated) continue;
       await this.rebuildGraph(
         row.path,
         parsed.links,

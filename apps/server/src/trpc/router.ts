@@ -78,7 +78,7 @@ const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
       const trpcCode =
         err.code === 'NOT_FOUND'
           ? 'NOT_FOUND'
-          : err.code === 'ALREADY_EXISTS'
+          : err.code === 'ALREADY_EXISTS' || err.code === 'CHANGED'
             ? 'CONFLICT'
             : err.code === 'UNAUTHORIZED'
               ? 'UNAUTHORIZED'
@@ -195,12 +195,22 @@ export const appRouter = t.router({
         }),
       ),
     update: protectedProcedure
-      .input(z.object({ path: field().min(1), content: noteContent(), ownerId: OwnerInput }))
+      .input(
+        z.object({
+          path: field().min(1),
+          content: noteContent(),
+          ownerId: OwnerInput,
+          /** The checksum the client read; the save is refused if the note moved on. */
+          expectedChecksum: field().optional(),
+        }),
+      )
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
           await assertWritable(ctx, owner, input.path, input.ownerId !== undefined);
-          return ctx.notes.update(owner, input.path, input.content);
+          return ctx.notes.update(owner, input.path, input.content, {
+            ...(input.expectedChecksum ? { expectedChecksum: input.expectedChecksum } : {}),
+          });
         }),
       ),
     // Own vault only, like `related`: a mention across a share would read, and

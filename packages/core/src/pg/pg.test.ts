@@ -18,6 +18,7 @@ import {
   escapeLike,
   PgNoteStore,
   NoteAlreadyExistsError,
+  NoteChangedError,
   NoteNotFoundError,
   toMarkdown,
 } from './notes.js';
@@ -209,6 +210,46 @@ describe('PgNoteStore', () => {
     await notes.upsert('Mover/a.md', '# A');
     await notes.upsert('Mover/b.md', '# B');
     await expect(notes.move('Mover/a.md', 'Mover/b.md')).rejects.toThrow(NoteAlreadyExistsError);
+  });
+});
+
+describe('concurrent writes', () => {
+  it('lets exactly one of two simultaneous creates of a path win', async () => {
+    const results = await Promise.allSettled([
+      notes.create('Carrera/misma.md', '# First'),
+      notes.create('Carrera/misma.md', '# Second'),
+    ]);
+    const won = results.filter((r) => r.status === 'fulfilled');
+    const lost = results.filter((r) => r.status === 'rejected');
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect((lost[0] as PromiseRejectedResult).reason).toBeInstanceOf(NoteAlreadyExistsError);
+    // The stored note is the winner's, not a mix and not the loser's.
+    const stored = await notes.get('Carrera/misma.md');
+    expect(stored.checksum).toBe((won[0] as PromiseFulfilledResult<{ checksum: string }>).value.checksum);
+  });
+
+  it('replaces a note only over the version the caller read', async () => {
+    const read = await notes.upsert('Carrera/version.md', '# Read');
+    const theirs = await notes.upsert('Carrera/version.md', '# Theirs');
+
+    await expect(
+      notes.replaceIfUnchanged('Carrera/version.md', '# Mine', read.checksum),
+    ).rejects.toThrow(NoteChangedError);
+    expect((await notes.get('Carrera/version.md')).body).toContain('Theirs');
+
+    const mine = await notes.replaceIfUnchanged('Carrera/version.md', '# Mine', theirs.checksum);
+    expect(mine.body).toContain('Mine');
+    expect((await notes.get('Carrera/version.md')).checksum).toBe(mine.checksum);
+  });
+
+  it('does not bring back a note deleted since it was read', async () => {
+    const read = await notes.upsert('Carrera/borrada.md', '# Gone');
+    await notes.remove('Carrera/borrada.md');
+    await expect(
+      notes.replaceIfUnchanged('Carrera/borrada.md', '# Back', read.checksum),
+    ).rejects.toThrow(NoteNotFoundError);
+    await expect(notes.get('Carrera/borrada.md')).rejects.toThrow(NoteNotFoundError);
   });
 });
 
