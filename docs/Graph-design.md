@@ -64,8 +64,9 @@ Territories count; its Brain, which nearly every browser holds, says nothing
 - Topics are not nodes here: a topic belongs to no project, so it has no place on the map.
 - Dragging a note moves the map, not the note: its place is where it is filed.
 
-**A layer is what gets drawn.** One popover, the first button of the toolbar, like a map's
-layers button:
+**A layer is what gets drawn.** One popover, right after the view tabs, like a map's layers
+button. The Sentinel does not show it: its stage draws no layer. The layers still decide which
+notes its walk can reach, so when they leave some out, the Sentinel's panel says how many.
 
 - **Include shared vaults** — whether folders others shared with you are loaded at all. On by
   default and remembered per browser; off, they are not even fetched (`notes.graph` scope
