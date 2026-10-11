@@ -13,17 +13,26 @@ interface LoginResult {
   user: { id: string };
 }
 
-/** Codes the Google sign-in redirect can carry back, in words. Anything else shows as it came. */
+/**
+ * Codes the Google sign-in redirect can carry back, in words. Anything else
+ * gets a generic sentence: shown as it came, `?error=` let any link put its
+ * own text on the real login page ("your account is locked, re-enter…").
+ */
 const REDIRECT_ERRORS: Record<string, string> = {
   SIGNUP_CLOSED:
     'Sign-up is closed on this server. Ask whoever runs it to invite you, or to add your address.',
 };
+const GENERIC_REDIRECT_ERROR = 'Sign-in did not complete. Try again.';
 
 function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
   const errorParam = params.get('error');
-  const initialError = errorParam ? (REDIRECT_ERRORS[errorParam] ?? errorParam) : null;
+  const initialError = errorParam
+    ? (Object.hasOwn(REDIRECT_ERRORS, errorParam)
+        ? REDIRECT_ERRORS[errorParam]!
+        : GENERIC_REDIRECT_ERROR)
+    : null;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');

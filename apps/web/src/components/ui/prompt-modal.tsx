@@ -1,9 +1,45 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+// Two small dialogs, on react-aria-components' Modal and Dialog: focus moves
+// in and stays in, Escape and the overlay cancel, and the screen reader hears
+// a dialog. The confirm dialog used to listen for Enter on the whole window,
+// so Enter on its own Cancel button confirmed first — on the dialog that asks
+// before a drag hands notes to another owner.
 
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components';
+
+import { Button } from './button';
 import { Input } from './input';
-import { cn } from '@/lib/utils';
+
+function Shell({
+  open,
+  onCancel,
+  role,
+  children,
+}: {
+  open: boolean;
+  onCancel(): void;
+  role?: 'dialog' | 'alertdialog';
+  children: ReactNode;
+}) {
+  return (
+    <ModalOverlay
+      isOpen={open}
+      onOpenChange={(isOpen) => {
+        if (!isOpen) onCancel();
+      }}
+      isDismissable
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"
+    >
+      <Modal className="w-[min(420px,90vw)] rounded-lg border border-border bg-bg-surface p-4 shadow-2xl">
+        <Dialog role={role} className="outline-none">
+          {children}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
+  );
+}
 
 interface PromptModalProps {
   open: boolean;
@@ -37,17 +73,6 @@ export function PromptModal({
     }
   }, [open, defaultValue]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
-
-  if (!open) return null;
-
   const submit = () => {
     const trimmed = value.trim();
     if (!trimmed) return;
@@ -55,50 +80,39 @@ export function PromptModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"
-      onClick={onCancel}
-    >
-      <div
-        className="w-[min(420px,90vw)] rounded-lg border border-border bg-bg-surface p-4 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+    <Shell open={open} onCancel={onCancel}>
+      <Heading slot="title" className="mb-3 text-sm font-medium text-fg-primary">
+        {title}
+      </Heading>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
       >
-        <div className="mb-3 text-sm font-medium text-fg-primary">{title}</div>
         {label && <div className="mb-1.5 font-mono text-[11px] text-fg-muted">{label}</div>}
         <Input
           ref={inputRef}
           autoFocus
+          aria-label={label ?? title}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              submit();
-            }
-          }}
         />
         <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded border border-border px-3 py-1.5 text-xs text-fg-secondary hover:bg-bg-elevated"
-          >
+          <Button size="sm" onPress={onCancel}>
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!value.trim()}
-            className={cn(
-              'rounded px-3 py-1.5 text-xs font-medium text-white transition-colors disabled:opacity-40',
-              danger ? 'bg-red-600 hover:bg-red-500' : 'bg-accent hover:bg-accent/90',
-            )}
+          </Button>
+          <Button
+            type="submit"
+            size="sm"
+            intent={danger ? 'danger' : 'primary'}
+            isDisabled={!value.trim()}
           >
             {okLabel}
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </form>
+    </Shell>
   );
 }
 
@@ -121,53 +135,25 @@ export function ConfirmModal({
   onCancel,
   onConfirm,
 }: ConfirmModalProps) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onConfirm();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onCancel, onConfirm]);
-
-  if (!open) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"
-      onClick={onCancel}
-    >
-      <div
-        className="w-[min(420px,90vw)] rounded-lg border border-border bg-bg-surface p-4 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-2 text-sm font-medium text-fg-primary">{title}</div>
-        {message && (
-          <div className="mb-1 whitespace-pre-line break-words font-mono text-[12px] text-fg-secondary">
-            {message}
-          </div>
-        )}
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded border border-border px-3 py-1.5 text-xs text-fg-secondary hover:bg-bg-elevated"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className={cn(
-              'rounded px-3 py-1.5 text-xs font-medium text-white transition-colors',
-              danger ? 'bg-red-600 hover:bg-red-500' : 'bg-accent hover:bg-accent/90',
-            )}
-          >
-            {okLabel}
-          </button>
+    <Shell open={open} onCancel={onCancel} role="alertdialog">
+      <Heading slot="title" className="mb-2 text-sm font-medium text-fg-primary">
+        {title}
+      </Heading>
+      {message && (
+        <div className="mb-1 whitespace-pre-line break-words font-mono text-[12px] text-fg-secondary">
+          {message}
         </div>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        {/* Focus starts on Cancel: Enter, pressed without reading, keeps things as they are. */}
+        <Button size="sm" autoFocus onPress={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" intent={danger ? 'danger' : 'primary'} onPress={onConfirm}>
+          {okLabel}
+        </Button>
       </div>
-    </div>
+    </Shell>
   );
 }

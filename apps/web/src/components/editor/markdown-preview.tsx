@@ -27,6 +27,7 @@ import { LinkPeek, usePeek } from '@/components/note/link-peek';
 import { noteSanitizeSchema } from '@/lib/markdown-sanitize';
 import { remarkWikilinks } from '@/lib/remark-wikilinks';
 import { cn } from '@/lib/utils';
+import { safeDecodeURI } from '@/lib/safe-decode';
 import type { ResolvedAttachment } from '@/lib/wikilinks-client';
 
 export interface MarkdownPreviewProps {
@@ -55,10 +56,11 @@ export function MarkdownPreview({
 
   const components = useMemo<Components>(
     () => ({
-      a({ href, children, ...rest }) {
+      // `node` is react-markdown's syntax tree node, not an attribute.
+      a({ href, children, node: _node, ...rest }) {
         const raw = href ?? '';
         if (raw.startsWith('wikilink://')) {
-          const target = decodeURI(raw.slice('wikilink://'.length));
+          const target = safeDecodeURI(raw.slice('wikilink://'.length));
           const { href: dest, resolved, path } = resolveLink(target);
           return (
             <Link
@@ -98,10 +100,10 @@ export function MarkdownPreview({
           </a>
         );
       },
-      img({ src, alt, ...rest }) {
+      img({ src, alt, node: _node, ...rest }) {
         const raw = typeof src === 'string' ? src : '';
         if (raw.startsWith('embed://')) {
-          const target = decodeURI(raw.slice('embed://'.length));
+          const target = safeDecodeURI(raw.slice('embed://'.length));
           const resolved = resolveEmbed(target);
           if (!resolved) {
             return (

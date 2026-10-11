@@ -337,9 +337,12 @@ export default function SharedNotePage() {
 interface NoteData {
   frontmatter: Record<string, unknown>;
   body: string;
+  /** The note as the server writes it, frontmatter as YAML. */
+  markdown?: string;
 }
 
 function reconstructBody(note: NoteData): string {
+  if (note.markdown !== undefined) return note.markdown;
   if (Object.keys(note.frontmatter).length === 0) return note.body;
   const fmYaml = Object.entries(note.frontmatter)
     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)

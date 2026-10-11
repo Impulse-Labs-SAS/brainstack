@@ -2,6 +2,7 @@
 // router; MCP clients go through the dedicated MCP transports. Both share the
 // same underlying services, so behaviour stays consistent.
 
+import { serializeNote, type Frontmatter } from '@brainstack/core';
 import { TRPCError, initTRPC } from '@trpc/server';
 import superjson from 'superjson';
 import { z } from 'zod';
@@ -123,6 +124,17 @@ const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
 
 const FrontmatterInput = frontmatterField().optional();
 
+/**
+ * A note with the markdown the editor shows: its frontmatter written as YAML
+ * by the same serializer the server saves with. The web app used to rebuild
+ * it as `key: <JSON>` lines, which turned lists into `["a","b"]` and wrote a
+ * value needing quotes as YAML that no longer parsed.
+ */
+const withMarkdown = <T extends { frontmatter: Frontmatter; body: string }>(note: T) => ({
+  ...note,
+  markdown: serializeNote(note.frontmatter, note.body),
+});
+
 /** A logged-in context: `protectedProcedure` has already rejected the alternative. */
 type AuthedContext = TrpcContext & { user: NonNullable<TrpcContext['user']> };
 
@@ -183,7 +195,7 @@ export const appRouter = t.router({
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
           await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
-          return ctx.notes.get(owner, input.path);
+          return withMarkdown(await ctx.notes.get(owner, input.path));
         }),
       ),
     list: protectedProcedure
@@ -462,7 +474,9 @@ export const appRouter = t.router({
     getForOwner: protectedProcedure
       .input(z.object({ ownerId: field().min(1), path: field().min(1) }))
       .query(async ({ ctx, input }) =>
-        wrap(() => ctx.crossOwner.getNote(ctx.user.id, input.ownerId, input.path)),
+        wrap(async () =>
+          withMarkdown(await ctx.crossOwner.getNote(ctx.user.id, input.ownerId, input.path)),
+        ),
       ),
     treeForOwner: protectedProcedure
       .input(

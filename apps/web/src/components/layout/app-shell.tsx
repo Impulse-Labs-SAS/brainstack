@@ -14,7 +14,7 @@ import {
   Sparkles,
   type LucideIcon,
 } from 'lucide-react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import {
   createContext,
   useCallback,
@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { authFetch } from '@/lib/authApi';
+import { signOut } from '@/lib/sign-out';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { CommandPalette } from '@/components/search/command-palette';
@@ -274,23 +274,16 @@ function initials(label: string): string {
  * shared machine the way out has to be in sight.
  */
 function UserFooter() {
-  const router = useRouter();
   const me = trpc.auth.me.useQuery();
   const [signingOut, setSigningOut] = useState(false);
 
   const user = me.data?.user;
   const label = user?.displayName?.trim() || user?.email || '';
 
-  const signOut = useCallback(async () => {
+  const onSignOut = useCallback(async () => {
     setSigningOut(true);
-    try {
-      await authFetch('/auth/logout', { method: 'POST' });
-    } catch {
-      // The cookie is HttpOnly, so there is nothing to clean up here; land on
-      // /login either way and let it sort the session out.
-    }
-    router.replace('/login');
-  }, [router]);
+    await signOut();
+  }, []);
 
   return (
     <div className="flex w-full items-center gap-2 border-t border-border-subtle p-2 md:flex-col md:gap-1 md:px-0 md:py-2">
@@ -316,7 +309,7 @@ function UserFooter() {
       </div>
       <button
         type="button"
-        onClick={() => void signOut()}
+        onClick={() => void onSignOut()}
         disabled={signingOut}
         aria-label="Sign out"
         className={cn(

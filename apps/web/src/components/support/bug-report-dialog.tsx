@@ -1,32 +1,12 @@
 'use client';
 
-import { CheckCircle2, Loader2 } from 'lucide-react';
+import { CheckCircle2, ExternalLink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Input } from '@/components/ui/input';
+import { issueUrl, type ReportKind as Kind } from '@/lib/bug-report';
 import { cn } from '@/lib/utils';
 import { DialogShell } from './dialog-shell';
-
-type Kind = 'bug' | 'idea' | 'other';
-
-export interface BugReport {
-  kind: Kind;
-  summary: string;
-  details: string;
-  /** Where the user was when they opened the dialog. */
-  page: string;
-  userAgent: string;
-}
-
-/**
- * Where a report goes.
- *
- * TODO: not wired to the server yet — nothing is sent or stored. Replace the
- * body with the real call (tRPC mutation or endpoint) once it exists.
- */
-async function submitBugReport(report: BugReport): Promise<void> {
-  console.warn('[bug-report] not connected yet; report was not sent', report);
-}
 
 const KINDS: ReadonlyArray<{ id: Kind; label: string }> = [
   { id: 'bug', label: 'Something broke' },
@@ -38,7 +18,7 @@ export function BugReportDialog({ open, onClose }: { open: boolean; onClose(): v
   const [kind, setKind] = useState<Kind>('bug');
   const [summary, setSummary] = useState('');
   const [details, setDetails] = useState('');
-  const [status, setStatus] = useState<'idle' | 'sending' | 'sent'>('idle');
+  const [status, setStatus] = useState<'idle' | 'opened'>('idle');
 
   // Every opening starts a fresh report.
   useEffect(() => {
@@ -51,17 +31,17 @@ export function BugReportDialog({ open, onClose }: { open: boolean; onClose(): v
 
   const canSend = summary.trim() !== '' && status === 'idle';
 
-  const send = async () => {
+  const send = () => {
     if (!canSend) return;
-    setStatus('sending');
-    await submitBugReport({
+    const url = issueUrl({
       kind,
       summary: summary.trim(),
       details: details.trim(),
-      page: window.location.pathname,
+      area: `/${window.location.pathname.split('/')[1] ?? ''}`,
       userAgent: navigator.userAgent,
     });
-    setStatus('sent');
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setStatus('opened');
   };
 
   return (
@@ -71,11 +51,13 @@ export function BugReportDialog({ open, onClose }: { open: boolean; onClose(): v
       title="Report a problem"
       subtitle="Tell us what went wrong or what you'd like to see."
     >
-      {status === 'sent' ? (
+      {status === 'opened' ? (
         <div className="flex flex-col items-center py-6 text-center">
           <CheckCircle2 size={28} className="mb-3 text-success" />
-          <div className="text-sm text-fg-primary">Thanks for the report</div>
-          <div className="mt-1 text-xs text-fg-muted">It helps us make BrainStack better.</div>
+          <div className="text-sm text-fg-primary">Finish it on GitHub</div>
+          <div className="mt-1 text-xs text-fg-muted">
+            The issue opened in a new tab, filled in. It is sent once you submit it there.
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -88,7 +70,7 @@ export function BugReportDialog({ open, onClose }: { open: boolean; onClose(): v
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void send();
+            send();
           }}
         >
           <div className="mb-3 flex gap-1 rounded border border-border bg-bg-elevated p-0.5">
@@ -134,7 +116,9 @@ export function BugReportDialog({ open, onClose }: { open: boolean; onClose(): v
             className="w-full resize-y rounded-md border border-border bg-bg-surface px-2 py-1.5 text-sm text-fg-primary placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
           />
           <p className="mt-1.5 text-[11px] text-fg-muted">
-            The page you are on and your browser are attached to help us reproduce it.
+            This opens a public issue on GitHub for you to review and submit, with the part of the
+            app you are in and your browser attached. Anyone can read it: leave out note names and
+            anything private.
           </p>
 
           <div className="mt-4 flex justify-end gap-2">
@@ -150,8 +134,8 @@ export function BugReportDialog({ open, onClose }: { open: boolean; onClose(): v
               disabled={!canSend}
               className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-40"
             >
-              {status === 'sending' && <Loader2 size={12} className="animate-spin" />}
-              Send report
+              <ExternalLink size={12} />
+              Open on GitHub
             </button>
           </div>
         </form>

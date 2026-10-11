@@ -52,6 +52,7 @@ import { isInside, nodeId, parseNodeId, sameNode, type NodeRef } from '@/lib/tre
 import { importMarkdownFiles, isMarkdownFile, summarizeImport } from '@/lib/import-md';
 import { forgetRecent, useRecentNotes } from '@/lib/recent-notes';
 import { groupSharedOwners } from '@/lib/shared-owners';
+import { encodePath } from '@/lib/wikilinks-client';
 import { ShareFolderModal } from '@/components/sharing/share-folder-modal';
 
 import { REVEAL_FOLDER_EVENT, type RevealFolderDetail } from '@/components/note/note-header';
@@ -123,7 +124,9 @@ function parentOf(path: string): string {
 }
 
 function notePathToRoute(ref: NodeRef, mine: string | undefined): string {
-  const clean = ref.path.replace(/\.md$/i, '');
+  // Encoded segment by segment, like every other note link: a `#` or `?` in
+  // a name otherwise ended the path there, and the tree opened another note.
+  const clean = encodePath(ref.path.replace(/\.md$/i, ''));
   // Somebody else's note opens in the shared view; paths there are relative to
   // their root, which is exactly what the node already carries.
   if (mine !== undefined && ref.ownerId !== mine) {
