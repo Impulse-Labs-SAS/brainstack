@@ -15,7 +15,7 @@
 // UPDATE instead. That is stronger than the transaction was: two concurrent
 // clicks on the same link race inside one statement and exactly one wins.
 
-import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
 
@@ -40,6 +40,8 @@ const {
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+/** Shortest gap between two reset or verification emails to one address. */
+const EMAIL_COOLDOWN_MS = 60 * 1000;
 /*
  * Eight, with the character-class rule below still in force: the NIST floor
  * for a memorised secret, with TOTP available on top.
@@ -477,6 +479,17 @@ export class AuthService {
       this.opts.logger.warn('verification email requested, but this instance has no email configured');
       return { url: null };
     }
+    // One message per address per cooldown: anyone may ask for it, and
+    // without a pause they could flood the inbox and the instance's sending
+    // quota. The answer is the same either way.
+    const [recent] = await this.opts.db
+      .select({ createdAt: emailVerificationTokens.createdAt })
+      .from(emailVerificationTokens)
+      .where(eq(emailVerificationTokens.userId, row.id))
+      .orderBy(desc(emailVerificationTokens.createdAt))
+      .limit(1);
+    if (recent && recent.createdAt > this.now() - EMAIL_COOLDOWN_MS) return { url: null };
+
     const issued = await this.issueEmailVerification(row, row.email);
     return { url: issued.url };
   }
@@ -535,6 +548,22 @@ export class AuthService {
     }
 
     const now = this.now();
+
+    // One message per address per cooldown, as for verification. A new link
+    // replaces the ones before it, so only the latest email works.
+    const [recent] = await this.opts.db
+      .select({ createdAt: passwordResetTokens.createdAt })
+      .from(passwordResetTokens)
+      .where(and(eq(passwordResetTokens.userId, row.id), isNull(passwordResetTokens.usedAt)))
+      .orderBy(desc(passwordResetTokens.createdAt))
+      .limit(1);
+    if (recent && recent.createdAt > now - EMAIL_COOLDOWN_MS) {
+      return { token: null, url: null, expiresAt: null };
+    }
+    await this.opts.db
+      .delete(passwordResetTokens)
+      .where(and(eq(passwordResetTokens.userId, row.id), isNull(passwordResetTokens.usedAt)));
+
     const expiresAt = now + RESET_TTL_MS;
     const token = generateToken(32);
 

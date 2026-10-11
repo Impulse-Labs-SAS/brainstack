@@ -16,6 +16,7 @@ import type { OAuthProviderService } from '../services/OAuthProviderService.js';
 import type { TotpService } from '../services/TotpService.js';
 
 import { MAX_BODY_BYTES, MAX_SMALL_BODY_BYTES } from '../config/limits.js';
+import type { TrustedProxy } from '../lib/clientIp.js';
 import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
 
 import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
@@ -63,6 +64,12 @@ export interface BuildAppOptions {
   appHome: string;
   /** Inject a custom limiter (tests). Defaults to an in-memory one. */
   loginLimiter?: LoginRateLimiter;
+  /**
+   * Which header, if any, names the client for rate limiting. Defaults to
+   * `proxy`: the last X-Forwarded-For entry, which the reverse proxy in front
+   * of the server wrote. See lib/clientIp.ts.
+   */
+  trustedProxy?: TrustedProxy;
   /** Google OAuth service. When omitted, /auth/google* routes are disabled. */
   google?: GoogleOAuthService;
   /**
@@ -135,6 +142,25 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   };
 
   const loginLimiter = opts.loginLimiter ?? createLoginRateLimiter();
+  const trustedProxy = opts.trustedProxy ?? 'proxy';
+
+  // Every route that can be reached without an account, and tRPC, which is
+  // where a signed-in client spends most of its requests, has a budget. The
+  // anonymous ones are counted per client address, before anything else runs.
+  const anonymousLimit = buildRateLimitMiddleware({
+    perMinute: opts.rateLimitPerMinute,
+    trustedProxy,
+    byIpOnly: true,
+  });
+  const trpcLimit = buildRateLimitMiddleware({
+    // A page load is one batched request, but autosave and the graph add up.
+    perMinute: opts.rateLimitPerMinute * 10,
+    trustedProxy,
+    byIpOnly: true,
+  });
+  app.use('/auth/*', anonymousLimit);
+  app.use('/invite/*', anonymousLimit);
+  app.use('/trpc/*', trpcLimit);
 
   app.route('/health', healthRouter);
   app.route('/config', createConfigRouter());
@@ -160,6 +186,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       secureCookies: opts.secureCookies,
       loginLimiter,
       appHome: opts.appHome,
+      trustedProxy,
     }),
   );
 
@@ -184,7 +211,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   }
 
   const requireAuth = buildAuthMiddleware(middlewareOpts);
-  const rateLimit = buildRateLimitMiddleware({ perMinute: opts.rateLimitPerMinute });
+  const rateLimit = buildRateLimitMiddleware({ perMinute: opts.rateLimitPerMinute, trustedProxy });
   const mcpRouter = createMcpHttpRouter({ buildServer: opts.buildMcpServer, logger: opts.logger });
 
   if (opts.oauth) {

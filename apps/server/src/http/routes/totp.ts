@@ -49,7 +49,7 @@ export function createTotpRouter(options: TotpRouterOptions): Hono<AuthBindings>
     } catch (err) {
       const status = err instanceof AppError ? err.status : 500;
       const message = err instanceof Error ? err.message : 'failed';
-      return c.json({ error: message }, status as 401 | 500);
+      return c.json({ error: message }, status as 401 | 429 | 500);
     }
   });
 
@@ -67,7 +67,7 @@ export function createTotpRouter(options: TotpRouterOptions): Hono<AuthBindings>
     } catch (err) {
       const status = err instanceof AppError ? err.status : 500;
       const message = err instanceof Error ? err.message : 'failed';
-      return c.json({ error: message }, status as 401 | 500);
+      return c.json({ error: message }, status as 401 | 429 | 500);
     }
   });
 

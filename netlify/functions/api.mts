@@ -22,6 +22,7 @@ import { loadConfig } from '../../apps/server/src/config/env.js';
 import { buildApp } from '../../apps/server/src/http/app.js';
 import { getLogger } from '../../apps/server/src/lib/logger.js';
 import { buildMcpServer } from '../../apps/server/src/mcp/server.js';
+import { purgeExpired } from '../../apps/server/src/services/Maintenance.js';
 import { backfillOwnerId } from '../../apps/server/src/services/OwnerBackfill.js';
 import { buildServices } from '../../apps/server/src/wiring.js';
 
@@ -87,6 +88,10 @@ async function boot(): Promise<Hono<never>> {
   await services.crawls.applyRetention();
   if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
 
+  // No process outlives a request here, so expired sessions, links and OAuth
+  // rows are cleared whenever a container starts.
+  await purgeExpired(db, { logger });
+
   // Notes written before ownership existed belong to nobody and are listed by
   // nobody. Claiming them before the first listing keeps them from vanishing.
   const backfill = await backfillOwnerId(db, { logger });
@@ -108,6 +113,8 @@ async function boot(): Promise<Hono<never>> {
     ...(services.google ? { google: services.google } : {}),
     resolveUserForApiKey: services.resolveUserForApiKey,
     rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
+    // Netlify's edge writes the client address into its own header.
+    trustedProxy: 'netlify',
     /*
      * Derived from the origin rather than NODE_ENV. A Secure cookie only means
      * anything over https and PUBLIC_ORIGIN says so directly; setting

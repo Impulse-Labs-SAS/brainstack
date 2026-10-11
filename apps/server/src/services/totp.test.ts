@@ -87,6 +87,8 @@ describe('TotpService verifyForUser', () => {
     const seeded = await auth.ensureUser('user@brain.test');
     const user = (await auth.findUserById(seeded.id))!;
     await totp.confirmEnrollment(user.id, secret, codeFor(secret));
+    // The enrolment spent this step's code; the next step brings a new one.
+    now += 30_000;
     expect(await totp.verifyForUser(user.id, codeFor(secret))).toBe(true);
   });
 
@@ -115,6 +117,7 @@ describe('AuthService.login with TOTP', () => {
     const me = (await auth.findUserById((await auth.ensureUser('user@brain.test')).id))!;
     const { secret } = totp.beginEnrollment('user@brain.test');
     await totp.confirmEnrollment(me.id, secret, codeFor(secret));
+    now += 30_000;
 
     await expect(auth.login('user@brain.test', STRONG)).rejects.toMatchObject({
       message: 'totp code required',
@@ -134,9 +137,56 @@ describe('TotpService.disable', () => {
     const u = await auth.ensureUser('user@brain.test');
     const { secret } = totp.beginEnrollment('user@brain.test');
     await totp.confirmEnrollment(u.id, secret, codeFor(secret));
+    now += 30_000;
     await expect(totp.disable(u.id, '000000')).rejects.toThrow(AppError);
     await totp.disable(u.id, codeFor(secret));
     expect((await auth.findUserById(u.id))?.hasTotp).toBe(false);
     expect(await totp.remainingBackupCodes(u.id)).toBe(0);
+  });
+});
+
+describe('TotpService against guessing', () => {
+  it('does not accept the enrolment code a second time', async () => {
+    const u = await auth.ensureUser('again@brain.test');
+    const { secret } = totp.beginEnrollment(u.email);
+    const code = codeFor(secret);
+    await totp.confirmEnrollment(u.id, secret, code);
+    expect(await totp.verifyForUser(u.id, code)).toBe(false);
+  });
+
+  async function enrolledUser(): Promise<{ id: string; secret: string }> {
+    const { user } = await auth.signup('guess@brain.test', STRONG);
+    const { secret } = totp.beginEnrollment(user.email);
+    await totp.confirmEnrollment(user.id, secret, codeFor(secret));
+    // The enrolment code's step is spent; the next one is another step.
+    now += 30_000;
+    return { id: user.id, secret };
+  }
+
+  it('accepts a code once', async () => {
+    const { id, secret } = await enrolledUser();
+    const code = codeFor(secret);
+    expect(await totp.verifyForUser(id, code)).toBe(true);
+    expect(await totp.verifyForUser(id, code)).toBe(false);
+  });
+
+  it('locks after five wrong codes, even for the right one, and unlocks later', async () => {
+    const { id, secret } = await enrolledUser();
+    for (let i = 0; i < 5; i++) {
+      expect(await totp.verifyForUser(id, '000000')).toBe(false);
+    }
+    await expect(totp.verifyForUser(id, codeFor(secret))).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+    });
+
+    now += 16 * 60 * 1000;
+    expect(await totp.verifyForUser(id, codeFor(secret))).toBe(true);
+  });
+
+  it('refuses to disable 2FA while locked', async () => {
+    const { id, secret } = await enrolledUser();
+    for (let i = 0; i < 5; i++) await totp.verifyForUser(id, '111111');
+    await expect(totp.disable(id, codeFor(secret))).rejects.toBeInstanceOf(AppError);
+    expect((await auth.findUserById(id))?.hasTotp).toBe(true);
   });
 });

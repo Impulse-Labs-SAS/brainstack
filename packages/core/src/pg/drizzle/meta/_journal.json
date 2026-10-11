@@ -43,6 +43,13 @@
       "when": 1791376791374,
       "tag": "0005_brief_darkhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791720017017,
+      "tag": "0006_totp_attempts",
+      "breakpoints": true
     }
   ]
 }

@@ -437,6 +437,20 @@ const crawlHistory: PgMigration = {
   ],
 };
 
+/**
+ * What stops a second factor from being guessed: consecutive wrong codes and
+ * the lock they earn, and the last time step accepted, so one code cannot be
+ * used twice.
+ */
+const totpAttempts: PgMigration = {
+  name: '0011_pg_totp_attempts',
+  statements: [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_failed_attempts INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_locked_until BIGINT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -448,4 +462,5 @@ export const pgMigrations: readonly PgMigration[] = [
   invitePermission,
   facets,
   crawlHistory,
+  totpAttempts,
 ];

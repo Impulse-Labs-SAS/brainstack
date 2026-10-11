@@ -11,10 +11,10 @@
 // belonging to nobody, which nothing reads.
 
 import { decodeBase32, encodeBase32NoPadding } from '@oslojs/encoding';
-import { createTOTPKeyURI, verifyTOTPWithGracePeriod } from '@oslojs/otp';
+import { createTOTPKeyURI, generateHOTP } from '@oslojs/otp';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
@@ -25,8 +25,13 @@ const { totpBackupCodes, users } = pgSchema;
 
 const TOTP_PERIOD = 30;
 const TOTP_DIGITS = 6;
-const TOTP_GRACE = 30; // accept the previous step too
+/** Steps either side of now a code may come from: one, for a clock that drifts. */
+const TOTP_WINDOW = 1;
 const BACKUP_CODE_COUNT = 10;
+/** Wrong codes in a row before the second factor locks. */
+const MAX_FAILED_ATTEMPTS = 5;
+/** How long it stays locked. Five guesses per quarter hour makes a million codes hopeless. */
+const LOCK_MS = 15 * 60 * 1000;
 
 export interface TotpServiceOptions {
   db: PgDb;
@@ -59,22 +64,32 @@ function generateBackupCode(): string {
   return out;
 }
 
-function verifySecret(secret: string, code: string, nowSec: number): boolean {
+/**
+ * The time step `code` was generated for, within the window around `nowSec`,
+ * or null. Computed here rather than with a library's verify, which reads the
+ * global clock and says only yes or no: the step is what lets a code be
+ * refused the second time it is presented.
+ */
+function matchingStep(secret: string, code: string, nowSec: number): number | null {
   let key: Uint8Array;
   try {
     key = decodeBase32(secret);
   } catch {
-    return false;
+    return null;
   }
-  // Pin the verifier to our `now()` if a test wants to: we re-seed Date.now
-  // momentarily because @oslojs/otp doesn't accept a clock injection.
-  const realNow = Date.now;
-  try {
-    Date.now = () => nowSec * 1000;
-    return verifyTOTPWithGracePeriod(key, TOTP_PERIOD, TOTP_DIGITS, code, TOTP_GRACE);
-  } finally {
-    Date.now = realNow;
+  const given = Buffer.from(code.trim());
+  const current = Math.floor(nowSec / TOTP_PERIOD);
+  let found: number | null = null;
+  // Every candidate is compared, so the time taken says nothing about which.
+  for (let step = current - TOTP_WINDOW; step <= current + TOTP_WINDOW; step++) {
+    const expected = Buffer.from(generateHOTP(key, BigInt(step), TOTP_DIGITS));
+    if (expected.length === given.length && timingSafeEqual(expected, given)) found = step;
   }
+  return found;
+}
+
+function verifySecret(secret: string, code: string, nowSec: number): boolean {
+  return matchingStep(secret, code, nowSec) !== null;
 }
 
 export class TotpService {
@@ -107,7 +122,8 @@ export class TotpService {
     code: string,
   ): Promise<{ backupCodes: string[] }> {
     const nowSec = Math.floor(this.now() / 1000);
-    if (!verifySecret(secret, code, nowSec)) {
+    const step = matchingStep(secret, code, nowSec);
+    if (step === null) {
       throw new AppError('invalid TOTP code', 'UNAUTHORIZED', 401);
     }
 
@@ -130,24 +146,92 @@ export class TotpService {
     // account whose second factor exists without any way around it.
     await this.opts.db
       .update(users)
-      .set({ totpSecret: secret, updatedAt: now })
+      .set({
+        totpSecret: secret,
+        totpFailedAttempts: 0,
+        totpLockedUntil: null,
+        // The code that proved the enrolment is spent like any other.
+        totpLastStep: step,
+        updatedAt: now,
+      })
       .where(eq(users.id, userId));
 
     return { backupCodes: codes };
   }
 
-  /** Verify a code against a stored secret (login second-factor step). */
+  /**
+   * Verify a code against a stored secret: the login step, and the proof
+   * `disable` asks for.
+   *
+   * Guessing is what this has to stop. Five wrong codes in a row lock the
+   * second factor for a quarter of an hour, counted in the database because a
+   * process is not the unit of deployment; and a code is accepted once, for a
+   * step later than the last one accepted, so a code seen over a shoulder or in
+   * a log is spent.
+   */
   async verifyForUser(userId: string, code: string): Promise<boolean> {
     const [row] = await this.opts.db
-      .select({ totpSecret: users.totpSecret })
+      .select({
+        totpSecret: users.totpSecret,
+        failed: users.totpFailedAttempts,
+        lockedUntil: users.totpLockedUntil,
+        lastStep: users.totpLastStep,
+      })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
 
     if (!row?.totpSecret) return false;
-    const nowSec = Math.floor(this.now() / 1000);
-    if (verifySecret(row.totpSecret, code, nowSec)) return true;
-    return this.consumeBackupCode(userId, code);
+    const now = this.now();
+    if (row.lockedUntil != null && row.lockedUntil > now) {
+      const minutes = Math.ceil((row.lockedUntil - now) / 60_000);
+      throw new AppError(
+        `too many wrong codes; try again in ${minutes} minute${minutes === 1 ? '' : 's'}`,
+        'RATE_LIMITED',
+        429,
+      );
+    }
+
+    const step = matchingStep(row.totpSecret, code, Math.floor(now / 1000));
+    if (step !== null && (row.lastStep == null || step > row.lastStep)) {
+      // Conditional, so two requests carrying the same code cannot both pass.
+      const [claimed] = await this.opts.db
+        .update(users)
+        .set({ totpLastStep: step, totpFailedAttempts: 0, totpLockedUntil: null })
+        .where(
+          and(
+            eq(users.id, userId),
+            sql`(${users.totpLastStep} IS NULL OR ${users.totpLastStep} < ${step})`,
+          ),
+        )
+        .returning({ id: users.id });
+      if (claimed) return true;
+    }
+
+    if (await this.consumeBackupCode(userId, code)) {
+      await this.opts.db
+        .update(users)
+        .set({ totpFailedAttempts: 0, totpLockedUntil: null })
+        .where(eq(users.id, userId));
+      return true;
+    }
+
+    await this.recordFailure(userId, now);
+    return false;
+  }
+
+  private async recordFailure(userId: string, now: number): Promise<void> {
+    const [row] = await this.opts.db
+      .update(users)
+      .set({ totpFailedAttempts: sql`${users.totpFailedAttempts} + 1` })
+      .where(eq(users.id, userId))
+      .returning({ failed: users.totpFailedAttempts });
+    if (row && row.failed >= MAX_FAILED_ATTEMPTS) {
+      await this.opts.db
+        .update(users)
+        .set({ totpFailedAttempts: 0, totpLockedUntil: now + LOCK_MS })
+        .where(eq(users.id, userId));
+    }
   }
 
   private async consumeBackupCode(userId: string, raw: string): Promise<boolean> {
@@ -185,7 +269,7 @@ export class TotpService {
     // rather than a second factor the user believes they removed.
     await this.opts.db
       .update(users)
-      .set({ totpSecret: null, updatedAt: this.now() })
+      .set({ totpSecret: null, totpLastStep: null, updatedAt: this.now() })
       .where(eq(users.id, userId));
 
     await this.opts.db.delete(totpBackupCodes).where(eq(totpBackupCodes.userId, userId));
@@ -204,5 +288,6 @@ export class TotpService {
 
 export const totpInternalsForTests = {
   generateBackupCode,
+  matchingStep,
   verifySecret,
 };

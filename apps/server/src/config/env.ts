@@ -37,6 +37,16 @@ const Env = z.object({
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
     .default('info'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(60),
+  /**
+   * Which header names the client for rate limiting. `proxy` (the default)
+   * believes the last X-Forwarded-For entry, which the reverse proxy in front
+   * writes — Caddy in docker-compose.yml. `direct` uses the socket address,
+   * for a server with nothing in front. The Netlify function sets its own.
+   */
+  TRUSTED_PROXY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.enum(['proxy', 'direct']).default('proxy'),
+  ),
   // Email. Resend's API or any SMTP server; either needs AUTH_EMAIL_FROM.
   RESEND_API_KEY: z.string().optional(),
   SMTP_HOST: z.string().optional(),

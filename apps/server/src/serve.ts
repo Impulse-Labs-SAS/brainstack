@@ -17,6 +17,7 @@ import { loadConfig } from './config/env.js';
 import { buildApp } from './http/app.js';
 import { getLogger } from './lib/logger.js';
 import { buildMcpServer } from './mcp/server.js';
+import { purgeExpired } from './services/Maintenance.js';
 import { backfillOwnerId } from './services/OwnerBackfill.js';
 import { buildServices } from './wiring.js';
 
@@ -59,6 +60,15 @@ async function main(): Promise<void> {
   await services.crawls.applyRetention();
   if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
 
+  // Expired sessions, links and OAuth rows, now and every hour after.
+  await purgeExpired(db, { logger });
+  const purge = setInterval(() => {
+    purgeExpired(db, { logger }).catch((err: unknown) =>
+      logger.error({ err }, 'purging expired rows failed'),
+    );
+  }, 60 * 60 * 1000);
+  purge.unref();
+
   const backfill = await backfillOwnerId(db, { logger });
   if (!backfill.skipped) {
     logger.info({ notesUpdated: backfill.notesUpdated }, 'claimed notes that had no owner');
@@ -78,6 +88,7 @@ async function main(): Promise<void> {
     ...(services.google ? { google: services.google } : {}),
     resolveUserForApiKey: services.resolveUserForApiKey,
     rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
+    trustedProxy: cfg.TRUSTED_PROXY,
     // A Secure cookie only means anything over https, and the origin says so.
     secureCookies: cfg.PUBLIC_ORIGIN.startsWith('https://'),
     corsOrigins: cfg.corsOrigins,
@@ -112,6 +123,7 @@ async function main(): Promise<void> {
    */
   const shutdown = (signal: NodeJS.Signals): void => {
     logger.info({ signal }, 'shutting down');
+    clearInterval(purge);
     server.close(() => {
       closeDb()
         .catch((err: unknown) => logger.error({ err }, 'closing the database failed'))

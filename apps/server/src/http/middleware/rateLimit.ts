@@ -1,12 +1,21 @@
 // In-memory token-bucket rate limiter. One bucket per key, refilled at
-// `perMinute` tokens per minute. Good enough for V1 single-node deploys;
-// replace with Redis if we ever scale out.
+// `perMinute` tokens per minute. Per process: on a serverless platform each
+// instance keeps its own buckets, which bounds a single client without
+// pretending to be a global quota.
 //
-// Keyed by principal where there is one, and by client IP where there is not —
-// the OAuth endpoints (register, token, authorize) are anonymous by design, and
-// keying only by principal would leave them with no limit at all.
+// Keyed by the user behind the request where there is one — an API key, an
+// OAuth token and a session all count against the same person, and two users
+// of one MCP host do not share a budget — and by client IP where there is not.
+// The IP comes from `clientIp`, which believes only the header the deployment
+// says its own proxy writes.
+//
+// Buckets idle for a full refill period are forgotten: they would be full
+// again anyway, and keeping them let a client that varied its key grow the
+// map for the life of the process.
 
 import type { MiddlewareHandler } from 'hono';
+
+import { clientIp, type TrustedProxy } from '../../lib/clientIp.js';
 
 import type { AuthBindings } from './auth.js';
 
@@ -17,36 +26,40 @@ interface Bucket {
 
 export interface RateLimitOptions {
   perMinute: number;
+  trustedProxy: TrustedProxy;
+  /** Ignore the principal and key by IP alone, for routes before authentication. */
+  byIpOnly?: boolean;
   /** Override clock for tests. */
   now?: () => number;
 }
 
-/** Best-effort client IP. Netlify sets the first; a proxy sets the second. */
-function clientIp(c: Parameters<MiddlewareHandler>[0]): string {
-  return (
-    c.req.header('x-nf-client-connection-ip') ??
-    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
-    'unknown'
-  ).slice(0, 64);
-}
+const REFILL_WINDOW_MS = 60_000;
+const SWEEP_EVERY = 1_000;
 
 export function buildRateLimitMiddleware(
   options: RateLimitOptions,
 ): MiddlewareHandler<AuthBindings> {
   const buckets = new Map<string, Bucket>();
   const capacity = options.perMinute;
-  const refillRatePerMs = options.perMinute / 60_000;
+  const refillRatePerMs = options.perMinute / REFILL_WINDOW_MS;
   const now = (): number => (options.now ? options.now() : Date.now());
+  let calls = 0;
+
+  const sweep = (t: number): void => {
+    for (const [key, bucket] of buckets) {
+      if (t - bucket.lastRefill >= REFILL_WINDOW_MS) buckets.delete(key);
+    }
+  };
 
   return async (c, next) => {
-    const principal = c.var.principal;
-    const key = !principal
-      ? `ip:${clientIp(c)}`
-      : principal.kind === 'apiKey'
-        ? `key:${principal.apiKey.id}`
-        : `user:${principal.user.id}`;
+    const principal = options.byIpOnly ? undefined : c.var.principal;
+    const key = principal
+      ? `user:${principal.user.id}`
+      : `ip:${clientIp(c, options.trustedProxy)}`;
 
     const t = now();
+    if (++calls % SWEEP_EVERY === 0) sweep(t);
+
     let bucket = buckets.get(key);
     if (!bucket) {
       bucket = { tokens: capacity, lastRefill: t };
@@ -60,7 +73,8 @@ export function buildRateLimitMiddleware(
     }
 
     if (bucket.tokens < 1) {
-      return c.json({ error: 'rate limit exceeded' }, 429);
+      const retryAfter = Math.ceil((1 - bucket.tokens) / refillRatePerMs / 1000);
+      return c.json({ error: 'rate limit exceeded' }, 429, { 'Retry-After': String(retryAfter) });
     }
     bucket.tokens -= 1;
     return next();

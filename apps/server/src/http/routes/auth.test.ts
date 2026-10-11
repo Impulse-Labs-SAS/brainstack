@@ -51,6 +51,7 @@ beforeEach(async () => {
     loginLimiter: createLoginRateLimiter(),
     secureCookies: false,
     appHome: 'https://brain.test',
+    trustedProxy: 'proxy',
   });
 });
 
@@ -165,6 +166,7 @@ describe('auth links', () => {
       loginLimiter: createLoginRateLimiter(),
       secureCookies: false,
       appHome: 'http://localhost',
+      trustedProxy: 'proxy',
     });
     const post = (path: string, body: unknown) =>
       r.request(path, {
