@@ -183,6 +183,18 @@ describe('TotpService against guessing', () => {
     expect(await totp.verifyForUser(id, codeFor(secret))).toBe(true);
   });
 
+  it('checks at most five guesses from a burst sent all at once', async () => {
+    const { id, secret } = await enrolledUser();
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, () => totp.verifyForUser(id, '000000')),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(5);
+    // And the factor is locked afterwards, right code or not.
+    await expect(totp.verifyForUser(id, codeFor(secret))).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+    });
+  });
+
   it('refuses to disable 2FA while locked', async () => {
     const { id, secret } = await enrolledUser();
     for (let i = 0; i < 5; i++) await totp.verifyForUser(id, '111111');

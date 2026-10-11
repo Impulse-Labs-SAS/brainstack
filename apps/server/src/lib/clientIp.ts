@@ -12,10 +12,16 @@
 //            Caddy, as shipped in docker-compose.yml, replaces the header
 //            with the peer address, so the last entry is the client.
 //   direct   the socket peer; for a server nothing sits in front of.
+//   header:<Name>
+//            a header a CDN or tunnel in front of Caddy writes (Cloudflare's
+//            CF-Connecting-IP). Behind one, X-Forwarded-For's last entry is
+//            the CDN's own address, so every visitor would share one rate-limit
+//            bucket — and thirty bad logins would lock everyone out. Only
+//            safe when the server cannot be reached except through that CDN.
 
 import type { Context } from 'hono';
 
-export type TrustedProxy = 'netlify' | 'proxy' | 'direct';
+export type TrustedProxy = 'netlify' | 'proxy' | 'direct' | `header:${string}`;
 
 const MAX_LENGTH = 64;
 
@@ -25,7 +31,9 @@ export function clientIp(c: Context, trust: TrustedProxy): string {
       ? c.req.header('x-nf-client-connection-ip')
       : trust === 'proxy'
         ? lastForwarded(c.req.header('x-forwarded-for'))
-        : undefined;
+        : trust.startsWith('header:')
+          ? c.req.header(trust.slice('header:'.length))?.trim()
+          : undefined;
   return (ip || socketAddress(c) || 'unknown').slice(0, MAX_LENGTH);
 }
 

@@ -62,7 +62,11 @@ async function main(): Promise<void> {
   if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
 
   // Expired sessions, links and OAuth rows, now and every hour after.
-  await purgeExpired(db, { logger });
+  // Housekeeping never stands between the server and its first request: a
+  // purge that fails is logged and tried again later.
+  await purgeExpired(db, { logger }).catch((err: unknown) =>
+    logger.warn({ err }, 'purging expired rows failed at startup'),
+  );
   const purge = setInterval(() => {
     purgeExpired(db, { logger }).catch((err: unknown) =>
       logger.error({ err }, 'purging expired rows failed'),

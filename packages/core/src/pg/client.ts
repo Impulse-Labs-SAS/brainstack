@@ -78,11 +78,24 @@ export function openPgDatabase(connectionString: string): BrainStackPgDatabase {
   // than any query here needs, and enough for a migration's index build on a
   // large vault — and a request that cannot get a connection in ten seconds
   // fails instead of hanging.
+  //
+  // Set once each connection opens, not as startup parameters: PgBouncer and
+  // other poolers refuse a connection whose startup packet carries settings
+  // they do not know, and "any Postgres" includes the ones behind a pooler.
+  // `onConnect` runs before the pool hands the connection out.
   const pool = new pg.Pool({
     connectionString,
     connectionTimeoutMillis: 10_000,
-    statement_timeout: 60_000,
-    idle_in_transaction_session_timeout: 60_000,
+    onConnect: async (client) => {
+      try {
+        await client.query(
+          'SET statement_timeout = 60000; SET idle_in_transaction_session_timeout = 60000',
+        );
+      } catch {
+        // A pooler that refuses SET leaves the server's own defaults; the
+        // connection still works.
+      }
+    },
   });
   const db = drizzleNodePg(pool, { schema }) as unknown as PgDb;
   return { db, close: () => pool.end() };
@@ -134,16 +147,25 @@ export async function runPgMigrations(
 
 /**
  * SQLSTATEs that mean "it already exists": a duplicate object, table or
- * schema, or the unique index on pg_type that two CREATE TABLE IF NOT EXISTS
- * racing each other trip. Read off the driver's error or the one drizzle
+ * schema. Read off the driver's error or the one drizzle
  * wraps around it.
  */
-const ALREADY_EXISTS_CODES = new Set(['42710', '42P07', '42P06', '23505']);
+const ALREADY_EXISTS_CODES = new Set(['42710', '42P07', '42P06']);
+/**
+ * A unique violation counts only on the catalogue indexes two concurrent
+ * CREATEs collide on. Anywhere else — a unique index over duplicate rows, a
+ * backfill that meets a duplicate — it is a real failure, and letting it
+ * through would record the migration as applied with its work missing.
+ */
+const CATALOGUE_INDEXES = new Set(['pg_type_typname_nsp_index', 'pg_class_relname_nsp_index']);
 
 function createdConcurrently(err: unknown): boolean {
   for (let e: unknown = err, depth = 0; e && depth < 3; depth += 1) {
-    const code = (e as { code?: unknown }).code;
+    const { code, constraint } = e as { code?: unknown; constraint?: unknown };
     if (typeof code === 'string' && ALREADY_EXISTS_CODES.has(code)) return true;
+    if (code === '23505' && typeof constraint === 'string' && CATALOGUE_INDEXES.has(constraint)) {
+      return true;
+    }
     e = (e as { cause?: unknown }).cause;
   }
   return false;

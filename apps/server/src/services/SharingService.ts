@@ -9,7 +9,7 @@
 import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 
-import { escapeLike, pgSchema, type PgDb } from '@brainstack/core/pg';
+import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
 
@@ -297,20 +297,16 @@ export class SharingService {
     const folderPath = normalizeFolderPath(params.folderPath);
     await this.deleteGrantsUnder(params.ownerId, params.sharedWithUserId, folderPath);
 
-    // One statement, because the HTTP driver opens no transaction: the email
-    // is matched with a subquery rather than read first and passed back in.
-    await this.opts.db
-      .update(folderShareInvites)
-      .set({ revokedAt: this.now() })
+    // The invites that would hand the folder, or one inside it, straight back:
+    // every link invite and this person's email invites. Matched in memory —
+    // share paths never go through LIKE, where a folder named `a_b` would
+    // also reach `aXb`.
+    const live = await this.opts.db
+      .select({ id: folderShareInvites.id, folderPath: folderShareInvites.folderPath })
+      .from(folderShareInvites)
       .where(
         and(
           eq(folderShareInvites.ownerId, params.ownerId),
-          or(
-            eq(folderShareInvites.folderPath, folderPath),
-            // Nested folders, matched with LIKE only to narrow: a pattern
-            // that over-matches here kills an invite, never grants anything.
-            sql`${folderShareInvites.folderPath} LIKE ${`${escapeLike(folderPath)}/%`}`,
-          ),
           isNull(folderShareInvites.revokedAt),
           or(
             eq(folderShareInvites.mode, 'link'),
@@ -320,6 +316,12 @@ export class SharingService {
           ),
         ),
       );
+    const doomed = live.filter((i) => pathFallsUnder(i.folderPath, folderPath)).map((i) => i.id);
+    if (doomed.length === 0) return;
+    await this.opts.db
+      .update(folderShareInvites)
+      .set({ revokedAt: this.now() })
+      .where(inArray(folderShareInvites.id, doomed));
   }
 
   /**

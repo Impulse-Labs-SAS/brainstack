@@ -136,11 +136,13 @@ export default function SharedNotePage() {
         },
         {
           onSuccess: (saved) => {
+            // Re-runs the autosave for whatever was typed while this was out —
+            // on this note or, after navigating, on the one now open.
+            setSaveTick((t) => t + 1);
             if (pathRef.current !== savingPath) return;
             savedContentRef.current = pending;
             checksumRef.current = saved.checksum;
             setSaveError(null);
-            setSaveTick((t) => t + 1);
             setSavedAt(Date.now());
             // Same reasoning as the own-note view: links may have changed.
             void utils.notes.graph.invalidate();

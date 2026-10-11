@@ -33,11 +33,11 @@ const REVOKED_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * An OAuth client registration with nothing left to show for it — no code, no
- * token — goes after this long. Registration needs no account, so every one a
+ * token — goes after a week. Registration needs no account, so every one a
  * stranger scripted used to stay forever; a real host that comes back simply
  * registers again.
  */
-const IDLE_CLIENT_MS = 24 * 60 * 60 * 1000;
+const IDLE_CLIENT_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface PurgeResult {
   deleted: number;
