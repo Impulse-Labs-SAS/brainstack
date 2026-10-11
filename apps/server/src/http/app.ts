@@ -84,7 +84,8 @@ export interface BuildAppOptions {
    * BrainStack acting as an OAuth provider for MCP hosts. When present, the
    * `.well-known` documents and `/oauth/*` endpoints are mounted, the MCP 401
    * carries the discovery challenge, and provider-issued access tokens
-   * authenticate wherever API keys do. `issuer` is the public origin tokens
+   * authenticate on /mcp. (Not on /trpc, which is the web app's API and
+   * reads a session cookie or an API key.) `issuer` is the public origin tokens
    * are bound to — never a request's Host header, which anyone can send.
    */
   oauth?: { service: OAuthProviderService; issuer: string };
@@ -102,6 +103,9 @@ export interface BuildAppOptions {
    */
   basePath?: string;
 }
+
+/** Client registrations one address may make in a minute. */
+const OAUTH_REGISTRATIONS_PER_MINUTE = 5;
 
 /** A logged path, with the token an invite link carries in it masked. */
 const loggablePath = (path: string) => path.replace(/(\/invite\/accept\/)[^/]+/, '$1[token]');
@@ -262,6 +266,12 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
     // Register and token are unauthenticated by design; the rate limiter is
     // what stands between them and whoever finds them.
     app.use('/oauth/*', rateLimit);
+    // Every registration is a row that stays, and an MCP host registers once
+    // per installation: a handful a minute from one address is generous.
+    app.use(
+      '/oauth/register',
+      buildRateLimitMiddleware({ perMinute: OAUTH_REGISTRATIONS_PER_MINUTE, trustedProxy, byIpOnly: true }),
+    );
     app.route(
       '/oauth',
       createOAuthProviderRouter({
@@ -293,6 +303,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       crossOwner: opts.crossOwner,
       crawls: opts.crawls,
       resolveUserForApiKey: opts.resolveUserForApiKey,
+      ...(opts.oauth ? { oauth: opts.oauth.service } : {}),
       logger: opts.logger,
       endpoint: `${opts.basePath ?? ''}/trpc`,
     }),

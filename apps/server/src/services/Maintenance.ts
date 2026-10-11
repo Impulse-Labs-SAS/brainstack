@@ -10,7 +10,7 @@
 // runs it on each cold start. Every statement is a plain indexed delete, safe
 // to run concurrently and to repeat.
 
-import { and, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lt, notExists, or } from 'drizzle-orm';
 import type { Logger } from 'pino';
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
@@ -20,6 +20,7 @@ const {
   folderShareInvites,
   magicLinkTokens,
   oauthAuthorizationCodes,
+  oauthClients,
   oauthStates,
   oauthTokens,
   passwordResetTokens,
@@ -29,6 +30,14 @@ const {
 
 /** Revoked OAuth tokens are kept this long, so a replay is still recognised as one. */
 const REVOKED_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * An OAuth client registration with nothing left to show for it — no code, no
+ * token — goes after this long. Registration needs no account, so every one a
+ * stranger scripted used to stay forever; a real host that comes back simply
+ * registers again.
+ */
+const IDLE_CLIENT_MS = 24 * 60 * 60 * 1000;
 
 export interface PurgeResult {
   deleted: number;
@@ -79,6 +88,30 @@ export async function purgeExpired(
         ),
       )
       .returning({ id: oauthTokens.id }),
+  );
+  // After the codes and tokens above, so a client whose last token just went
+  // counts as idle.
+  await count(
+    db
+      .delete(oauthClients)
+      .where(
+        and(
+          lt(oauthClients.createdAt, now - IDLE_CLIENT_MS),
+          notExists(
+            db
+              .select({ id: oauthAuthorizationCodes.id })
+              .from(oauthAuthorizationCodes)
+              .where(eq(oauthAuthorizationCodes.clientId, oauthClients.id)),
+          ),
+          notExists(
+            db
+              .select({ id: oauthTokens.id })
+              .from(oauthTokens)
+              .where(eq(oauthTokens.clientId, oauthClients.id)),
+          ),
+        ),
+      )
+      .returning({ id: oauthClients.id }),
   );
   await count(
     db

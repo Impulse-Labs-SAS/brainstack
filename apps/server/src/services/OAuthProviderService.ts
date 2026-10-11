@@ -8,7 +8,7 @@
 // and short-lived, refresh rotates the whole pair. Secrets are stored as
 // sha256 hashes, the same rule as api_keys.
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { createHash } from 'node:crypto';
 
@@ -41,6 +41,30 @@ export interface OAuthClient {
   redirectUris: string[];
   tokenEndpointAuthMethod: string;
   hasSecret: boolean;
+  /** When it registered, for the consent page: a client made a minute ago is worth a second look. */
+  createdAt: number;
+}
+
+/** A client a user has let in, as their settings list it. */
+export interface ConnectedClient {
+  clientId: string;
+  name: string;
+  /** Where its authorizations were delivered: a host, `localhost`, or an app's own scheme. */
+  redirectTargets: string[];
+  /** When the user first let it in, of the authorizations still alive. */
+  connectedAt: number;
+  lastUsedAt: number | null;
+}
+
+/** Where an authorization for `uri` ends up, in words a person can check. */
+export function redirectTarget(uri: string): string {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') return parsed.host;
+    return `${parsed.protocol}//`;
+  } catch {
+    return uri;
+  }
 }
 
 export interface RegisteredClient extends OAuthClient {
@@ -87,6 +111,10 @@ export function isAllowedRedirectUri(uri: string): boolean {
   } catch {
     return false;
   }
+  // RFC 6749 §3.1.2: no fragment. And no credentials in the URL, which no
+  // callback needs and which only make the host harder to read.
+  if (parsed.hash !== '' || uri.includes('#')) return false;
+  if (parsed.username !== '' || parsed.password !== '') return false;
   if (parsed.protocol === 'https:') return true;
   if (parsed.protocol === 'http:') {
     return (
@@ -158,6 +186,7 @@ export class OAuthProviderService {
       redirectUris: params.redirectUris,
       tokenEndpointAuthMethod: method,
       hasSecret: confidential,
+      createdAt: this.now(),
       ...(secret ? { secret } : {}),
     };
   }
@@ -175,6 +204,7 @@ export class OAuthProviderService {
       redirectUris: row.redirectUris,
       tokenEndpointAuthMethod: row.tokenEndpointAuthMethod,
       hasSecret: row.secretHash !== null,
+      createdAt: row.createdAt,
     };
   }
 
@@ -244,19 +274,102 @@ export class OAuthProviderService {
         ),
       )
       .returning();
-    if (!row) return null;
+    if (!row) {
+      // A code presented twice was seen by someone besides the client that
+      // first used it. The tokens that first exchange issued may be in the
+      // wrong hands, so they go (RFC 6749 §4.1.2): their family is named after
+      // the code, which is what makes them findable from here.
+      const [spent] = await this.opts.db
+        .select({ id: oauthAuthorizationCodes.id })
+        .from(oauthAuthorizationCodes)
+        .where(eq(oauthAuthorizationCodes.codeHash, sha256(params.code)))
+        .limit(1);
+      if (spent) await this.revokeFamily(spent.id, now);
+      return null;
+    }
     if (row.expiresAt < now) return null;
     if (row.clientId !== params.clientId) return null;
     if (row.redirectUri !== params.redirectUri) return null;
     if (pkceChallengeFrom(params.codeVerifier) !== row.codeChallenge) return null;
 
-    // A fresh authorization begins a new token family.
+    // A fresh authorization begins a new token family, named after its code.
     return this.issuePair({
       clientId: row.clientId,
       userId: row.userId,
       scope: row.scope,
-      familyId: nanoid(),
+      familyId: row.id,
     });
+  }
+
+  private async revokeFamily(familyId: string, now: number): Promise<void> {
+    await this.opts.db
+      .update(oauthTokens)
+      .set({ revokedAt: now })
+      .where(and(eq(oauthTokens.familyId, familyId), isNull(oauthTokens.revokedAt)));
+  }
+
+  /**
+   * The clients `userId` has let in that can still act: those holding a live
+   * refresh token. Without this list the only way to cut a client off was
+   * /oauth/revoke, which needs the token — so only the client, or whoever
+   * took it, could.
+   */
+  async listConnectedClients(userId: string): Promise<ConnectedClient[]> {
+    const now = this.now();
+    const rows = await this.opts.db
+      .select({
+        clientId: oauthTokens.clientId,
+        kind: oauthTokens.kind,
+        createdAt: oauthTokens.createdAt,
+        lastUsedAt: oauthTokens.lastUsedAt,
+        name: oauthClients.name,
+        redirectUris: oauthClients.redirectUris,
+      })
+      .from(oauthTokens)
+      .innerJoin(oauthClients, eq(oauthClients.id, oauthTokens.clientId))
+      .where(
+        and(
+          eq(oauthTokens.userId, userId),
+          isNull(oauthTokens.revokedAt),
+          gt(oauthTokens.expiresAt, now),
+        ),
+      );
+
+    const byClient = new Map<string, ConnectedClient & { live: boolean }>();
+    for (const row of rows) {
+      const entry = byClient.get(row.clientId) ?? {
+        clientId: row.clientId,
+        name: row.name,
+        redirectTargets: [...new Set(row.redirectUris.map(redirectTarget))],
+        connectedAt: row.createdAt,
+        lastUsedAt: null,
+        live: false,
+      };
+      if (row.kind === 'refresh') entry.live = true;
+      entry.connectedAt = Math.min(entry.connectedAt, row.createdAt);
+      if (row.lastUsedAt !== null) {
+        entry.lastUsedAt = Math.max(entry.lastUsedAt ?? 0, row.lastUsedAt);
+      }
+      byClient.set(row.clientId, entry);
+    }
+    return [...byClient.values()]
+      .filter((c) => c.live)
+      .map(({ live: _live, ...client }) => client)
+      .sort((a, b) => b.connectedAt - a.connectedAt);
+  }
+
+  /** Cut a client off from `userId`'s account: every token it holds for them. */
+  async disconnectClient(userId: string, clientId: string): Promise<void> {
+    await this.opts.db
+      .update(oauthTokens)
+      .set({ revokedAt: this.now() })
+      .where(
+        and(
+          eq(oauthTokens.userId, userId),
+          eq(oauthTokens.clientId, clientId),
+          isNull(oauthTokens.revokedAt),
+        ),
+      );
   }
 
   /**

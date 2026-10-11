@@ -16,6 +16,7 @@ import { z } from 'zod';
 import type { AuthService } from '../../services/AuthService.js';
 import {
   isAllowedRedirectUri,
+  redirectTarget,
   narrowScope,
   OAUTH_SCOPES,
   type OAuthClient,
@@ -194,6 +195,8 @@ export function createOAuthProviderRouter(opts: OAuthProviderRouterOptions): Hon
       consentPage({
         action: `${c.req.path}/decision`,
         clientName: client.name,
+        redirectTarget: redirectTarget(q.redirect_uri),
+        registeredAgo: ago(Date.now() - client.createdAt),
         userEmail: user.email,
         scope,
         fields: {
@@ -327,7 +330,7 @@ export function createOAuthProviderRouter(opts: OAuthProviderRouterOptions): Hon
       return c.json(
         {
           error: 'invalid_redirect_uri',
-          error_description: `not https or loopback: ${invalid.join(', ')}`,
+          error_description: `not an allowed redirect URI (https, loopback http or an app scheme, without a fragment or credentials): ${invalid.join(', ')}`,
         },
         400,
       );
@@ -345,7 +348,10 @@ export function createOAuthProviderRouter(opts: OAuthProviderRouterOptions): Hon
     return c.json(
       {
         client_id: registered.id,
-        ...(registered.secret ? { client_secret: registered.secret } : {}),
+        // A secret here never expires; RFC 7591 asks for that to be said.
+        ...(registered.secret
+          ? { client_secret: registered.secret, client_secret_expires_at: 0 }
+          : {}),
         client_id_issued_at: Math.floor(Date.now() / 1000),
         client_name: registered.name,
         redirect_uris: registered.redirectUris,
@@ -390,6 +396,13 @@ function escapeHtml(value: string): string {
 function consentPage(params: {
   action: string;
   clientName: string;
+  /**
+   * Where the authorization goes if the user allows it. The client chose its
+   * own name — anyone can register as "Claude" — so the host is the one fact
+   * here the user can check against the app they are setting up.
+   */
+  redirectTarget: string;
+  registeredAgo: string;
   userEmail: string;
   scope: string;
   fields: Record<string, string>;
@@ -413,7 +426,9 @@ function consentPage(params: {
     main { max-width: 24rem; padding: 2rem; }
     h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 1rem; }
     p { color: #a3a3a3; font-size: 0.9rem; line-height: 1.5; }
-    code { color: #ededed; }
+    code, strong { color: #ededed; }
+    .where { border: 1px solid #333; border-radius: 0.5rem; padding: 0.75rem; }
+    .where code { font-size: 1rem; word-break: break-all; }
     .actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
     button { flex: 1; padding: 0.6rem 1rem; border-radius: 0.5rem; border: 1px solid #333;
              font-size: 0.9rem; cursor: pointer; background: #171717; color: #ededed; }
@@ -426,6 +441,12 @@ function consentPage(params: {
     <p><strong>${escapeHtml(params.clientName)}</strong> wants to connect to your
        BrainStack notes as <code>${escapeHtml(params.userEmail)}</code>
        with scope <code>${escapeHtml(params.scope)}</code>.</p>
+    <p class="where">If you allow it, access is handed to
+       <code>${escapeHtml(params.redirectTarget)}</code>.
+       Allow only if that is the app you are connecting right now; any app can
+       call itself by any name. (Registered ${escapeHtml(params.registeredAgo)}.)</p>
+    <p>It will read and change every note you can, folders shared with you
+       included, until you disconnect it under Settings → Connected AI clients.</p>
     <form method="post" action="${escapeHtml(params.action)}">
       ${hidden}
       <div class="actions">
@@ -436,6 +457,16 @@ function consentPage(params: {
   </main>
 </body>
 </html>`;
+}
+
+/** "3 minutes ago", for the consent page. */
+function ago(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  return `${Math.round(hours / 24)} days ago`;
 }
 
 function errorPage(message: string): string {

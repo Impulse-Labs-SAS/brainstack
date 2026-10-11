@@ -32,6 +32,13 @@ describe('isAllowedRedirectUri', () => {
     expect(isAllowedRedirectUri('file:///etc/passwd')).toBe(false);
   });
 
+  it('refuses a fragment or credentials in the URI (RFC 6749 §3.1.2)', () => {
+    expect(isAllowedRedirectUri('https://client.test/cb#frag')).toBe(false);
+    expect(isAllowedRedirectUri('https://client.test/cb#')).toBe(false);
+    expect(isAllowedRedirectUri('https://user:pw@client.test/cb')).toBe(false);
+    expect(isAllowedRedirectUri('https://user@client.test/cb')).toBe(false);
+  });
+
   it('refuses garbage', () => {
     expect(isAllowedRedirectUri('not a url')).toBe(false);
     expect(isAllowedRedirectUri('')).toBe(false);

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createLoginRateLimiter } from '../lib/rateLimitLogin.js';
 import { purgeExpired } from '../services/Maintenance.js';
+import { pkceChallengeFrom } from '../services/OAuthProviderService.js';
 import { createTestDatabase, type TestDatabase } from '../services/testDb.js';
 import { buildTestApp, type TestApp } from '../testApp.js';
 
@@ -99,5 +100,35 @@ describe('purgeExpired', () => {
 
     await purgeExpired(database.db, { now: session.expiresAt + 1, logger });
     expect(await auth.validateSession(session.token)).toBeNull();
+  });
+
+  it('deletes an OAuth registration nobody used, and keeps one in use', async () => {
+    const oauth = app.services.oauthProvider;
+    const user = await app.services.auth.ensureUser('client-owner@brain.test');
+    const idle = await oauth.registerClient({ name: 'idle', redirectUris: ['https://a.test/cb'] });
+    const used = await oauth.registerClient({ name: 'used', redirectUris: ['https://b.test/cb'] });
+    const verifier = 'v'.repeat(43);
+    const code = await oauth.createAuthorizationCode({
+      clientId: used.id,
+      userId: user.id,
+      redirectUri: 'https://b.test/cb',
+      codeChallenge: pkceChallengeFrom(verifier),
+      scope: 'mcp',
+    });
+    await oauth.exchangeAuthorizationCode({
+      code,
+      clientId: used.id,
+      redirectUri: 'https://b.test/cb',
+      codeVerifier: verifier,
+    });
+
+    // Not yet a day old: both stay.
+    await purgeExpired(database.db, { now: Date.now() + 60 * 60 * 1000 });
+    expect(await oauth.getClient(idle.id)).not.toBeNull();
+
+    await purgeExpired(database.db, { now: Date.now() + 25 * 60 * 60 * 1000 });
+    expect(await oauth.getClient(idle.id)).toBeNull();
+    // Its refresh token lives for months, so the client in use stays.
+    expect(await oauth.getClient(used.id)).not.toBeNull();
   });
 });

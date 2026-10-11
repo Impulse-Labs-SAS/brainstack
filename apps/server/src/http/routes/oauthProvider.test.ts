@@ -577,6 +577,62 @@ describe('token exchange', () => {
     expect(mcp.status).toBe(401);
   });
 
+  it('a code presented twice revokes what its first exchange issued', async () => {
+    const clientId = await registerClient();
+    const code = await obtainCode(clientId);
+    const first = (await (await exchange(clientId, code)).json()) as TokenResponse;
+
+    const replay = await exchange(clientId, code);
+    expect(replay.status).toBe(400);
+
+    const mcp = await app.request('/mcp', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${first.access_token}` },
+    });
+    expect(mcp.status).toBe(401);
+  });
+
+  it('shows on the consent page where access will be sent', async () => {
+    const clientId = await registerClient();
+    const consent = await app.request(authorizeUrl(clientId), {
+      headers: { Cookie: sessionCookie },
+    });
+    const html = await consent.text();
+    expect(html).toContain('client.test');
+    expect(html).toMatch(/Registered (just now|\d+ minutes? ago)/);
+    expect(consent.headers.get('x-frame-options')).toBe('DENY');
+  });
+
+  it('lists a connected client for its user, and disconnecting it ends its access', async () => {
+    const clientId = await registerClient();
+    const tokens = (await (
+      await exchange(clientId, await obtainCode(clientId))
+    ).json()) as TokenResponse;
+
+    const listed = await oauth.listConnectedClients('sam');
+    expect(listed).toMatchObject([
+      { clientId, name: 'Test MCP host', redirectTargets: ['client.test'] },
+    ]);
+    expect(await oauth.listConnectedClients('somebody-else')).toEqual([]);
+
+    await oauth.disconnectClient('sam', clientId);
+    expect(await oauth.listConnectedClients('sam')).toEqual([]);
+    const mcp = await app.request('/mcp', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    expect(mcp.status).toBe(401);
+  });
+
+  it('refuses a registration whose redirect URI carries a fragment', async () => {
+    const res = await app.request('/oauth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_name: 'x', redirect_uris: ['https://client.test/cb#x'] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('answers GET on /mcp with 405 instead of an event stream that never ends', async () => {
     const clientId = await registerClient();
     const tokens = (await (
