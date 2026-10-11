@@ -22,7 +22,14 @@ export interface TestDatabase {
 // `notes` cascades into links and tags; `users` cascades into sessions,
 // api_keys, shares, invites and every auth token. Truncating the roots with
 // CASCADE covers the rest.
-const ROOT_TABLES = ['notes', 'users', 'magic_link_tokens', 'api_keys', 'oauth_states'];
+const ROOT_TABLES = [
+  'notes',
+  'users',
+  'magic_link_tokens',
+  'api_keys',
+  'oauth_states',
+  'oauth_clients',
+];
 
 /** Fresh, migrated, isolated database. Call `close()` when the suite ends. */
 export async function createTestDatabase(): Promise<TestDatabase> {

@@ -74,6 +74,16 @@ describe('note paths', () => {
     expect(normalizeNoteKey('  Inbox//nota.md  ')).toBe('Inbox/nota.md');
   });
 
+  it('folds `.` segments anywhere, so one note has one key', () => {
+    expect(normalizeNoteKey('a/./b.md')).toBe('a/b.md');
+    expect(normalizeNoteKey('./a/./././b.md')).toBe('a/b.md');
+  });
+
+  it('refuses control characters and paths too long to index', () => {
+    expect(() => normalizeNoteKey('a\u0007b.md')).toThrow(PathTraversalError);
+    expect(() => normalizeNoteKey(`${'a'.repeat(1100)}.md`)).toThrow(PathTraversalError);
+  });
+
   it('rejects traversal, absolute paths, null bytes and non-markdown', () => {
     expect(() => normalizeNoteKey('../etc/passwd.md')).toThrow(PathTraversalError);
     expect(() => normalizeNoteKey('Inbox/../../secret.md')).toThrow(PathTraversalError);

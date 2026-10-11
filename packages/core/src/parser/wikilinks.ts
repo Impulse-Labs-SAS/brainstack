@@ -7,8 +7,13 @@ import type { ParsedLink } from '../types.js';
 
 import { isMasked } from './code-mask.js';
 
-const WIKILINK_RE = /(!)?\[\[([^\]\n]+)\]\]/g;
-const MARKDOWN_LINK_RE = /(!)?\[([^\]\n]*)\]\(([^)\s][^)\n]*)\)/g;
+// Every class here excludes the bracket that would open another match, so a
+// failed attempt stops at the next candidate instead of rescanning to the end
+// of the line. The earlier patterns let `[` (and `(`) inside, and a single
+// line of 100k `[` took ten seconds of the one event loop every tenant shares.
+const WIKILINK_RE = /(!)?\[\[([^[\]\n]+)\]\]/g;
+// A target may hold one level of balanced parentheses, `Notes (old).md`.
+const MARKDOWN_LINK_RE = /(!)?\[([^[\]\n]*)\]\(((?:[^()[\]\n]|\([^()[\]\n]*\))+)\)/g;
 const EXTERNAL_URL_RE = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
 
 /** Splits a wikilink body into `target | section | alias`. */

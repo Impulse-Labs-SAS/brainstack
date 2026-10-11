@@ -6,6 +6,12 @@ import { TRPCError, initTRPC } from '@trpc/server';
 import superjson from 'superjson';
 import { z } from 'zod';
 
+import {
+  emailField,
+  field,
+  frontmatterField,
+  noteContent,
+} from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError } from '../lib/errors.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
@@ -88,7 +94,7 @@ const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
   }
 };
 
-const FrontmatterInput = z.record(z.string(), z.unknown()).optional();
+const FrontmatterInput = frontmatterField().optional();
 
 /** A logged-in context: `protectedProcedure` has already rejected the alternative. */
 type AuthedContext = TrpcContext & { user: NonNullable<TrpcContext['user']> };
@@ -100,7 +106,7 @@ type AuthedContext = TrpcContext & { user: NonNullable<TrpcContext['user']> };
  * the caller. Naming somebody else's id is how a shared folder is addressed:
  * paths are always relative to that person's root, never to yours.
  */
-const OwnerInput = z.string().min(1).optional();
+const OwnerInput = field().min(1).optional();
 const ownerOf = (ctx: AuthedContext, ownerId?: string): string => ownerId ?? ctx.user.id;
 
 /**
@@ -145,7 +151,7 @@ export const appRouter = t.router({
   }),
   notes: t.router({
     get: protectedProcedure
-      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
+      .input(z.object({ path: field().min(1), ownerId: OwnerInput }))
       .query(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
@@ -157,11 +163,11 @@ export const appRouter = t.router({
       .input(
         z
           .object({
-            folder: z.string().optional(),
-            tag: z.string().optional(),
-            facetKey: z.string().optional(),
-            facetValue: z.string().optional(),
-            status: z.string().optional(),
+            folder: field().optional(),
+            tag: field().optional(),
+            facetKey: field().optional(),
+            facetValue: field().optional(),
+            status: field().optional(),
             limit: z.number().int().min(1).max(500).optional(),
           })
           .optional(),
@@ -174,8 +180,8 @@ export const appRouter = t.router({
     create: protectedProcedure
       .input(
         z.object({
-          path: z.string().min(1),
-          content: z.string(),
+          path: field().min(1),
+          content: noteContent(),
           frontmatter: FrontmatterInput,
           ownerId: OwnerInput,
         }),
@@ -188,7 +194,7 @@ export const appRouter = t.router({
         }),
       ),
     update: protectedProcedure
-      .input(z.object({ path: z.string().min(1), content: z.string(), ownerId: OwnerInput }))
+      .input(z.object({ path: field().min(1), content: noteContent(), ownerId: OwnerInput }))
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
@@ -199,7 +205,7 @@ export const appRouter = t.router({
     // Own vault only, like `related`: a mention across a share would read, and
     // rewrite, bodies the grant never covered.
     unlinkedMentions: protectedProcedure
-      .input(z.object({ path: z.string().min(1) }))
+      .input(z.object({ path: field().min(1) }))
       .query(({ ctx, input }) => wrap(() => ctx.notes.unlinkedMentions(ctx.user.id, input.path))),
     // The caller's own vault and the folders shared with them: the crawl
     // re-checks every row against those, so it stops at a share's edge.
@@ -239,14 +245,14 @@ export const appRouter = t.router({
         }),
       ),
     linkMentions: protectedProcedure
-      .input(z.object({ sourcePath: z.string().min(1), targetPath: z.string().min(1) }))
+      .input(z.object({ sourcePath: field().min(1), targetPath: field().min(1) }))
       .mutation(({ ctx, input }) =>
         wrap(() => ctx.notes.linkMentions(ctx.user.id, input.sourcePath, input.targetPath)),
       ),
     remove: protectedProcedure
       .input(
         z.object({
-          path: z.string().min(1),
+          path: field().min(1),
           recursive: z.boolean().optional(),
           ownerId: OwnerInput,
         }),
@@ -259,7 +265,7 @@ export const appRouter = t.router({
         }),
       ),
     move: protectedProcedure
-      .input(z.object({ from: z.string().min(1), to: z.string().min(1), ownerId: OwnerInput }))
+      .input(z.object({ from: field().min(1), to: field().min(1), ownerId: OwnerInput }))
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           // One owner for both ends: a move stays inside a single vault, and
@@ -280,10 +286,10 @@ export const appRouter = t.router({
     moveToOwner: protectedProcedure
       .input(
         z.object({
-          from: z.string().min(1),
+          from: field().min(1),
           fromOwnerId: OwnerInput,
-          to: z.string().min(1),
-          toOwnerId: z.string().min(1),
+          to: field().min(1),
+          toOwnerId: field().min(1),
         }),
       )
       .mutation(async ({ ctx, input }) =>
@@ -306,7 +312,7 @@ export const appRouter = t.router({
         }),
       ),
     createFolder: protectedProcedure
-      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
+      .input(z.object({ path: field().min(1), ownerId: OwnerInput }))
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
@@ -318,7 +324,7 @@ export const appRouter = t.router({
       .input(
         z
           .object({
-            path: z.string().optional(),
+            path: field().optional(),
             depth: z.number().int().min(1).max(MAX_TREE_DEPTH).optional(),
           })
           .optional(),
@@ -330,14 +336,14 @@ export const appRouter = t.router({
       .input(
         z
           .object({
-            folder: z.string().optional(),
+            folder: field().optional(),
             limit: z.number().int().min(1).max(500).optional(),
           })
           .optional(),
       )
       .query(({ ctx, input }) => ctx.notes.listDecisions(ctx.user.id, input ?? {})),
     backlinks: protectedProcedure
-      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
+      .input(z.object({ path: field().min(1), ownerId: OwnerInput }))
       .query(async ({ ctx, input }) => {
         const owner = ownerOf(ctx, input.ownerId);
         await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
@@ -366,7 +372,7 @@ export const appRouter = t.router({
     // notes the grant never covered. See NoteService.affinity.
     affinity: protectedProcedure.query(({ ctx }) => ctx.notes.affinity(ctx.user.id)),
     outboundLinks: protectedProcedure
-      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
+      .input(z.object({ path: field().min(1), ownerId: OwnerInput }))
       .query(async ({ ctx, input }) => {
         const owner = ownerOf(ctx, input.ownerId);
         await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
@@ -380,7 +386,7 @@ export const appRouter = t.router({
     related: protectedProcedure
       .input(
         z.object({
-          path: z.string().min(1),
+          path: field().min(1),
           ownerId: OwnerInput,
           scope: z.enum(['mine', 'shared', 'all']).optional(),
           limit: z.number().int().min(1).max(50).optional(),
@@ -404,26 +410,26 @@ export const appRouter = t.router({
         });
       }),
     facetsForNote: protectedProcedure
-      .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))
+      .input(z.object({ path: field().min(1), ownerId: OwnerInput }))
       .query(async ({ ctx, input }) => {
         const owner = ownerOf(ctx, input.ownerId);
         await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
         return ctx.notes.listFacetsForNote(owner, input.path);
       }),
     facets: protectedProcedure
-      .input(z.object({ key: z.string().optional() }).optional())
+      .input(z.object({ key: field().optional() }).optional())
       .query(({ ctx, input }) => ctx.notes.listFacets(ctx.user.id, input?.key)),
     tags: protectedProcedure.query(({ ctx }) => ctx.notes.listTags(ctx.user.id)),
     getForOwner: protectedProcedure
-      .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
+      .input(z.object({ ownerId: field().min(1), path: field().min(1) }))
       .query(async ({ ctx, input }) =>
         wrap(() => ctx.crossOwner.getNote(ctx.user.id, input.ownerId, input.path)),
       ),
     treeForOwner: protectedProcedure
       .input(
         z.object({
-          ownerId: z.string().min(1),
-          path: z.string().min(1),
+          ownerId: field().min(1),
+          path: field().min(1),
           depth: z.number().int().min(1).max(MAX_TREE_DEPTH).optional(),
         }),
       )
@@ -431,7 +437,7 @@ export const appRouter = t.router({
         wrap(() => ctx.crossOwner.listTree(ctx.user.id, input.ownerId, input.path, input.depth)),
       ),
     linksForOwner: protectedProcedure
-      .input(z.object({ ownerId: z.string().min(1), path: z.string().min(1) }))
+      .input(z.object({ ownerId: field().min(1), path: field().min(1) }))
       .query(({ ctx, input }) =>
         wrap(() => ctx.crossOwner.linksForOwner(ctx.user.id, input.ownerId, input.path)),
       ),
@@ -440,7 +446,7 @@ export const appRouter = t.router({
     query: protectedProcedure
       .input(
         z.object({
-          query: z.string().min(1),
+          query: field().min(1),
           limit: z.number().int().min(1).max(50).optional(),
           scope: z.enum(['mine', 'shared', 'all']).optional(),
         }),
@@ -474,8 +480,8 @@ export const appRouter = t.router({
     shareWithUser: sessionProcedure
       .input(
         z.object({
-          folderPath: z.string().min(1),
-          email: z.string().email(),
+          folderPath: field().min(1),
+          email: emailField(),
           permission: z.enum(['read', 'write']).optional(),
         }),
       )
@@ -499,8 +505,8 @@ export const appRouter = t.router({
     revoke: sessionProcedure
       .input(
         z.object({
-          folderPath: z.string().min(1),
-          sharedWithUserId: z.string().min(1),
+          folderPath: field().min(1),
+          sharedWithUserId: field().min(1),
         }),
       )
       .mutation(async ({ ctx, input }) =>
@@ -516,9 +522,9 @@ export const appRouter = t.router({
     createInvite: sessionProcedure
       .input(
         z.object({
-          folderPath: z.string().min(1),
+          folderPath: field().min(1),
           mode: z.enum(['email', 'link']),
-          inviteeEmail: z.string().email().optional(),
+          inviteeEmail: emailField().optional(),
           permission: z.enum(['read', 'write']).optional(),
         }),
       )
@@ -545,7 +551,7 @@ export const appRouter = t.router({
       ),
     listPendingInvites: protectedProcedure.query(({ ctx }) => ctx.invites.listPending(ctx.user.id)),
     revokeInvite: sessionProcedure
-      .input(z.object({ inviteId: z.string().min(1) }))
+      .input(z.object({ inviteId: field().min(1) }))
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           await ctx.invites.revoke(ctx.user.id, input.inviteId);
@@ -553,7 +559,7 @@ export const appRouter = t.router({
         }),
       ),
     acceptInvite: sessionProcedure
-      .input(z.object({ token: z.string().min(1) }))
+      .input(z.object({ token: field().min(1) }))
       .mutation(async ({ ctx, input }) =>
         wrap(() =>
           ctx.invites.accept({
@@ -566,12 +572,14 @@ export const appRouter = t.router({
   apiKeys: t.router({
     list: sessionProcedure.query(({ ctx }) => ctx.apiKeys.list(ctx.user.id)),
     create: sessionProcedure
-      .input(z.object({ name: z.string().min(1).max(80), scopes: z.array(z.string()).optional() }))
+      .input(
+        z.object({ name: z.string().min(1).max(80), scopes: z.array(field()).max(16).optional() }),
+      )
       .mutation(({ ctx, input }) =>
         ctx.apiKeys.create(ctx.user.id, input.name, input.scopes ?? []),
       ),
     revoke: sessionProcedure
-      .input(z.object({ id: z.string().min(1) }))
+      .input(z.object({ id: field().min(1) }))
       .mutation(async ({ ctx, input }) => {
         await wrap(() => ctx.apiKeys.revoke(input.id, ctx.user.id));
         return { ok: true };

@@ -14,6 +14,7 @@ import type { NoteService } from '../../services/NoteService.js';
 import type { InviteService } from '../../services/InviteService.js';
 import type { SearchService } from '../../services/SearchService.js';
 import type { SharingService } from '../../services/SharingService.js';
+import { MAX_TRPC_BATCH } from '../../config/limits.js';
 import { SESSION_COOKIE, type AuthBindings, type Principal } from '../middleware/auth.js';
 import { buildContext } from '../../trpc/context.js';
 import { appRouter } from '../../trpc/router.js';
@@ -48,6 +49,9 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
       endpoint: options.endpoint ?? '/trpc',
       req: c.req.raw,
       router: appRouter,
+      // Batched calls run concurrently; without a cap one request could carry
+      // hundreds of them past any per-request limit.
+      maxBatchSize: MAX_TRPC_BATCH,
       createContext: () =>
         buildContext(
           {

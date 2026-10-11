@@ -21,6 +21,7 @@ export type {
 
 // --- Paths -------------------------------------------------------------------
 export {
+  MAX_PATH_LENGTH,
   PathTraversalError,
   normalizeNoteKey,
   normalizeRelativePath,

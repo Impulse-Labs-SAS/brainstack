@@ -11,7 +11,7 @@ import { ApiKeyService, type ApiKey } from './services/ApiKeyService.js';
 import { AuthService, type User } from './services/AuthService.js';
 import { CrawlHistoryService } from './services/CrawlHistoryService.js';
 import { CrossOwnerReader } from './services/CrossOwnerReader.js';
-import { createEmailSender, type EmailConfig } from './services/EmailSender.js';
+import { createEmailSender, type EmailConfig, type EmailSender } from './services/EmailSender.js';
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { InviteService } from './services/InviteService.js';
 import { NoteService } from './services/NoteService.js';
@@ -49,6 +49,8 @@ export interface BuildServicesOptions {
   apiBasePath?: string;
   /** Resend or SMTP. Leave it out and the instance sends no email at all. */
   email?: EmailConfig;
+  /** A ready sender instead of `email`; tests pass one that captures mail. */
+  emailSender?: EmailSender;
   /** Let anyone create an account. See AuthService's sign-up policy. */
   openSignup?: boolean;
   googleClientId?: string | undefined;
@@ -59,7 +61,7 @@ export interface BuildServicesOptions {
 }
 
 export function buildServices(opts: BuildServicesOptions): Services {
-  const emailSender = createEmailSender(opts.email ?? {});
+  const emailSender = opts.emailSender ?? createEmailSender(opts.email ?? {});
 
   // Before NoteService, which needs it to clean up after a folder it removes.
   const sharing = new SharingService({ db: opts.db });

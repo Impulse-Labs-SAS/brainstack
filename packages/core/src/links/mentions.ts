@@ -39,9 +39,12 @@ export interface MentionCandidate {
   aliases?: readonly unknown[];
 }
 
-const WIKILINK_RE = /!?\[\[[^\]\n]+\]\]/g;
-const MARKDOWN_LINK_RE = /!?\[[^\]\n]*\]\([^)\n]*\)/g;
-const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/gi;
+// Same shapes as the parser's, with the same care: no class contains the
+// bracket that starts the next attempt, and a URL scheme is bounded, so none
+// of these can rescan a long line once per character.
+const WIKILINK_RE = /!?\[\[[^[\]\n]+\]\]/g;
+const MARKDOWN_LINK_RE = /!?\[[^[\]\n]*\]\((?:[^()[\]\n]|\([^()[\]\n]*\))*\)/g;
+const URL_RE = /\b[a-z][a-z0-9+.-]{0,31}:\/\/\S+/gi;
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 
 /** Lower case, diacritics stripped. */

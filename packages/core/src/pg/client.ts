@@ -72,7 +72,18 @@ export function openPgDatabase(connectionString: string): BrainStackPgDatabase {
     return { db, close: async () => {} };
   }
 
-  const pool = new pg.Pool({ connectionString });
+  // Without limits a request waiting for a pool slot waited forever, and a
+  // slow query held its slot as long as Postgres let it run, so ten of them
+  // stalled every route of the instance. A statement gets a minute — far more
+  // than any query here needs, and enough for a migration's index build on a
+  // large vault — and a request that cannot get a connection in ten seconds
+  // fails instead of hanging.
+  const pool = new pg.Pool({
+    connectionString,
+    connectionTimeoutMillis: 10_000,
+    statement_timeout: 60_000,
+    idle_in_transaction_session_timeout: 60_000,
+  });
   const db = drizzleNodePg(pool, { schema }) as unknown as PgDb;
   return { db, close: () => pool.end() };
 }

@@ -124,6 +124,26 @@ describe('extractFrontmatter edge cases', () => {
   });
 });
 
+describe('parsing cost', () => {
+  // Each of these used to take seconds to minutes: the link patterns let the
+  // bracket that starts the next attempt inside, so every failed attempt
+  // rescanned the rest of the line.
+  it.each([
+    ['a line of [', '['.repeat(200_000)],
+    ['a line of [[', '[['.repeat(100_000)],
+    ['unclosed markdown links', '[x](a'.repeat(40_000)],
+  ])('stays linear on %s', (_name, body) => {
+    const started = performance.now();
+    parseNote(body);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it('still reads targets with one level of parentheses and titles', () => {
+    const links = parseNote('[t](Notes%20(old).md) [x](b.md "title") [[A|alias]]').links;
+    expect(links.map((l) => l.rawTarget)).toEqual(['Notes%20(old).md', 'b.md', 'A']);
+  });
+});
+
 describe('extractLinks', () => {
   function links(body: string) {
     return extractLinks(body, buildCodeMask(body));
