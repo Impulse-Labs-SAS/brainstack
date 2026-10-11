@@ -50,7 +50,7 @@ export async function searchNotes(source: ContextSource, input: SearchInput): Pr
 
   const index = await source.titles();
   const titleOf = new Map(index.map((n) => [n.path, n.title]));
-  const { named, namedWords } = resolveNames(query, index);
+  const { named, namedWords, focus } = resolveNames(query, index);
 
   // What was named is listed by name; the rest of the query is what is
   // searched. A query that is only a name searches for that name.
@@ -61,7 +61,7 @@ export async function searchNotes(source: ContextSource, input: SearchInput): Pr
   const set = new CandidateSet();
   set.setContext({
     weights: new Map([[query, 1]]),
-    namedFolders: [...new Set([...named.keys()].map(folderOf))],
+    namedFolders: [...new Set(focus.map(folderOf))],
   });
   for (const [path, { text, count }] of named) {
     set.offer({ path, score: NAMED_SCORE, via: { kind: 'named', text, count } });

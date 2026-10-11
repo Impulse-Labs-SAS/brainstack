@@ -610,12 +610,22 @@ export class NoteService {
    * descendants and finds nothing at the path itself. That is a success, not a
    * miss — which is what makes "delete this folder" work from the tree.
    */
-  async remove(ownerId: string, path: string, opts: { recursive?: boolean } = {}): Promise<void> {
+  /**
+   * Delete a note, or a folder and everything in it with `recursive`.
+   * Answers with what is gone — notes and folders, as the caller names them —
+   * so whoever asked can show the blast radius instead of guessing it.
+   */
+  async remove(
+    ownerId: string,
+    path: string,
+    opts: { recursive?: boolean } = {},
+  ): Promise<{ deleted: string[]; deletedFolders: string[] }> {
     const physical = this.toPhysical(ownerId, path);
+    const logical = (p: string) => this.toLogical(ownerId, p);
 
     if (!opts.recursive) {
       await this.store.remove(physical);
-      return;
+      return { deleted: [logical(physical)], deletedFolders: [] };
     }
 
     // Grants go first. A folder implied only by its notes has no `folders`
@@ -659,6 +669,11 @@ export class NoteService {
       // Neither a note nor a folder with anything in it.
       throw new AppError(`not found: ${path}`, 'NOT_FOUND', 404);
     }
+
+    return {
+      deleted: [...under.map((r) => r.path), ...(self ? [physical] : [])].map(logical).sort(),
+      deletedFolders: removedFolders.map((r) => logical(r.path)).sort(),
+    };
   }
 
   /**

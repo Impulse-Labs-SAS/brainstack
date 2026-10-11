@@ -35,14 +35,47 @@ export interface Names {
   undecided: Set<string>;
   /** Every word of what the text named, folded. */
   namedWords: Set<string>;
+  /**
+   * The named notes whose folders the text is about: the reader's own when it
+   * named any, so a shared note never narrows the focus away from them.
+   */
+  focus: string[];
 }
 
-/** Resolve what `text` names against `index`, the titles and aliases of every note. */
-export function resolveNames(
-  text: string,
-  index: ReadonlyArray<{ path: string; title: string; aliases: unknown[] }>,
-): Names {
+/**
+ * A note in the index. `secondary` marks one from a source the reader trusts
+ * less than their own — in BrainStack, a folder somebody else shared, where
+ * anyone with access sets the titles and aliases.
+ */
+export interface NameEntry {
+  path: string;
+  title: string;
+  aliases: unknown[];
+  secondary?: boolean;
+}
+
+/**
+ * Resolve what `text` names against `index`, the titles and aliases of every
+ * note.
+ *
+ * The reader's own notes name first. A secondary note's title or alias that
+ * one of theirs also uses names nothing: otherwise anybody who can write in a
+ * folder shared with the reader could give a note an alias equal to one of the
+ * reader's titles and either take its place or make it "ambiguous" — and an
+ * ambiguous note is never handed over, only asked about.
+ */
+export function resolveNames(text: string, index: ReadonlyArray<NameEntry>): Names {
   const titleOf = new Map(index.map((n) => [n.path, n.title]));
+  const secondary = new Set(index.filter((n) => n.secondary).map((n) => n.path));
+  const primaryNames = new Set(
+    index
+      .filter((n) => !n.secondary)
+      .flatMap((n) => [n.title, ...n.aliases])
+      .filter((n): n is string => typeof n === 'string')
+      .map((n) => foldForMatch(n.trim())),
+  );
+  const unclaimed = (name: unknown) =>
+    typeof name === 'string' && !primaryNames.has(foldForMatch(name.trim()));
   const title = (path: string) => titleOf.get(path) ?? path;
 
   // -- Seeds: what the text links to ----------------------------------------
@@ -61,10 +94,16 @@ export function resolveNames(
 
   const noteIndex = new Set(index.map((n) => n.path));
   const linkCtx = { sourcePath: 'prompt.md', noteIndex, attachmentIndex: new Set<string>() };
+  // A link resolves among the reader's own notes first, for the same reason.
+  const primaryCtx = {
+    ...linkCtx,
+    noteIndex: new Set([...noteIndex].filter((p) => !secondary.has(p))),
+  };
   const linkSeen = new Set<string>();
   for (const link of extractLinks(text, buildCodeMask(text))) {
     const said = link.alias ?? link.rawTarget;
-    const resolved = resolveLink(link, linkCtx);
+    const own = resolveLink(link, primaryCtx);
+    const resolved = own.targetType === 'note' ? own : resolveLink(link, linkCtx);
     if (resolved.targetType === 'note' && !resolved.ambiguous) {
       nameSeed(resolved.targetPath, said);
       continue;
@@ -89,7 +128,15 @@ export function resolveNames(
 
   // -- Seeds: what the text names --------------------------------------------
   const { terms: mentionTerms, ambiguous } = indexMentionTerms(
-    index.map((n) => ({ target: n.path, title: n.title, aliases: n.aliases })),
+    index.map((n) =>
+      n.secondary
+        ? {
+            target: n.path,
+            title: unclaimed(n.title) ? n.title : '',
+            aliases: n.aliases.filter(unclaimed),
+          }
+        : { target: n.path, title: n.title, aliases: n.aliases },
+    ),
   );
   // Ambiguous terms are matched alongside the others, not after them, so that
   // the longer of two overlapping titles still wins whichever kind it is.
@@ -118,7 +165,9 @@ export function resolveNames(
     });
   }
   const namedWords = new Set([...named.values()].flatMap(({ text: said }) => foldedWords(said)));
-  return { named, unresolved, settledTerms, undecided, namedWords };
+  const namedOwn = [...named.keys()].filter((p) => !secondary.has(p));
+  const focus = namedOwn.length > 0 ? namedOwn : [...named.keys()];
+  return { named, unresolved, settledTerms, undecided, namedWords, focus };
 }
 
 /**

@@ -29,3 +29,4 @@ export {
   type SearchHit,
   type SearchInput,
 } from './search.js';
+export { type NameEntry } from './names.js';

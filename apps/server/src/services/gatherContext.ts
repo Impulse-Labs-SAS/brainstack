@@ -78,15 +78,26 @@ const FOREIGN = '\u0000';
 
 function keys(viewerId: string) {
   const own = `${viewerId}/`;
+  const place = (key: string): Placed => {
+    if (!key.startsWith(FOREIGN)) return { path: key };
+    const stored = key.slice(1);
+    const slash = stored.indexOf('/');
+    return { ownerId: stored.slice(0, slash), path: stored.slice(slash + 1) };
+  };
   return {
     fromStored: (stored: string) =>
       stored.startsWith(own) ? stored.slice(own.length) : `${FOREIGN}${stored}`,
     toStored: (key: string) => (key.startsWith(FOREIGN) ? key.slice(1) : `${own}${key}`),
-    place: (key: string): Placed => {
-      if (!key.startsWith(FOREIGN)) return { path: key };
-      const stored = key.slice(1);
-      const slash = stored.indexOf('/');
-      return { ownerId: stored.slice(0, slash), path: stored.slice(slash + 1) };
+    place,
+    /**
+     * `row` with its path placed and, when the note is somebody else's, their
+     * id as the first key. An assistant reads the JSON in order: told whose
+     * note it was only after the excerpt, it had already read another
+     * person's words as if they were the user's.
+     */
+    placeFirst: <T extends { path: string }>(row: T): Omit<T, 'path'> & Placed => {
+      const at = place(row.path);
+      return { ...(at.ownerId ? { ownerId: at.ownerId } : {}), ...row, path: at.path };
     },
   };
 }
@@ -100,11 +111,14 @@ export function vaultSource(
   const scopes = [...sharedScopes];
   const { fromStored, toStored } = keys(viewerId);
   return {
+    // A shared note's names yield to the caller's own: whoever can write in a
+    // shared folder sets them, and must not be able to take over or hide the
+    // caller's notes by giving theirs the same alias.
     titles: async () =>
-      (await deps.notes.mentionIndex(viewerId, scopes)).map((n) => ({
-        ...n,
-        path: fromStored(n.path),
-      })),
+      (await deps.notes.mentionIndex(viewerId, scopes)).map((n) => {
+        const path = fromStored(n.path);
+        return { ...n, path, ...(path.startsWith(FOREIGN) ? { secondary: true } : {}) };
+      }),
     links: async (paths) =>
       (await deps.notes.linksTouching(viewerId, paths.map(toStored), scopes)).map((l) => ({
         ...l,
@@ -141,7 +155,7 @@ export async function gatherContext(
   sharedScopes: readonly SharedScope[] = [],
 ): Promise<GatherContextResult> {
   const result = await crawlContext(vaultSource(deps, viewerId, sharedScopes), input);
-  const { place } = keys(viewerId);
+  const { place, placeFirst } = keys(viewerId);
   return {
     ...result,
     notes: result.notes.map((n) => {
@@ -156,14 +170,12 @@ export async function gatherContext(
               };
             })()
           : n.via;
-      return { ...n, ...place(n.path), via };
+      return { ...placeFirst(n), via };
     }),
     unresolved: result.unresolved.map((u) =>
-      u.candidates
-        ? { ...u, candidates: u.candidates.map((c) => ({ ...c, ...place(c.path) })) }
-        : u,
+      u.candidates ? { ...u, candidates: u.candidates.map(placeFirst) } : u,
     ),
-    leftOut: result.leftOut.map((n) => ({ ...n, ...place(n.path) })),
+    leftOut: result.leftOut.map(placeFirst),
   };
 }
 
@@ -197,12 +209,13 @@ export async function searchBrain(
   const placed = hits.map((h) => ({ hit: h, at: place(h.path) }));
   return placed
     .filter(({ at }) => input.scope !== 'shared' || at.ownerId !== undefined)
+    // The owner first, before the snippet: see `placeFirst`.
     .map(({ hit, at }) => ({
+      ownerId: at.ownerId ?? viewerId,
       path: at.path,
       title: hit.title,
+      reason: hit.reason,
       snippet: hit.snippet,
       score: hit.score,
-      ownerId: at.ownerId ?? viewerId,
-      reason: hit.reason,
     }));
 }
