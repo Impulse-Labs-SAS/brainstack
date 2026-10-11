@@ -1,5 +1,5 @@
 // MCP server setup. Registers BrainStack tools on a single McpServer instance
-// and exposes a helper to connect to a given transport (stdio, HTTP, etc).
+// and exposes a helper to connect to a given transport (Streamable HTTP).
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -9,6 +9,7 @@ import type { Logger } from 'pino';
 import { emailField, field, frontmatterField, noteContent } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError, describeError, toAppError } from '../lib/errors.js';
+import { READ_ONLY_MESSAGE } from '../lib/scopes.js';
 
 import type { AuthService } from '../services/AuthService.js';
 import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
@@ -35,6 +36,8 @@ export interface McpPrincipal {
    * server's OAuth provider. Only used to name the assistant in the crawl history.
    */
   clientRef?: string;
+  /** A key without `notes:write`: every tool that changes something refuses. */
+  readOnly?: boolean;
 }
 
 export interface BuildMcpServerOptions {
@@ -148,7 +151,13 @@ export function buildMcpServer({
    * what created private copies of shared folders. Naming an owner settles it,
    * so the check stands down once one is given.
    */
+  /** Refuses when the credential is a read-only key. Every write tool calls it. */
+  const requireWriteAccess = (): void => {
+    if (principal?.readOnly) throw new AppError(READ_ONLY_MESSAGE, 'FORBIDDEN', 403);
+  };
+
   const assertWrite = async (path: string, ownerId?: string): Promise<void> => {
+    requireWriteAccess();
     const userId = requireUserId();
     const owner = ownerOf(ownerId);
     await sharing.assertCanWrite(userId, owner, path);
@@ -769,6 +778,7 @@ export function buildMcpServer({
     },
     async ({ path, email, permission }) => {
       try {
+        requireWriteAccess();
         const ownerId = requireUserId();
         const self = await auth.findUserById(ownerId);
         if (self && self.email.toLowerCase() === email.trim().toLowerCase()) {
@@ -809,6 +819,7 @@ export function buildMcpServer({
     },
     async ({ path, email }) => {
       try {
+        requireWriteAccess();
         const ownerId = requireUserId();
         // The same answer whether or not the address has an account: this
         // tool is not a way to learn who is a member of the instance.
