@@ -39,7 +39,7 @@ You are free to fork BrainStack and change it under the terms of the license.
 
 ## Running it from source
 
-You need Node 20.10+ and pnpm 10.
+You need Node 22+ and pnpm 10.
 
 ```bash
 pnpm install

@@ -46,6 +46,23 @@ describe('migrations', () => {
     await expect(runPgMigrations(db)).resolves.toEqual([]);
   });
 
+  it('carries on when another instance created the same object first', async () => {
+    // Modelled as two migrations with the same statement: the second meets
+    // what the first made, as a racing instance would.
+    const fresh = drizzle(new PGlite()) as unknown as PgDb;
+    const create = "CREATE TYPE race_kind AS ENUM ('a')";
+    const ran = await runPgMigrations(fresh, [
+      { name: '9001_first', statements: [create] },
+      { name: '9002_second', statements: [create] },
+    ]);
+    expect(ran).toEqual(['9001_first', '9002_second']);
+
+    // Anything else still fails.
+    await expect(
+      runPgMigrations(fresh, [{ name: '9003_broken', statements: ['SELECT * FROM nowhere'] }]),
+    ).rejects.toThrow();
+  });
+
   it('builds the schema on first use, and only once', async () => {
     // A database with nothing in it — the state a new deployment starts from,
     // where there is no endpoint to call and no credential to call it with.

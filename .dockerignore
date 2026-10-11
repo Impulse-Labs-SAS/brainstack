@@ -9,9 +9,11 @@ build
 .git
 .github
 *.log
-.env
-.env.*
-!.env.example
+# Every .env, at any depth: `COPY apps ./apps` used to carry apps/server/.env,
+# the development file with real secrets in it, into the build stage.
+**/.env
+**/.env.*
+!**/.env.example
 coverage
 brain
 data

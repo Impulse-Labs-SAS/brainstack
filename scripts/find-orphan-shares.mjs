@@ -30,7 +30,7 @@
 // from here to know which — deleting it is right, but whoever owned it will
 // want to share the new path again.
 
-import { neon } from '@neondatabase/serverless';
+import { connect } from './lib/db.mjs';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -39,7 +39,7 @@ if (!connectionString) {
 }
 
 const fix = process.argv.includes('--fix');
-const sql = neon(connectionString);
+const { sql, close } = connect(connectionString);
 
 /** True when `path` is `folder` or sits inside it. Mirrors `pathFallsUnder`. */
 function fallsUnder(path, folder) {
@@ -101,11 +101,12 @@ console.log('');
 
 if (!fix) {
   console.log('Dry run. Re-run with --fix to delete these grants and revoke their invites.');
+  await close();
   process.exit(0);
 }
 
 const ids = orphans.map((o) => o.id);
-await sql`DELETE FROM folder_shares WHERE id = ANY(${ids})`;
+await sql`DELETE FROM folder_shares WHERE id IN ${ids}`;
 
 // The invites for those same paths, so nobody can accept their way back into a
 // folder that no longer exists.
@@ -119,7 +120,8 @@ const doomedInvites = invites
   .map((i) => i.id);
 
 if (doomedInvites.length > 0) {
-  await sql`UPDATE folder_share_invites SET revoked_at = ${Date.now()} WHERE id = ANY(${doomedInvites})`;
+  await sql`UPDATE folder_share_invites SET revoked_at = ${Date.now()} WHERE id IN ${doomedInvites}`;
 }
 
 console.log(`Deleted ${ids.length} grant(s), revoked ${doomedInvites.length} live invite(s).`);
+await close();

@@ -14,16 +14,6 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "Debug: server (MCP stdio)",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@brainstack/server", "dev"],
-      "env": { "MCP_STDIO": "true" },
-      "console": "integratedTerminal",
-      "skipFiles": ["<node_internals>/**"]
-    },
-    {
-      "type": "node",
-      "request": "launch",
       "name": "Debug: vitest current file (core)",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@brainstack/core", "exec", "vitest", "run", "${relativeFile}"],
