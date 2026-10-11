@@ -23,7 +23,7 @@
     "@oslojs/otp": "^1.1.0",
     "@trpc/server": "^11.17.0",
     "arctic": "^3.7.0",
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.6",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.13",
     "nanoid": "^5.1.16",
