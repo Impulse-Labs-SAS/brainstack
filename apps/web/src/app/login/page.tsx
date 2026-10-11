@@ -7,6 +7,7 @@ import { Suspense, useState } from 'react';
 import { BrandLockup } from '@/components/ui/brand';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { GoogleButton } from '@/components/auth/google-button';
 import { AuthApiError, authFetch } from '@/lib/authApi';
 
 interface LoginResult {
@@ -129,6 +130,7 @@ function LoginInner() {
             {pending ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>
+        <GoogleButton redirectTo={params.get('redirect_to')} />
 
         <div className="mt-6 flex items-center justify-between text-xs text-fg-muted">
           <Link href="/signup" className="hover:text-fg-primary">

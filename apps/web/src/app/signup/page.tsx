@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { BrandLockup } from '@/components/ui/brand';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { GoogleButton } from '@/components/auth/google-button';
 import { authFetch } from '@/lib/authApi';
 
 export default function SignupPage() {
@@ -117,6 +118,7 @@ export default function SignupPage() {
             {pending ? 'Creating…' : 'Create account'}
           </Button>
         </form>
+        <GoogleButton />
 
         <div className="mt-6 text-xs text-fg-muted">
           Already have an account?{' '}

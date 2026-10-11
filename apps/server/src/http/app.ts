@@ -211,7 +211,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   app.use('/trpc/*', trpcLimit);
 
   app.route('/health', createHealthRouter(opts.ping, opts.logger));
-  app.route('/config', createConfigRouter());
+  app.route('/config', createConfigRouter({ google: Boolean(opts.google) }));
 
   // /invite/accept/:token corre con optional-auth: el handler maneja
   // los casos logueado/no-logueado y redirige al frontend acorde.
@@ -247,6 +247,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
         logger: opts.logger,
         secureCookies: opts.secureCookies,
         appHome: opts.appHome,
+        ...(opts.basePath ? { basePath: opts.basePath } : {}),
       }),
     );
   }

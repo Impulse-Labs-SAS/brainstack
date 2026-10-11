@@ -213,6 +213,30 @@ describe('AuthService Google OAuth linking', () => {
     ).rejects.toThrow(/not verified/);
   });
 
+  it('refuses the link even when the password sign-up lands after the check', async () => {
+    // The race: the Google callback read "no account", then a stranger's
+    // password sign-up for the same address committed before its write.
+    const raced = auth as unknown as { rowByEmail(email: string): Promise<unknown> };
+    const realRowByEmail = raced.rowByEmail.bind(auth);
+    raced.rowByEmail = async (email: string) => {
+      const before = await realRowByEmail(email);
+      await auth.signup('user@brain.test', 'Str4nger!Password');
+      return before;
+    };
+
+    await expect(
+      auth.upsertGoogleUser({
+        googleId: 'g-victim',
+        email: 'user@brain.test',
+        googleEmailVerified: true,
+      }),
+    ).rejects.toThrow(/not verified/);
+    raced.rowByEmail = realRowByEmail;
+
+    // The stranger's row stays unverified and unlinked.
+    await expect(auth.login('user@brain.test', 'Str4nger!Password')).rejects.toThrow();
+  });
+
   it('refuses to link when Google email is not verified', async () => {
     await expect(
       auth.upsertGoogleUser({
