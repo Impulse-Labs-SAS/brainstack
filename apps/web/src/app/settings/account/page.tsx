@@ -1,12 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { authFetch } from '@/lib/authApi';
+import { signOut } from '@/lib/sign-out';
 import { trpc } from '@/lib/trpc';
 
 interface TotpStatus {
@@ -20,7 +20,6 @@ interface TotpEnrollment {
 }
 
 export default function AccountSettingsPage() {
-  const router = useRouter();
   const me = trpc.auth.me.useQuery();
   const [totpStatus, setTotpStatus] = useState<TotpStatus | null>(null);
 
@@ -63,10 +62,7 @@ export default function AccountSettingsPage() {
             <Button
               intent="danger"
               size="sm"
-              onPress={async () => {
-                await authFetch('/auth/logout', { method: 'POST' });
-                router.replace('/login');
-              }}
+              onPress={() => void signOut()}
             >
               Sign out
             </Button>

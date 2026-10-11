@@ -140,6 +140,44 @@ class SentinelBoundary extends Component<
   }
 }
 
+/**
+ * Stored layers over the defaults, each field kept only if it has the right
+ * type. Storage is whatever an older version, another tab or a hand left
+ * there; `hiddenVaults` that is not an array used to throw on first render.
+ */
+function storedLayersOr(stored: unknown, defaults: GraphLayers): GraphLayers {
+  if (typeof stored !== 'object' || stored === null) return defaults;
+  const s = stored as Record<string, unknown>;
+  const flag = (key: 'affinity' | 'indexes' | 'topics' | 'routes') =>
+    typeof s[key] === 'boolean' ? (s[key] as boolean) : defaults[key];
+  return {
+    hiddenVaults: Array.isArray(s.hiddenVaults)
+      ? s.hiddenVaults.filter((v): v is string => typeof v === 'string')
+      : defaults.hiddenVaults,
+    affinity: flag('affinity'),
+    indexes: flag('indexes'),
+    topics: flag('topics'),
+    routes: flag('routes'),
+  };
+}
+
+/** Saved node positions for `view`, skipping any entry that is not three numbers. */
+function storedPositions(
+  stored: unknown,
+  view: View,
+): Map<string, { x: number; y: number; z: number }> | undefined {
+  if (typeof stored !== 'object' || stored === null) return undefined;
+  const { view: savedView, positions } = stored as { view?: unknown; positions?: unknown };
+  if (savedView !== view || typeof positions !== 'object' || positions === null) return undefined;
+  const out = new Map<string, { x: number; y: number; z: number }>();
+  for (const [id, p] of Object.entries(positions)) {
+    if (Array.isArray(p) && p.length === 3 && p.every((n) => Number.isFinite(n))) {
+      out.set(id, { x: p[0] as number, y: p[1] as number, z: p[2] as number });
+    }
+  }
+  return out;
+}
+
 // Preferences are per-browser conveniences: a blocked or private store just
 // means starting from the defaults.
 function readPref<T>(key: string): T | null {
@@ -275,8 +313,7 @@ export function GraphView({
     controller.initView(opening.view);
     setView(opening.view);
     setSentinel(opening.sentinel);
-    const storedLayers = readPref<GraphLayers>(LAYERS_KEY);
-    if (storedLayers) setLayers({ ...DEFAULT_LAYERS, ...storedLayers });
+    setLayers(storedLayersOr(readPref<unknown>(LAYERS_KEY), DEFAULT_LAYERS));
     setReady(true);
 
     const onLeave = () => saveLayout();
@@ -318,15 +355,7 @@ export function GraphView({
     builtRef.current = { nodes, edges };
     if (!previous) {
       // First layout: start from where the notes were last time, if it was this view.
-      const stored = readPref<{ view: View; positions: Record<string, [number, number, number]> }>(
-        LAYOUT_KEY,
-      );
-      const saved =
-        stored?.view === c.view
-          ? new Map(
-              Object.entries(stored.positions).map(([id, [x, y, z]]) => [id, { x, y, z }] as const),
-            )
-          : undefined;
+      const saved = storedPositions(readPref<unknown>(LAYOUT_KEY), c.view);
       c.setModel(model, 'init', saved);
     } else {
       c.setModel(model, previous.nodes !== nodes || previous.edges !== edges ? 'data' : 'layers');

@@ -24,7 +24,13 @@ export function serverOrigin(): string {
   // Rendering on the server: no window, and nothing on this path needs a
   // same-origin call, so the dev default is the only useful answer.
   if (typeof window === 'undefined') return 'http://localhost:3000';
-  return window.location.origin.replace(':3001', ':3000');
+  // `next dev` serves the web app on 3001 beside the API on 3000. Only there:
+  // a deployed instance that happens to sit on a port with 3001 in it is its
+  // own origin, API included.
+  if (process.env.NODE_ENV === 'development') {
+    return window.location.origin.replace(':3001', ':3000');
+  }
+  return window.location.origin;
 }
 
 /** Base every API call is built on: origin plus the prefix. */
