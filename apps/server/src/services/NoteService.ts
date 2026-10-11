@@ -23,18 +23,19 @@ import {
   type StoredNote,
 } from '@brainstack/core/pg';
 import {
+  extractFrontmatter,
   findMentions,
   linkMentions,
   mentionSnippet,
   mentionTerms,
   rewriteLinkTargets,
+  serializeNote,
   type Frontmatter,
   type Mention,
   type MentionTerm,
   type NoteBodySource,
 } from '@brainstack/core';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
-import matter from 'gray-matter';
 
 import { AppError } from '../lib/errors.js';
 import { toLogical, toPhysical } from '../lib/vault.js';
@@ -551,7 +552,7 @@ export class NoteService {
     frontmatter?: Frontmatter,
   ): Promise<MutationResult> {
     const physical = this.toPhysical(ownerId, path);
-    const raw = frontmatter ? matter.stringify(content, frontmatter) : content;
+    const raw = frontmatter ? serializeNote(frontmatter, content) : content;
     const saved = await this.asCaller(ownerId, () => this.store.create(physical, raw, ownerId));
     const logical = this.toLogical(ownerId, saved.path);
 
@@ -566,11 +567,11 @@ export class NoteService {
     const physical = this.toPhysical(ownerId, path);
     // Preserve existing frontmatter unless the incoming content carries its own.
     const existing = await this.asCaller(ownerId, () => this.store.get(physical));
-    const incoming = matter(content);
+    const incoming = extractFrontmatter(content);
     const raw =
-      Object.keys(incoming.data).length > 0
+      Object.keys(incoming.frontmatter).length > 0
         ? content
-        : matter.stringify(content, existing.frontmatter);
+        : serializeNote(existing.frontmatter, content);
 
     const saved = await this.store.upsert(physical, raw, ownerId);
     return this.toLogical(ownerId, saved.path);
@@ -1493,7 +1494,7 @@ export class NoteService {
       read: async (path) => (await this.store.get(path)).body,
       write: async (path, body) => {
         const existing = await this.store.get(path);
-        await this.store.upsert(path, matter.stringify(body, existing.frontmatter), ownerId);
+        await this.store.upsert(path, serializeNote(existing.frontmatter, body), ownerId);
       },
     };
   }

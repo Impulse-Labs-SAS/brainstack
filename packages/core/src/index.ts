@@ -58,6 +58,7 @@ export {
   extractTags,
   FACET_SKIP_KEYS,
   parseNote,
+  serializeNote,
   type ParseNoteOptions,
 } from './parser/index.js';
 

@@ -82,6 +82,19 @@ describe('NoteService', () => {
     expect(read.body).toContain('cambiado');
   });
 
+  it('never evaluates a `---js` block on create or update, and stores it as body', async () => {
+    const payload = '---js\n(globalThis.__bsServerEval = true, { title: "x" })\n---\nbody\n';
+    await notes.create(USER, 'Inbox/js.md', payload, { title: 'Js' });
+    await notes.update(USER, 'Inbox/js.md', payload);
+    await notes.create(USER, 'Inbox/js-plain.md', payload);
+
+    expect((globalThis as { __bsServerEval?: boolean }).__bsServerEval).toBeUndefined();
+    const read = await notes.get(USER, 'Inbox/js.md');
+    expect(read.frontmatter).toEqual({ title: 'Js' });
+    expect(read.body).toBe(payload);
+    expect((await notes.get(USER, 'Inbox/js-plain.md')).body).toBe(payload);
+  });
+
   it('filters the list by folder and by tag', async () => {
     await notes.create(USER, 'Proyectos/a.md', '# A\n\n#erebor');
     await notes.create(USER, 'Inbox/b.md', '# B');

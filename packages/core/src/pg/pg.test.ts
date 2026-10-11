@@ -181,6 +181,20 @@ describe('PgNoteStore', () => {
     );
   });
 
+  it('keeps a body that starts with a rule, and never runs a `---js` one, across a move', async () => {
+    const rule = '---\nfirst paragraph after a rule\n';
+    const js = '---js\n(globalThis.__bsMoved = true, {})\n---\nafter\n';
+    await notes.upsert('Mover/rule.md', `---\ntitle: Rule\n---\n${rule}`);
+    await notes.upsert('Mover/js.md', `---\ntitle: Js\n---\n${js}`);
+
+    const rule2 = await notes.move('Mover/rule.md', 'Mover/rule2.md');
+    const js2 = await notes.move('Mover/js.md', 'Mover/js2.md');
+
+    expect(rule2).toMatchObject({ frontmatter: { title: 'Rule' }, body: rule });
+    expect(js2).toMatchObject({ frontmatter: { title: 'Js' }, body: js });
+    expect((globalThis as { __bsMoved?: boolean }).__bsMoved).toBeUndefined();
+  });
+
   it('refuses to move onto an occupied path', async () => {
     await notes.upsert('Mover/a.md', '# A');
     await notes.upsert('Mover/b.md', '# B');

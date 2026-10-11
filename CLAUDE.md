@@ -34,7 +34,7 @@ Read the relevant ones before making non-trivial changes.
 - **Every `LIKE` built from a path goes through `escapeLike`** (`@brainstack/core/pg`). Unescaped, `a_b/%` also matches `aXb/`, so deleting or moving one folder reaches into its neighbour. A `LIKE` over shared folders may narrow a query, but the rows are still re-checked in memory before anyone sees them.
 - Path traversal protection on every user/agent input (centralised in `packages/core/src/paths.ts`: `normalizeNoteKey`, `normalizeRelativePath`). Pure string logic, no `node:path` — the Postgres store runs where there is no disk to resolve against. A client may sanitise before sending (the `.md` import in `apps/web` does), but the store is the barrier that counts.
 - `services/` never imports Hono / tRPC / MCP — only `db/` and `core/`. When a service must report something with permission consequences, it does so through a callback wired in `wiring.ts`, not by importing `SharingService`.
-- Markdown body parsed via gray-matter + remark + own plugins. Wikilinks inside code fences are never indexed or rewritten.
+- Frontmatter is split, parsed and written back only by `packages/core/src/parser/frontmatter.ts` (js-yaml, default schema). Never gray-matter: it `eval()`s a `---js` block and re-parses bodies on stringify; lint refuses the import. Wikilinks inside code fences are never indexed or rewritten.
 - `move` rewrites every wikilink pointing at what moved; `delete` rewrites nothing and leaves them unresolved.
 - Never use shadcn in `apps/web`. Components are built on `react-aria-components` with the design tokens in `src/styles/globals.css`.
 

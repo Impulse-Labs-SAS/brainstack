@@ -88,7 +88,7 @@ function uniqueOrdered<T>(items: readonly T[]): T[] {
   return out;
 }
 
-export { extractFrontmatter } from './frontmatter.js';
+export { extractFrontmatter, serializeNote } from './frontmatter.js';
 export { extractLinks } from './wikilinks.js';
 export { extractTags } from './tags.js';
 export { extractFacets, FACET_SKIP_KEYS } from './facets.js';

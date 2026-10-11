@@ -22,6 +22,19 @@ module.exports = {
       { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
     ],
     '@typescript-eslint/consistent-type-imports': 'warn',
+    // gray-matter runs a `---js` block through eval() and re-parses bodies on
+    // stringify. Frontmatter goes through packages/core/src/parser/frontmatter.ts.
+    'no-restricted-imports': [
+      'error',
+      {
+        paths: [
+          {
+            name: 'gray-matter',
+            message: 'Use extractFrontmatter / serializeNote from @brainstack/core.',
+          },
+        ],
+      },
+    ],
   },
   ignorePatterns: ['dist/', 'build/', '.next/', 'node_modules/', '*.cjs'],
 };

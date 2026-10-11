@@ -6,6 +6,7 @@ import {
   extractLinks,
   extractTags,
   parseNote,
+  serializeNote,
 } from './index.js';
 
 describe('extractFrontmatter', () => {
@@ -45,6 +46,81 @@ describe('extractFrontmatter', () => {
   it('keeps the time of a timestamp that has one', () => {
     const raw = '---\nat: 2026-09-14T10:30:00Z\n---\nbody\n';
     expect(extractFrontmatter(raw).frontmatter).toEqual({ at: '2026-09-14T10:30:00.000Z' });
+  });
+});
+
+describe('frontmatter never runs code', () => {
+  // gray-matter evaluated a block opened with `---js`. These would set the
+  // flag if any engine other than plain YAML ever saw the text again.
+  const PAYLOAD = '---js\n(globalThis.__bsEvaluated = true, { title: "x" })\n---\nbody\n';
+
+  it('treats a `---js` block as body text', () => {
+    const result = extractFrontmatter(PAYLOAD);
+    expect(result.hadFrontmatter).toBe(false);
+    expect(result.frontmatter).toEqual({});
+    expect(result.body).toBe(PAYLOAD);
+    expect((globalThis as { __bsEvaluated?: boolean }).__bsEvaluated).toBeUndefined();
+  });
+
+  it('writes a `---js` body back without parsing it', () => {
+    const out = serializeNote({ title: 'Note' }, PAYLOAD);
+    expect((globalThis as { __bsEvaluated?: boolean }).__bsEvaluated).toBeUndefined();
+    expect(extractFrontmatter(out)).toMatchObject({ frontmatter: { title: 'Note' }, body: PAYLOAD });
+  });
+
+  it('refuses YAML tags that build functions or objects', () => {
+    const raw = '---\nx: !!js/function "function () { return 1 }"\n---\nbody\n';
+    expect(extractFrontmatter(raw)).toMatchObject({ malformed: true, frontmatter: {} });
+  });
+});
+
+describe('serializeNote', () => {
+  it('round-trips frontmatter and body', () => {
+    const fm = { title: 'Hello', tags: ['a', 'b/c'], created: '2026-09-14', nested: { n: 1 } };
+    const out = serializeNote(fm, '# Body\n\ntext\n');
+    expect(extractFrontmatter(out)).toMatchObject({ frontmatter: fm, body: '# Body\n\ntext\n' });
+  });
+
+  it('keeps a body that starts with a horizontal rule exactly as written', () => {
+    for (const body of [
+      '---\nfirst paragraph after a rule\n\nsecond\n',
+      '---\nsecret: leaked\n---\nvisible\n',
+      '---\n',
+    ]) {
+      const out = serializeNote({ title: 'T' }, body);
+      expect(extractFrontmatter(out)).toMatchObject({ frontmatter: { title: 'T' }, body });
+    }
+  });
+
+  it('writes no block for an empty frontmatter', () => {
+    expect(serializeNote({}, 'body')).toBe('body');
+    expect(serializeNote(null, 'body')).toBe('body');
+  });
+
+  it('drops values YAML cannot hold instead of failing', () => {
+    const out = serializeNote({ a: 1, b: undefined } as Record<string, unknown>, 'x');
+    expect(extractFrontmatter(out).frontmatter).toEqual({ a: 1 });
+  });
+});
+
+describe('extractFrontmatter edge cases', () => {
+  it('reads an opening rule with nothing closing it as body, not YAML', () => {
+    const raw = '---\nfirst paragraph after a rule\n';
+    expect(extractFrontmatter(raw)).toMatchObject({ frontmatter: {}, body: raw });
+  });
+
+  it('accepts an empty block and a block of comments', () => {
+    expect(extractFrontmatter('---\n---\nbody')).toMatchObject({ frontmatter: {}, body: 'body', malformed: false });
+    expect(extractFrontmatter('---\n# note\n---\nbody')).toMatchObject({ frontmatter: {}, body: 'body', malformed: false });
+  });
+
+  it('keeps a block that is not a mapping in the body', () => {
+    const raw = '---\n- a\n- b\n---\nbody';
+    expect(extractFrontmatter(raw)).toMatchObject({ frontmatter: {}, body: raw, malformed: true });
+  });
+
+  it('handles CRLF line endings', () => {
+    expect(extractFrontmatter('---\r\ntitle: A\r\n---\r\nbody')).toMatchObject({ frontmatter: { title: 'A' }, body: 'body' });
   });
 });
 
