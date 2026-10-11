@@ -12,7 +12,7 @@
 # =============================================================================
 
 # ---- build: install everything and compile every workspace ------------------
-FROM node:22-bookworm-slim AS build
+FROM node:25-bookworm-slim AS build
 
 RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 WORKDIR /app
@@ -44,7 +44,7 @@ FROM build AS server-deploy
 RUN pnpm --filter @brainstack/server deploy --prod --legacy /deploy
 
 # ---- server -----------------------------------------------------------------
-FROM node:22-bookworm-slim AS server
+FROM node:25-bookworm-slim AS server
 
 ENV NODE_ENV=production
 WORKDIR /app
@@ -58,7 +58,7 @@ EXPOSE 3000
 CMD ["node", "dist/serve.js"]
 
 # ---- web --------------------------------------------------------------------
-FROM node:22-bookworm-slim AS web
+FROM node:25-bookworm-slim AS web
 
 ENV NODE_ENV=production
 ENV PORT=3000
