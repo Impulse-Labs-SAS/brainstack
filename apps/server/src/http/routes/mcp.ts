@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger } from 'pino';
 
+import { scopesAllowWrite } from '../../lib/scopes.js';
 import type { McpPrincipal } from '../../mcp/server.js';
 import type { AuthBindings } from '../middleware/auth.js';
 
@@ -53,7 +54,12 @@ export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOption
     const mcpPrincipal: McpPrincipal | null = principal
       ? {
           userId: principal.user.id,
-          ...(principal.kind === 'apiKey' ? { clientRef: principal.apiKey.id } : {}),
+          ...(principal.kind === 'apiKey'
+            ? {
+                clientRef: principal.apiKey.id,
+                ...(scopesAllowWrite(principal.apiKey.scopes) ? {} : { readOnly: true }),
+              }
+            : {}),
         }
       : null;
     const server = buildServer(mcpPrincipal);

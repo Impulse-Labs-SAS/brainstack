@@ -16,6 +16,7 @@ import {
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { approveShareRequest } from '../services/shareRequests.js';
 import { AppError, INTERNAL_MESSAGE, toAppError } from '../lib/errors.js';
+import { API_KEY_SCOPES, READ_ONLY_MESSAGE, scopesAllowWrite } from '../lib/scopes.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
 import {
   gatherContext,
@@ -81,9 +82,21 @@ const mapAppErrors = t.middleware(async ({ next }) => {
 });
 const procedure = t.procedure.use(mapAppErrors);
 
-const requireUser = t.middleware(({ ctx, next }) => {
+/** Mutations that only read: a read-only key may still call them. */
+const READING_MUTATIONS = new Set(['notes.gatherContext']);
+
+const requireUser = t.middleware(({ ctx, next, type, path }) => {
   if (!ctx.user) {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'session required' });
+  }
+  // A key without `notes:write` reads and nothing else.
+  if (
+    type === 'mutation' &&
+    !READING_MUTATIONS.has(path) &&
+    ctx.principal?.kind === 'apiKey' &&
+    !scopesAllowWrite(ctx.principal.apiKey.scopes)
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: READ_ONLY_MESSAGE });
   }
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
@@ -681,7 +694,11 @@ export const appRouter = t.router({
     list: sessionProcedure.query(({ ctx }) => ctx.apiKeys.list(ctx.user.id)),
     create: sessionProcedure
       .input(
-        z.object({ name: z.string().min(1).max(80), scopes: z.array(field()).max(16).optional() }),
+        z.object({
+          name: z.string().min(1).max(80),
+          // Read only is `['notes:read']`; nothing, or `notes:write`, is full access.
+          scopes: z.array(z.enum(API_KEY_SCOPES)).max(API_KEY_SCOPES.length).optional(),
+        }),
       )
       .mutation(({ ctx, input }) =>
         ctx.apiKeys.create(ctx.user.id, input.name, input.scopes ?? []),

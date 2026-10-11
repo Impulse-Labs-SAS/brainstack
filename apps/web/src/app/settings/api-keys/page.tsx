@@ -1,11 +1,14 @@
 'use client';
 
+import { Check } from 'lucide-react';
 import { useState } from 'react';
+import { Checkbox } from 'react-aria-components';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import { cn } from '@/lib/utils';
 
 export default function ApiKeysPage() {
   const list = trpc.apiKeys.list.useQuery();
@@ -13,6 +16,7 @@ export default function ApiKeysPage() {
   const revoke = trpc.apiKeys.revoke.useMutation({ onSuccess: () => list.refetch() });
 
   const [name, setName] = useState('');
+  const [readOnly, setReadOnly] = useState(false);
   const [justCreated, setJustCreated] = useState<string | null>(null);
 
   return (
@@ -38,14 +42,38 @@ export default function ApiKeysPage() {
               intent="primary"
               isDisabled={!name.trim() || create.isPending}
               onPress={async () => {
-                const result = await create.mutateAsync({ name: name.trim() });
+                const result = await create.mutateAsync({
+                  name: name.trim(),
+                  ...(readOnly ? { scopes: ['notes:read' as const] } : {}),
+                });
                 setJustCreated(result.token);
                 setName('');
+                setReadOnly(false);
               }}
             >
               Generate
             </Button>
           </div>
+          <Checkbox
+            isSelected={readOnly}
+            onChange={setReadOnly}
+            className="group mt-3 flex cursor-pointer items-center gap-2 text-xs text-fg-secondary outline-none"
+          >
+            {({ isSelected }) => (
+              <>
+                <span
+                  className={cn(
+                    'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border',
+                    isSelected ? 'border-accent bg-accent text-accent-fg' : 'border-border-strong',
+                    'group-focus-visible:ring-2 group-focus-visible:ring-accent/40',
+                  )}
+                >
+                  {isSelected && <Check size={10} strokeWidth={3} />}
+                </span>
+                Read only — the key can search and read, never change, move, share or delete
+              </>
+            )}
+          </Checkbox>
           {justCreated && (
             <div className="mt-4 rounded-md border border-warning bg-bg-elevated p-3 text-xs">
               <div className="mb-1 font-mono text-warning">SAVE THIS — IT WONT BE SHOWN AGAIN</div>
@@ -63,6 +91,7 @@ export default function ApiKeysPage() {
               <tr>
                 <th className="py-2">Name</th>
                 <th className="py-2 font-mono">Prefix</th>
+                <th className="py-2">Access</th>
                 <th className="py-2">Created</th>
                 <th className="py-2">Last used</th>
                 <th />
@@ -73,6 +102,11 @@ export default function ApiKeysPage() {
                 <tr key={key.id} className="border-t border-border-subtle">
                   <td className="py-2 text-fg-primary">{key.name}</td>
                   <td className="py-2 font-mono text-fg-secondary">{key.prefix}…</td>
+                  <td className="py-2 text-fg-secondary">
+                    {key.scopes.length > 0 && !key.scopes.includes('notes:write')
+                      ? 'Read only'
+                      : 'Full'}
+                  </td>
                   <td className="py-2 text-fg-secondary">
                     {new Date(key.createdAt).toISOString().slice(0, 10)}
                   </td>
@@ -95,7 +129,7 @@ export default function ApiKeysPage() {
               ))}
               {list.data && list.data.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-6 text-center text-fg-muted">
+                  <td colSpan={6} className="py-6 text-center text-fg-muted">
                     No keys yet.
                   </td>
                 </tr>
