@@ -15,7 +15,7 @@
 // UPDATE instead. That is stronger than the transaction was: two concurrent
 // clicks on the same link race inside one statement and exactly one wins.
 
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
 
@@ -28,7 +28,14 @@ import { generateToken, sha256 } from '../lib/tokens.js';
 import type { EmailSender } from './EmailSender.js';
 import type { TotpService } from './TotpService.js';
 
-const { emailVerificationTokens, folderShareInvites, passwordResetTokens, sessions, users } = pgSchema;
+const {
+  emailVerificationTokens,
+  folderShareInvites,
+  oauthTokens,
+  passwordResetTokens,
+  sessions,
+  users,
+} = pgSchema;
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -408,9 +415,28 @@ export class AuthService {
     await this.opts.db.delete(sessions).where(eq(sessions.tokenHash, sha256(token)));
   }
 
-  /** Used after a password change, so other devices do not stay signed in. */
-  async revokeAllSessionsFor(userId: string): Promise<void> {
-    await this.opts.db.delete(sessions).where(eq(sessions.userId, userId));
+  /**
+   * Sign an account out everywhere: every session, and every token an AI
+   * client obtained through the OAuth provider. Used when a password is reset
+   * or changed, which is what someone does when they suspect an intruder — an
+   * intruder who connected an MCP client would otherwise keep refreshing its
+   * token for months. `keepSessionToken` spares the session that asked.
+   *
+   * API keys stay: the user minted each one by hand and sees them listed in
+   * Settings, where they can be revoked one by one.
+   */
+  async revokeAllSessionsFor(userId: string, keepSessionToken?: string): Promise<void> {
+    await this.opts.db
+      .delete(sessions)
+      .where(
+        keepSessionToken
+          ? and(eq(sessions.userId, userId), ne(sessions.tokenHash, sha256(keepSessionToken)))
+          : eq(sessions.userId, userId),
+      );
+    await this.opts.db
+      .update(oauthTokens)
+      .set({ revokedAt: this.now() })
+      .where(and(eq(oauthTokens.userId, userId), isNull(oauthTokens.revokedAt)));
   }
 
   // -- Email verification ----------------------------------------------------
@@ -590,10 +616,15 @@ export class AuthService {
     return password;
   }
 
+  /**
+   * Change the password and sign out every other session and connected AI
+   * client. `currentSessionToken` is the session that asked, which stays.
+   */
   async changePassword(
     userId: string,
     currentPassword: string,
     newPassword: string,
+    currentSessionToken?: string,
   ): Promise<void> {
     const row = await this.rowById(userId);
     if (!row || !row.passwordHash) {
@@ -611,6 +642,7 @@ export class AuthService {
       .update(users)
       .set({ passwordHash: await hashPassword(newPassword), updatedAt: now })
       .where(eq(users.id, userId));
+    await this.revokeAllSessionsFor(userId, currentSessionToken);
   }
 
   // -- Google OAuth helpers --------------------------------------------------

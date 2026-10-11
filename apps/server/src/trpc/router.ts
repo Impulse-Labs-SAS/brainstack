@@ -38,8 +38,30 @@ const requireUser = t.middleware(({ ctx, next }) => {
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
 
+/**
+ * Account management and sharing: a signed-in person, never an API key.
+ *
+ * A key is handed to an assistant and sits in plain text in its config file.
+ * Letting it mint more keys, revoke the owner's, or invite people meant one
+ * leaked key became control of the account that survived its own revocation.
+ * The REST account routes already drew the same line.
+ */
+const requireSession = t.middleware(({ ctx, next }) => {
+  if (!ctx.user) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'session required' });
+  }
+  if (ctx.principal?.kind !== 'user') {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'this needs a signed-in session, not an API key',
+    });
+  }
+  return next({ ctx: { ...ctx, user: ctx.user } });
+});
+
 export const publicProcedure = t.procedure;
 export const protectedProcedure = t.procedure.use(requireUser);
+export const sessionProcedure = t.procedure.use(requireSession);
 
 const wrap = async <T>(fn: () => Promise<T> | T): Promise<T> => {
   try {
@@ -113,8 +135,7 @@ const assertWritable = async (
 export const appRouter = t.router({
   auth: t.router({
     me: t.procedure.query(({ ctx }) => ({ user: ctx.user })),
-    logout: protectedProcedure.mutation(() => ({ ok: true })),
-    updateProfile: protectedProcedure
+    updateProfile: sessionProcedure
       .input(z.object({ displayName: z.string().max(120) }))
       .mutation(async ({ ctx, input }) =>
         wrap(async () => ({
@@ -450,7 +471,7 @@ export const appRouter = t.router({
     listMyShares: protectedProcedure.query(({ ctx }) =>
       ctx.sharing.listMyShares(ctx.user.id),
     ),
-    shareWithUser: protectedProcedure
+    shareWithUser: sessionProcedure
       .input(
         z.object({
           folderPath: z.string().min(1),
@@ -475,7 +496,7 @@ export const appRouter = t.router({
           return { id, sharedWithUserId: target.id, permission: input.permission ?? 'read' };
         }),
       ),
-    revoke: protectedProcedure
+    revoke: sessionProcedure
       .input(
         z.object({
           folderPath: z.string().min(1),
@@ -492,7 +513,7 @@ export const appRouter = t.router({
           return { ok: true };
         }),
       ),
-    createInvite: protectedProcedure
+    createInvite: sessionProcedure
       .input(
         z.object({
           folderPath: z.string().min(1),
@@ -523,7 +544,7 @@ export const appRouter = t.router({
         }),
       ),
     listPendingInvites: protectedProcedure.query(({ ctx }) => ctx.invites.listPending(ctx.user.id)),
-    revokeInvite: protectedProcedure
+    revokeInvite: sessionProcedure
       .input(z.object({ inviteId: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
@@ -531,7 +552,7 @@ export const appRouter = t.router({
           return { ok: true };
         }),
       ),
-    acceptInvite: protectedProcedure
+    acceptInvite: sessionProcedure
       .input(z.object({ token: z.string().min(1) }))
       .mutation(async ({ ctx, input }) =>
         wrap(() =>
@@ -543,13 +564,13 @@ export const appRouter = t.router({
       ),
   }),
   apiKeys: t.router({
-    list: protectedProcedure.query(({ ctx }) => ctx.apiKeys.list(ctx.user.id)),
-    create: protectedProcedure
+    list: sessionProcedure.query(({ ctx }) => ctx.apiKeys.list(ctx.user.id)),
+    create: sessionProcedure
       .input(z.object({ name: z.string().min(1).max(80), scopes: z.array(z.string()).optional() }))
       .mutation(({ ctx, input }) =>
         ctx.apiKeys.create(ctx.user.id, input.name, input.scopes ?? []),
       ),
-    revoke: protectedProcedure
+    revoke: sessionProcedure
       .input(z.object({ id: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
         await wrap(() => ctx.apiKeys.revoke(input.id, ctx.user.id));
