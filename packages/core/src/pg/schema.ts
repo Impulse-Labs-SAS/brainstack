@@ -170,6 +170,12 @@ export const users = pgTable(
     googleId: text('google_id'),
     /** Null unless the user turned 2FA on. */
     totpSecret: text('totp_secret'),
+    /** Wrong second-factor codes in a row; reset by a right one. */
+    totpFailedAttempts: integer('totp_failed_attempts').notNull().default(0),
+    /** No code is checked before this instant; set after too many wrong ones. */
+    totpLockedUntil: bigint('totp_locked_until', { mode: 'number' }),
+    /** The last 30-second step a code was accepted for; never accepted twice. */
+    totpLastStep: bigint('totp_last_step', { mode: 'number' }),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(0),
   },
   (t) => ({

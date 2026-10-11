@@ -14,6 +14,7 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { Logger } from 'pino';
 import { z } from 'zod';
 
+import { clientIp, type TrustedProxy } from '../../lib/clientIp.js';
 import { AppError } from '../../lib/errors.js';
 import type { LoginRateLimiter } from '../../lib/rateLimitLogin.js';
 import type { AuthService } from '../../services/AuthService.js';
@@ -33,16 +34,14 @@ export interface AuthRouterOptions extends AuthMiddlewareOptions {
   secureCookies: boolean;
   /** Where to redirect after a successful verification / reset. */
   appHome: string;
+  /** Which header names the client, if any. See lib/clientIp.ts. */
+  trustedProxy: TrustedProxy;
 }
 
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
 
 type AuthCtx = Context<AuthBindings>;
 
-function clientIp(c: AuthCtx): string {
-  // tsx/node behind a reverse proxy will fill x-forwarded-for.
-  return (c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local').slice(0, 64);
-}
 
 function setSessionCookie(c: AuthCtx, token: string, secure: boolean): void {
   setCookie(c, SESSION_COOKIE, token, {
@@ -97,17 +96,14 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       .safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
 
-    const ip = clientIp(c);
+    const ip = clientIp(c, options.trustedProxy);
     const limiterKey = { ip, email: parsed.data.email };
 
     try {
       options.loginLimiter.check(limiterKey);
     } catch (err) {
-      if ((err as { code?: string }).code === 'RATE_LIMITED') {
-        return c.json(
-          { error: 'too many attempts, try again later' },
-          429,
-        );
+      if (err instanceof AppError && err.code === 'RATE_LIMITED') {
+        return c.json({ error: err.message, code: err.code }, 429);
       }
       throw err;
     }
@@ -172,7 +168,7 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       // Create a fresh session so the user lands logged in.
       const session = await options.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
-        ipAddress: clientIp(c),
+        ipAddress: clientIp(c, options.trustedProxy),
       });
       setSessionCookie(c, session.token, options.secureCookies);
       return c.json({ user });
@@ -190,7 +186,7 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
       const user = await options.auth.consumeEmailVerification(token);
       const session = await options.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
-        ipAddress: clientIp(c),
+        ipAddress: clientIp(c, options.trustedProxy),
       });
       setSessionCookie(c, session.token, options.secureCookies);
       return c.redirect(`${options.appHome}/?verified=1`);
@@ -267,7 +263,7 @@ function jsonError(c: AuthCtx, err: unknown) {
   if (err instanceof AppError) {
     return c.json(
       { error: err.message, code: err.code },
-      err.status as 400 | 401 | 403 | 404 | 409 | 500 | 503,
+      err.status as 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503,
     );
   }
   const message = err instanceof Error ? err.message : 'failed';
