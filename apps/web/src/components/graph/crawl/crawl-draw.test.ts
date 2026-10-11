@@ -75,14 +75,20 @@ function drawing(replay: CrawlReplay, view: ReplayView, over: Partial<CrawlDrawi
 }
 
 describe('drawCrawl', () => {
-  it('hangs a label on every note the field places, in its colour, and none on one it cannot', () => {
+  /** A label as its card writes it: the title, then why in capitals. */
+  const lines = (text: string) => {
+    const at = text.lastIndexOf(' · ');
+    return at < 0 ? [text] : [text.slice(0, at), text.slice(at + 3).toUpperCase()];
+  };
+
+  it('hangs a label on every note the field places, its title over why, and none on one it cannot', () => {
     const { replay, view } = finished();
     const labels = replay.labels;
     expect(labels.length).toBeGreaterThan(2);
     const all = recorder();
     drawCrawl(all.ctx, flat, drawing(replay, view));
     expect(all.ops.filter((o) => o.op === 'fillText').map((o) => o.args[0])).toEqual(
-      labels.map((l) => l.text),
+      labels.flatMap((l) => lines(l.text)),
     );
 
     const lost = labels.find((l) => l.nodeId)!.nodeId!;
@@ -102,7 +108,7 @@ describe('drawCrawl', () => {
     const some = recorder();
     drawCrawl(some.ctx, flat, drawing(replay, unplaced));
     expect(some.ops.filter((o) => o.op === 'fillText').map((o) => o.args[0])).toEqual(
-      labels.filter((l) => l.nodeId !== lost).map((l) => l.text),
+      labels.filter((l) => l.nodeId !== lost).flatMap((l) => lines(l.text)),
     );
   });
 
