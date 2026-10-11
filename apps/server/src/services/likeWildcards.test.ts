@@ -67,6 +67,7 @@ describe('a folder name with % or _ matches only itself', () => {
 
     await notes.moveAcrossVaults({
       fromOwnerId: 'owner',
+      viewerId: 'owner',
       fromPath: 'a_b',
       toOwnerId: 'viewer',
       toPath: 'a_b',

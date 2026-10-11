@@ -44,6 +44,7 @@ describe('NoteService.moveAcrossVaults', () => {
 
     const result = await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor',
       toOwnerId: 'sam',
       toPath: 'Impulse Labs/Gondor',
@@ -62,6 +63,7 @@ describe('NoteService.moveAcrossVaults', () => {
     await notes.create('frodo', 'Gondor/x.md', 'a');
     await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor',
       toOwnerId: 'sam',
       toPath: 'Impulse Labs/Gondor',
@@ -79,12 +81,33 @@ describe('NoteService.moveAcrossVaults', () => {
 
     const result = await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor',
       toOwnerId: 'sam',
       toPath: 'Gondor',
     });
 
     expect(result.linksLeftDangling).toEqual([]);
+  });
+
+  it('never names notes the mover cannot read, only counts them', async () => {
+    await notes.create('frodo', 'Gondor/nota.md', 'shared note');
+    await notes.create('frodo', 'private/strategy.md', 'see [[Gondor/nota]]');
+    await notes.create('frodo', 'Gondor/index.md', 'see [[Gondor/nota]] and [[private/strategy]]');
+
+    // sam holds a grant on frodo's Gondor and takes it into their own vault.
+    const result = await notes.moveAcrossVaults({
+      fromOwnerId: 'frodo',
+      fromPath: 'Gondor/nota.md',
+      toOwnerId: 'sam',
+      toPath: 'nota.md',
+      viewerId: 'sam',
+      viewerScopes: [{ ownerId: 'frodo', folderPath: 'Gondor' }],
+    });
+
+    expect(result.linksNowBroken).toEqual([{ note: 'Gondor/index.md', target: 'Gondor/nota.md' }]);
+    expect(result.linksNowBrokenElsewhere).toBe(1);
+    expect(JSON.stringify(result)).not.toContain('private/strategy');
   });
 
   it('reporta los links que quedan colgando por cruzar, en ambas direcciones', async () => {
@@ -94,6 +117,7 @@ describe('NoteService.moveAcrossVaults', () => {
 
     const result = await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor',
       toOwnerId: 'sam',
       toPath: 'Gondor',
@@ -112,6 +136,7 @@ describe('NoteService.moveAcrossVaults', () => {
 
     const result = await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor',
       toOwnerId: 'sam',
       toPath: 'Gondor',
@@ -128,6 +153,7 @@ describe('NoteService.moveAcrossVaults', () => {
     await expect(
       notes.moveAcrossVaults({
         fromOwnerId: 'frodo',
+        viewerId: 'frodo',
         fromPath: 'Gondor',
         toOwnerId: 'sam',
         toPath: 'Gondor',
@@ -141,6 +167,7 @@ describe('NoteService.moveAcrossVaults', () => {
     await notes.create('frodo', 'suelta.md', 'x');
     const result = await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'suelta.md',
       toOwnerId: 'sam',
       toPath: 'Impulse Labs/suelta.md',
@@ -154,6 +181,7 @@ describe('NoteService.moveAcrossVaults', () => {
     await expect(
       notes.moveAcrossVaults({
         fromOwnerId: 'frodo',
+        viewerId: 'frodo',
         fromPath: 'Gondor',
         toOwnerId: 'frodo',
         toPath: 'Otro',
@@ -165,6 +193,7 @@ describe('NoteService.moveAcrossVaults', () => {
     await expect(
       notes.moveAcrossVaults({
         fromOwnerId: 'frodo',
+        viewerId: 'frodo',
         fromPath: 'NoExiste',
         toOwnerId: 'sam',
         toPath: 'x',
@@ -202,6 +231,7 @@ describe('moveAcrossVaults y los shares que quedaban atrás', () => {
 
     await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor',
       toOwnerId: 'sam',
       toPath: 'impulse-labs/Gondor',
@@ -223,6 +253,7 @@ describe('moveAcrossVaults y los shares que quedaban atrás', () => {
 
     await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor',
       toOwnerId: 'sam',
       toPath: 'impulse-labs/Gondor',
@@ -244,6 +275,7 @@ describe('moveAcrossVaults y los shares que quedaban atrás', () => {
 
     await notes.moveAcrossVaults({
       fromOwnerId: 'frodo',
+      viewerId: 'frodo',
       fromPath: 'Gondor/x.md',
       toOwnerId: 'sam',
       toPath: 'impulse-labs/x.md',

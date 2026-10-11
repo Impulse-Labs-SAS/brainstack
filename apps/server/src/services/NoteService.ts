@@ -100,8 +100,15 @@ export interface CrossVaultMoveResult {
   movedNotes: number;
   /** Links inside what moved, now pointing at notes that stayed behind. */
   linksLeftDangling: Array<{ note: string; target: string }>;
-  /** Notes that stayed behind, now pointing at what moved away. */
+  /**
+   * Notes that stayed behind, now pointing at what moved away — only those the
+   * mover can read. The rest are counted in `linksNowBrokenElsewhere`, never
+   * named: a write grant on one folder is no licence to learn the paths of
+   * the owner's other notes.
+   */
   linksNowBroken: Array<{ note: string; target: string }>;
+  /** Notes the mover cannot read that also pointed at what moved. */
+  linksNowBrokenElsewhere: number;
 }
 
 /** A folder someone shared with the viewer, addressed in its owner's vault. */
@@ -404,14 +411,20 @@ export class NoteService {
    * shared signal is — two notes sharing a tag only they use outrank two that
    * merely share a technology half the vault happens to use.
    *
-   * Scoped like `graph()`: the caller's own notes plus whatever folders were
+   * Scoped like `graph()`: the viewer's own notes plus whatever folders were
    * shared with them, since "related" only means something over notes the
    * viewer can actually open.
+   *
+   * The viewer and the note's owner are separate arguments on purpose. One id
+   * used to stand for both, so asking about a note in somebody else's shared
+   * folder made *their whole vault* the candidate set, and the answer named
+   * private notes the viewer had no grant on. `opts.ownerId` only says whose
+   * vault `path` is in; it never widens what is searched.
    */
   async listRelated(
-    ownerId: string,
+    viewerId: string,
     path: string,
-    opts: { sharedScopes?: SharedScope[]; limit?: number } = {},
+    opts: { ownerId?: string; sharedScopes?: SharedScope[]; limit?: number } = {},
   ): Promise<
     Array<{
       path: string;
@@ -422,7 +435,7 @@ export class NoteService {
       reasons: RelatedReason[];
     }>
   > {
-    const physical = this.toPhysical(ownerId, path);
+    const physical = this.toPhysical(opts.ownerId ?? viewerId, path);
     const limit = opts.limit ?? 10;
 
     const [targetTags, allTargetFacets] = await Promise.all([
@@ -437,42 +450,8 @@ export class NoteService {
     const facetSignals = targetFacets.map((f) => facetSignal(f.key, f.value));
     if (tagSignals.length === 0 && facetSignals.length === 0) return [];
 
-    const scopeWhere = this.scopeWhere(ownerId, opts.sharedScopes);
-    const inScope = this.inScope(ownerId, opts.sharedScopes);
-
-    // Vault-wide rarity, independent of the viewer's scope: a signal's weight
-    // is what it costs to share it with anyone, not just with what this
-    // viewer happens to be allowed to see.
-    const [tagCounts, facetCounts] = await Promise.all([
-      tagSignals.length
-        ? this.opts.db
-            .select({ tag: tags.tag, count: sql<number>`count(*)::int` })
-            .from(tags)
-            .where(
-              inArray(
-                tags.tag,
-                targetTags.map((t) => t.tag),
-              ),
-            )
-            .groupBy(tags.tag)
-        : [],
-      facetSignals.length
-        ? this.opts.db
-            .select({ key: facets.key, value: facets.value, count: sql<number>`count(*)::int` })
-            .from(facets)
-            .where(
-              or(...targetFacets.map((f) => and(eq(facets.key, f.key), eq(facets.value, f.value)))),
-            )
-            .groupBy(facets.key, facets.value)
-        : [],
-    ]);
-    const counts = [
-      ...tagCounts.map((c) => ({ signal: tagSignal(c.tag), count: Number(c.count) })),
-      ...facetCounts.map((c) => ({
-        signal: facetSignal(c.key, c.value),
-        count: Number(c.count),
-      })),
-    ];
+    const scopeWhere = this.scopeWhere(viewerId, opts.sharedScopes);
+    const inScope = this.inScope(viewerId, opts.sharedScopes);
 
     const [tagHitRows, facetHitRows] = await Promise.all([
       tagSignals.length
@@ -511,6 +490,21 @@ export class NoteService {
       ...tagHitRows.map((r) => ({ path: r.path, signal: tagSignal(r.tag) })),
       ...facetHitRows.map((r) => ({ path: r.path, signal: facetSignal(r.key, r.value) })),
     ].filter((h) => inScope(h.path));
+
+    // Rarity is counted over the notes the viewer can read, the same rows the
+    // hits come from, plus the note itself. Counting across every vault made
+    // the score an oracle: `1/score` told anyone how many notes other accounts
+    // had with a given tag or client.
+    const holders = new Map<string, Set<string>>();
+    for (const h of hits) {
+      const set = holders.get(h.signal) ?? new Set<string>();
+      set.add(h.path);
+      holders.set(h.signal, set);
+    }
+    const counts = [...tagSignals, ...facetSignals].map((signal) => ({
+      signal,
+      count: (holders.get(signal)?.size ?? 0) + 1,
+    }));
 
     const ranked: RankedNote[] = rankRelated(hits, counts, limit);
     if (ranked.length === 0) return [];
@@ -789,6 +783,10 @@ export class NoteService {
     fromPath: string;
     toOwnerId: string;
     toPath: string;
+    /** Who asks for the move; the report names only notes they can read. */
+    viewerId: string;
+    /** Folders shared with the viewer, as `sharing.listSharedRoots` gives them. */
+    viewerScopes?: SharedScope[];
   }): Promise<CrossVaultMoveResult> {
     const { fromOwnerId, toOwnerId } = params;
     if (fromOwnerId === toOwnerId) {
@@ -853,12 +851,15 @@ export class NoteService {
           .from(links)
           .where(inArray(links.targetPath, sources))
       : [];
-    const linksNowBroken = inbound
-      .filter((l) => !movedSet.has(l.sourcePath))
+    const readable = this.inScope(params.viewerId, params.viewerScopes);
+    const brokenRows = inbound.filter((l) => !movedSet.has(l.sourcePath));
+    const linksNowBroken = brokenRows
+      .filter((l) => readable(l.sourcePath))
       .map((l) => ({
         note: this.toLogical(fromOwnerId, l.sourcePath),
         target: this.toLogical(fromOwnerId, l.targetPath),
       }));
+    const linksNowBrokenElsewhere = brokenRows.length - linksNowBroken.length;
 
     // Also before: links inside what moves that were already unresolved, so
     // the report blames the crossing for its own damage and nothing else.
@@ -925,6 +926,7 @@ export class NoteService {
       movedNotes: sources.length,
       linksLeftDangling,
       linksNowBroken,
+      linksNowBrokenElsewhere,
     };
   }
 
