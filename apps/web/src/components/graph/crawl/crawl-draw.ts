@@ -9,7 +9,9 @@
 // midpoint. Over a space that routes a thread its own way they would cut the
 // corner — two walks on screen that disagree — so whoever draws over one
 // turns them off, and the found halos with them. Only found notes and asks
-// have a label.
+// have a label. A found note's is a reticle — brackets that close on the
+// note, and a leader out to a card beside it, its title over why it was
+// found — so a label never covers the note it names, nor another one.
 
 import type { Projected } from '@/lib/graph-camera';
 
@@ -92,41 +94,127 @@ export function drawCrawl(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDra
   ctx.globalAlpha = 1;
 }
 
+/** Half the side of a found note's brackets, and how long each arm is, CSS pixels. */
+const RETICLE = 11;
+const ARM = 4.5;
+/** How far a card stands off its note, CSS pixels: across, and up. */
+const LEAD_X = 30;
+const LEAD_Y = 26;
+/** A card's inner padding and line heights, CSS pixels. */
+const PAD = 9;
+const CARD_H = 34;
+
+type Box = { x: number; y: number; w: number; h: number };
+const overlaps = (r: Box, x: number, y: number, w: number, h: number) =>
+  x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y;
+
+/** "Title · why" into its two lines; a label with no reason is all title. */
+function splitLabel(text: string): { title: string; why: string } {
+  const at = text.lastIndexOf(' · ');
+  return at < 0 ? { title: text, why: '' } : { title: text.slice(0, at), why: text.slice(at + 3) };
+}
+
 function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing): void {
-  const placed: Array<{ x: number; y: number; w: number; h: number }> = [];
   const at: Vec3 = [0, 0, 0];
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.font = `500 11px ${d.font}`;
+  const shown: Array<{ L: ReplayLabel; x: number; y: number; alpha: number }> = [];
   for (const L of d.labels) {
     const where = L.nodeId ? (d.view.field.node(L.nodeId, at) ? at : null) : L.point;
     const p = where ? P(where) : null;
     if (!p) continue;
     const age = d.view.clock - L.born;
-    let alpha = Math.min(1, age / 0.25) * (age > 4 ? (L.kind === 'ask' ? 0.85 : 0.55) : 1);
-    if (d.view.mode === 'done' && L.kind !== 'named' && L.kind !== 'ask') alpha *= 0.25;
+    let alpha = Math.min(1, age / 0.25) * (age > 4 ? (L.kind === 'ask' ? 0.85 : 0.6) : 1);
+    if (d.view.mode === 'done' && L.kind !== 'named' && L.kind !== 'ask') alpha *= 0.35;
     if (alpha <= 0.01) continue;
-    const w = ctx.measureText(L.text).width + 12;
-    const h = 18;
-    let x = p.x + 10;
-    let y = p.y - 24;
-    if (x + w > d.width - 6) x = p.x - 10 - w;
-    x = Math.max(6, x);
-    for (let i = 0; i < 4; i++) {
-      if (!placed.some((r) => x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y)) break;
-      y += 21;
+    shown.push({ L, x: p.x, y: p.y, alpha });
+  }
+  // Every note that carries a label is kept clear, so no card covers a find.
+  const placed: Box[] = shown
+    .filter((s) => s.L.nodeId)
+    .map((s) => ({ x: s.x - RETICLE - 2, y: s.y - RETICLE - 2, w: 2 * RETICLE + 4, h: 2 * RETICLE + 4 }));
+  const level = d.alpha ?? 1;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  for (const { L, x, y, alpha } of shown) {
+    const colour = CRAWL_COLORS[L.kind];
+    const { title, why } = splitLabel(L.text);
+    ctx.font = `500 12px ${d.font}`;
+    const titleW = ctx.measureText(title).width;
+    ctx.font = `500 9.5px ${d.font}`;
+    const whyW = why ? ctx.measureText(why.toUpperCase()).width * 1.08 : 0;
+    const w = Math.ceil(Math.max(titleW, whyW)) + 2 * PAD + 8;
+    const h = why ? CARD_H : 24;
+
+    // To the upper right, else mirrored; then the first height free of every
+    // card and note already placed.
+    let right = x + LEAD_X + w <= d.width - 8;
+    let cx = right ? x + LEAD_X : x - LEAD_X - w;
+    if (cx < 8) {
+      right = true;
+      cx = Math.max(8, x + LEAD_X);
     }
-    placed.push({ x, y, w, h });
-    ctx.globalAlpha = alpha * (d.alpha ?? 1);
-    ctx.fillStyle = 'rgba(6,6,10,0.86)';
-    ctx.strokeStyle = CRAWL_COLORS[L.kind];
+    let cy = y - LEAD_Y - h / 2;
+    for (const step of [0, -1, 1, -2, 2, -3, 3]) {
+      const ty = y - LEAD_Y - h / 2 + step * (h + 6);
+      if (!placed.some((r) => overlaps(r, cx, ty, w, h))) {
+        cy = ty;
+        break;
+      }
+    }
+    cy = Math.max(6, cy);
+    placed.push({ x: cx, y: cy, w, h });
+
+    ctx.globalAlpha = alpha * level;
+    if (L.nodeId) {
+      // The reticle: four corners closing on the note.
+      ctx.strokeStyle = hexA(colour, 0.9);
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
+        ctx.moveTo(x + sx * RETICLE, y + sy * (RETICLE - ARM));
+        ctx.lineTo(x + sx * RETICLE, y + sy * RETICLE);
+        ctx.lineTo(x + sx * (RETICLE - ARM), y + sy * RETICLE);
+      }
+      ctx.stroke();
+      // The leader: from the nearest corner out, then level into the card.
+      const edge = right ? cx : cx + w;
+      const mid = cy + h / 2;
+      const ox = x + (right ? RETICLE : -RETICLE);
+      const oy = y + (mid < y ? -RETICLE : RETICLE);
+      const knee = edge + (right ? -10 : 10);
+      ctx.strokeStyle = hexA(colour, 0.5);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(knee, mid);
+      ctx.lineTo(edge, mid);
+      ctx.stroke();
+    }
+
+    // The card: dark glass with a hairline edge and a lit top, a swatch of why, two lines.
+    ctx.fillStyle = 'rgba(14,15,24,0.84)';
+    ctx.beginPath();
+    ctx.roundRect(cx, cy, w, h, 7);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 3);
-    ctx.fill();
+    ctx.roundRect(cx + 0.5, cy + 0.5, w - 1, h - 1, 7);
     ctx.stroke();
-    ctx.fillStyle = CRAWL_COLORS[L.kind];
-    ctx.fillText(L.text, x + 6, y + 12.5);
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath();
+    ctx.moveTo(cx + 7, cy + 0.5);
+    ctx.lineTo(cx + w - 7, cy + 0.5);
+    ctx.stroke();
+    ctx.fillStyle = colour;
+    ctx.fillRect(cx + PAD, cy + (why ? 9 : 10), 3, 3);
+    ctx.font = `500 12px ${d.font}`;
+    ctx.fillStyle = '#ecebf5';
+    ctx.fillText(title, cx + PAD + 8, cy + (why ? 14.5 : 16));
+    if (why) {
+      ctx.font = `500 9.5px ${d.font}`;
+      ctx.fillStyle = hexA(colour, 0.9);
+      ctx.fillText(why.toUpperCase(), cx + PAD + 8, cy + 27);
+    }
   }
 }
 

@@ -570,15 +570,19 @@ describe('CrawlPlugin in the Sentinel view', () => {
     s.host.until(() => s.snap().reached.length > 0);
     const key = s.snap().reached[0]!;
     const title = s.vault.model.nodes.find((n) => n.path === key)!.label;
+    const times = () => s.host.ctx.texts.filter((t) => t === title).length;
+    s.host.ctx.texts.length = 0;
+    s.host.frame();
+    const unmarked = times();
+    // The mark says the title once more than the walk's own labels do.
     s.plugin.mark(key);
     s.host.ctx.texts.length = 0;
     s.host.frame();
-    // The mark says the bare title; the walk's own labels say why it was found.
-    expect(s.host.ctx.texts).toContain(title);
+    expect(times()).toBe(unmarked + 1);
     s.plugin.mark(null);
     s.host.ctx.texts.length = 0;
     s.host.frame();
-    expect(s.host.ctx.texts).not.toContain(title);
+    expect(times()).toBe(unmarked);
     // A key the graph does not show rings nothing, and breaks nothing.
     s.plugin.mark('no/such/note.md');
     expect(() => s.host.frame()).not.toThrow();

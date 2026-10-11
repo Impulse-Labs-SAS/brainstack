@@ -10,7 +10,7 @@ import { Button } from 'react-aria-components';
 
 import { cn } from '@/lib/utils';
 
-import { GLASS } from '../../graph-preview';
+import { FLOAT_GLASS } from '../../graph-preview';
 import type { CrawlSnapshot } from '../crawl-snapshot';
 
 import { FOCUS_RING } from './panel-ui';
@@ -39,7 +39,7 @@ export function Transport({
     <div
       role="group"
       aria-label="Replay"
-      className={cn(GLASS, 'pointer-events-auto flex items-center gap-0.5 rounded-full p-1 shadow-2xl', className)}
+      className={cn(FLOAT_GLASS, 'pointer-events-auto flex items-center gap-0.5 rounded-full p-1', className)}
       style={style}
     >
       <TransportButton

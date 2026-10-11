@@ -16,6 +16,14 @@ import { cn } from '@/lib/utils';
 import type { Selection } from './graph-controller';
 
 export const GLASS = 'border border-border-subtle bg-[rgba(17,17,17,0.86)] backdrop-blur-md';
+/**
+ * The controls that float over the graph's canvas — the views, zoom, the
+ * replay — as glass the scene shows through: a lighter tint, a deeper blur
+ * that keeps the colour behind it, a lit top edge and a soft drop shadow, so
+ * they sit in the space rather than on top of it as flat panels.
+ */
+export const FLOAT_GLASS =
+  'border border-white/[0.07] bg-[linear-gradient(180deg,rgba(28,30,46,0.6),rgba(10,11,18,0.6))] backdrop-blur-xl backdrop-saturate-150 shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_10px_30px_rgba(0,0,0,0.45)]';
 
 const KIND_LABEL: Record<EdgeKind, string> = { link: 'link', structure: 'index', affinity: 'shared topic', topic: 'topic' };
 const KIND_RANK: Record<EdgeKind, number> = { link: 0, structure: 1, topic: 2, affinity: 3 };
