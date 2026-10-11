@@ -6,16 +6,18 @@
 // straight chords with a gentle bow, so a walk between projects crosses the
 // hub, and the Sentinel walks them with world up, as it walks the brain.
 //
-// Asleep, the network is dark glass and faint filaments inside a fainter
-// cage — enough to read as a network with a shape, never enough to compete
-// with what the crawl lights. Then the crawl wakes it, and what it did stays:
+// Asleep, the network is dark glass and faint filaments inside the soft
+// contour of a membrane, hung in a cool glow of air — enough to read as a
+// network with a shape, never enough to compete with what the crawl lights.
+// Then the crawl wakes it, and what it did stays:
 //
 //  - the eye reveals what falls in its cone: specular, rims and edges come up
 //    only there, and fade again as it moves on;
 //  - a note the walk passes flares and keeps an ember;
 //  - a note found ignites in the colour of why it was found, with a ring
 //    running out round it, facing the camera, and keeps a halo and a slow
-//    breath;
+//    breath — and lights the gems and threads round it (up to eight finds
+//    at once, the latest first);
 //  - a thread walked becomes a tube of light, hot behind the walk, cooling to
 //    a trail with pulses running the way it went; a thread a grip closes on
 //    flashes and goes dark again.
@@ -29,13 +31,12 @@
 // dims as the brain's depth cue dims it, so the volume reads near to far
 // (shaders.ts).
 //
-// It draws first into the graph's canvas — clearing it to the graph's own
-// background, writing depth — with a camera placed exactly as the graph's,
-// and reports the depth range it drew with so the Sentinel draws into the
-// same depth: a tube in front of a tentacle hides it. Seven or eight draws,
-// one program each kind, and every renderer setting it touches is put back
-// (withRendererState). It never changes the renderer's clear colour: its
-// background clears with its own.
+// It draws first into the graph's canvas — clearing it, painting its air
+// over the whole of it, writing depth — with a camera placed exactly as the
+// graph's, and reports the depth range it drew with so the Sentinel draws
+// into the same depth: a tube in front of a tentacle hides it. Eight or nine
+// draws, one program each kind, and every renderer setting it touches is put
+// back (withRendererState). It never changes the renderer's clear colour.
 
 import * as THREE from 'three';
 import type GUI from 'three/addons/libs/lil-gui.module.min.js';
@@ -50,15 +51,15 @@ import { threadKey, type ThreadKey } from '../../threads';
 import type { Vec3 } from '../../vec';
 import { polylineThreadField } from '../polyline-field';
 import type { CrawlSpace, SpaceBuild, SpaceFrame } from '../space';
-import { cageLines } from '../volume/cage';
 import { CAGE_OUT, type Cluster } from '../volume/cluster';
 import { volumeLayout, type CrystalKind, type VolumeLayout } from '../volume/layout';
 
-import { buildCage, cageMaterial } from './cage';
+import { backdropMaterial, buildBackdrop } from './backdrop';
 import { routeChords, type RouteChords } from './chords';
 import { CrystalMeshes, crystalMaterial, type CrystalNote } from './crystal-meshes';
 import { Filaments, filamentMaterial } from './filaments';
 import { defaultKnobs, type DormantKnobs } from './knobs';
+import { buildMembrane, bulbTints, bulbsOf, membraneMaterial } from './membrane';
 import { Sprites, haloMaterial, ringMaterial } from './sprites';
 import { DormantState, type StateUpload } from './state';
 import { Tubes, tubeMaterial } from './tubes';
@@ -66,10 +67,13 @@ import { Tubes, tubeMaterial } from './tubes';
 export const DORMANT_NETWORK = 'Dormant network';
 
 /**
- * The graph's background: the canvas is cleared to it, as graph-scene.ts
- * clears it, and the opaque crystals and filaments fade into it with depth.
+ * The air: a cool glow behind the form, falling to near black at the screen's
+ * edges. Opaque gems far off fade into it.
  */
-const BACKGROUND = '#0a0a0a';
+const AIR_CORE = '#161a2b';
+const AIR_EDGE = '#060609';
+/** The glow's radius, as a share of the canvas's longer side. */
+const AIR_RADIUS = 0.75;
 /**
  * The fastest a walk crosses the cluster, creature units a second. A leg from
  * one lobe through the hub to another runs 30–40 units: at 9 it takes about
@@ -129,26 +133,29 @@ const WHY = ['#b8a6ff', '#5eead4', '#4ade80'] as const;
 const GLASS = '#14181c';
 const RIM = '#8fa3b0';
 /** How bright the dormant glass's rim is, and its faint inner light, before the glass knob. */
-const RIM_LEVEL = 0.1;
+const RIM_LEVEL = 0.16;
 const PIP_LEVEL = 0.04;
+/** The membrane's contour at full: its bulb's colour at this much light. */
+const MEMBRANE_LEVEL = 0.06;
 /**
- * The cage: a cool grey at 0.024 of its light, about two thirds of a dormant
- * link from afar, where it is the form's outline; close up the shader keeps
- * it under a third of one.
+ * A found note's core, halo and ring. The core stays under the shoulder's
+ * knee so it keeps its colour and facets; the halo carries the glow.
  */
-const CAGE = '#9fb4b4';
-const CAGE_LEVEL = 0.024;
-/** A found note's core, halo and ring. */
-const CORE_LIT = 1.6;
-const HALO_GAIN = 0.35;
+const CORE_LIT = 1.05;
+const HALO_GAIN = 0.32;
+/** How far a found note lights its neighbours, creature units, and how brightly. */
+const EMIT_REACH = 3.5;
+const EMIT_GAIN = 0.55;
+/** At most this many finds light their neighbours at once: the shader's EMITTERS. */
+const EMITTERS = 8;
 const RING_GAIN = 0.8;
 /** The eye's highlight on dormant glass. */
 const SPECULAR = 1.5;
 
 const vec3 = (rgb: readonly number[]) => new THREE.Vector3(rgb[0], rgb[1], rgb[2]);
-const BACKGROUND_LINEAR = vec3(linear(BACKGROUND));
 const GLASS_LINEAR = vec3(linear(GLASS));
-const CAGE_LINEAR = vec3(linear(CAGE));
+/** Why a note was found, linear, as uWhy holds it: index 0 is the accent. */
+const WHY_LINEAR = [vec3(linear(SENTINEL_PALETTE.accent)), ...WHY.map((hex) => vec3(linear(hex)))];
 
 /** sRGB 0–1 to linear light. */
 function toLinear(c: number): number {
@@ -161,9 +168,8 @@ interface Built {
   state: DormantState;
   nodeTexture: THREE.DataTexture;
   threadTexture: THREE.DataTexture;
-  cage: THREE.LineSegments;
-  /** Segments in the cage. */
-  cageSegments: number;
+  membrane: THREE.InstancedMesh;
+  backdrop: THREE.Mesh;
   crystals: CrystalMeshes;
   filaments: Filaments;
   tubes: Tubes;
@@ -197,8 +203,8 @@ export interface DormantStats {
   uploads: number;
   /** Chords of the trail drawn as tubes. */
   tubes: number;
-  /** Segments of the cage. */
-  cage: number;
+  /** Shells of the membrane: one per bulb. */
+  membrane: number;
 }
 
 export class DormantNetwork implements CrawlSpace {
@@ -218,7 +224,8 @@ export class DormantNetwork implements CrawlSpace {
   /** Every material reads these: one object, so a frame sets each once. */
   private readonly uniforms: Record<string, THREE.IUniform>;
   private readonly materials: {
-    cage: THREE.ShaderMaterial;
+    backdrop: THREE.ShaderMaterial;
+    membrane: THREE.ShaderMaterial;
     crystal: THREE.ShaderMaterial;
     filament: THREE.ShaderMaterial;
     tube: THREE.ShaderMaterial;
@@ -261,14 +268,20 @@ export class DormantNetwork implements CrawlSpace {
       uDepthFloor: u(DEPTH_FLOOR),
       uNearFade: u(new THREE.Vector2(0, 0)),
       uCue: u(1),
-      uBackground: u(BACKGROUND_LINEAR.clone()),
+      uBdCentre: u(new THREE.Vector2()),
+      uBdR: u(1),
+      uBdCore: u(vec3(linear(AIR_CORE))),
+      uBdEdge: u(vec3(linear(AIR_EDGE))),
+      uEmit: u(Array.from({ length: EMITTERS }, () => new THREE.Vector4())),
+      uEmitCol: u(Array.from({ length: EMITTERS }, () => new THREE.Vector3())),
+      uEmitReach: u(1),
       uPx: u(1),
       uViewport: u(new THREE.Vector2(1, 1)),
       uDpr: u(1),
       uNear: u(1),
       uHead: u(new THREE.Vector2(-1, 0)),
       uRead: u(new THREE.Vector3(-1, 0, 0)),
-      uCage: u(CAGE_LINEAR.clone().multiplyScalar(CAGE_LEVEL)),
+      uMembrane: u(MEMBRANE_LEVEL),
       uCageFar: u(new THREE.Vector2(0, 1)),
       uGlass: u(GLASS_LINEAR.clone()),
       uRim: u(RIM_LEVEL),
@@ -291,16 +304,17 @@ export class DormantNetwork implements CrawlSpace {
       uRingGain: u(RING_GAIN),
     };
     this.materials = {
-      cage: cageMaterial(this.uniforms),
+      backdrop: backdropMaterial(this.uniforms),
+      membrane: membraneMaterial(this.uniforms),
       crystal: crystalMaterial(this.uniforms),
       filament: filamentMaterial(this.uniforms),
       tube: tubeMaterial(this.uniforms),
       halo: haloMaterial(this.uniforms),
       ring: ringMaterial(this.uniforms),
     };
-    // Cleared to the graph's own background by three's own clear: the
-    // renderer's clear colour is left alone.
-    this.scene.background = new THREE.Color(BACKGROUND);
+    // Cleared by three's own clear, with the renderer's colour, then painted
+    // over by the backdrop: the renderer's clear colour is left alone.
+    this.scene.background = null;
   }
 
   get depth(): { near: number; far: number } | null {
@@ -331,7 +345,7 @@ export class DormantNetwork implements CrawlSpace {
       buildMs: b.ms,
       uploads: b.state.uploads,
       tubes: b.tubes.chordCount,
-      cage: b.cageSegments,
+      membrane: b.membrane.count,
     };
   }
 
@@ -385,8 +399,12 @@ export class DormantNetwork implements CrawlSpace {
       };
     });
 
-    const lines = cageLines(layout.cluster);
-    const cage = buildCage(lines, this.materials.cage);
+    const membrane = buildMembrane(
+      layout.cluster,
+      bulbTints(bulbsOf(layout.cluster), notes),
+      this.materials.membrane,
+    );
+    const backdrop = buildBackdrop(this.materials.backdrop);
     const crystals = new CrystalMeshes(notes, this.materials.crystal);
     crystals.place((id) => this.kindOf(layout, id), unit, k.crystalSize);
     const filaments = new Filaments(
@@ -397,7 +415,8 @@ export class DormantNetwork implements CrawlSpace {
     const tubes = new Tubes(chords, this.materials.tube);
     const sprites = new Sprites(notes, this.materials.halo, this.materials.ring);
     this.scene.add(
-      cage,
+      backdrop,
+      membrane,
       ...crystals.meshes,
       filaments.mesh,
       tubes.mesh,
@@ -415,8 +434,8 @@ export class DormantNetwork implements CrawlSpace {
       state,
       nodeTexture,
       threadTexture,
-      cage,
-      cageSegments: lines.length / 6,
+      membrane,
+      backdrop,
       crystals,
       filaments,
       tubes,
@@ -550,6 +569,13 @@ export class DormantNetwork implements CrawlSpace {
     u.uDepthFloor!.value = 1 - (1 - DEPTH_FLOOR) * cue;
     u.uCue!.value = cue;
 
+    // The air's glow sits behind what the camera looks at — the form from
+    // afar, the walk close up — a little above the middle of the canvas.
+    (u.uBdCentre!.value as THREE.Vector2).set(0.5 * this.buffer.x, 0.55 * this.buffer.y);
+    u.uBdR!.value = AIR_RADIUS * Math.max(this.buffer.x, this.buffer.y);
+
+    this.emitters(b, frame, clock);
+
     const eye = frame.eye;
     const cone = u.uEyeCone!.value as THREE.Vector4;
     const seen =
@@ -572,7 +598,7 @@ export class DormantNetwork implements CrawlSpace {
     (u.uHead!.value as THREE.Vector2).set(s.head[0], s.head[1]);
     (u.uRead!.value as THREE.Vector3).set(s.read[0], s.read[1], s.read[2]);
 
-    (u.uCage!.value as THREE.Vector3).copy(CAGE_LINEAR).multiplyScalar(CAGE_LEVEL * k.cage);
+    u.uMembrane!.value = MEMBRANE_LEVEL * k.cage;
     // Whole from 1.8 radii away — every view of the whole form — and only in the eye's pool within 0.8.
     (u.uCageFar!.value as THREE.Vector2).set(0.8 * radius, 1.8 * radius);
     (u.uGlass!.value as THREE.Vector3).copy(GLASS_LINEAR).multiplyScalar(k.glass);
@@ -593,10 +619,37 @@ export class DormantNetwork implements CrawlSpace {
       b.size = k.crystalSize;
       b.crystals.place((id) => this.kindOf(b.layout, id), unit, b.size);
     }
-    b.cage.visible = k.cage > 0 && b.cageSegments > 0;
+    b.membrane.visible = k.cage > 0 && b.membrane.count > 0;
     // Nothing found, nothing ringing: no draw for them at all.
     b.sprites.halos.visible = s.found > 0 && k.halo > 0;
     b.sprites.rings.visible = !frame.still && s.found > 0 && clock - s.lastFound < RING_SECONDS;
+  }
+
+  /**
+   * The finds that light their neighbours: the latest first, at most
+   * EMITTERS, each coming up over a third of a second of replay clock, so a
+   * jump in the replay lights them as they would have been.
+   */
+  private emitters(b: Built, frame: SpaceFrame, clock: number): void {
+    const u = this.uniforms;
+    const at = u.uEmit!.value as THREE.Vector4[];
+    const colour = u.uEmitCol!.value as THREE.Vector3[];
+    for (const e of at) e.w = 0;
+    u.uEmitReach!.value = EMIT_REACH * b.layout.unit;
+    const found = frame.view?.history.foundAt;
+    if (!found || found.size === 0) return;
+    const latest = [...found]
+      .filter(([, t]) => t <= clock)
+      .sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))
+      .slice(0, EMITTERS);
+    latest.forEach(([id, t], i) => {
+      const p = b.layout.positions.get(id);
+      const node = b.state.nodeIndex(id);
+      if (!p || node < 0) return;
+      const why = Math.round(Math.min(3, Math.max(0, b.state.nodes[node * 4 + 2]!)));
+      at[i]!.set(p[0], p[1], p[2], EMIT_GAIN * Math.min(1, (clock - t) / 0.3));
+      colour[i]!.copy(WHY_LINEAR[why]!);
+    });
   }
 
   gui(folder: GUI): void {
@@ -608,7 +661,7 @@ export class DormantNetwork implements CrawlSpace {
       .name('neck width (spacings, rebuilds)')
       .onFinishChange(rebuild);
     folder.add(k, 'bow', 0, 0.25, 0.01).name('thread bow (rebuilds)').onFinishChange(rebuild);
-    folder.add(k, 'cage', 0, 4, 0.05).name('cage brightness');
+    folder.add(k, 'cage', 0, 4, 0.05).name('membrane brightness');
     folder.add(k, 'crystalSize', 0.5, 2, 0.05).name('crystal size');
     folder.add(k, 'glass', 0, 4, 0.05).name('glass brightness');
     folder.add(k, 'eyeReach', 1, 12, 0.1).name('eye reach (u)');
@@ -684,14 +737,17 @@ export class DormantNetwork implements CrawlSpace {
     if (!b) return;
     this.built = null;
     this.scene.remove(
-      b.cage,
+      b.backdrop,
+      b.membrane,
       ...b.crystals.meshes,
       b.filaments.mesh,
       b.tubes.mesh,
       b.sprites.halos,
       b.sprites.rings,
     );
-    b.cage.geometry.dispose();
+    b.backdrop.geometry.dispose();
+    b.membrane.geometry.dispose();
+    b.membrane.dispose();
     b.crystals.dispose();
     b.filaments.dispose();
     b.tubes.dispose();
@@ -718,7 +774,7 @@ export class DormantNetwork implements CrawlSpace {
 
 /**
  * The box round every bulb of the form — hub, lobes and satellite, each grown
- * by `pad` — so the overview frames the cage and what reaches past it. The
+ * by `pad` — so the overview frames the membrane and what reaches past it. The
  * necks lie between the hub and their lobes, inside it.
  */
 function boundsOfCluster(c: Cluster, pad: number): Bounds {

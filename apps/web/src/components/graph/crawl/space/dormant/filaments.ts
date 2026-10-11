@@ -5,9 +5,10 @@
 //
 // A ribbon is widened on screen, as three's fat lines are: its true width up
 // close, never under a pixel from afar, so a dormant thread neither vanishes
-// nor shimmers. It is opaque and writes depth — a claw that closes round one
-// goes behind it where it should — and its edges are anti-aliased by alpha to
-// coverage on the multisampled canvas, which needs no sorting. The same
+// nor shimmers. It is added light, tested against the depth the gems wrote
+// and never writing any, so where threads cross their light adds up; its
+// edges are anti-aliased in the shader, a pixel of soft fringe, so a thin
+// diagonal never breaks into the dots alpha to coverage left on it. The same
 // coverage dissolves it where it passes close to the camera.
 //
 // Its brightness is the brain's own lines' (links at 0.22 of the vault's
@@ -23,7 +24,7 @@ import * as THREE from 'three';
 import type { RouteChords } from './chords';
 import { FILAMENT_FS, FILAMENT_VS } from './shaders';
 
-/** The filaments' material: opaque, depth-writing, edges by alpha to coverage. */
+/** The filaments' material: added light, depth-tested, never writing depth; edges anti-aliased in the shader. */
 export function filamentMaterial(uniforms: Record<string, THREE.IUniform>): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     name: 'brainstack-dormant-filament',
@@ -32,7 +33,9 @@ export function filamentMaterial(uniforms: Record<string, THREE.IUniform>): THRE
     fragmentShader: FILAMENT_FS,
     toneMapped: false,
     // The quad is widened square to the chord on screen, always counter-clockwise: it always faces the camera.
-    alphaToCoverage: true,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
   });
 }
 

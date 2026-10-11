@@ -16,7 +16,7 @@ export interface DormantKnobs {
   neck: number;
   /** How far a thread bows off its chord, a share of its length. Changes the layout. */
   bow: number;
-  /** The cage's brightness; 0 hides it. */
+  /** The membrane's brightness (named cage for exported settings); 0 hides it. */
   cage: number;
   /** Every crystal's footprint, as a share of its kind's. */
   crystalSize: number;
@@ -67,7 +67,7 @@ export function defaultKnobs(): DormantKnobs {
     ember: 0.12,
     halo: 0.9,
     filamentWidth: 0.012,
-    filamentGlow: 1,
+    filamentGlow: 0.7,
     tubeWidth: 0.028,
     tubeGlow: 0.55,
     pulseSpeed: 3,

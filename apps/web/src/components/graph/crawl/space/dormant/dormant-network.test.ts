@@ -49,7 +49,7 @@ describe('the dormant network', () => {
       build.field.up(p, up);
       expect(up).toEqual([0, 1, 0]);
     }
-    // The bounds hold every note, the cage round them and a little more.
+    // The bounds hold every note, the membrane round them and a little more.
     const { cx, cy, cz, w, h, d } = build.bounds;
     for (const p of build.positions.values()) {
       expect(Math.abs(p[0] - cx)).toBeLessThanOrEqual(w / 2);
@@ -90,19 +90,32 @@ describe('the dormant network', () => {
     early.dispose();
   });
 
-  it('draws a cage over the form it laid out, as one draw that never writes depth', () => {
+  it('wraps each bulb of the form in a membrane tinted by what it holds, as one draw that never writes depth', () => {
     const space = new DormantNetwork();
     space.build(vault.model);
-    const cages = insides(space).scene.children.filter((o) => o.name === 'dormant cage');
-    expect(cages).toHaveLength(1);
-    const cage = cages[0] as THREE.LineSegments;
-    expect(cage).toBeInstanceOf(THREE.LineSegments);
-    const segments = space.stats!.cage;
-    expect(segments).toBeGreaterThan(0);
-    expect(cage.geometry.getAttribute('position').count).toBe(2 * segments);
-    const material = cage.material as THREE.ShaderMaterial;
+    const shells = insides(space).scene.children.filter((o) => o.name === 'dormant membrane');
+    expect(shells).toHaveLength(1);
+    const membrane = shells[0] as THREE.InstancedMesh;
+    expect(membrane).toBeInstanceOf(THREE.InstancedMesh);
+    expect(space.stats!.membrane).toBeGreaterThan(0);
+    expect(membrane.count).toBe(space.stats!.membrane);
+    expect(membrane.instanceColor).not.toBeNull();
+    const material = membrane.material as THREE.ShaderMaterial;
     expect(material.depthWrite).toBe(false);
     expect(material.blending).toBe(THREE.AdditiveBlending);
+    space.dispose();
+  });
+
+  it('paints the air first, over the whole canvas, testing and writing no depth', () => {
+    const space = new DormantNetwork();
+    space.build(vault.model);
+    const backdrop = insides(space).scene.children.find(
+      (o) => o.name === 'dormant backdrop',
+    ) as THREE.Mesh;
+    expect(backdrop.renderOrder).toBeLessThan(0);
+    const material = backdrop.material as THREE.ShaderMaterial;
+    expect(material.depthTest).toBe(false);
+    expect(material.depthWrite).toBe(false);
     space.dispose();
   });
 

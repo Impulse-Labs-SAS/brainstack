@@ -23,9 +23,9 @@ import { nearestSite } from './fcc';
 
 /** The most lobes a cluster grows: the cube's eight diagonals. */
 export const MAX_LOBES = 8;
-/** Sites stay this many spacings inside the surface, so no crystal pokes through the cage. */
+/** Sites stay this many spacings inside the surface, so no crystal pokes through the membrane. */
 export const SITE_INSET = 0.35;
-/** The cage sits this many spacings outside the surface (cage.ts). */
+/** The membrane sits this many spacings outside each bulb (dormant/membrane.ts). */
 export const CAGE_OUT = 0.3;
 /** Open space between the satellite's surface and any other bulb's, spacings: about five creature units. */
 export const ISLAND_GAP = 3;
@@ -39,7 +39,7 @@ export const lobePart = (i: number): number => 2 + i;
 export const neckPart = (i: number): number => 2 + MAX_LOBES + i;
 export const PARTS = 2 + 2 * MAX_LOBES;
 
-/** The least a hub is, spacings: a hub alone, even for an empty vault, still has sites and a cage. */
+/** The least a hub is, spacings: a hub alone, even for an empty vault, still has sites and a membrane. */
 const HUB_MIN = 1.5;
 /** The least a lobe or the satellite is, spacings. */
 const LOBE_MIN_R = 1.5;
@@ -89,7 +89,7 @@ export interface Cluster {
   blend: number;
   /** The hub's centre: the layout's origin, [0, 0, 0]. */
   centre: Vec3;
-  /** Everything (bulbs and the cage over them) lies within this of the centre, world units. */
+  /** Everything (bulbs and the membrane over them) lies within this of the centre, world units. */
   radius: number;
   /** Per lobe, packed for `probe`: cx, cy, cz, r, neck r, |axis|² — 6 floats a lobe. Read-only. */
   readonly packed: Float64Array;
@@ -429,7 +429,7 @@ export function probe(c: Cluster, x: number, y: number, z: number, out: Probe): 
 
 const scratch: Probe = { d: 0, part: 0 };
 
-/** The signed distance alone, for tests, the layout's jitter and the cage. */
+/** The signed distance alone, for tests, the layout's jitter. */
 export function clusterSdf(c: Cluster, p: Vec3): number {
   return probe(c, p[0], p[1], p[2], scratch).d;
 }

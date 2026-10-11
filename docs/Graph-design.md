@@ -112,9 +112,13 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
   them too, and either way the plugin resumes it.
 - **The dormant network** (`space/`): every note a crystal in one cluster — a hub with lobes
   round it, the biggest projects a lobe each, the rest regions of the hub — and every link a
-  faint thread between them. It stays dark until the walk wakes it: the threads it takes become
-  tubes of light and stay lit, and each note it finds ignites in the colour of why it was handed
-  over (named, linked, a decision). It is laid out from the model, never from the brain's
+  faint thread of added light between them, so crossings add up. Each bulb of the cluster sits
+  in a membrane lit only at its contour, in the colour of what it holds, and the whole hangs in
+  a cool glow of air that far notes fade into. It stays dark until the walk wakes it: the
+  threads it takes become tubes of light and stay lit, and each note it finds ignites in the
+  colour of why it was handed over (named, linked, a decision) and lights the notes and
+  threads round it. Its label is a reticle: brackets close on the note and a leader runs out
+  to a card with its title over why, so no label covers the note it names. It is laid out from the model, never from the brain's
   positions, which it leaves untouched — the brain's saved layout included.
 - **Decisions.** `notes.graph` marks each note that records a decision (`isDecision`: a
   `decisión`/`decision` tag or `status: decidido`, with the same scope as everything else it

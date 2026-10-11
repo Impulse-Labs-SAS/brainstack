@@ -1,7 +1,7 @@
-// The dormant network's shaders, as GLSL strings: the form's cage, the
-// crystals, the dormant filaments, the walked tubes, and the halos and rings
-// of found notes. Plain strings, no three: the GPU modules beside this one
-// build their materials from them, all over one shared set of uniforms.
+// The dormant network's shaders, as GLSL strings: the backdrop, the form's
+// membrane, the crystals, the dormant filaments, the walked tubes, and the
+// halos and rings of found notes. Plain strings, no three: the GPU modules
+// beside this one build their materials from them, over one set of uniforms.
 //
 // What the shaders share:
 //
@@ -13,19 +13,22 @@
 //    which a stamp in the future would turn into infinity.
 //  - The eye's pool (`eyePool`): the cone the Sentinel's eye lights, the same
 //    angles as its spotlight, fading with distance, plus a little spill right
-//    under the lens. It is the only thing that makes the dormant glass shine:
-//    outside it there is no specular at all, so 1,600 flat facets never
-//    glitter at once.
-//  - The fades: near the camera everything dissolves — crystals, tubes and
-//    filaments through alpha to coverage, sprites by their light — so nothing
-//    blocks or near-clips the view from inside the volume; beyond the focus
-//    things dim as the brain's `depthFade` dims them, so the volume reads
-//    near to far instead of as a tangle; and far from where the camera looks,
-//    dormant light falls off (`focusOf`). Lit things keep most of theirs. The
-//    depth cue knob scales both. Crystals and filaments are opaque, so they
-//    fade towards the background rather than to black: dimmed to black, a
-//    far thread would draw darker than the canvas it crosses, a dark line
-//    where the brain's additive ones simply recede.
+//    under the lens. It is what makes the dormant glass shine: outside it
+//    the glass keeps only a faint glint of the key light, so 1,600 flat
+//    facets never glitter at once.
+//  - The finds' light (`emitLight`): up to eight found notes light the gems,
+//    threads and membrane round them, falling off within a few creature units.
+//  - The air (`backdrop`): a cool glow behind the form, darker towards the
+//    screen's edges, painted first.
+//  - The fades: near the camera everything dissolves — crystals and tubes
+//    through alpha to coverage, filaments and sprites by their light — so
+//    nothing blocks or near-clips the view from inside the volume; beyond the
+//    focus things dim as the brain's `depthFade` dims them, so the volume
+//    reads near to far instead of as a tangle; and far from where the camera
+//    looks, dormant light falls off (`focusOf`). Lit things keep most of
+//    theirs. The depth cue knob scales both. Crystals are opaque, so they fade
+//    into the air behind them rather than to black, which would draw them as
+//    holes in it; filaments are added light, and simply recede.
 //  - The output: colour is worked in linear light and only its highlights are
 //    rolled off — the darks the dormant network lives in stay exactly as
 //    they are — then encoded for the canvas and dithered, so the faint
@@ -96,6 +99,48 @@ const EYE = /* glsl */ `
   }
 `;
 
+/**
+ * The air the network hangs in: a cool glow behind the form, falling to near
+ * black at the edges of the screen, then a vignette. Drawn as the backdrop,
+ * and what an opaque thing far off fades into, so depth reads as distance
+ * through air, not as a grey-out.
+ */
+const ATMOS = /* glsl */ `
+  // Where the form's centre falls on the canvas, and the glow's radius, device pixels.
+  uniform vec2 uBdCentre;
+  uniform float uBdR;
+  // The glow's core and the screen's edge, linear.
+  uniform vec3 uBdCore;
+  uniform vec3 uBdEdge;
+  vec3 backdrop(vec2 fc) {
+    float r = length(fc - uBdCentre) / max(uBdR, 1.0);
+    vec3 c = mix(uBdCore, uBdEdge, smoothstep(0.0, 1.0, r));
+    return c * (1.0 - 0.45 * smoothstep(0.6, 1.3, r));
+  }
+`;
+
+/**
+ * Light the found notes give their neighbours: up to eight emitters, each a
+ * world position and level, and a colour. It falls off within uEmitReach, so
+ * a find lights the gems and threads round it, never the whole cluster.
+ */
+const EMIT = /* glsl */ `
+  #define EMITTERS 8
+  uniform vec4 uEmit[EMITTERS];
+  uniform vec3 uEmitCol[EMITTERS];
+  uniform float uEmitReach;
+  vec3 emitLight(vec3 p) {
+    vec3 l = vec3(0.0);
+    for (int i = 0; i < EMITTERS; i++) {
+      vec4 e = uEmit[i];
+      if (e.w <= 0.0) continue;
+      float d = distance(p, e.xyz) / max(uEmitReach, 1e-5);
+      l += uEmitCol[i] * e.w * (1.0 - smoothstep(0.55, 1.0, d)) / (1.0 + 18.0 * d * d);
+    }
+    return l;
+  }
+`;
+
 /** The depth, near and focus fades. */
 const FADE = /* glsl */ `
   uniform vec3 uTarget;
@@ -108,8 +153,6 @@ const FADE = /* glsl */ `
   uniform vec2 uNearFade;
   // How much of the dimming beyond the focus applies, 0–1: the depth cue knob.
   uniform float uCue;
-  // The canvas's clear colour, linear: what an opaque dormant thing fades into.
-  uniform vec3 uBackground;
 
   float depthOf(float depth) {
     return clamp(1.0 - (depth - uFocus) / max(uDepthRange, 1e-3), uDepthFloor, 1.0);
@@ -156,42 +199,69 @@ const KEY = /* glsl */ `
   const vec3 KEY = vec3(-0.3913, 0.6148, 0.6848);
 `;
 
-// -- The cage ---------------------------------------------------------------------
+// -- The backdrop -----------------------------------------------------------------
 
-export const CAGE_VS = /* glsl */ `
-  ${COMMON}
-  varying vec3 vWorld;
-  varying vec3 vView;
+export const BACKDROP_VS = /* glsl */ `
   void main() {
-    vec4 world = modelMatrix * vec4(position, 1.0);
-    vec4 mv = viewMatrix * world;
-    gl_Position = projectionMatrix * mv;
-    vWorld = world.xyz;
-    vView = mv.xyz;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
   }
 `;
 
-export const CAGE_FS = /* glsl */ `
+export const BACKDROP_FS = /* glsl */ `
+  ${ATMOS}
+  ${OUT}
+  void main() {
+    finish(backdrop(gl_FragCoord.xy), 1.0);
+  }
+`;
+
+// -- The membrane -----------------------------------------------------------------
+
+export const MEMBRANE_VS = /* glsl */ `
+  ${COMMON}
+  varying vec3 vNormal;
+  varying vec3 vView;
+  varying vec3 vWorld;
+  varying vec3 vTint;
+  void main() {
+    vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vec4 mv = viewMatrix * world;
+    gl_Position = projectionMatrix * mv;
+    // A sphere scaled evenly: its normal is its position, turned with the frame.
+    vNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);
+    vView = mv.xyz;
+    vWorld = world.xyz;
+    vTint = instanceColor;
+  }
+`;
+
+export const MEMBRANE_FS = /* glsl */ `
   ${COMMON}
   ${EYE}
+  ${EMIT}
   ${FADE}
   ${OUT}
-  uniform vec3 uCage;
-  // The depths over which the cage comes in whole, world units: 0.8 and 1.8
-  // times the form's bounding radius, so from the overview all of it shows,
-  // and from a chase inside the hub the walls near the walk do not.
+  uniform float uMembrane;
+  // The depths over which the membrane comes in whole, world units: 0.8 and
+  // 1.8 times the form's bounding radius, so from the overview all of it
+  // shows, and from a chase inside the hub the walls near the walk do not.
   uniform vec2 uCageFar;
-  varying vec3 vWorld;
+  varying vec3 vNormal;
   varying vec3 vView;
+  varying vec3 vWorld;
+  varying vec3 vTint;
   void main() {
     float depth = -vView.z;
-    // Whole from afar, where it is the form's outline.
+    float ndv = abs(dot(normalize(vNormal), normalize(-vView)));
+    // Light only where the surface turns away: a contour, never a wall.
+    // Close up the contour is a thin line, so a bulb filling the screen
+    // never draws a thick ring.
     float afar = smoothstep(uCageFar.x, uCageFar.y, depth);
-    // Close up only where the eye looks, and never brighter than a third of a
-    // dormant link: its long straight edges must not read as threads. A wire
-    // faces every way, so the pool's facing term is taken as full.
+    float rim = pow(1.0 - ndv, mix(7.0, 3.0, afar));
     float pool = eyePool(vWorld, normalize(uEyePos - vWorld));
-    finishAdded(uCage * (afar + 0.35 * pool) * depthOf(depth) * nearOf(length(vView)));
+    vec3 c = vTint * uMembrane * (rim + 0.012 * afar) * (afar + 0.15 * pool);
+    c += emitLight(vWorld) * 0.02 * rim;
+    finishAdded(c * depthOf(depth) * nearOf(length(vView)));
   }
 `;
 
@@ -201,6 +271,7 @@ export const CRYSTAL_VS = /* glsl */ `
   ${COMMON}
   ${STATE}
   ${EYE}
+  ${EMIT}
   ${FADE}
   attribute vec3 aEdge;
   // The inner light's height and radius, and the keel's height: the same at every vertex of a kind.
@@ -228,6 +299,8 @@ export const CRYSTAL_VS = /* glsl */ `
   varying vec4 vLight;
   varying float vWhy;
   varying float vBand;
+  // The light found notes nearby throw on it.
+  varying vec3 vSpill;
 
   // The ignition's swell: to 1.3 in 0.12 s, then a damped settle.
   float popOf(float a) {
@@ -299,6 +372,7 @@ export const CRYSTAL_VS = /* glsl */ `
 
     // A gem faces every way: the pool's facing term is taken as full.
     vReveal = eyePool(coreWorld, normalize(uEyePos - coreWorld));
+    vSpill = emitLight(coreWorld);
     vFade = depthOf(-coreView.z) * focusOf(coreWorld, 0.35);
     vPx = length(c0) * uPx / max(-vCore.z, 1e-3);
   }
@@ -306,10 +380,10 @@ export const CRYSTAL_VS = /* glsl */ `
 
 export const CRYSTAL_FS = /* glsl */ `
   ${COMMON}
+  ${ATMOS}
   ${OUT}
   ${KEY}
   uniform vec3 uGlass;
-  uniform vec3 uBackground;
   uniform float uPip;
   uniform float uRim;
   uniform vec3 uRimTint;
@@ -331,6 +405,7 @@ export const CRYSTAL_FS = /* glsl */ `
   varying vec4 vLight;
   varying float vWhy;
   varying float vBand;
+  varying vec3 vSpill;
 
   void main() {
     vec3 n = normalize(vNormal);
@@ -347,9 +422,15 @@ export const CRYSTAL_FS = /* glsl */ `
     float e = min(min(vEdge.x, vEdge.y), vEdge.z);
     float edge = (1.0 - smoothstep(0.0, 1.5 * fwidth(e), e)) * smoothstep(4.0, 10.0, vPx);
     c += uAccent * vReveal * (spec * uSpec + 0.04 + 0.3 * edge);
-    // Further off, towards the background: an opaque gem dimmed towards
-    // black would stand out from afar as a hole in it.
-    c = mix(uBackground, c, mix(0.3, 1.0, vFade));
+    // Everywhere, a faint glint of the key and engraved edges: glass catches
+    // light even where the eye is not looking, so the network never goes flat.
+    float glint = pow(max(dot(n, normalize(KEY + v)), 0.0), 60.0);
+    c += uRimTint * (0.05 * glint + 0.03 * edge);
+    // Lit by the finds round it: most on the rim, where glass gathers light.
+    c += vSpill * (0.12 + 0.9 * rim + 0.5 * edge);
+    // Further off, into the air behind: an opaque gem dimmed towards black
+    // would stand out from afar as a hole in it.
+    c = mix(backdrop(gl_FragCoord.xy), c, mix(0.3, 1.0, vFade));
 
     // The light inside: a sphere seen through the glass, the chord the eye's ray cuts through it.
     vec3 rd = normalize(vView);
@@ -372,7 +453,8 @@ export const CRYSTAL_FS = /* glsl */ `
     float level;
     if (lit > 0.0) {
       vec3 why = uWhy[int(clamp(vWhy, 0.0, 3.0) + 0.5)];
-      light = mix(why, vec3(1.0), 0.6 * vLight.w);
+      // The flash runs towards warm white, and only partway: the core keeps its colour and its facets.
+      light = mix(why, vec3(1.0, 0.945, 0.878), 0.3 * vLight.w);
       level = lit * uCoreLit;
     } else if (reading > ember) {
       light = uReadColour;
@@ -398,6 +480,7 @@ export const FILAMENT_VS = /* glsl */ `
   ${COMMON}
   ${STATE}
   ${EYE}
+  ${EMIT}
   ${FADE}
   attribute vec3 aA;
   attribute vec3 aB;
@@ -463,9 +546,9 @@ export const FILAMENT_VS = /* glsl */ `
     // A thread faces every way: the pool's facing term is taken as full.
     float reveal = eyePool(p, normalize(uEyePos - p));
     float fade = depthOf(depth) * focusOf(p, 0.3);
-    // Opaque, so faded towards the background, as the brain's additive lines
-    // recede into it, not drawn darker than the canvas it crosses.
-    vColour = mix(uBackground, aTint * uFilGlow, fade) + uAccent * 0.15 * reveal;
+    // Added light, as the brain's lines are: it recedes into the air with
+    // depth, and where threads cross their light adds up.
+    vColour = aTint * uFilGlow * fade + uAccent * 0.15 * reveal + emitLight(p) * 0.3;
     vFromGrip = fromGrip;
     vFlash = flash;
     vEye = (atB ? b : a).xyz;
@@ -483,14 +566,15 @@ export const FILAMENT_FS = /* glsl */ `
   varying float vFlash;
   varying vec3 vEye;
   void main() {
-    // Coverage across the ribbon, for alpha to coverage: solid in the middle,
-    // a pixel of fringe — and less of it near the camera, per fragment, so a
-    // long chord passing the camera fades where it passes, not by its ends.
+    // Coverage across the ribbon, worked out here rather than by the
+    // multisampler: solid in the middle, a pixel of soft fringe, so a thin
+    // diagonal never breaks into dots — and less of it near the camera, per
+    // fragment, so a long chord passing the camera fades where it passes.
     float cover = clamp(vHalf - abs(vAcross), 0.0, 1.0) * nearOf(length(vEye));
     if (cover <= 0.0) discard;
     // The whole thread flashes faintly; round the claw, brightly.
     float g = vFlash * (0.06 + 0.94 * exp(-vFromGrip * vFromGrip));
-    finish(vColour * (1.0 + 2.0 * g) + uAccent * 0.5 * g, cover);
+    finishAdded((vColour * (1.0 + 2.0 * g) + uAccent * 0.5 * g) * cover);
   }
 `;
 
@@ -632,7 +716,7 @@ export const HALO_VS = /* glsl */ `
     float breath = 1.0 + moving * 0.12 * sin(6.2831853 * (uTime / 3.2 + aSeed));
     float depth = max(-mv.z, 1e-3);
     // As wide as its radius says, but never a speck from afar nor a fog close up.
-    float px = clamp(uHaloR * uPx / depth, 6.0 * uDpr, 48.0 * uDpr);
+    float px = clamp(uHaloR * uPx / depth, 8.0 * uDpr, 160.0 * uDpr);
     // Brought forward by its radius, so the threads and crystals beside it
     // never cut it in half; depth-tested still, so a gem in front hides it.
     float k = max(0.5, 1.0 - px / uPx);
@@ -652,7 +736,8 @@ export const HALO_FS = /* glsl */ `
   void main() {
     float d2 = dot(vUv, vUv);
     if (d2 >= 1.0) discard;
-    finishAdded(vColour * exp(-d2 * 4.0) * (1.0 - d2));
+    // A tight core of light and a wide, soft skirt: the glow of a lens, not a disc.
+    finishAdded(vColour * (0.55 * exp(-d2 * 14.0) + 0.45 * exp(-d2 * 3.0)) * (1.0 - d2));
   }
 `;
 
