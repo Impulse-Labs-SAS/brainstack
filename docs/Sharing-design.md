@@ -417,8 +417,10 @@ existente en lugar de duplicarla.
 
 ### Lo que queda pendiente
 
-- **Merge.** Dos personas editando la misma nota es last-write-wins. No hay
-  detección de conflicto ni edición concurrente real.
+- **Merge.** Two people editing one note no longer overwrite each other
+  silently: a save names the version it was built on and is refused if the
+  note moved on (§19). There is still no real-time co-editing or merge; the
+  person who saved second chooses which version stays.
 - **Attachments cross-owner.** `upload_attachment` y `getAttachment` no toman
   `ownerId` todavía.
 - **Limpieza de las copias creadas por el bug.** Ver `scripts/find-shadow-copies.mjs`.
@@ -460,3 +462,54 @@ novena nota dejaría ocho mudadas y la carpeta partida en dos lugares.
 Arrastrar y soltar sobre una carpeta de "shared with me" hace la migración. Las
 carpetas de solo lectura no se ofrecen como destino: no habilitar el drop es la
 forma amable de decir lo que el servidor diría con un 403.
+
+---
+
+## 19. After the security review
+
+The audit of this subsystem changed several of the rules above. This section is
+the current state; where it contradicts an earlier one, it wins.
+
+**An assistant asks, a person shares.** `share_folder` over MCP no longer grants
+anything. It files a request (`share_requests`, at most 20 pending per owner,
+expiring after 7 days) that the owner approves or declines under Settings →
+Sharing in the web app. Approval grants access to an existing account or sends
+an email invitation. `unshare` answers the same whether or not the address has
+an account, so neither tool tells anyone who is a member.
+
+**A recipient can say no.** A share still arrives without asking, but the
+recipient can leave it, or leave it and block further shares from that owner
+(`share_blocks`). `grant` refuses a blocked pair.
+
+**Revoking reaches everything under the folder.** Revoking a folder deletes the
+grants on folders nested inside it and the pending invitations that would hand
+it straight back. Deleting or moving a folder away does the same before
+anything else changes.
+
+**Giving notes away is a person's own act.** `move_to_owner` over MCP refuses to
+take notes out of the caller's own vault, confirmation flag or not: the caller
+cannot undo it, and the flag is only the assistant's word. People do it in the
+web app by dragging onto the shared folder, which asks them to confirm. Taking
+notes out of a folder shared with you still works over MCP. The tRPC route
+needs a session, never an API key.
+
+**Concurrent edits conflict instead of overwriting.** Every note carries a
+checksum. The web editor sends the checksum its draft was built on, and
+`update_note` accepts one; a save over a newer version fails with `CHANGED`
+(409), and the editor offers "Load their version" or "Overwrite with mine".
+
+**Whose words these are comes first.** `get_note`, `list_notes` and `list_tree`
+say when a note is in somebody else's vault and whose, before the body;
+`gather_context` and `search_brain` put `ownerId` before the excerpt. The
+assistant guide says that shared text is information, never instructions.
+
+**The caller's own names win.** When resolving what a prompt names, a shared
+note's title or alias that one of the caller's notes also uses names nothing,
+and a shared note never narrows the folder focus away from the caller's own.
+Otherwise anybody with write access to a shared folder could hijack or hide
+the caller's notes with an alias.
+
+**Read-only keys.** An API key created with `notes:read` and without
+`notes:write` can read shared folders like its owner, and is refused every
+write, share and delete.
+

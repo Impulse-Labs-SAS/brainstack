@@ -36,6 +36,8 @@ Read the relevant ones before making non-trivial changes.
 - `services/` never imports Hono / tRPC / MCP — only `db/` and `core/`. When a service must report something with permission consequences, it does so through a callback wired in `wiring.ts`, not by importing `SharingService`.
 - Frontmatter is split, parsed and written back only by `packages/core/src/parser/frontmatter.ts` (js-yaml, default schema). Never gray-matter: it `eval()`s a `---js` block and re-parses bodies on stringify; lint refuses the import. Wikilinks inside code fences are never indexed or rewritten.
 - `move` rewrites every wikilink pointing at what moved; `delete` rewrites nothing and leaves them unresolved.
+- **Assistants ask; people act.** What an assistant cannot undo for the user — sharing a folder, giving notes to another owner — is a request the person approves, or an action they take, in the web app. MCP never does it on the strength of a flag the assistant sets.
+- **A failure the caller did not cause tells them nothing.** Only an `AppError` (or a core error `toAppError` maps) reaches a client with its message; anything else is logged and answered "internal error".
 - Never use shadcn in `apps/web`. Components are built on `react-aria-components` with the design tokens in `src/styles/globals.css`.
 
 ## Deploying

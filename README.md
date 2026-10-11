@@ -118,11 +118,11 @@ The web app's sidebar has **Connect AI** and **Skill** dialogs with this instanc
 
 ### Claude Desktop, claude.ai and other clients that support OAuth
 
-Add `https://<your-domain>/api/mcp` as a connector (in Claude: **Settings → Connectors**). The client sends you to BrainStack to sign in and approve access.
+Add `https://<your-domain>/api/mcp` as a connector (in Claude: **Settings → Connectors**). The client sends you to BrainStack to sign in and approve access; the approval page shows where access will be sent, so check it is the app you are connecting. **Settings → Connected AI clients** lists every client you approved and disconnects any of them.
 
 ### Claude Code, Cursor and clients that take a token
 
-Generate an API key in the web app (**Settings → API keys**), then:
+Generate an API key in the web app (**Settings → API keys**) — tick **Read only** for an assistant that should search and read but never change anything — then:
 
 ```bash
 claude mcp add brainstack --transport http https://<your-domain>/api/mcp \
