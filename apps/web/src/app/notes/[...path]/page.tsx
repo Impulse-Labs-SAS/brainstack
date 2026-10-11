@@ -79,7 +79,10 @@ export default function NotePage() {
 
   const note = trpc.notes.get.useQuery(
     { path },
-    { enabled: !!urlPath, placeholderData: keepPreviousData },
+    // Refetched on focus, unlike the app's default: coming back to a tab is
+    // when someone else's edit is most likely waiting, and a clean draft
+    // picks it up (see the resync below).
+    { enabled: !!urlPath, placeholderData: keepPreviousData, refetchOnWindowFocus: true },
   );
   const backlinks = trpc.notes.backlinks.useQuery(
     { path },
@@ -188,6 +191,27 @@ export default function NotePage() {
    */
   const savedContentRef = useRef<string | null>(null);
 
+  /**
+   * The checksum of the version the draft was based on. Every save sends it,
+   * and the server refuses the write if the note moved on since — another tab,
+   * a collaborator on a shared folder, an assistant, a link rewritten by a
+   * move. Without it the autosave replaced their work with a draft that had
+   * never seen it.
+   */
+  const checksumRef = useRef<string | null>(null);
+  /** Someone else's save got in first; autosave waits for the reader to choose. */
+  const [conflict, setConflict] = useState(false);
+  /**
+   * One save at a time. A second one sent while the first is out would carry
+   * the checksum the first is about to replace, and conflict with itself.
+   * `saveTick` re-runs the autosave once a save lands, for whatever was typed
+   * while it was out.
+   */
+  const savingRef = useRef(false);
+  const [saveTick, setSaveTick] = useState(0);
+  const pathRef = useRef(path);
+  pathRef.current = path;
+
   /** Stable across renders, unlike the mutation object it comes from. */
   const saveRef = useRef(update.mutate);
   saveRef.current = update.mutate;
@@ -203,8 +227,23 @@ export default function NotePage() {
     setDraft(body);
     setDraftPath(path);
     savedContentRef.current = body;
+    checksumRef.current = note.data.checksum;
+    setConflict(false);
     setSavedAt(null);
     setJustSaved(false);
+  }, [note.data, note.isPlaceholderData, path, draftPath]);
+
+  // A newer version arrived (a refetch after someone else's save). With
+  // nothing unsaved here it simply replaces the draft; with unsaved edits the
+  // draft is kept, and its next save reports the conflict.
+  useEffect(() => {
+    if (!note.data || note.isPlaceholderData || draftPath !== path) return;
+    if (note.data.checksum === checksumRef.current || savingRef.current) return;
+    if (draftRef.current !== savedContentRef.current) return;
+    const body = reconstructBody(note.data);
+    checksumRef.current = note.data.checksum;
+    savedContentRef.current = body;
+    setDraft(body);
   }, [note.data, note.isPlaceholderData, path, draftPath]);
 
   // Recent notes, for the sidebar and the quick switcher.
@@ -217,17 +256,30 @@ export default function NotePage() {
     if (draft === null) return;
     // Belongs to the note on screen, not to one being navigated away from.
     if (draftPath !== path) return;
+    if (conflict || savingRef.current) return;
     if (draft === savedContentRef.current) return;
 
     const handle = setTimeout(() => {
       const pending = draft;
+      const savingPath = path;
+      savingRef.current = true;
       saveRef.current(
         // Named explicitly: this is the note open in your own vault, so a
         // shared folder of the same name must not make it unwritable.
-        { path, content: pending, ownerId: mine },
         {
-          onSuccess: () => {
+          path,
+          content: pending,
+          ownerId: mine,
+          ...(checksumRef.current ? { expectedChecksum: checksumRef.current } : {}),
+        },
+        {
+          onSuccess: (saved) => {
+            // A save that lands after navigating away belongs to that note,
+            // not to the one now on screen.
+            if (pathRef.current !== savingPath) return;
             savedContentRef.current = pending;
+            checksumRef.current = saved.checksum;
+            setSaveTick((t) => t + 1);
             setSavedAt(Date.now());
             setJustSaved(true);
             // Links may have changed (wikilinks added/removed): the full
@@ -243,11 +295,42 @@ export default function NotePage() {
             void utils.notes.related.invalidate();
             void utils.notes.unlinkedMentions.invalidate();
           },
+          onError: (err) => {
+            if (pathRef.current !== savingPath) return;
+            if (err.data?.code === 'CONFLICT') setConflict(true);
+            else setActionError(`Not saved: ${err.message}. It is retried on the next edit.`);
+          },
+          onSettled: () => {
+            savingRef.current = false;
+          },
         },
       );
     }, 600);
     return () => clearTimeout(handle);
-  }, [draft, draftPath, path, mine, utils]);
+  }, [draft, draftPath, path, mine, utils, conflict, saveTick]);
+
+  /**
+   * Out of a conflict, either way the draft now builds on the newest version:
+   * "theirs" replaces it, "mine" keeps it and saves it over theirs.
+   */
+  const resolveConflict = useCallback(
+    async (keep: 'theirs' | 'mine') => {
+      try {
+        await utils.notes.get.invalidate({ path });
+        const fresh = await utils.notes.get.fetch({ path });
+        checksumRef.current = fresh.checksum;
+        if (keep === 'theirs') {
+          const body = reconstructBody(fresh);
+          savedContentRef.current = body;
+          setDraft(body);
+        }
+        setConflict(false);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : 'Could not load the note');
+      }
+    },
+    [path, utils],
+  );
 
   useEffect(() => {
     if (!justSaved) return;
@@ -282,6 +365,7 @@ export default function NotePage() {
               // Checked again: the fetch is a second round trip to type during.
               if (draftRef.current === draftAtDispatch) {
                 savedContentRef.current = body;
+                checksumRef.current = fresh.checksum;
                 setDraft(body);
               }
             }
@@ -463,11 +547,13 @@ export default function NotePage() {
   const crumbs = folder
     ? folder.split('/').map((label, i, all) => ({ label, path: all.slice(0, i + 1).join('/') }))
     : [];
-  const status: { kind: 'saving' | 'saved' | 'idle'; text: string } = update.isPending
-    ? { kind: 'saving', text: 'Saving…' }
-    : justSaved
-      ? { kind: 'saved', text: 'Saved' }
-      : { kind: 'idle', text: `Edited ${relativeTime(savedAt ?? note.data.mtime)}` };
+  const status: { kind: 'saving' | 'saved' | 'idle'; text: string } = conflict
+    ? { kind: 'idle', text: 'Not saved' }
+    : update.isPending
+      ? { kind: 'saving', text: 'Saving…' }
+      : justSaved
+        ? { kind: 'saved', text: 'Saved' }
+        : { kind: 'idle', text: `Edited ${relativeTime(savedAt ?? note.data.mtime)}` };
   const mentionCount =
     (mentions.data?.incoming.length ?? 0) + (mentions.data?.outgoing.length ?? 0);
   const backlinkSources = new Set((backlinks.data ?? []).map((b) => b.sourcePath)).size;
@@ -494,6 +580,33 @@ export default function NotePage() {
           menu={menu}
           mod={mod}
         />
+        {conflict && (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-700/40 bg-amber-950/40 px-4 py-1.5 text-xs text-amber-200"
+          >
+            <span>
+              Someone else saved this note after you opened it. Your edits are still here, but not
+              saved.
+            </span>
+            <span className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => void resolveConflict('theirs')}
+                className="underline"
+              >
+                Load their version
+              </button>
+              <button
+                type="button"
+                onClick={() => void resolveConflict('mine')}
+                className="underline"
+              >
+                Overwrite with mine
+              </button>
+            </span>
+          </div>
+        )}
         {actionError && (
           <div
             role="alert"

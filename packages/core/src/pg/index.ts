@@ -25,6 +25,7 @@ export {
 export { PREFIX_CONFIG, STEM_CONFIG } from './schema.js';
 export {
   NoteAlreadyExistsError as PgNoteAlreadyExistsError,
+  NoteChangedError as PgNoteChangedError,
   NoteNotFoundError as PgNoteNotFoundError,
   PgNoteStore,
   escapeLike,

@@ -282,14 +282,24 @@ export function buildMcpServer({
     'update_note',
     {
       title: 'Update a note',
-      description: 'Replace the contents of an existing note. Fails if the note does not exist.',
-      inputSchema: { path: field().min(1), content: noteContent(), ownerId: OWNER_ARG },
+      description:
+        'Replace the contents of an existing note. Fails if the note does not exist. Pass the `checksum` get_note returned as `expectedChecksum` so the write is refused, instead of overwriting, if someone changed the note since you read it.',
+      inputSchema: {
+        path: field().min(1),
+        content: noteContent(),
+        ownerId: OWNER_ARG,
+        expectedChecksum: field()
+          .optional()
+          .describe('The checksum get_note returned; the update fails with CHANGED if the note moved on.'),
+      },
     },
-    async ({ path, content, ownerId }) => {
+    async ({ path, content, ownerId, expectedChecksum }) => {
       try {
         await assertWrite(path, ownerId);
-        const final = await notes.update(ownerOf(ownerId), path, content);
-        return TEXT(`Updated ${final}`);
+        const final = await notes.update(ownerOf(ownerId), path, content, {
+          ...(expectedChecksum ? { expectedChecksum } : {}),
+        });
+        return TEXT(`Updated ${final.path} (checksum ${final.checksum})`);
       } catch (err) {
         return toMcpError(err);
       }

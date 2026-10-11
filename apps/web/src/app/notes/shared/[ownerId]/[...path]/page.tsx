@@ -53,7 +53,9 @@ export default function SharedNotePage() {
   const isNote = !!sharedWithMe.data && !isFolder;
   const note = trpc.notes.getForOwner.useQuery(
     { ownerId, path },
-    { enabled: isNote && !!ownerId, placeholderData: keepPreviousData },
+    // Refetched on focus: on a shared note, someone else's edit is the
+    // expected case, and a clean draft picks it up.
+    { enabled: isNote && !!ownerId, placeholderData: keepPreviousData, refetchOnWindowFocus: true },
   );
   const linksQ = trpc.notes.linksForOwner.useQuery(
     { ownerId, path },
@@ -76,6 +78,18 @@ export default function SharedNotePage() {
   const [draftPath, setDraftPath] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const savedContentRef = useRef<string | null>(null);
+  const draftRef = useRef<string | null>(null);
+  draftRef.current = draft;
+  // Every save names the version it builds on, one save at a time; see the
+  // own-note view for why. Here it matters most: the owner and everyone else
+  // with write access edit the same note.
+  const checksumRef = useRef<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const savingRef = useRef(false);
+  const [saveTick, setSaveTick] = useState(0);
+  const pathRef = useRef(path);
+  pathRef.current = path;
   const saveRef = useRef(update.mutate);
   saveRef.current = update.mutate;
 
@@ -86,31 +100,84 @@ export default function SharedNotePage() {
     setDraft(body);
     setDraftPath(path);
     savedContentRef.current = body;
+    checksumRef.current = note.data.checksum;
+    setConflict(false);
+    setSaveError(null);
     setSavedAt(null);
+  }, [note.data, note.isPlaceholderData, path, draftPath]);
+
+  // A newer version with nothing unsaved here replaces the draft.
+  useEffect(() => {
+    if (!note.data || note.isPlaceholderData || draftPath !== path) return;
+    if (note.data.checksum === checksumRef.current || savingRef.current) return;
+    if (draftRef.current !== savedContentRef.current) return;
+    const body = reconstructBody(note.data);
+    checksumRef.current = note.data.checksum;
+    savedContentRef.current = body;
+    setDraft(body);
   }, [note.data, note.isPlaceholderData, path, draftPath]);
 
   useEffect(() => {
     if (!canWrite || draft === null) return;
     if (draftPath !== path) return;
+    if (conflict || savingRef.current) return;
     if (draft === savedContentRef.current) return;
 
     const handle = setTimeout(() => {
       const pending = draft;
+      const savingPath = path;
+      savingRef.current = true;
       saveRef.current(
-        { ownerId, path, content: pending },
         {
-          onSuccess: () => {
+          ownerId,
+          path,
+          content: pending,
+          ...(checksumRef.current ? { expectedChecksum: checksumRef.current } : {}),
+        },
+        {
+          onSuccess: (saved) => {
+            if (pathRef.current !== savingPath) return;
             savedContentRef.current = pending;
+            checksumRef.current = saved.checksum;
+            setSaveError(null);
+            setSaveTick((t) => t + 1);
             setSavedAt(Date.now());
             // Same reasoning as the own-note view: links may have changed.
             void utils.notes.graph.invalidate();
             void utils.notes.linksForOwner.invalidate();
           },
+          onError: (err) => {
+            if (pathRef.current !== savingPath) return;
+            if (err.data?.code === 'CONFLICT') setConflict(true);
+            else setSaveError(`Not saved: ${err.message}. It is retried on the next edit.`);
+          },
+          onSettled: () => {
+            savingRef.current = false;
+          },
         },
       );
     }, 600);
     return () => clearTimeout(handle);
-  }, [canWrite, draft, draftPath, path, ownerId, utils]);
+  }, [canWrite, draft, draftPath, path, ownerId, utils, conflict, saveTick]);
+
+  const resolveConflict = useCallback(
+    async (keep: 'theirs' | 'mine') => {
+      try {
+        await utils.notes.getForOwner.invalidate({ ownerId, path });
+        const fresh = await utils.notes.getForOwner.fetch({ ownerId, path });
+        checksumRef.current = fresh.checksum;
+        if (keep === 'theirs') {
+          const body = reconstructBody(fresh);
+          savedContentRef.current = body;
+          setDraft(body);
+        }
+        setConflict(false);
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : 'Could not load the note');
+      }
+    },
+    [ownerId, path, utils],
+  );
 
   // -- Layout: the tree on the left (the layout's), connections on the right -
 
@@ -165,11 +232,13 @@ export default function SharedNotePage() {
 
   const status = !canWrite
     ? ({ kind: 'readonly', text: 'Read only' } as const)
-    : update.isPending
-      ? ({ kind: 'saving', text: 'Saving…' } as const)
-      : savedAt
-        ? ({ kind: 'saved', text: `Saved ${new Date(savedAt).toLocaleTimeString()}` } as const)
-        : ({ kind: 'idle', text: 'Shared · can edit' } as const);
+    : conflict
+      ? ({ kind: 'idle', text: 'Not saved' } as const)
+      : update.isPending
+        ? ({ kind: 'saving', text: 'Saving…' } as const)
+        : savedAt
+          ? ({ kind: 'saved', text: `Saved ${new Date(savedAt).toLocaleTimeString()}` } as const)
+          : ({ kind: 'idle', text: 'Shared · can edit' } as const);
   const outgoing = new Set((linksQ.data ?? []).map((l) => l.targetPath)).size;
   const menu: NoteMenuItem[] = [
     {
@@ -198,6 +267,44 @@ export default function SharedNotePage() {
         menu={menu}
         mod={mod}
       />
+      {conflict && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-700/40 bg-amber-950/40 px-4 py-1.5 text-xs text-amber-200"
+        >
+          <span>
+            Someone else saved this note after you opened it. Your edits are still here, but not
+            saved.
+          </span>
+          <span className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => void resolveConflict('theirs')}
+              className="underline"
+            >
+              Load their version
+            </button>
+            <button
+              type="button"
+              onClick={() => void resolveConflict('mine')}
+              className="underline"
+            >
+              Overwrite with mine
+            </button>
+          </span>
+        </div>
+      )}
+      {saveError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-red-700/40 bg-red-950/40 px-4 py-1.5 text-xs text-red-200"
+        >
+          {saveError}
+          <button type="button" onClick={() => setSaveError(null)} className="underline">
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="relative flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-hidden">
           <NoteEditor
