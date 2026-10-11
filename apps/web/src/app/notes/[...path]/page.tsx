@@ -276,10 +276,12 @@ export default function NotePage() {
           onSuccess: (saved) => {
             // A save that lands after navigating away belongs to that note,
             // not to the one now on screen.
+            // Re-runs the autosave for whatever was typed while this was out —
+            // on this note or, after navigating, on the one now open.
+            setSaveTick((t) => t + 1);
             if (pathRef.current !== savingPath) return;
             savedContentRef.current = pending;
             checksumRef.current = saved.checksum;
-            setSaveTick((t) => t + 1);
             setSavedAt(Date.now());
             setJustSaved(true);
             // Links may have changed (wikilinks added/removed): the full

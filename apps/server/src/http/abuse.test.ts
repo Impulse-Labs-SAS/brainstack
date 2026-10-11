@@ -122,11 +122,11 @@ describe('purgeExpired', () => {
       codeVerifier: verifier,
     });
 
-    // Not yet a day old: both stay.
+    // Not yet a week old: both stay.
     await purgeExpired(database.db, { now: Date.now() + 60 * 60 * 1000 });
     expect(await oauth.getClient(idle.id)).not.toBeNull();
 
-    await purgeExpired(database.db, { now: Date.now() + 25 * 60 * 60 * 1000 });
+    await purgeExpired(database.db, { now: Date.now() + 8 * 24 * 60 * 60 * 1000 });
     expect(await oauth.getClient(idle.id)).toBeNull();
     // Its refresh token lives for months, so the client in use stays.
     expect(await oauth.getClient(used.id)).not.toBeNull();

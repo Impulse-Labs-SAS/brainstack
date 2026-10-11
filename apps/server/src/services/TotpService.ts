@@ -192,6 +192,26 @@ export class TotpService {
       );
     }
 
+    // The guess is counted before it is checked. Counting afterwards let a
+    // burst of parallel requests all read "no failures, not locked" and all
+    // be checked: hundreds of guesses per lock cycle instead of five. The
+    // conditional increment admits at most MAX_FAILED_ATTEMPTS at a time.
+    const [reserved] = await this.opts.db
+      .update(users)
+      .set({ totpFailedAttempts: sql`${users.totpFailedAttempts} + 1` })
+      .where(
+        and(
+          eq(users.id, userId),
+          sql`${users.totpFailedAttempts} < ${MAX_FAILED_ATTEMPTS}`,
+          sql`(${users.totpLockedUntil} IS NULL OR ${users.totpLockedUntil} <= ${now})`,
+        ),
+      )
+      .returning({ failed: users.totpFailedAttempts });
+    if (!reserved) {
+      await this.lock(userId, now);
+      throw new AppError('too many wrong codes; try again in 15 minutes', 'RATE_LIMITED', 429);
+    }
+
     const step = matchingStep(row.totpSecret, code, Math.floor(now / 1000));
     if (step !== null && (row.lastStep == null || step > row.lastStep)) {
       // Conditional, so two requests carrying the same code cannot both pass.
@@ -216,22 +236,21 @@ export class TotpService {
       return true;
     }
 
-    await this.recordFailure(userId, now);
+    if (reserved.failed >= MAX_FAILED_ATTEMPTS) await this.lock(userId, now);
     return false;
   }
 
-  private async recordFailure(userId: string, now: number): Promise<void> {
-    const [row] = await this.opts.db
+  /** Lock the second factor, unless a lock is already running. */
+  private async lock(userId: string, now: number): Promise<void> {
+    await this.opts.db
       .update(users)
-      .set({ totpFailedAttempts: sql`${users.totpFailedAttempts} + 1` })
-      .where(eq(users.id, userId))
-      .returning({ failed: users.totpFailedAttempts });
-    if (row && row.failed >= MAX_FAILED_ATTEMPTS) {
-      await this.opts.db
-        .update(users)
-        .set({ totpFailedAttempts: 0, totpLockedUntil: now + LOCK_MS })
-        .where(eq(users.id, userId));
-    }
+      .set({ totpFailedAttempts: 0, totpLockedUntil: now + LOCK_MS })
+      .where(
+        and(
+          eq(users.id, userId),
+          sql`(${users.totpLockedUntil} IS NULL OR ${users.totpLockedUntil} <= ${now})`,
+        ),
+      );
   }
 
   private async consumeBackupCode(userId: string, raw: string): Promise<boolean> {

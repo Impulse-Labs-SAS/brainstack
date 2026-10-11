@@ -92,7 +92,11 @@ async function boot(): Promise<Hono<never>> {
 
   // No process outlives a request here, so expired sessions, links and OAuth
   // rows are cleared whenever a container starts.
-  await purgeExpired(db, { logger });
+  // Housekeeping never stands between the server and its first request: a
+  // purge that fails is logged and tried again later.
+  await purgeExpired(db, { logger }).catch((err: unknown) =>
+    logger.warn({ err }, 'purging expired rows failed at startup'),
+  );
 
   // Notes written before ownership existed belong to nobody and are listed by
   // nobody. Claiming them before the first listing keeps them from vanishing.

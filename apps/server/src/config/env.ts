@@ -47,9 +47,22 @@ const Env = z.object({
    * writes — Caddy in docker-compose.yml. `direct` uses the socket address,
    * for a server with nothing in front. The Netlify function sets its own.
    */
+  // `proxy`, `direct`, or `header:<Name>` for a CDN or tunnel in front of
+  // Caddy that names the client in a header of its own (CF-Connecting-IP).
   TRUSTED_PROXY: z.preprocess(
     (v) => (v === '' ? undefined : v),
-    z.enum(['proxy', 'direct']).default('proxy'),
+    z
+      .union([
+        z.enum(['proxy', 'direct']),
+        z
+          .string()
+          .regex(
+            /^header:[A-Za-z0-9-]+$/,
+            'TRUSTED_PROXY must be proxy, direct, or header:<Header-Name>',
+          )
+          .transform((v) => v as `header:${string}`),
+      ])
+      .default('proxy'),
   ),
   // Email. Resend's API or any SMTP server; either needs AUTH_EMAIL_FROM.
   RESEND_API_KEY: z.string().optional(),
