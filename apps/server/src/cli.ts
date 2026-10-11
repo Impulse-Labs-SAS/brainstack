@@ -38,7 +38,7 @@ async function main(argv: string[]): Promise<number> {
     const password = await auth.resetPasswordFromServer(email);
     process.stdout.write(
       `New password for ${email}:\n\n  ${password}\n\n` +
-        'Every session of this account was signed out. ' +
+        'Every session and connected AI client of this account was signed out. ' +
         'Sign in with it, then change it under Settings → Account.\n',
     );
     return 0;

@@ -93,6 +93,18 @@ describe('POST /google/unlink', () => {
 });
 
 describe('POST /logout', () => {
+  it('revokes the session the browser sends as a cookie', async () => {
+    const { token, cookie } = await signedIn();
+
+    const res = await router.request('/logout', { method: 'POST', headers: { cookie } });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=;`);
+    expect(await auth.validateSession(token)).toBeNull();
+    const me = await router.request('/me', { headers: { cookie } });
+    expect(me.status).toBe(401);
+  });
+
   it('has invalidated the session by the time it answers', async () => {
     const { token } = await signedIn();
 
@@ -103,6 +115,25 @@ describe('POST /logout', () => {
 
     expect(res.status).toBe(200);
     expect(await auth.validateSession(token)).toBeNull();
+  });
+});
+
+describe('POST /change-password', () => {
+  it('signs out every other session and keeps the one that asked', async () => {
+    const user = await auth.ensureUser('pw@brain.test');
+    const password = await auth.resetPasswordFromServer('pw@brain.test');
+    const current = await auth.createSession(user.id);
+    const other = await auth.createSession(user.id);
+
+    const res = await router.request('/change-password', {
+      method: 'POST',
+      headers: { cookie: `${SESSION_COOKIE}=${current.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ currentPassword: password, newPassword: 'Another-Horse-10' }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await auth.validateSession(current.token)).not.toBeNull();
+    expect(await auth.validateSession(other.token)).toBeNull();
   });
 });
 

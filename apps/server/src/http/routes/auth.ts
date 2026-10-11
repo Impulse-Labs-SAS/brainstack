@@ -10,7 +10,7 @@
 // return JSON; when they create a session, they ALSO set the cookie.
 
 import { Hono, type Context } from 'hono';
-import { deleteCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { Logger } from 'pino';
 import { z } from 'zod';
 
@@ -130,7 +130,11 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
   // -- Logout -------------------------------------------------------------
 
   router.post('/logout', async (c) => {
-    const token = c.req.header('x-session-token') ?? c.req.query('token');
+    // The cookie first: it is HttpOnly, so the browser can only ever send it,
+    // never read it into a header. Reading the header alone left every web
+    // session valid for its full lifetime after "Sign out". The header stays
+    // for clients that hold the token themselves.
+    const token = getCookie(c, SESSION_COOKIE) ?? c.req.header('x-session-token');
     // Awaited: on a serverless runtime nothing is guaranteed to run once the
     // response is sent, and a logout that leaves the session valid is not one.
     if (token) await options.auth.revokeSession(token);
@@ -234,6 +238,7 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
         principal.user.id,
         parsed.data.currentPassword,
         parsed.data.newPassword,
+        getCookie(c, SESSION_COOKIE),
       );
       return c.json({ ok: true });
     } catch (err) {

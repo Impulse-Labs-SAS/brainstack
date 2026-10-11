@@ -433,6 +433,35 @@ describe('two accounts on a default instance', () => {
     await expect(bob.crawls.get({ id: crawlId! })).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  it('an API key cannot manage keys, the profile or sharing', async () => {
+    const user = asUser('alice', 'alice@brain.test');
+    const services = buildServices({
+      db: database.db,
+      logger: pino({ level: 'silent' }),
+      publicOrigin: 'http://localhost:3000',
+      authorizedEmails: new Set(),
+    });
+    const key = await services.apiKeys.create('alice', 'Assistant');
+    const viaKey = appRouter.createCaller(
+      buildContext(services, { kind: 'apiKey', apiKey: key, user }),
+    );
+
+    const refusals = [
+      viaKey.apiKeys.create({ name: 'minted' }),
+      viaKey.apiKeys.list(),
+      viaKey.apiKeys.revoke({ id: key.id }),
+      viaKey.auth.updateProfile({ displayName: 'x' }),
+      viaKey.sharing.createInvite({ folderPath: 'proj', mode: 'link' }),
+      viaKey.sharing.shareWithUser({ folderPath: 'proj', email: 'bob@brain.test' }),
+      viaKey.sharing.revoke({ folderPath: 'proj', sharedWithUserId: 'bob' }),
+    ];
+    for (const call of refusals) {
+      await expect(call).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    // Notes still work: that is what the key is for.
+    await expect(viaKey.notes.create({ path: 'n.md', content: '# N' })).resolves.toBeTruthy();
+  });
+
   it('records a crawl made with an API key as an assistant’s', async () => {
     const user = asUser('alice', 'alice@brain.test');
     const services = buildServices({

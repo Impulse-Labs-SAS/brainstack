@@ -6,6 +6,7 @@ import { AppError } from '../lib/errors.js';
 import { ApiKeyService } from './ApiKeyService.js';
 import { AuthService, validatePassword } from './AuthService.js';
 import { CapturingEmailSender } from './EmailSender.js';
+import { OAuthProviderService, pkceChallengeFrom } from './OAuthProviderService.js';
 import { createTestDatabase, type TestDatabase } from './testDb.js';
 
 const logger = pino({ level: 'silent' });
@@ -388,5 +389,36 @@ describe('AuthService.updateProfile', () => {
 
   it('fails on an unknown user', async () => {
     await expect(auth.updateProfile('nope', { displayName: 'x' })).rejects.toThrow(AppError);
+  });
+});
+
+describe('signing out everywhere', () => {
+  it('a password reset also revokes the tokens of connected AI clients', async () => {
+    const oauth = new OAuthProviderService({ db: database.db });
+    const user = await auth.ensureUser('oauth@brain.test');
+    const client = await oauth.registerClient({
+      name: 'Assistant',
+      redirectUris: ['https://client.test/cb'],
+    });
+    const verifier = 'v'.repeat(64);
+    const code = await oauth.createAuthorizationCode({
+      clientId: client.id,
+      userId: user.id,
+      redirectUri: 'https://client.test/cb',
+      codeChallenge: pkceChallengeFrom(verifier),
+      scope: 'mcp',
+    });
+    const issued = await oauth.exchangeAuthorizationCode({
+      code,
+      clientId: client.id,
+      redirectUri: 'https://client.test/cb',
+      codeVerifier: verifier,
+    });
+    expect(await oauth.validateAccessToken(issued!.accessToken)).not.toBeNull();
+
+    await auth.resetPasswordFromServer('oauth@brain.test');
+
+    expect(await oauth.validateAccessToken(issued!.accessToken)).toBeNull();
+    expect(await oauth.refresh({ refreshToken: issued!.refreshToken, clientId: client.id })).toBeNull();
   });
 });
