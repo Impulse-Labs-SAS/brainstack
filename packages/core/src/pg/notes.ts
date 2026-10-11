@@ -494,18 +494,24 @@ export class PgNoteStore {
     return deleted.length;
   }
 
-  /** Every note path in the brain. Used to resolve wikilinks. */
-  private async allNotePaths(): Promise<Set<string>> {
-    const rows = await this.db.select({ path: notes.path }).from(notes);
+  /**
+   * Note paths wikilinks may resolve to: one owner's, or — for a legacy row
+   * with no owner — every path. Reading every path in the database on every
+   * write made one large vault slow down everyone else's saves.
+   */
+  private async allNotePaths(prefix = ''): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(prefix ? like(notes.path, `${escapeLike(prefix)}%`) : undefined);
     return new Set(rows.map((r) => r.path));
   }
 
   /**
    * Replace the derived rows for one note.
    *
-   * Wikilink resolution needs the full set of note paths, so this reads every
-   * path on each write. Fine at personal-brain scale; if the brain ever grows
-   * past that, resolve lazily at read time instead.
+   * Wikilink resolution needs the set of note paths in the owner's vault, so
+   * this reads them on each write.
    */
   private async rebuildGraph(
     path: string,
@@ -523,7 +529,7 @@ export class PgNoteStore {
     // Without this, no link in the database would ever resolve, and every
     // backlink panel would sit empty for reasons nothing would report.
     const prefix = ownerId && path.startsWith(`${ownerId}/`) ? `${ownerId}/` : '';
-    const stored = await this.allNotePaths();
+    const stored = await this.allNotePaths(prefix);
     const noteIndex = prefix
       ? new Set(
           [...stored].filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length)),

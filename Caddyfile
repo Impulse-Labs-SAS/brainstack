@@ -11,6 +11,11 @@
 
 	@server path /api/* /.well-known/oauth-protected-resource* /.well-known/oauth-authorization-server*
 	handle @server {
+		# A note travels in a request body; nothing larger is ever needed, and
+		# without a cap one request could buffer gigabytes into the server.
+		request_body {
+			max_size 10MB
+		}
 		# MCP streams its responses; buffering them would hold each one back
 		# until it finished.
 		reverse_proxy server:3000 {
@@ -19,6 +24,9 @@
 	}
 
 	handle {
+		request_body {
+			max_size 2MB
+		}
 		reverse_proxy web:3000
 	}
 

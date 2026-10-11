@@ -18,6 +18,9 @@ export function trpcClientConfig() {
       httpBatchLink({
         url,
         transformer: superjson,
+        // The server refuses a batch of more than 50 calls; staying under it
+        // splits a large page into several requests instead of failing it.
+        maxItems: 40,
         fetch(input, init) {
           return fetch(input, { ...init, credentials: 'include' });
         },

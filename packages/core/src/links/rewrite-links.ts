@@ -5,7 +5,8 @@
 
 import { buildCodeMask, isMasked } from '../parser/code-mask.js';
 
-const WIKILINK_RE = /(!)?\[\[([^\]\n]+)\]\]/g;
+// The parser's pattern: no `[` inside, so a failed match never rescans the line.
+const WIKILINK_RE = /(!)?\[\[([^[\]\n]+)\]\]/g;
 
 export interface LinkRewriteMapping {
   /**

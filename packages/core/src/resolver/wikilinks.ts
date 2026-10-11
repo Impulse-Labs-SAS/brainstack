@@ -49,6 +49,30 @@ function basename(path: string): string {
   return idx === -1 ? path : path.slice(idx + 1);
 }
 
+/**
+ * Every path in an index, grouped by file name. Resolving a bare `[[Note]]`
+ * used to walk the whole index twice per link, so a note with many links in a
+ * large vault cost links × notes on the one event loop. Built once per index
+ * object and reused; a size check rebuilds it if a caller grew the set.
+ */
+const basenameIndexes = new WeakMap<ReadonlySet<string>, { size: number; byName: Map<string, string[]> }>();
+
+function pathsNamed(index: ReadonlySet<string>, name: string): readonly string[] {
+  let cached = basenameIndexes.get(index);
+  if (!cached || cached.size !== index.size) {
+    const byName = new Map<string, string[]>();
+    for (const path of index) {
+      const key = basename(path);
+      const list = byName.get(key);
+      if (list) list.push(path);
+      else byName.set(key, [path]);
+    }
+    cached = { size: index.size, byName };
+    basenameIndexes.set(index, cached);
+  }
+  return cached.byName.get(name) ?? [];
+}
+
 function withMdExtension(target: string): string {
   return target.toLowerCase().endsWith('.md') ? target : `${target}.md`;
 }
@@ -153,11 +177,7 @@ function resolveAttachment(raw: string, ctx: ResolutionInputs): ResolutionResult
     return { targetPath: raw, targetType: 'attachment', ambiguous: false, candidates: [] };
   }
   // Search by basename anywhere.
-  const target = basename(raw);
-  const matches: string[] = [];
-  for (const path of ctx.attachmentIndex) {
-    if (basename(path) === target) matches.push(path);
-  }
+  const matches = [...pathsNamed(ctx.attachmentIndex, basename(raw))];
   if (matches.length === 1) {
     return {
       targetPath: matches[0] ?? raw,
@@ -202,11 +222,10 @@ function resolveNote(raw: string, ctx: ResolutionInputs, link: ParsedLink): Reso
   }
 
   // 3. Any descendant folder of source's folder.
-  const descendantMatches: string[] = [];
-  for (const path of ctx.noteIndex) {
-    if (basename(path) !== filename) continue;
-    if (sourceDir === '' || path.startsWith(`${sourceDir}/`)) descendantMatches.push(path);
-  }
+  const named = pathsNamed(ctx.noteIndex, filename);
+  const descendantMatches = named.filter(
+    (path) => sourceDir === '' || path.startsWith(`${sourceDir}/`),
+  );
   if (descendantMatches.length === 1) {
     return {
       targetPath: descendantMatches[0] ?? filename,
@@ -217,10 +236,7 @@ function resolveNote(raw: string, ctx: ResolutionInputs, link: ParsedLink): Reso
   }
 
   // 4. Unique match anywhere.
-  const globalMatches: string[] = [];
-  for (const path of ctx.noteIndex) {
-    if (basename(path) === filename) globalMatches.push(path);
-  }
+  const globalMatches = [...named];
   if (globalMatches.length === 1) {
     return {
       targetPath: globalMatches[0] ?? filename,

@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import type { Logger } from 'pino';
 
+import { emailField, field, frontmatterField, noteContent } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { AppError } from '../lib/errors.js';
 
@@ -158,8 +159,7 @@ export function buildMcpServer({
   };
 
   /** The `ownerId` argument, described once for every tool that takes it. */
-  const OWNER_ARG = z
-    .string()
+  const OWNER_ARG = field()
     .optional()
     .describe(
       'Owner of the vault this path belongs to. Omit for your own notes. ' +
@@ -175,7 +175,7 @@ export function buildMcpServer({
       description:
         "Full-text search over notes in BrainStack, ranked the way gather_context ranks them: a note the query names by title first, then the matches, those outside the named note's folder lower. `scope` decides what is searched: `all` (default) the user's own notes and the folders shared with them, `mine` only their own, `shared` only the shared ones. Returns up to `limit` hits (default 10, at most 50), each with a `snippet`, a `reason`, and the `ownerId` of the vault it lives in.",
       inputSchema: {
-        query: z.string().min(1),
+        query: field().min(1),
         limit: z.number().int().min(1).max(50).optional(),
         scope: z.enum(['mine', 'shared', 'all']).optional(),
       },
@@ -218,7 +218,7 @@ export function buildMcpServer({
     {
       title: 'Read a note',
       description: 'Read a single note from the brain by its path (relative to NOTES_DIR).',
-      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
+      inputSchema: { path: field().min(1), ownerId: OWNER_ARG },
     },
     async ({ path, ownerId }) => {
       try {
@@ -237,11 +237,11 @@ export function buildMcpServer({
       description:
         'List notes in BrainStack. Filter by folder prefix, tag, a frontmatter facet (facetKey + facetValue — see list_facets), or frontmatter status. Sorted by mtime desc.',
       inputSchema: {
-        folder: z.string().optional(),
-        tag: z.string().optional(),
-        facetKey: z.string().optional(),
-        facetValue: z.string().optional(),
-        status: z.string().optional(),
+        folder: field().optional(),
+        tag: field().optional(),
+        facetKey: field().optional(),
+        facetValue: field().optional(),
+        status: field().optional(),
         limit: z.number().int().min(1).max(500).optional(),
         ownerId: OWNER_ARG,
       },
@@ -265,9 +265,9 @@ export function buildMcpServer({
       description:
         'Create a new note at the given path. Fails if a note already exists. Returns the final path plus `affectedMocs`: the existing `_<Folder>.md` index note for the parent folder, if any, which you should consider updating to link the new note.',
       inputSchema: {
-        path: z.string().min(1),
-        content: z.string(),
-        frontmatter: z.record(z.string(), z.unknown()).optional(),
+        path: field().min(1),
+        content: noteContent(),
+        frontmatter: frontmatterField().optional(),
         ownerId: OWNER_ARG,
       },
     },
@@ -287,7 +287,7 @@ export function buildMcpServer({
     {
       title: 'Update a note',
       description: 'Replace the contents of an existing note. Fails if the note does not exist.',
-      inputSchema: { path: z.string().min(1), content: z.string(), ownerId: OWNER_ARG },
+      inputSchema: { path: field().min(1), content: noteContent(), ownerId: OWNER_ARG },
     },
     async ({ path, content, ownerId }) => {
       try {
@@ -308,7 +308,7 @@ export function buildMcpServer({
         'Return a hierarchical view of the vault. Scope to a subfolder with `path`. ' +
         'Cap depth with `depth` (default 4). Folders are listed before files; both alphabetical.',
       inputSchema: {
-        path: z.string().optional(),
+        path: field().optional(),
         depth: z.number().int().min(1).max(MAX_TREE_DEPTH).optional(),
         ownerId: OWNER_ARG,
       },
@@ -332,7 +332,7 @@ export function buildMcpServer({
         'List every note flagged as a decision (tag `decisión`/`decision` or frontmatter `status: decidido`). ' +
         'Optional folder scope.',
       inputSchema: {
-        folder: z.string().optional(),
+        folder: field().optional(),
         limit: z.number().int().min(1).max(500).optional(),
         ownerId: OWNER_ARG,
       },
@@ -354,7 +354,7 @@ export function buildMcpServer({
       title: 'Create a folder',
       description:
         'Create a folder (and any missing parents) under the vault root. Idempotent: a no-op if the folder already exists.',
-      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
+      inputSchema: { path: field().min(1), ownerId: OWNER_ARG },
     },
     async ({ path, ownerId }) => {
       try {
@@ -373,7 +373,7 @@ export function buildMcpServer({
       title: 'Move or rename a note, attachment, or folder',
       description:
         'Move/rename a path. Wikilinks pointing at the moved path(s) — including aliases, sections, and attachment embeds — are rewritten across the vault. Folders are moved with all their contents. Returns the final path plus `affectedMocs`: existing `_<Folder>.md` index notes in the source and destination parent folders that you should consider updating.',
-      inputSchema: { from: z.string().min(1), to: z.string().min(1), ownerId: OWNER_ARG },
+      inputSchema: { from: field().min(1), to: field().min(1), ownerId: OWNER_ARG },
     },
     async ({ from, to, ownerId }) => {
       try {
@@ -395,9 +395,9 @@ export function buildMcpServer({
       description:
         'TRANSFERS OWNERSHIP. Move a note or folder from one person’s vault into another’s — for example, out of a folder somebody shared with you and into your own notes. This is not a copy and not a reorganisation: the notes leave the source vault and belong to the destination owner afterwards. Whoever owned them stops owning them, and keeps access only if the destination is shared with them — possibly at a narrower permission than they had, or not at all. ALWAYS tell the user this before calling, name who stops being the owner, and get their agreement; a request to tidy up or to move something into another folder does not by itself mean they intend to take ownership of somebody else’s notes. Requires write access at both ends. Wikilinks crossing the new boundary cannot be rewritten (a wikilink cannot name a vault), so the answer lists what was left dangling in each direction rather than repairing it silently. Calling this without `userConfirmedOwnershipTransfer` moves nothing and answers with what the transfer would cost, which is what you put to the user. Use `move` for anything staying inside one vault, which changes no ownership.',
       inputSchema: {
-        from: z.string().min(1),
+        from: field().min(1),
         fromOwnerId: OWNER_ARG,
-        to: z.string().min(1),
+        to: field().min(1),
         toOwnerId: z
           .string()
           .min(1)
@@ -505,7 +505,7 @@ export function buildMcpServer({
       description:
         'Delete a path. Folders require `recursive: true` unless empty. Does NOT rewrite wikilinks — links pointing here become unresolved.',
       inputSchema: {
-        path: z.string().min(1),
+        path: field().min(1),
         recursive: z.boolean().optional(),
         ownerId: OWNER_ARG,
       },
@@ -526,7 +526,7 @@ export function buildMcpServer({
     {
       title: 'List backlinks',
       description: 'List every note that links to or embeds the given path (note or attachment).',
-      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
+      inputSchema: { path: field().min(1), ownerId: OWNER_ARG },
     },
     async ({ path, ownerId }) => {
       try {
@@ -551,7 +551,7 @@ export function buildMcpServer({
       title: 'List outbound links',
       description:
         'List every note or attachment the given path links to or embeds — the mirror of list_links.',
-      inputSchema: { path: z.string().min(1), ownerId: OWNER_ARG },
+      inputSchema: { path: field().min(1), ownerId: OWNER_ARG },
     },
     async ({ path, ownerId }) => {
       try {
@@ -577,7 +577,7 @@ export function buildMcpServer({
       title: 'List related notes',
       description:
         'Notes related to the given path by a shared tag or frontmatter facet (e.g. both using `technologies: nextjs`), ranked by how rare the shared signal is — sharing an uncommon tag outranks sharing a technology half the vault uses. Own vault only; does not take `ownerId`.',
-      inputSchema: { path: z.string().min(1), limit: z.number().int().min(1).max(50).optional() },
+      inputSchema: { path: field().min(1), limit: z.number().int().min(1).max(50).optional() },
     },
     async ({ path, limit }) => {
       try {
@@ -596,7 +596,7 @@ export function buildMcpServer({
       title: 'List unlinked mentions',
       description:
         'Where a note is named without a wikilink, both ways: `incoming` lists other notes whose text says this note\'s title or an alias; `outgoing` lists notes whose title this note\'s text says. Each row has the other note\'s path, the text as written, how many times, and a snippet. Read-only: to link them, propose the edit to the user and write it with `update_note` once they approve, replacing the text with `[[path|text as written]]`. Own vault only; does not take `ownerId`.',
-      inputSchema: { path: z.string().min(1) },
+      inputSchema: { path: field().min(1) },
     },
     async ({ path }) => {
       try {
@@ -649,8 +649,8 @@ export function buildMcpServer({
       description:
         'Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note\'s facets (with `ownerId` for a note in a shared folder); omit it (optionally with `key`) to browse every (key, value) pair in use in your own vault, with counts. Browsing never takes another owner\'s `ownerId`.',
       inputSchema: {
-        path: z.string().optional(),
-        key: z.string().optional(),
+        path: field().optional(),
+        key: field().optional(),
         ownerId: OWNER_ARG,
       },
     },
@@ -701,7 +701,7 @@ export function buildMcpServer({
       title: 'List folders I shared',
       description:
         'List the folders I have shared, who has access to each, and with what permission. Optionally filter to a single folder with `path`.',
-      inputSchema: { path: z.string().optional() },
+      inputSchema: { path: field().optional() },
     },
     async ({ path }) => {
       try {
@@ -721,8 +721,8 @@ export function buildMcpServer({
       description:
         'Give another person access to a folder, by email. `permission` is "read" (default) or "write"; write lets them create and edit notes in the folder, which they address by passing your id as `ownerId`. Someone who already has a BrainStack account is granted access immediately; anyone else is emailed an invitation that expires in 7 days. Access covers the folder and everything under it, including notes created later. Re-sharing a folder with the same person changes their permission.',
       inputSchema: {
-        path: z.string().min(1),
-        email: z.string().email(),
+        path: field().min(1),
+        email: emailField(),
         permission: z.enum(['read', 'write']).optional(),
       },
     },
@@ -778,7 +778,7 @@ export function buildMcpServer({
       title: 'Revoke someone from a folder',
       description:
         'Take away one person’s access to a folder, by email. Also kills the invitations that could hand it straight back. A no-op when they had no access.',
-      inputSchema: { path: z.string().min(1), email: z.string().email() },
+      inputSchema: { path: field().min(1), email: emailField() },
     },
     async ({ path, email }) => {
       try {

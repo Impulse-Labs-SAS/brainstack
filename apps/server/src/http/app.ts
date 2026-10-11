@@ -1,7 +1,8 @@
 // Hono application factory. Combines middlewares and routers so that
 // `index.ts` only worries about boot order and shutdown.
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import type { Logger } from 'pino';
 
@@ -14,6 +15,7 @@ import type { GoogleOAuthService } from '../services/GoogleOAuthService.js';
 import type { OAuthProviderService } from '../services/OAuthProviderService.js';
 import type { TotpService } from '../services/TotpService.js';
 
+import { MAX_BODY_BYTES, MAX_SMALL_BODY_BYTES } from '../config/limits.js';
 import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
 
 import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
@@ -101,6 +103,15 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       }),
     );
   }
+
+  // Nothing reads a request body unbounded. Notes travel over tRPC and MCP,
+  // so those get room for one; every other route carries a few fields. A
+  // reverse proxy in front may cap lower, never higher.
+  const tooLarge = (c: Context) => c.json({ error: 'request body too large' }, 413);
+  const noteBodies = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: tooLarge });
+  const smallBodies = bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: tooLarge });
+  const carriesNotes = /(?:^|\/)(?:trpc|mcp)(?:\/|$)/;
+  app.use('*', (c, next) => (carriesNotes.test(c.req.path) ? noteBodies : smallBodies)(c, next));
 
   app.use('*', async (c, next) => {
     const start = Date.now();
