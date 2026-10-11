@@ -13,6 +13,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read the code, nothing more. Pull requests from forks get a read-only token
+# anyway; this says the same for every other run.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: lint · typecheck · test · build
@@ -25,17 +30,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 10.30.3
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -74,10 +79,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Build the server image
         run: docker build --target server --tag brainstack-server .
 
       - name: Build the web image
         run: docker build --target web --tag brainstack-web .
+
+      # Building proves the Dockerfile; this proves the image can start what
+      # it says it starts. A renamed entry point used to build green.
+      - name: Check the images' entry points
+        run: |
+          set -euo pipefail
+          docker run --rm brainstack-server node --check dist/serve.js
+          docker run --rm brainstack-server node --check dist/cli.js
+          docker run --rm brainstack-web node --check apps/web/server.js

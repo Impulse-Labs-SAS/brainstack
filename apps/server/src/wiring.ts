@@ -1,7 +1,7 @@
 // Builds the service graph from a Postgres connection.
 //
 // One place where the wiring lives, shared by every entrypoint: the Next route
-// handlers, the stdio MCP process, and the tests. Nothing here touches the
+// handlers, the long-lived server, and the tests. Nothing here touches the
 // filesystem or holds a connection open, so it is safe to call per request.
 
 import { openPgDatabase, PgNoteStore, PgSearchService, type PgDb } from '@brainstack/core/pg';

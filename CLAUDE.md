@@ -9,7 +9,7 @@ Read the relevant ones before making non-trivial changes.
 
 ## Stack
 
-- pnpm workspaces, TypeScript strict, Node 20+.
+- pnpm workspaces, TypeScript strict, Node 22+.
 - Backend: Hono + `@modelcontextprotocol/sdk` + tRPC + Drizzle.
 - Frontend: Next.js 15 App Router + Tailwind + `react-aria-components` + CodeMirror 6.
 - Storage: **Postgres** — any provider. `openPgDatabase` picks the driver from the connection string: Neon over its HTTP driver, everything else over node-postgres. Tests run on PGlite — real Postgres, in process.
@@ -20,7 +20,7 @@ Read the relevant ones before making non-trivial changes.
 
 ## Workspaces
 
-- `apps/server` — Node app: HTTP (tRPC + MCP) and stdio MCP.
+- `apps/server` — Node app: HTTP (tRPC + MCP over Streamable HTTP).
 - `apps/web` — Next.js web app, replaces Obsidian for humans.
 - `packages/core` — Markdown parsing, wikilink resolution, Postgres store and search (framework-agnostic). Also **Sentinel** (`@brainstack/core/sentinel`), the engine behind `gather_context` and every search (`search_brain`, the web palette), so all of them rank alike: it reads through a `ContextSource` and knows nothing about vaults, so it can serve another system or move to its own package.
 - `packages/skill` — Canonical AI instructions + multi-client adapters.

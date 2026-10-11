@@ -18,6 +18,14 @@ const Env = z.object({
       message:
         'DATABASE_URL must be a Postgres connection string. A file path is a leftover ' +
         'from when notes lived in sqlite; storage is Postgres now.',
+    })
+    // Said here, and without the value: a password with `/`, `#` or `?` in it
+    // breaks the URL, and the driver's own error hides why (and the server
+    // restarts in a loop). Never echo the string; it holds the password.
+    .refine((v) => URL.canParse(v), {
+      message:
+        'DATABASE_URL does not parse as a URL. If the password contains characters such as ' +
+        '/ # ? @ or :, percent-encode them (encodeURIComponent), or pick a password without them.',
     }),
   PORT: z.coerce.number().int().positive().default(3000),
   // Trailing slash stripped: this becomes the OAuth issuer and is concatenated
@@ -29,10 +37,6 @@ const Env = z.object({
     .url()
     .default('http://localhost:3000')
     .transform((v) => v.replace(/\/+$/, '')),
-  MCP_STDIO: z
-    .string()
-    .default('false')
-    .transform((v) => trueish.has(v.toLowerCase())),
   LOG_LEVEL: z
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
     .default('info'),
@@ -94,8 +98,8 @@ let cached: AppConfig | null = null;
 
 export function loadConfig(): AppConfig {
   if (cached) return cached;
-  // Quiet: dotenv otherwise prints a banner to stdout, which is the JSON-RPC
-  // channel under stdio MCP and the output of the reset-password command.
+  // Quiet: dotenv otherwise prints a banner to stdout, which is where the
+  // reset-password command writes its output.
   loadDotenv({ quiet: true });
   const parsed = Env.parse(process.env);
   const authorizedEmails = new Set(

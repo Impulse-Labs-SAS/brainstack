@@ -7,7 +7,7 @@
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.30.3",
   "engines": {
-    "node": ">=20.10.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "lint": "pnpm -r lint",
@@ -21,7 +21,8 @@
     "check:functions": "pnpm --filter @brainstack/core build && node scripts/check-functions.mjs"
   },
   "pnpm": {
-    "onlyBuiltDependencies": [
+    "onlyBuiltDependencies": [],
+    "ignoredBuiltDependencies": [
       "better-sqlite3"
     ],
     "overrides": {

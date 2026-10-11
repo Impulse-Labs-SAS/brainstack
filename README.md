@@ -21,7 +21,7 @@ If you work with several AI assistants, you keep retyping the same context every
 
 ```
 apps/
-  server/     Hono + tRPC + MCP server (Node 20+), with its own OAuth 2.1 provider for MCP clients
+  server/     Hono + tRPC + MCP server (Node 22+), with its own OAuth 2.1 provider for MCP clients
   web/        Next.js 15 web app: react-aria-components + CodeMirror 6
 packages/
   core/       Markdown parsing, wikilink resolution, Postgres store and full-text search
@@ -77,6 +77,24 @@ After the first account, sign-up is closed. People get in when one of these appl
 
 New accounts verify their address by email, so all three need email configured. Any account holder can invite by email, so everyone you let in can bring someone else in, into a folder they share. Keep that in mind before you add people you don't know.
 
+### Backups
+
+Everything BrainStack knows is in Postgres: notes, links, accounts and shares.
+With the bundled database, take a dump while it runs:
+
+```bash
+docker compose exec -T postgres pg_dump -U brainstack -d brainstack > brainstack-$(date +%F).sql
+```
+
+and restore one into an empty database:
+
+```bash
+docker compose exec -T postgres psql -U brainstack -d brainstack < brainstack-2026-01-01.sql
+```
+
+Keep the dumps somewhere other than the machine that runs BrainStack. With an
+external database, back it up the way its provider recommends.
+
 ## Local development
 
 ```bash
@@ -86,7 +104,7 @@ pnpm lint
 pnpm typecheck
 pnpm test        # runs on PGlite, in process; no database needed
 pnpm build
-# server on :3000 (HTTP + MCP; stdio MCP when MCP_STDIO=true)
+# server on :3000 (HTTP + MCP)
 pnpm --filter @brainstack/server dev
 # web app on :3001
 pnpm --filter @brainstack/web dev

@@ -113,7 +113,14 @@ export async function runPgMigrations(
   for (const migration of list) {
     if (applied.has(migration.name)) continue;
     for (const statement of migration.statements) {
-      await db.execute(sql.raw(statement));
+      try {
+        await db.execute(sql.raw(statement));
+      } catch (err) {
+        // Another instance, starting on the same cold database, got there
+        // between our check and our statement. What it created is what this
+        // statement creates, so the migration carries on.
+        if (!createdConcurrently(err)) throw err;
+      }
     }
     await db.execute(
       sql`INSERT INTO _brainstack_migrations (name, applied_at)
@@ -123,6 +130,23 @@ export async function runPgMigrations(
     ran.push(migration.name);
   }
   return ran;
+}
+
+/**
+ * SQLSTATEs that mean "it already exists": a duplicate object, table or
+ * schema, or the unique index on pg_type that two CREATE TABLE IF NOT EXISTS
+ * racing each other trip. Read off the driver's error or the one drizzle
+ * wraps around it.
+ */
+const ALREADY_EXISTS_CODES = new Set(['42710', '42P07', '42P06', '23505']);
+
+function createdConcurrently(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e && depth < 3; depth += 1) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string' && ALREADY_EXISTS_CODES.has(code)) return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**
@@ -136,7 +160,9 @@ export async function runPgMigrations(
  * The work happens once per process, not once per request: the promise is
  * cached against the handle, so warm requests await something already settled.
  * Concurrent instances racing on a cold start is fine — every statement is
- * idempotent and the ledger insert takes ON CONFLICT DO NOTHING.
+ * idempotent, a statement that loses the race to an identical one is let
+ * through (`createdConcurrently`), and the ledger insert takes ON CONFLICT
+ * DO NOTHING.
  *
  * A failure is not cached. The next request retries rather than leaving the
  * instance permanently convinced the schema is broken.

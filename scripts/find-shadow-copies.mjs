@@ -23,7 +23,9 @@
 //
 // So: run this, read it, then act. There is no --fix flag on purpose.
 
-import { neon } from '@neondatabase/serverless';
+import { escapeLike } from '@brainstack/core/pg';
+
+import { connect } from './lib/db.mjs';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -31,7 +33,7 @@ if (!connectionString) {
   process.exit(1);
 }
 
-const sql = neon(connectionString);
+const { sql, close } = connect(connectionString);
 
 /** True when `path` is `folder` or sits inside it. Mirrors `pathFallsUnder`. */
 function fallsUnder(path, folder) {
@@ -75,16 +77,18 @@ async function main() {
     const viewerId = share.shared_with_user_id;
     const shadowPrefix = `${viewerId}/${share.folder_path}`;
 
+    // Escaped: a folder named `a_b` must not also match `aXb`.
+    const under = `${escapeLike(shadowPrefix)}/%`;
     const notes = await sql`
       SELECT path, title, updated_at
         FROM notes
-       WHERE path = ${shadowPrefix} OR path LIKE ${`${shadowPrefix}/%`}
+       WHERE path = ${shadowPrefix} OR path LIKE ${under}
        ORDER BY path
     `;
     const folders = await sql`
       SELECT path
         FROM folders
-       WHERE path = ${shadowPrefix} OR path LIKE ${`${shadowPrefix}/%`}
+       WHERE path = ${shadowPrefix} OR path LIKE ${under}
        ORDER BY path
     `;
 
@@ -144,7 +148,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main()
+  .then(() => close())
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
