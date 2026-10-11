@@ -416,7 +416,8 @@ export function CrawlPanel({
   );
   const open = answer ? answer.unresolved.filter((u) => !curation.settled.has(u.term)).length : 0;
   const copyState: CopyState = copied ? 'copied' : brief.reading > 0 ? 'reading' : 'ready';
-  const onGraph = answer ? Math.max(0, answer.notes.length - (snap?.offGraph ?? 0)) : 0;
+  const offGraph = answer ? (snap?.offGraph ?? 0) : 0;
+  const onGraph = answer ? Math.max(0, answer.notes.length - offGraph) : 0;
 
   const status = answer && (
     <div className="grid gap-1.5">
@@ -447,6 +448,13 @@ export function CrawlPanel({
           style={{ width: `${done ? 100 : onGraph > 0 ? Math.round(((reached?.size ?? 0) / onGraph) * 100) : 0}%` }}
         />
       </div>
+      {/* The Layers button is not on this view, so the walk says what the layers kept from it. */}
+      {offGraph > 0 && (
+        <p className="text-[11.5px] text-fg-muted">
+          {offGraph} {offGraph === 1 ? 'note is' : 'notes are'} not on the graph: hidden by your
+          layers in Brain, Network or Territories, or no longer in the vault.
+        </p>
+      )}
     </div>
   );
 

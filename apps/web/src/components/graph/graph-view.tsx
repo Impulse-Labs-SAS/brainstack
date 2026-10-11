@@ -450,17 +450,6 @@ export function GraphView({
       <WheelBinder target={overlayRef} controller={controllerRef} />
 
       <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2">
-        {model && (
-          <GraphLayersMenu
-            model={model}
-            layers={layers}
-            onChange={setLayers}
-            view={view}
-            includeShared={includeShared}
-            onIncludeSharedChange={onIncludeSharedChange}
-          />
-        )}
-
         <ToggleButtonGroup
           aria-label="View"
           selectionMode="single"
@@ -501,7 +490,20 @@ export function GraphView({
           ))}
         </ToggleButtonGroup>
 
-        {/* The brain's own tools: the Sentinel keeps the layers, the views, zoom and Fit. */}
+        {/*
+          The brain's own tools: the Sentinel keeps the views, zoom and Fit. The layers still
+          decide which notes its walk can reach; the panel says when they left some out.
+        */}
+        {model && !sentinel && (
+          <GraphLayersMenu
+            model={model}
+            layers={layers}
+            onChange={setLayers}
+            view={view}
+            includeShared={includeShared}
+            onIncludeSharedChange={onIncludeSharedChange}
+          />
+        )}
         {model && !sentinel && (
           <GraphSearch
             model={model}
