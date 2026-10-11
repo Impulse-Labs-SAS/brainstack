@@ -679,6 +679,19 @@ export const appRouter = t.router({
         return { ok: true };
       }),
   }),
+  // The AI clients a person let in through this server's OAuth provider, and
+  // the way to cut one off. A person's own decision, so a session only.
+  connectedClients: t.router({
+    list: sessionProcedure.query(({ ctx }) =>
+      ctx.oauth ? ctx.oauth.listConnectedClients(ctx.user.id) : [],
+    ),
+    disconnect: sessionProcedure
+      .input(z.object({ clientId: field().min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        await ctx.oauth?.disconnectClient(ctx.user.id, input.clientId);
+        return { ok: true };
+      }),
+  }),
   // The caller's own crawls only: whoever shared a folder with them never sees
   // what they asked.
   crawls: t.router({

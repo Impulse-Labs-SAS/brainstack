@@ -10,6 +10,7 @@ import type { AuthService, User } from '../services/AuthService.js';
 import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import type { NoteService } from '../services/NoteService.js';
+import type { OAuthProviderService } from '../services/OAuthProviderService.js';
 import type { InviteService } from '../services/InviteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import type { SharedRoot, SharingService } from '../services/SharingService.js';
@@ -25,6 +26,8 @@ export interface ServerServices {
   invites: InviteService;
   crossOwner: CrossOwnerReader;
   crawls: CrawlHistoryService;
+  /** The OAuth provider, when this instance runs one. */
+  oauth?: OAuthProviderService;
 }
 
 export interface TrpcContext extends ServerServices {
