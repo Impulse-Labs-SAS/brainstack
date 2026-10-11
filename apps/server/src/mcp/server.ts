@@ -21,7 +21,6 @@ import {
   MAX_TERMS,
   MAX_TEXT_CHARS,
 } from '../services/gatherContext.js';
-import type { InviteService } from '../services/InviteService.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import { normalizeFolderPath, type SharingService } from '../services/SharingService.js';
@@ -44,10 +43,8 @@ export interface BuildMcpServerOptions {
   sharing: SharingService;
   /** Reads across an ownership boundary, masking what the grant does not cover. */
   crossOwner: CrossOwnerReader;
-  /** Resolves the email a caller shares with into an account. */
+  /** Resolves the email a caller unshares into an account. */
   auth: AuthService;
-  /** Used when that email has no account yet. */
-  invites: InviteService;
   /** Where `gather_context` leaves each crawl for the Sentinel view to replay. */
   crawls: CrawlHistoryService;
   logger: Logger;
@@ -83,7 +80,6 @@ export function buildMcpServer({
   sharing,
   crossOwner,
   auth,
-  invites,
   crawls,
   logger,
   principal,
@@ -717,54 +713,41 @@ export function buildMcpServer({
   server.registerTool(
     'share_folder',
     {
-      title: 'Share a folder with someone',
+      title: 'Ask to share a folder with someone',
       description:
-        'Give another person access to a folder, by email. `permission` is "read" (default) or "write"; write lets them create and edit notes in the folder, which they address by passing your id as `ownerId`. Someone who already has a BrainStack account is granted access immediately; anyone else is emailed an invitation that expires in 7 days. Access covers the folder and everything under it, including notes created later. Re-sharing a folder with the same person changes their permission.',
+        'Ask to give another person access to a folder, by email. Nothing is shared yet: the request waits for the user to approve it in the BrainStack web app (Settings → Sharing), where they see the folder, the address and the permission. Tell the user that. `permission` is "read" (default) or "write"; write lets them create and edit notes in the folder. Once approved, someone with an account gets access at once and anyone else is emailed an invitation that expires in 7 days. Asking again for the same folder and address updates the request.',
       inputSchema: {
         path: field().min(1),
         email: emailField(),
         permission: z.enum(['read', 'write']).optional(),
       },
+      annotations: { destructiveHint: false, openWorldHint: true },
     },
     async ({ path, email, permission }) => {
       try {
         const ownerId = requireUserId();
-        const target = await auth.findUserByEmail(email);
-
-        if (target && target.id !== ownerId) {
-          const shareId = await sharing.grant({
-            ownerId,
-            sharedWithUserId: target.id,
-            folderPath: path,
-            grantedBy: ownerId,
-            permission,
-          });
-          return JSON_TEXT({
-            status: 'granted',
-            shareId,
-            folderPath: normalizeFolderPath(path),
-            permission: permission ?? 'read',
-            sharedWith: { userId: target.id, email: target.email },
-          });
+        const self = await auth.findUserById(ownerId);
+        if (self && self.email.toLowerCase() === email.trim().toLowerCase()) {
+          throw new AppError("you can't share a folder with yourself", 'INVALID_INPUT', 400);
         }
-
-        const invite = await invites.create({
+        // An assistant only ever asks. It reads what other people wrote in
+        // folders shared with the user, so a request to share may not be the
+        // user's; the grant waits for them, signed in, in the web app.
+        const request = await sharing.requestShare({
           ownerId,
           folderPath: path,
-          mode: 'email',
-          inviteeEmail: email,
+          email,
           permission,
+          requestedBy: principal?.clientRef ?? null,
         });
-        // The accept token is deliberately left out of the answer. It is a
-        // bearer credential, and the invitee already has it in their inbox;
-        // repeating it here would copy it into a chat transcript for no gain.
         return JSON_TEXT({
-          status: 'invited',
-          inviteId: invite.inviteId,
+          status: 'pending_approval',
+          requestId: request.id,
           folderPath: normalizeFolderPath(path),
           permission: permission ?? 'read',
-          invitedEmail: email,
-          expiresAt: invite.expiresAt,
+          email,
+          expiresAt: request.expiresAt,
+          next: 'Ask the user to approve it in the BrainStack web app, under Settings → Sharing.',
         });
       } catch (err) {
         return toMcpError(err);
@@ -777,25 +760,26 @@ export function buildMcpServer({
     {
       title: 'Revoke someone from a folder',
       description:
-        'Take away one person’s access to a folder, by email. Also kills the invitations that could hand it straight back. A no-op when they had no access.',
+        'Take away one person’s access to a folder and every folder nested in it, by email. Also kills the invitations that could hand it straight back. A no-op when they had no access.',
       inputSchema: { path: field().min(1), email: emailField() },
     },
     async ({ path, email }) => {
       try {
         const ownerId = requireUserId();
+        // The same answer whether or not the address has an account: this
+        // tool is not a way to learn who is a member of the instance.
         const target = await auth.findUserByEmail(email);
-        if (!target) {
-          throw new AppError(`no account for ${email}`, 'NOT_FOUND', 404);
+        if (target) {
+          await sharing.revoke({
+            ownerId,
+            sharedWithUserId: target.id,
+            folderPath: path,
+          });
         }
-        await sharing.revoke({
-          ownerId,
-          sharedWithUserId: target.id,
-          folderPath: path,
-        });
         return JSON_TEXT({
           status: 'revoked',
           folderPath: normalizeFolderPath(path),
-          revokedFrom: { userId: target.id, email: target.email },
+          email,
         });
       } catch (err) {
         return toMcpError(err);

@@ -13,6 +13,7 @@ import {
   noteContent,
 } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
+import { approveShareRequest } from '../services/shareRequests.js';
 import { AppError } from '../lib/errors.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
 import {
@@ -547,6 +548,61 @@ export const appRouter = t.router({
                 expiresAt: inv.expiresAt,
                 token: null as string | null,
               };
+        }),
+      ),
+    /** Shares an assistant asked for, waiting for this user's approval. */
+    listShareRequests: sessionProcedure.query(async ({ ctx }) => {
+      const requests = await ctx.sharing.listShareRequests(ctx.user.id);
+      const names = await ctx.crawls.clientNames(
+        ctx.user.id,
+        requests.map((r) => r.requestedBy),
+      );
+      return requests.map(({ requestedBy, ...r }) => ({
+        ...r,
+        requestedBy: requestedBy ? (names.get(requestedBy) ?? 'an assistant') : null,
+      }));
+    }),
+    approveShareRequest: sessionProcedure
+      .input(z.object({ id: field().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() =>
+          approveShareRequest(
+            { sharing: ctx.sharing, invites: ctx.invites, auth: ctx.auth },
+            ctx.user.id,
+            input.id,
+          ),
+        ),
+      ),
+    rejectShareRequest: sessionProcedure
+      .input(z.object({ id: field().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          await ctx.sharing.takeShareRequest(ctx.user.id, input.id);
+          return { ok: true };
+        }),
+      ),
+    /** Leave a folder somebody shared with me; `block` refuses their shares from now on. */
+    leave: sessionProcedure
+      .input(
+        z.object({
+          ownerId: field().min(1),
+          folderPath: field().min(1),
+          block: z.boolean().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          await ctx.sharing.leave({ userId: ctx.user.id, ...input });
+          return { ok: true };
+        }),
+      ),
+    listBlocked: sessionProcedure.query(({ ctx }) => ctx.sharing.listBlocked(ctx.user.id)),
+    unblock: sessionProcedure
+      .input(z.object({ ownerId: field().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          await ctx.sharing.unblock(ctx.user.id, input.ownerId);
+          return { ok: true };
         }),
       ),
     listPendingInvites: protectedProcedure.query(({ ctx }) => ctx.invites.listPending(ctx.user.id)),

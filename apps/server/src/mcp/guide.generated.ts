@@ -54,8 +54,8 @@ You interact with BrainStack via these MCP tools:
 
 **Sharing (require user approval — see below):**
 
-- \`share_folder(path, email, permission?)\` — grant read or write on a folder and everything under it
-- \`unshare(path, email)\` — revoke that person's access
+- \`share_folder(path, email, permission?)\` — **asks** to grant read or write on a folder and everything under it; nothing is shared until the user approves it in the web app (Settings → Sharing)
+- \`unshare(path, email)\` — revoke that person's access to the folder and to anything nested in it
 - \`list_shares(path?)\` — folders you have shared and who can read each one
 
 ## When to use BrainStack
@@ -168,8 +168,9 @@ Sharing hands another person access to everything under a folder, including note
 
 - **Always ask first, and echo the exact folder and email back** before calling \`share_folder\`. "Share \`Erebor/\` with frodo@example.com — that covers every note under it, now and in the future. Confirm?"
 - \`permission\` is \`read\` (default) or \`write\`. **\`write\`** lets them create and edit inside the folder (they pass your \`ownerId\` on writes). Re-sharing with the same person **updates** their permission rather than adding a second grant.
-- Someone with a BrainStack account gets access immediately. Anyone else receives an email invitation that **expires in 7 days**.
-- \`unshare(path, email)\` revokes access and kills pending invitations that would hand it straight back. It is a no-op when the person had no access.
+- \`share_folder\` only files a request. Tell the user it is waiting for them under **Settings → Sharing** in the web app; nothing is shared, and nobody is emailed, until they approve it there. Once approved, someone with a BrainStack account gets access immediately; anyone else receives an email invitation that **expires in 7 days**.
+- A share arrives in the other person's vault without asking them. They can leave it, and refuse further shares from the user, under Settings → Sharing.
+- \`unshare(path, email)\` revokes access to the folder and to every folder nested in it, and kills pending invitations that would hand it straight back. It is a no-op when the person had no access.
 - Use \`list_shares()\` before proposing a change, so the user sees the current state rather than your assumption of it.
 - Never propose sharing a folder the user has not mentioned, and never widen an existing share to a broader folder on your own initiative.
 

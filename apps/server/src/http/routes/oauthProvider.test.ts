@@ -102,7 +102,7 @@ beforeEach(async () => {
     appHome: ISSUER,
     oauth: { service: oauth, issuer: ISSUER },
     buildMcpServer: (principal) =>
-      buildMcpServer({ notes, search, sharing, crossOwner, auth, invites, crawls, logger, principal }),
+      buildMcpServer({ notes, search, sharing, crossOwner, auth, crawls, logger, principal }),
   });
 
   const session = await auth.createSession('sam');

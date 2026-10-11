@@ -181,6 +181,9 @@ const DEFAULT_TREE_DEPTH = 4;
  * Hard ceiling on tree depth a caller can ask for. Lives here so the tRPC and
  * MCP schemas, the web client and this service share one number.
  */
+/** Notes a folder move rewrites links for at a time. */
+const LINK_REWRITE_BATCH = 25;
+
 export const MAX_TREE_DEPTH = 20;
 
 /**
@@ -586,6 +589,15 @@ export class NoteService {
       return;
     }
 
+    // Grants go first. A folder implied only by its notes has no `folders`
+    // row, so waiting to see whether one was removed left those grants alive,
+    // and a failure halfway through left them alive with nothing to retry:
+    // the retry finds an empty path and stops at NOT_FOUND. Revoking only
+    // shrinks access, so doing it before anything is deleted is always safe —
+    // a delete that then fails leaves a folder nobody else can see, never a
+    // share pointing at a folder that is gone.
+    await this.opts.onFolderGone?.(ownerId, this.toLogical(ownerId, physical));
+
     const under = await this.opts.db
       .select({ path: notes.path })
       .from(notes)
@@ -617,12 +629,6 @@ export class NoteService {
     } else if (under.length === 0 && removedFolders.length === 0) {
       // Neither a note nor a folder with anything in it.
       throw new AppError(`not found: ${path}`, 'NOT_FOUND', 404);
-    }
-
-    // A folder was here and is not any more, so nothing should still be shared
-    // on it. Skipped when only a note went: a note is not a grant's subject.
-    if (removedFolders.length > 0) {
-      await this.opts.onFolderGone?.(ownerId, this.toLogical(ownerId, physical));
     }
   }
 
@@ -658,6 +664,11 @@ export class NoteService {
 
     if (asNote) {
       const saved = await this.asCaller(ownerId, () => this.store.move(from, to));
+      // Register the folder it landed in, as `create` does: a folder implied
+      // by nothing but note paths was invisible to everything that reads the
+      // `folders` table, the cleanup of shares on delete included.
+      const parent = this.toLogical(ownerId, to).split('/').slice(0, -1).join('/');
+      if (parent) await this.ensureFolders(ownerId, parent);
       // Logical, not physical: a wikilink says `[[Gondor/nota]]`, never
       // `[[u_42/Gondor/nota]]`. Passing the stored path meant only a changed
       // basename ever matched, and moving a note between folders left every
@@ -717,8 +728,32 @@ export class NoteService {
       throw new AppError(`already exists at the destination: ${names}`, 'ALREADY_EXISTS', 409);
     }
 
-    for (const mapping of mappings) {
-      await this.asCaller(ownerId, () => this.store.move(mapping.from, mapping.to));
+    // The folder is still this owner's, just somewhere else, so a grant on it
+    // moves rather than dies. Moved before the notes: if the loop below fails
+    // halfway, the people it is shared with lose sight of what has not moved
+    // yet rather than of what has, and a retry finds no grant left to move.
+    await this.opts.onFolderMoved?.(
+      ownerId,
+      this.toLogical(ownerId, from),
+      this.toLogical(ownerId, to),
+    );
+
+    // Links are rewritten a batch at a time, right behind the notes they
+    // point at. Rewriting once at the end left every link to an already moved
+    // note stale whenever the loop failed, and a retry only knew about the
+    // notes still left to move.
+    for (let i = 0; i < mappings.length; i += LINK_REWRITE_BATCH) {
+      const batch = mappings.slice(i, i + LINK_REWRITE_BATCH);
+      for (const mapping of batch) {
+        await this.asCaller(ownerId, () => this.store.move(mapping.from, mapping.to));
+      }
+      await rewriteLinkTargets(
+        this.bodySource(ownerId),
+        batch.map((m) => ({
+          from: this.toLogical(ownerId, m.from),
+          to: this.toLogical(ownerId, m.to),
+        })),
+      );
     }
 
     // The folder rows follow their notes. Registered first so an empty folder
@@ -737,25 +772,6 @@ export class NoteService {
           or(eq(folders.path, from), like(folders.path, `${escapeLike(from)}/%`)),
         ),
       );
-
-    if (mappings.length > 0) {
-      await rewriteLinkTargets(
-        this.bodySource(ownerId),
-        mappings.map((m) => ({
-          from: this.toLogical(ownerId, m.from),
-          to: this.toLogical(ownerId, m.to),
-        })),
-      );
-    }
-
-    // The folder is still this owner's, just somewhere else, so a grant on it
-    // moves rather than dies. Without this a rename cut the recipient's access
-    // without telling anybody and left the old name in their tree.
-    await this.opts.onFolderMoved?.(
-      ownerId,
-      this.toLogical(ownerId, from),
-      this.toLogical(ownerId, to),
-    );
 
     return { path: logicalTo, affectedMocs: await this.mocsFor(ownerId, logicalTo) };
   }
@@ -874,6 +890,14 @@ export class NoteService {
         : [],
     );
 
+    // The folder leaves this owner's brain, so the grants on it go — before
+    // anything moves. Revoking only shrinks access; a crossing that fails
+    // halfway then leaves notes nobody else can see, never a grant on a path
+    // that ends up empty and could later cover a new folder of the same name.
+    if (!asNote) {
+      await this.opts.onFolderGone?.(fromOwnerId, this.toLogical(fromOwnerId, from));
+    }
+
     // The crossing itself: written under the new owner, then dropped from the
     // old vault. Upsert rebuilds the link graph against the destination's
     // notes, which is what turns a link to something left behind into an
@@ -885,7 +909,10 @@ export class NoteService {
     }
 
     const logicalTo = this.toLogical(toOwnerId, to);
-    if (!asNote) {
+    if (asNote) {
+      const parent = logicalTo.split('/').slice(0, -1).join('/');
+      if (parent) await this.ensureFolders(toOwnerId, parent);
+    } else {
       await this.ensureFolders(toOwnerId, logicalTo);
       for (const row of folderRows) {
         const moved = `${to}${row.path.slice(from.length)}`;
@@ -900,11 +927,6 @@ export class NoteService {
           ),
         );
 
-      // The folder is gone from the source vault, so the grants that pointed at
-      // it go too. Without this the person it was shared with kept an empty
-      // root in their tree that nothing could ever fill — which is exactly how
-      // a share whose folder had been moved away looked.
-      await this.opts.onFolderGone?.(fromOwnerId, this.toLogical(fromOwnerId, from));
     }
 
     const destinations = sources.map(destinationOf);

@@ -50,6 +50,13 @@
       "when": 1791720017017,
       "tag": "0006_totp_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791720274640,
+      "tag": "0007_share_requests_and_blocks",
+      "breakpoints": true
     }
   ]
 }

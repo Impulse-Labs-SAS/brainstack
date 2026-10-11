@@ -139,7 +139,6 @@ async function boot(): Promise<Hono<never>> {
         // needs the same cross-owner reader the app itself gets above.
         crossOwner: services.crossOwner,
         auth: services.auth,
-        invites: services.invites,
         crawls: services.crawls,
         logger,
         principal,

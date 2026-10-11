@@ -6,14 +6,19 @@
 // Grants are per folder, not per note, so a share keeps covering notes created
 // after it was handed out.
 
-import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 
-import { pgSchema, type PgDb } from '@brainstack/core/pg';
+import { escapeLike, pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
 
-const { folderShares, folderShareInvites, users } = pgSchema;
+const { folderShares, folderShareInvites, shareBlocks, shareRequests, users } = pgSchema;
+
+/** How long a share an assistant asked for waits for the owner. */
+const SHARE_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Pending requests one owner may have at once; an assistant cannot pile them up. */
+const MAX_PENDING_SHARE_REQUESTS = 20;
 
 /** What a grant allows. Ordered: 'write' implies 'read'. */
 export type SharePermission = 'read' | 'write';
@@ -137,10 +142,10 @@ export class SharingService {
 
     const owner = hit.ownerDisplayName ?? hit.ownerEmail;
     throw new AppError(
-      `"${hit.folderPath}" es una carpeta que te compartió ${owner}, así que este path es ` +
-        `ambiguo. Para escribir en la carpeta compartida pasá ownerId="${hit.ownerId}". ` +
-        `Sin eso escribirías una copia en tu propio vault que ${owner} no vería; si era eso ` +
-        `lo que querías, usá otro nombre.`,
+      `"${hit.folderPath}" is a folder ${owner} shared with you, so this path is ambiguous. ` +
+        `To write in the shared folder, pass ownerId="${hit.ownerId}". To write in your own ` +
+        `vault, pass your own id as ownerId — or leave the shared folder under Settings → ` +
+        `Sharing if you never wanted it.`,
       'FORBIDDEN',
       403,
     );
@@ -220,9 +225,26 @@ export class SharingService {
     }
     const permission = params.permission ?? 'read';
 
-    // The unique index does the deduplicating, so this is one statement rather
-    // than a lookup followed by an insert that could race with itself.
-    const [inserted] = await this.opts.db
+    // A share lands in someone else's vault uninvited. Whoever left one of
+    // yours and said "no more" is not reached again until they say otherwise.
+    const [blocked] = await this.opts.db
+      .select({ userId: shareBlocks.userId })
+      .from(shareBlocks)
+      .where(
+        and(
+          eq(shareBlocks.userId, params.sharedWithUserId),
+          eq(shareBlocks.blockedOwnerId, params.ownerId),
+        ),
+      )
+      .limit(1);
+    if (blocked) {
+      throw new AppError('this person is not accepting shares from you', 'FORBIDDEN', 403);
+    }
+
+    // One statement: the unique index deduplicates, and re-granting — which is
+    // how the permission is changed — updates the row in place. A lookup and a
+    // separate update could lose to a revoke landing between them.
+    const [row] = await this.opts.db
       .insert(folderShares)
       .values({
         id: nanoid(),
@@ -233,28 +255,14 @@ export class SharingService {
         grantedAt: this.now(),
         grantedBy: params.grantedBy,
       })
-      .onConflictDoNothing()
+      .onConflictDoUpdate({
+        target: [folderShares.folderPath, folderShares.ownerId, folderShares.sharedWithUserId],
+        set: { permission, grantedAt: this.now(), grantedBy: params.grantedBy },
+      })
       .returning({ id: folderShares.id });
 
-    if (inserted) return inserted.id;
-
-    // Already shared. Re-granting is how the permission is changed — the owner
-    // picks 'write' in the same dialog that first said 'read' — so the existing
-    // row is updated rather than left as it was.
-    const [updated] = await this.opts.db
-      .update(folderShares)
-      .set({ permission, grantedAt: this.now(), grantedBy: params.grantedBy })
-      .where(
-        and(
-          eq(folderShares.folderPath, folderPath),
-          eq(folderShares.ownerId, params.ownerId),
-          eq(folderShares.sharedWithUserId, params.sharedWithUserId),
-        ),
-      )
-      .returning({ id: folderShares.id });
-
-    if (!updated) throw new AppError('could not create share', 'INTERNAL', 500);
-    return updated.id;
+    if (!row) throw new AppError('could not create share', 'INTERNAL', 500);
+    return row.id;
   }
 
   /**
@@ -276,6 +284,9 @@ export class SharingService {
    * People who already accepted keep their access; only the way back in closes.
    * To keep inviting, the owner issues a new link.
    *
+   * Grants on folders nested inside go too: removing someone from `proj`
+   * while a grant on `proj/sub` kept them writing there is not removing them.
+   *
    * No-op when there is nothing to revoke.
    */
   async revoke(params: {
@@ -284,16 +295,7 @@ export class SharingService {
     folderPath: string;
   }): Promise<void> {
     const folderPath = normalizeFolderPath(params.folderPath);
-
-    await this.opts.db
-      .delete(folderShares)
-      .where(
-        and(
-          eq(folderShares.folderPath, folderPath),
-          eq(folderShares.ownerId, params.ownerId),
-          eq(folderShares.sharedWithUserId, params.sharedWithUserId),
-        ),
-      );
+    await this.deleteGrantsUnder(params.ownerId, params.sharedWithUserId, folderPath);
 
     // One statement, because the HTTP driver opens no transaction: the email
     // is matched with a subquery rather than read first and passed back in.
@@ -303,7 +305,12 @@ export class SharingService {
       .where(
         and(
           eq(folderShareInvites.ownerId, params.ownerId),
-          eq(folderShareInvites.folderPath, folderPath),
+          or(
+            eq(folderShareInvites.folderPath, folderPath),
+            // Nested folders, matched with LIKE only to narrow: a pattern
+            // that over-matches here kills an invite, never grants anything.
+            sql`${folderShareInvites.folderPath} LIKE ${`${escapeLike(folderPath)}/%`}`,
+          ),
           isNull(folderShareInvites.revokedAt),
           or(
             eq(folderShareInvites.mode, 'link'),
@@ -462,6 +469,188 @@ export class SharingService {
     }
 
     return doomed.length;
+  }
+
+  /**
+   * Leave a folder somebody shared with you, and anything of theirs nested in
+   * it. With `block`, refuse every share from that person from now on.
+   *
+   * A share is granted without asking the recipient, so the recipient needs a
+   * way out: without one, anybody with an account could share a folder named
+   * like one of yours — `Inbox` — and every write you made there without an
+   * owner would be refused as ambiguous, with nothing you could do about it.
+   */
+  async leave(params: {
+    userId: string;
+    ownerId: string;
+    folderPath: string;
+    block?: boolean;
+  }): Promise<void> {
+    await this.deleteGrantsUnder(params.ownerId, params.userId, normalizeFolderPath(params.folderPath));
+    if (params.block) await this.block(params.userId, params.ownerId);
+  }
+
+  /** Refuse every share from `ownerId`, and leave the ones already given. */
+  async block(userId: string, ownerId: string): Promise<void> {
+    if (userId === ownerId) return;
+    await this.opts.db
+      .insert(shareBlocks)
+      .values({ userId, blockedOwnerId: ownerId, createdAt: this.now() })
+      .onConflictDoNothing();
+    await this.opts.db
+      .delete(folderShares)
+      .where(and(eq(folderShares.ownerId, ownerId), eq(folderShares.sharedWithUserId, userId)));
+  }
+
+  async unblock(userId: string, ownerId: string): Promise<void> {
+    await this.opts.db
+      .delete(shareBlocks)
+      .where(and(eq(shareBlocks.userId, userId), eq(shareBlocks.blockedOwnerId, ownerId)));
+  }
+
+  /** The people a user refuses shares from. */
+  async listBlocked(
+    userId: string,
+  ): Promise<Array<{ ownerId: string; email: string; displayName: string | null; since: number }>> {
+    const rows = await this.opts.db
+      .select({
+        ownerId: shareBlocks.blockedOwnerId,
+        email: users.email,
+        displayName: users.displayName,
+        since: shareBlocks.createdAt,
+      })
+      .from(shareBlocks)
+      .innerJoin(users, eq(users.id, shareBlocks.blockedOwnerId))
+      .where(eq(shareBlocks.userId, userId))
+      .orderBy(desc(shareBlocks.createdAt));
+    return rows.map((r) => ({ ...r, since: Number(r.since) }));
+  }
+
+  /** Every grant from `ownerId` to `userId` at or under `folderPath`, matched in memory. */
+  private async deleteGrantsUnder(
+    ownerId: string,
+    userId: string,
+    folderPath: string,
+  ): Promise<void> {
+    const rows = await this.opts.db
+      .select({ id: folderShares.id, folderPath: folderShares.folderPath })
+      .from(folderShares)
+      .where(and(eq(folderShares.ownerId, ownerId), eq(folderShares.sharedWithUserId, userId)));
+    const doomed = rows.filter((r) => pathFallsUnder(r.folderPath, folderPath)).map((r) => r.id);
+    if (doomed.length > 0) {
+      await this.opts.db.delete(folderShares).where(inArray(folderShares.id, doomed));
+    }
+  }
+
+  /**
+   * Ask, on the owner's behalf, to share a folder — what an assistant does
+   * instead of granting. Nothing is shared until the owner approves it in the
+   * web app with a signed-in session.
+   *
+   * An assistant reads text other people wrote (a folder shared *with* the
+   * user is someone else's writing), so "share this with x@y" may not come
+   * from the user at all. A grant is the one action that hands another
+   * account a way in, so it is the one that waits for a person.
+   *
+   * Asking again for the same folder and address updates the request.
+   */
+  async requestShare(params: {
+    ownerId: string;
+    folderPath: string;
+    email: string;
+    permission?: SharePermission;
+    requestedBy?: string | null;
+  }): Promise<{ id: string; expiresAt: number }> {
+    const folderPath = normalizeFolderPath(params.folderPath);
+    if (folderPath === '') {
+      throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
+    }
+    const email = params.email.trim().toLowerCase();
+    const now = this.now();
+    const expiresAt = now + SHARE_REQUEST_TTL_MS;
+
+    const pending = await this.listShareRequests(params.ownerId);
+    const same = pending.find((r) => r.folderPath === folderPath && r.email === email);
+    if (same) {
+      await this.opts.db
+        .update(shareRequests)
+        .set({ permission: params.permission ?? 'read', createdAt: now, expiresAt })
+        .where(eq(shareRequests.id, same.id));
+      return { id: same.id, expiresAt };
+    }
+    if (pending.length >= MAX_PENDING_SHARE_REQUESTS) {
+      throw new AppError(
+        'too many share requests are waiting for approval; ask the user to review them first',
+        'RATE_LIMITED',
+        429,
+      );
+    }
+
+    const id = nanoid();
+    await this.opts.db.insert(shareRequests).values({
+      id,
+      ownerId: params.ownerId,
+      folderPath,
+      email,
+      permission: params.permission ?? 'read',
+      requestedBy: params.requestedBy ?? null,
+      createdAt: now,
+      expiresAt,
+    });
+    return { id, expiresAt };
+  }
+
+  /** Requests still waiting for this owner, newest first. */
+  async listShareRequests(ownerId: string): Promise<
+    Array<{
+      id: string;
+      folderPath: string;
+      email: string;
+      permission: SharePermission;
+      requestedBy: string | null;
+      createdAt: number;
+      expiresAt: number;
+    }>
+  > {
+    const rows = await this.opts.db
+      .select()
+      .from(shareRequests)
+      .where(and(eq(shareRequests.ownerId, ownerId), gt(shareRequests.expiresAt, this.now())))
+      .orderBy(desc(shareRequests.createdAt));
+    return rows.map((r) => ({
+      id: r.id,
+      folderPath: r.folderPath,
+      email: r.email,
+      permission: r.permission,
+      requestedBy: r.requestedBy,
+      createdAt: Number(r.createdAt),
+      expiresAt: Number(r.expiresAt),
+    }));
+  }
+
+  /**
+   * Remove a pending request and hand it back, for the caller to act on.
+   * Claimed in one statement, so approving twice at once acts once.
+   */
+  async takeShareRequest(
+    ownerId: string,
+    id: string,
+  ): Promise<{ folderPath: string; email: string; permission: SharePermission } | null> {
+    const [row] = await this.opts.db
+      .delete(shareRequests)
+      .where(
+        and(
+          eq(shareRequests.id, id),
+          eq(shareRequests.ownerId, ownerId),
+          gt(shareRequests.expiresAt, this.now()),
+        ),
+      )
+      .returning({
+        folderPath: shareRequests.folderPath,
+        email: shareRequests.email,
+        permission: shareRequests.permission,
+      });
+    return row ?? null;
   }
 
   // --- Internals -------------------------------------------------------------

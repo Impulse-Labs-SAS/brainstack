@@ -451,6 +451,38 @@ const totpAttempts: PgMigration = {
   ],
 };
 
+/**
+ * Shares an assistant asked for, waiting for the owner to approve them in the
+ * web app; and the people a user no longer accepts shares from.
+ *
+ * Granting someone a folder reaches another account, so an assistant — which
+ * may have read text written by somebody else — can only ask. And a share
+ * lands in the recipient's vault uninvited, so the recipient can leave it and
+ * refuse more from the same person.
+ */
+const shareRequestsAndBlocks: PgMigration = {
+  name: '0012_pg_share_requests_and_blocks',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS share_requests (
+       id           TEXT PRIMARY KEY,
+       owner_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       folder_path  TEXT NOT NULL,
+       email        TEXT NOT NULL,
+       permission   TEXT NOT NULL DEFAULT 'read' CHECK (permission IN ('read', 'write')),
+       requested_by TEXT,
+       created_at   BIGINT NOT NULL,
+       expires_at   BIGINT NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_share_requests_owner ON share_requests (owner_id, created_at)`,
+    `CREATE TABLE IF NOT EXISTS share_blocks (
+       user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       blocked_owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       created_at       BIGINT NOT NULL,
+       PRIMARY KEY (user_id, blocked_owner_id)
+     )`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -463,4 +495,5 @@ export const pgMigrations: readonly PgMigration[] = [
   facets,
   crawlHistory,
   totpAttempts,
+  shareRequestsAndBlocks,
 ];

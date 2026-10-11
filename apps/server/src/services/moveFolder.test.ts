@@ -235,3 +235,29 @@ describe('NoteService.move — los shares siguen a la carpeta', () => {
     expect(invite?.folderPath).toBe('Archivo/Gondor');
   });
 });
+
+describe('shares on a folder implied only by its notes', () => {
+  it('go when the folder is deleted, so a folder made later is not shared', async () => {
+    await database.db
+      .insert(users)
+      .values({ id: 'u2', email: 'u2@x.com', createdAt: Date.now(), updatedAt: 0 });
+    const sharing = new SharingService({ db: database.db });
+    const notes2 = new NoteService({
+      db: database.db,
+      onFolderGone: (ownerId, folderPath) => sharing.revokeUnder({ ownerId, folderPath }).then(() => {}),
+    });
+    await notes2.create('u1', 'x.md', 'x');
+    await notes2.move('u1', 'x.md', 'drafts/x.md');
+    await sharing.grant({
+      ownerId: 'u1',
+      sharedWithUserId: 'u2',
+      folderPath: 'drafts',
+      grantedBy: 'u1',
+    });
+
+    await notes2.remove('u1', 'drafts', { recursive: true });
+    await notes2.create('u1', 'drafts/secret.md', 'private');
+
+    expect(await sharing.canRead('u2', 'u1', 'drafts/secret.md')).toBe(false);
+  });
+});

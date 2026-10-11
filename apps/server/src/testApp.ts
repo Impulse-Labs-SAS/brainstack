@@ -61,7 +61,6 @@ export function buildTestApp(
         sharing: services.sharing,
         crossOwner: services.crossOwner,
         auth: services.auth,
-        invites: services.invites,
         crawls: services.crawls,
         logger,
         principal,

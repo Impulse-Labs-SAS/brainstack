@@ -10,7 +10,7 @@
 // runs it on each cold start. Every statement is a plain indexed delete, safe
 // to run concurrently and to repeat.
 
-import { and, isNotNull, lt, or } from 'drizzle-orm';
+import { and, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import type { Logger } from 'pino';
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
@@ -24,6 +24,7 @@ const {
   oauthTokens,
   passwordResetTokens,
   sessions,
+  shareRequests,
 } = pgSchema;
 
 /** Revoked OAuth tokens are kept this long, so a replay is still recognised as one. */
@@ -82,8 +83,14 @@ export async function purgeExpired(
   await count(
     db
       .delete(folderShareInvites)
-      .where(lt(folderShareInvites.expiresAt, now))
+      // An accepted invite is the record of how someone got in; only the ones
+      // that lapsed unused go.
+      .where(and(lt(folderShareInvites.expiresAt, now), isNull(folderShareInvites.acceptedAt)))
       .returning({ id: folderShareInvites.id }),
+  );
+
+  await count(
+    db.delete(shareRequests).where(lt(shareRequests.expiresAt, now)).returning({ id: shareRequests.id }),
   );
 
   if (deleted > 0) opts.logger?.info({ deleted }, 'purged expired sessions, links and tokens');
