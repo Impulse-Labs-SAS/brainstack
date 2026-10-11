@@ -744,10 +744,21 @@ export class AuthService {
           lastLoginAt: now,
           updatedAt: now,
         },
+        // The refusal above, again inside the statement. A password sign-up
+        // for this address landing between that read and this write would
+        // otherwise be merged: the stranger's password on the Google
+        // owner's verified account.
+        setWhere: sql`${users.emailVerified} = true OR ${users.passwordHash} IS NULL`,
       })
       .returning();
 
-    if (!row) throw new AppError('could not create user', 'INTERNAL', 500);
+    if (!row) {
+      throw new AppError(
+        'local account exists and is not verified; verify it before linking Google',
+        'FORBIDDEN',
+        403,
+      );
+    }
     return toUser(row as UserRow);
   }
 

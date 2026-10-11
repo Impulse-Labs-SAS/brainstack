@@ -113,15 +113,28 @@ export function buildServices(opts: BuildServicesOptions): Services {
   });
 
   // Optional: without credentials the Google routes simply are not mounted.
+  // The callback defaults to this server's own, which is what the Google
+  // console needs to be told anyway; half a configuration says so at boot
+  // instead of leaving a self-hoster to wonder where the button went.
+  const googleRedirectUri =
+    opts.googleRedirectUri ||
+    `${opts.publicOrigin.replace(/\/+$/, '')}${opts.apiBasePath ?? ''}/auth/google/callback`;
   const google =
-    opts.googleClientId && opts.googleClientSecret && opts.googleRedirectUri
+    opts.googleClientId && opts.googleClientSecret
       ? new GoogleOAuthService({
           clientId: opts.googleClientId,
           clientSecret: opts.googleClientSecret,
-          redirectUri: opts.googleRedirectUri,
+          redirectUri: googleRedirectUri,
           db: opts.db,
         })
       : undefined;
+  if (google) {
+    opts.logger.info({ redirectUri: googleRedirectUri }, 'Google sign-in enabled');
+  } else if (opts.googleClientId || opts.googleClientSecret) {
+    opts.logger.warn(
+      'Google sign-in is off: set both GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET',
+    );
+  }
 
   return {
     db: opts.db,

@@ -18,6 +18,8 @@ export interface OAuthGoogleRouterOptions {
   secureCookies: boolean;
   /** Where to redirect after a successful sign-in / on error. */
   appHome: string;
+  /** The prefix the API is mounted under, e.g. `/api`. */
+  basePath?: string;
 }
 
 const STATE_COOKIE = 'bs_oauth_state';
@@ -36,6 +38,10 @@ function setSessionCookie(c: Context<AuthBindings>, token: string, secure: boole
 
 export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<AuthBindings> {
   const router = new Hono<AuthBindings>();
+  // The state cookie has to reach the callback, which lives under the API's
+  // prefix. Scoped to a bare `/auth`, the browser never sent it to
+  // `/api/auth/google/callback`, and every sign-in failed on "state mismatch".
+  const statePath = `${opts.basePath ?? ''}/auth`;
 
   router.get('/google', async (c) => {
     const redirectTo = c.req.query('redirect_to') ?? undefined;
@@ -44,7 +50,7 @@ export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<Au
       httpOnly: true,
       secure: opts.secureCookies,
       sameSite: 'Lax',
-      path: '/auth',
+      path: statePath,
       maxAge: STATE_MAX_AGE,
     });
     return c.redirect(url);
@@ -54,7 +60,7 @@ export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<Au
     const code = c.req.query('code');
     const state = c.req.query('state');
     const stateCookie = getCookie(c, STATE_COOKIE) ?? null;
-    deleteCookie(c, STATE_COOKIE, { path: '/auth' });
+    deleteCookie(c, STATE_COOKIE, { path: statePath });
 
     if (!code || !state) {
       return c.redirect(`${opts.appHome}/login?error=missing_oauth_params`);

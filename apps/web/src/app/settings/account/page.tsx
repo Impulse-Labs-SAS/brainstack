@@ -244,7 +244,8 @@ function GoogleCard({
       <section>
         <h2 className="mb-2 text-base font-medium text-fg-primary">Google</h2>
         <div className="rounded border border-border bg-bg-surface p-4 text-sm text-fg-secondary">
-          Google sign-in is not linked. Sign out and use &ldquo;Continue with Google&rdquo; once to link.
+          Google sign-in is not linked. If this server offers it, sign out and use &ldquo;Continue
+          with Google&rdquo; on the sign-in page once, with this account&apos;s address, to link it.
         </div>
       </section>
     );

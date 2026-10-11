@@ -1,19 +1,22 @@
 // Public configuration endpoint. No auth: it describes the instance, not the
 // user.
 //
-// Every instance is the same now, so what it reports is fixed. It stays for two
-// readers: the deploy check, which asks it for a 200 to prove the API function
-// answers, and a web bundle cached from before, which reads `features.sharing`
-// to decide whether to show the share actions.
+// Readers: the deploy check, which asks it for a 200 to prove the API function
+// answers; a web bundle cached from before, which reads `features.sharing`;
+// and the login page, which offers Google only where it is configured.
 
 import { Hono } from 'hono';
 
-export const PUBLIC_CONFIG = {
-  features: {
-    sharing: true,
-  },
-} as const;
+export function publicConfig(opts: { google: boolean }) {
+  return {
+    features: {
+      sharing: true,
+      google: opts.google,
+    },
+  } as const;
+}
 
-export function createConfigRouter(): Hono {
-  return new Hono().get('/', (c) => c.json(PUBLIC_CONFIG));
+export function createConfigRouter(opts: { google: boolean } = { google: false }): Hono {
+  const config = publicConfig(opts);
+  return new Hono().get('/', (c) => c.json(config));
 }
