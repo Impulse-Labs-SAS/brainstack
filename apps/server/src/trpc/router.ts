@@ -276,6 +276,11 @@ export const appRouter = t.router({
             fromPath: input.from,
             toOwnerId: input.toOwnerId,
             toPath: input.to,
+            viewerId: ctx.user.id,
+            viewerScopes: (await ctx.sharedRoots()).map((r) => ({
+              ownerId: r.ownerId,
+              folderPath: r.folderPath,
+            })),
           });
         }),
       ),
@@ -371,7 +376,11 @@ export const appRouter = t.router({
                 folderPath: r.folderPath,
               }))
             : [];
-        return ctx.notes.listRelated(owner, input.path, { sharedScopes, limit: input.limit });
+        return ctx.notes.listRelated(ctx.user.id, input.path, {
+          ownerId: owner,
+          sharedScopes,
+          limit: input.limit,
+        });
       }),
     facetsForNote: protectedProcedure
       .input(z.object({ path: z.string().min(1), ownerId: OwnerInput }))

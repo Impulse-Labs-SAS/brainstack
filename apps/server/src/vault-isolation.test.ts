@@ -388,6 +388,36 @@ describe('two accounts on a default instance', () => {
     expect((await alice.notes.get({ path: 'Privado/diario.md' })).body).toContain('secreto de alice');
   });
 
+  it('cannot learn private notes through related notes on a shared one', async () => {
+    const alice = callerFor(asUser('alice', 'alice@brain.test'));
+    const bob = callerFor(asUser('bob', 'bob@brain.test'));
+
+    await alice.notes.create({ path: 'proj/shared.md', content: '# Shared\n\n#client/acme' });
+    await alice.notes.create({ path: 'private/hidden.md', content: '# Hidden strategy\n\n#client/acme' });
+    await alice.sharing.shareWithUser({ folderPath: 'proj', email: 'bob@brain.test', permission: 'read' });
+
+    for (const scope of ['mine', 'shared', 'all'] as const) {
+      const related = await bob.notes.related({ path: 'proj/shared.md', ownerId: 'alice', scope });
+      expect(JSON.stringify(related)).not.toContain('hidden');
+    }
+  });
+
+  it('scores related notes without counting other vaults', async () => {
+    const alice = callerFor(asUser('alice', 'alice@brain.test'));
+    const bob = callerFor(asUser('bob', 'bob@brain.test'));
+
+    await bob.notes.create({ path: 'a.md', content: '# A\n\n#rare' });
+    await bob.notes.create({ path: 'b.md', content: '# B\n\n#rare' });
+    const before = await bob.notes.related({ path: 'a.md' });
+
+    for (const n of [1, 2, 3]) {
+      await alice.notes.create({ path: `x${n}.md`, content: `# X${n}\n\n#rare` });
+    }
+    const after = await bob.notes.related({ path: 'a.md' });
+
+    expect(after).toEqual(before);
+  });
+
   it('cannot list or replay each other’s crawls', async () => {
     const alice = callerFor(asUser('alice', 'alice@brain.test'));
     const bob = callerFor(asUser('bob', 'bob@brain.test'));

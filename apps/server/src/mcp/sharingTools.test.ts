@@ -512,6 +512,35 @@ describe('the listing tools answer with their rows, not with a pending promise',
     expect(browse.value).toMatchObject([{ key: 'technologies', value: 'nextjs', count: 1 }]);
   });
 
+  it('list_facets never browses another vault, shared or not', async () => {
+    const owner = await clientFor(OWNER.id);
+    await call(owner, 'create_note', {
+      path: 'Privado/a.md',
+      content: 'A',
+      frontmatter: { client: 'Acme', status: 'open' },
+    });
+    await call(owner, 'create_note', { path: 'Shared/s.md', content: 'S', frontmatter: { client: 'Globex' } });
+    await sharing.grant({
+      ownerId: OWNER.id,
+      folderPath: 'Shared',
+      sharedWithUserId: FRODO.id,
+      grantedBy: OWNER.id,
+      permission: 'read',
+    });
+
+    const frodo = await clientFor(FRODO.id);
+    const browse = await call(frodo, 'list_facets', { ownerId: OWNER.id });
+    expect(browse.error).toContain('FORBIDDEN');
+    expect(JSON.stringify(browse)).not.toContain('Acme');
+
+    const keyed = await call(frodo, 'list_facets', { ownerId: OWNER.id, key: 'client' });
+    expect(keyed.error).toContain('FORBIDDEN');
+
+    // One shared note's facets still read fine.
+    const one = await call(frodo, 'list_facets', { path: 'Shared/s.md', ownerId: OWNER.id });
+    expect(one.value).toMatchObject([{ key: 'client', value: 'Globex' }]);
+  });
+
   it('list_links omits a backlink source frodo has no grant to see', async () => {
     const owner = await clientFor(OWNER.id);
     const frodo = await clientFor(FRODO.id);

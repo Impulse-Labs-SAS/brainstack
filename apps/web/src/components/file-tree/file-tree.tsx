@@ -793,7 +793,10 @@ export function FileTree() {
           toOwnerId: dst.ownerId,
         });
         await refresh();
-        const dangling = result.linksLeftDangling.length + result.linksNowBroken.length;
+        const dangling =
+          result.linksLeftDangling.length +
+          result.linksNowBroken.length +
+          result.linksNowBrokenElsewhere;
         pushToast(
           'info',
           `moved to ${result.path}, now owned by ${ownerLabel(dst.ownerId)}` +

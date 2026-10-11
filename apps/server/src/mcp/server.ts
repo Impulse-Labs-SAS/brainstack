@@ -467,6 +467,11 @@ export function buildMcpServer({
           fromPath: from,
           toOwnerId,
           toPath: to,
+          viewerId: requireUserId(),
+          viewerScopes: (await sharing.listSharedRoots(requireUserId())).map((r) => ({
+            ownerId: r.ownerId,
+            folderPath: r.folderPath,
+          })),
         });
 
         return JSON_TEXT({
@@ -642,7 +647,7 @@ export function buildMcpServer({
     {
       title: 'List facets',
       description:
-        'Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note\'s facets; omit it (optionally with `key`) to browse every (key, value) pair in use, with counts.',
+        'Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note\'s facets (with `ownerId` for a note in a shared folder); omit it (optionally with `key`) to browse every (key, value) pair in use in your own vault, with counts. Browsing never takes another owner\'s `ownerId`.',
       inputSchema: {
         path: z.string().optional(),
         key: z.string().optional(),
@@ -655,7 +660,17 @@ export function buildMcpServer({
           const owner = await readOwner(path, ownerId);
           return JSON_TEXT(await notes.listFacetsForNote(owner, path));
         }
-        return JSON_TEXT(await notes.listFacets(ownerOf(ownerId), key));
+        // Browsing aggregates a whole vault, and a grant covers one folder of
+        // it, so only your own vault can be browsed.
+        const userId = requireUserId();
+        if (ownerId !== undefined && ownerId !== userId) {
+          throw new AppError(
+            'browsing facets covers your own vault only; pass `path` to read the facets of one note in a shared folder',
+            'FORBIDDEN',
+            403,
+          );
+        }
+        return JSON_TEXT(await notes.listFacets(userId, key));
       } catch (err) {
         return toMcpError(err);
       }

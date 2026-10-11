@@ -32,7 +32,7 @@ You interact with BrainStack via these MCP tools:
 - `list_links(path, ownerId?)` — backlinks for a path; in your own vault each one carries the source note's `title` and the `snippet` line it is cited in
 - `list_outbound_links(path, ownerId?)` — what a path links to or embeds, with each target note's `title`; the mirror of `list_links`
 - `list_related(path, limit?)` — notes related by a shared tag or facet, ranked by rarity, each with the `reasons` (tags and facet values) it shares, rarest first; **own vault only** (no `ownerId`)
-- `list_facets(path?, key?, ownerId?)` — a note's frontmatter facets (`path` given), or every `(key, value)` in use (`path` omitted)
+- `list_facets(path?, key?, ownerId?)` — a note's frontmatter facets (`path` given, with `ownerId` for a shared note), or every `(key, value)` in use in your own vault (`path` omitted)
 - `list_unlinked_mentions(path)` — where a note is named without a wikilink: `incoming` (other notes whose text says its title or an alias) and `outgoing` (titles its own text says); **own vault only** (no `ownerId`)
 - `list_decisions(folder?, limit?, ownerId?)` — notes tagged `decisión`/`decision` or with frontmatter `status: decidido` (via facets)
 - `gather_context(text, terms?, depth?, maxChars?)` — **start here**: everything the vault holds about a question or a prompt, in one call — the notes it names or links, the best hits for the question itself and for its vague `terms`, what those link to, with their bodies, and what it could not resolve; it reads the user's own vault **and the folders shared with them** — a shared note comes with its `ownerId`. See **Answering from the brain in one call**
@@ -154,8 +154,9 @@ Crossing costs links, and the tool says so rather than hiding it: a wikilink
 cannot name a vault, so `[[personal/idea]]` inside a note that just left the
 user's vault has nothing to point at any more. The answer lists
 `linksLeftDangling` (what moved, now pointing at what stayed) and
-`linksNowBroken` (what stayed, now pointing at what moved). Report those to the
-user — they are the part of the move that needs a human decision.
+`linksNowBroken` (what stayed, now pointing at what moved). Notes the user
+cannot read are never named there, only counted in `linksNowBrokenElsewhere`.
+Report those to the user — they are the part of the move that needs a human decision.
 
 ## Sharing folders
 
