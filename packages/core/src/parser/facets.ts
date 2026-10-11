@@ -40,7 +40,7 @@ function displayValueFor(obj: Record<string, unknown>): string {
 /** One entry (an array element, or the field itself when it isn't an array). */
 function facetFromEntry(entry: unknown): { value: string; data: Record<string, unknown> | null } | null {
   // extractFrontmatter already turns dates into text; this covers a caller
-  // handing in frontmatter straight from gray-matter. Checked before
+  // handing in frontmatter straight from the YAML parser. Checked before
   // isPlainObject, which a Date would otherwise pass as an object with no
   // display field — and get indexed as its JSON, quotes included.
   if (entry instanceof Date) {

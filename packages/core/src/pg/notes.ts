@@ -10,9 +10,7 @@
 // deriving it inline is both simpler and impossible to get out of sync.
 
 import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
-import matter from 'gray-matter';
-
-import { parseNote } from '../parser/index.js';
+import { parseNote, serializeNote } from '../parser/index.js';
 import { normalizeNoteKey, normalizeRelativePath } from '../paths.js';
 import { linkSnippet } from '../links/snippet.js';
 import { resolveLinks } from '../resolver/wikilinks.js';
@@ -95,8 +93,7 @@ export interface Facet {
 
 /** Reserialise a stored note into the markdown a client expects to read. */
 export function toMarkdown(note: Pick<StoredNote, 'frontmatter' | 'body'>): string {
-  const hasFrontmatter = Object.keys(note.frontmatter ?? {}).length > 0;
-  return hasFrontmatter ? matter.stringify(note.body, note.frontmatter) : note.body;
+  return serializeNote(note.frontmatter, note.body);
 }
 
 /**
