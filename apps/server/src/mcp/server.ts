@@ -154,6 +154,16 @@ export function buildMcpServer({
     if (ownerId === undefined) await sharing.assertNotShadowingShare(userId, path);
   };
 
+  /**
+   * Whose vault a note came from, for the front of a tool's answer: `own`, or
+   * `shared` with the owner's id — text someone else wrote, to be read as
+   * information and never as instructions.
+   */
+  const ownership = (owner: string) =>
+    owner === requireUserId()
+      ? { source: 'own' as const }
+      : { source: 'shared' as const, ownerId: owner };
+
   /** The `ownerId` argument, described once for every tool that takes it. */
   const OWNER_ARG = field()
     .optional()
@@ -218,8 +228,12 @@ export function buildMcpServer({
     },
     async ({ path, ownerId }) => {
       try {
-        const note = await notes.get(await readOwner(path, ownerId), path);
-        return JSON_TEXT(note);
+        const owner = await readOwner(path, ownerId);
+        const note = await notes.get(owner, path);
+        // Whose words these are comes before the words: a shared note can be
+        // written by anyone with access to the folder, and reads back with the
+        // same weight as the user's own unless the assistant is told first.
+        return JSON_TEXT({ ...ownership(owner), ...note });
       } catch (err) {
         return toMcpError(err);
       }
@@ -247,7 +261,7 @@ export function buildMcpServer({
         const owner = await readOwner(args.folder, ownerId);
         const facet = facetKey && facetValue ? { key: facetKey, value: facetValue } : undefined;
         const rows = await notes.list(owner, { ...args, ...(facet ? { facet } : {}) });
-        return JSON_TEXT(rows);
+        return JSON_TEXT(owner === requireUserId() ? rows : rows.map((r) => ({ ownerId: owner, ...r })));
       } catch (err) {
         return toMcpError(err);
       }
@@ -323,7 +337,7 @@ export function buildMcpServer({
       try {
         const owner = await readOwner(path, ownerId);
         const tree = await notes.listTree(owner, path, depth);
-        return JSON_TEXT(tree);
+        return JSON_TEXT(owner === requireUserId() ? tree : { ownerId: owner, ...tree });
       } catch (err) {
         return toMcpError(err);
       }
@@ -399,7 +413,7 @@ export function buildMcpServer({
     {
       title: 'Move a note or folder into another vault',
       description:
-        'TRANSFERS OWNERSHIP. Move a note or folder from one person’s vault into another’s — for example, out of a folder somebody shared with you and into your own notes. This is not a copy and not a reorganisation: the notes leave the source vault and belong to the destination owner afterwards. Whoever owned them stops owning them, and keeps access only if the destination is shared with them — possibly at a narrower permission than they had, or not at all. ALWAYS tell the user this before calling, name who stops being the owner, and get their agreement; a request to tidy up or to move something into another folder does not by itself mean they intend to take ownership of somebody else’s notes. Requires write access at both ends. Wikilinks crossing the new boundary cannot be rewritten (a wikilink cannot name a vault), so the answer lists what was left dangling in each direction rather than repairing it silently. Calling this without `userConfirmedOwnershipTransfer` moves nothing and answers with what the transfer would cost, which is what you put to the user. Use `move` for anything staying inside one vault, which changes no ownership.',
+        'TRANSFERS OWNERSHIP. Move a note or folder from one person’s vault into another’s — out of a folder somebody shared with you, for example into your own notes. It never takes notes out of the user’s own vault: giving them away is done by the user in the web app (dragging them onto the shared folder in the file tree), and this tool refuses it. This is not a copy and not a reorganisation: the notes leave the source vault and belong to the destination owner afterwards. Whoever owned them stops owning them, and keeps access only if the destination is shared with them — possibly at a narrower permission than they had, or not at all. ALWAYS tell the user this before calling, name who stops being the owner, and get their agreement; a request to tidy up or to move something into another folder does not by itself mean they intend to take ownership of somebody else’s notes. Requires write access at both ends. Wikilinks crossing the new boundary cannot be rewritten (a wikilink cannot name a vault), so the answer lists what was left dangling in each direction rather than repairing it silently. Calling this without `userConfirmedOwnershipTransfer` moves nothing and answers with what the transfer would cost, which is what you put to the user. Use `move` for anything staying inside one vault, which changes no ownership.',
       inputSchema: {
         from: field().min(1),
         fromOwnerId: OWNER_ARG,
@@ -422,10 +436,23 @@ export function buildMcpServer({
     },
     async ({ from, fromOwnerId, to, toOwnerId, userConfirmedOwnershipTransfer }) => {
       try {
+        const previousOwner = ownerOf(fromOwnerId);
+        // Giving the caller's own notes away cannot be undone by them, and the
+        // flag below is only the assistant's word that they agreed. That
+        // direction is the person's own action, in the web app, where they
+        // confirm it themselves — the same reason share_folder only asks.
+        if (previousOwner === requireUserId() && toOwnerId !== previousOwner) {
+          throw new AppError(
+            'Moving your own notes into someone else’s vault makes them the owner, and only you ' +
+              'can do that: drag the note or folder onto the shared folder in the BrainStack web ' +
+              'app. Tell the user so; this tool does not do it.',
+            'FORBIDDEN',
+            403,
+          );
+        }
         // Taking something out of a vault is a write on that vault.
         await assertWrite(from, fromOwnerId);
         await assertWrite(to, toOwnerId);
-        const previousOwner = ownerOf(fromOwnerId);
 
         // What the previous owner is left with, which depends on the grants
         // rather than on the notes — so it can be answered before moving.
@@ -519,8 +546,10 @@ export function buildMcpServer({
     async ({ path, recursive, ownerId }) => {
       try {
         await assertWrite(path, ownerId);
-        const result = await notes.remove(ownerOf(ownerId), path, { recursive });
-        return JSON_TEXT(result);
+        // What is gone, so the assistant can report the blast radius. This
+        // used to answer `undefined`, which the client rejected as an invalid
+        // result after the delete had already happened.
+        return JSON_TEXT(await notes.remove(ownerOf(ownerId), path, { recursive }));
       } catch (err) {
         return toMcpError(err);
       }

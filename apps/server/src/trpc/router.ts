@@ -294,7 +294,9 @@ export const appRouter = t.router({
      * must be allowed to take it from where it is *and* to put it where it is
      * going, and those are two different grants.
      */
-    moveToOwner: protectedProcedure
+    // A person in the web app, never an API key: this changes who owns the
+    // notes, and the previous owner cannot undo it.
+    moveToOwner: sessionProcedure
       .input(
         z.object({
           from: field().min(1),

@@ -18,7 +18,7 @@
 
 import { foldForMatch } from '../links/mentions.js';
 
-import { WORD_BREAK, resolveNames, withoutNamed } from './names.js';
+import { WORD_BREAK, resolveNames, withoutNamed, type NameEntry } from './names.js';
 import {
   CandidateSet,
   PROMPT_HITS,
@@ -84,8 +84,11 @@ export interface GatherContextResult {
 
 /** Where the engine reads from. Paths are whatever the source uses to name a note. */
 export interface ContextSource {
-  /** Every note the reader may see: path, title and aliases. No bodies. */
-  titles(): Promise<Array<{ path: string; title: string; aliases: unknown[] }>>;
+  /**
+   * Every note the reader may see: path, title and aliases. No bodies.
+   * `secondary` marks a note whose names yield to the reader's own.
+   */
+  titles(): Promise<NameEntry[]>;
   /**
    * Note-to-note links touching any of `paths`, in either direction. `position`
    * — where in its source the link is written — is optional; with it, a
@@ -126,7 +129,10 @@ export async function crawlContext(
   const title = (path: string) => titleOf.get(path) ?? path;
 
   const set = new CandidateSet();
-  const { named, unresolved, settledTerms, undecided, namedWords } = resolveNames(text, index);
+  const { named, unresolved, settledTerms, undecided, namedWords, focus } = resolveNames(
+    text,
+    index,
+  );
   for (const [path, { text: said, count }] of named) {
     set.offer({ path, score: NAMED_SCORE, via: { kind: 'named', text: said, count } });
   }
@@ -184,7 +190,7 @@ export async function crawlContext(
   // counts half. Both are only known now that every search has run.
   set.setContext({
     weights,
-    namedFolders: [...new Set([...named.keys()].map(folderOf))],
+    namedFolders: [...new Set(focus.map(folderOf))],
   });
   for (const { term, hits } of termHits) {
     hits.forEach((hit, rank) => {

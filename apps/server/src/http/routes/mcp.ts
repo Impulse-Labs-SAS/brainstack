@@ -1,6 +1,6 @@
 // MCP HTTP transport mounted under /mcp. Uses StreamableHTTPServerTransport
-// in stateless mode (one transport per request) — fine for V1, switch to
-// session-aware transports when we add auth in Fase 3.
+// in stateless mode: one server and one transport per request, nothing kept
+// between them.
 //
 // Two transports for two runtimes. In development @hono/node-server hands us
 // Node's IncomingMessage/ServerResponse and the SDK's Node transport writes
@@ -26,6 +26,22 @@ export interface McpHttpRouterOptions {
 
 export function createMcpHttpRouter({ buildServer, logger }: McpHttpRouterOptions): Hono<AuthBindings> {
   const router = new Hono<AuthBindings>();
+
+  // Stateless, so only POST means anything. Handed to the transport, a GET
+  // opened an event stream nothing would ever write to, holding a socket and a
+  // server per request for as long as the client cared to keep it; the
+  // Streamable HTTP spec lets a server without sessions refuse it.
+  router.on(['GET', 'DELETE'], '/', (c) =>
+    c.json(
+      {
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Method not allowed: this server is stateless, use POST' },
+        id: null,
+      },
+      405,
+      { Allow: 'POST' },
+    ),
+  );
 
   router.all('/', async (c) => {
     // @hono/node-server exposes the raw Node objects on `c.env`.

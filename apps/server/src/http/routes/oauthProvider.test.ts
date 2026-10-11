@@ -577,6 +577,19 @@ describe('token exchange', () => {
     expect(mcp.status).toBe(401);
   });
 
+  it('answers GET on /mcp with 405 instead of an event stream that never ends', async () => {
+    const clientId = await registerClient();
+    const tokens = (await (
+      await exchange(clientId, await obtainCode(clientId))
+    ).json()) as TokenResponse;
+    const res = await app.request('/mcp', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'text/event-stream' },
+    });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
+  });
+
   it('a refresh sent twice at once fails the loser without burning the winner', async () => {
     const clientId = await registerClient();
     const code = await obtainCode(clientId);
