@@ -101,6 +101,12 @@ export function AppShell({ children }: { children: ReactNode }) {
    */
   const [navOpen, setNavOpen] = useState(false);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
+  // A share an assistant asked for does nothing until it is approved, so the
+  // rail says when one is waiting. Polled gently; it changes rarely.
+  const shareRequests = trpc.sharing.listShareRequests.useQuery(undefined, {
+    refetchInterval: 60_000,
+  });
+  const pendingShares = shareRequests.data?.length ?? 0;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -158,6 +164,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                 >
                   <Icon size={16} strokeWidth={1.75} />
                   <span className="md:hidden">{link.label}</span>
+                  {link.href === '/settings' && pendingShares > 0 && (
+                    <span
+                      aria-label={`${pendingShares} share request${pendingShares === 1 ? '' : 's'} waiting`}
+                      className="absolute right-1 top-1 h-2 w-2 rounded-full bg-accent"
+                    />
+                  )}
                   <RailTip>{link.label}</RailTip>
                 </Link>
               );

@@ -22,6 +22,10 @@ export default function SettingsPage() {
             <div className="text-fg-primary">Account</div>
             <div className="text-xs text-fg-muted">Password, Google sign-in, 2FA, sessions.</div>
           </Link>
+          <Link href="/settings/sharing" className="block rounded border border-border bg-bg-surface p-3 hover:bg-bg-elevated">
+            <div className="text-fg-primary">Sharing</div>
+            <div className="text-xs text-fg-muted">Approve shares an assistant asked for; leave or block shares from others.</div>
+          </Link>
           <Link href="/settings/api-keys" className="block rounded border border-border bg-bg-surface p-3 hover:bg-bg-elevated">
             <div className="text-fg-primary">API keys</div>
             <div className="text-xs text-fg-muted">Manage tokens for MCP clients (Claude, Cursor, …).</div>

@@ -14,12 +14,13 @@ import { AuthService } from '../services/AuthService.js';
 import { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import { CapturingEmailSender } from '../services/EmailSender.js';
-import { InviteService } from '../services/InviteService.js';
 import { NoteService } from '../services/NoteService.js';
 import { SearchService } from '../services/SearchService.js';
 import { SharingService } from '../services/SharingService.js';
 import { TotpService } from '../services/TotpService.js';
 import { createTestDatabase, type TestDatabase } from '../services/testDb.js';
+import { InviteService } from '../services/InviteService.js';
+import { approveShareRequest } from '../services/shareRequests.js';
 
 import { GUIDE, SERVER_INSTRUCTIONS } from './guide.generated.js';
 import { buildMcpServer } from './server.js';
@@ -47,12 +48,6 @@ async function clientFor(userId: string): Promise<Client> {
     authorizedEmails: new Set(),
     totp,
   });
-  const invites = new InviteService({
-    db: database.db,
-    email,
-    sharing,
-    publicOrigin: 'http://test',
-  });
   const crossOwner = new CrossOwnerReader({ sharing, db: database.db });
 
   const server = buildMcpServer({
@@ -61,7 +56,6 @@ async function clientFor(userId: string): Promise<Client> {
     sharing,
     crossOwner,
     auth,
-    invites,
     crawls: new CrawlHistoryService({ db: database.db, retentionDays: 30 }),
     logger,
     principal: { userId },
@@ -88,6 +82,34 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
   } catch {
     return { value: text };
   }
+}
+
+/**
+ * Share the way an assistant now does — ask with share_folder — and approve the
+ * request the way the owner does in the web app.
+ */
+async function shareApproved(
+  client: Client,
+  ownerId: string,
+  args: { path: string; email: string; permission?: 'read' | 'write' },
+) {
+  const asked = await call(client, 'share_folder', args);
+  const requestId = (asked.value as { requestId: string }).requestId;
+  return approveShareRequest(
+    {
+      sharing,
+      invites: new InviteService({ db: database.db, email, sharing, publicOrigin: 'http://test' }),
+      auth: new AuthService({
+        db: database.db,
+        email,
+        logger,
+        publicOrigin: 'http://test',
+        authorizedEmails: new Set(),
+      }),
+    },
+    ownerId,
+    requestId,
+  );
 }
 
 beforeAll(async () => {
@@ -131,33 +153,49 @@ describe('the assistant instructions', () => {
 });
 
 describe('share_folder', () => {
-  it('grants straight away when the email already has an account', async () => {
+  it('only asks: nothing is granted or sent until the owner approves', async () => {
     const owner = await clientFor(OWNER.id);
     const { value } = await call(owner, 'share_folder', {
       path: 'Impulse Labs',
       email: FRODO.email,
+      permission: 'write',
     });
 
     expect(value).toMatchObject({
-      status: 'granted',
+      status: 'pending_approval',
       folderPath: 'Impulse Labs',
-      sharedWith: { userId: FRODO.id, email: FRODO.email },
+      permission: 'write',
     });
     expect(email.sent).toHaveLength(0);
-    expect(await sharing.canRead(FRODO.id, OWNER.id, 'Impulse Labs/nota.md')).toBe(true);
+    expect(await sharing.canRead(FRODO.id, OWNER.id, 'Impulse Labs/nota.md')).toBe(false);
+    expect(await sharing.listShareRequests(OWNER.id)).toMatchObject([
+      { folderPath: 'Impulse Labs', email: FRODO.email, permission: 'write' },
+    ]);
   });
 
-  it('invites by email when there is no account yet, without leaking the token', async () => {
+  it('grants once approved, when the email already has an account', async () => {
     const owner = await clientFor(OWNER.id);
-    const { value } = await call(owner, 'share_folder', {
+    const approved = await shareApproved(owner, OWNER.id, {
+      path: 'Impulse Labs',
+      email: FRODO.email,
+    });
+
+    expect(approved).toMatchObject({ status: 'granted', folderPath: 'Impulse Labs' });
+    expect(email.sent).toHaveLength(0);
+    expect(await sharing.canRead(FRODO.id, OWNER.id, 'Impulse Labs/nota.md')).toBe(true);
+    expect(await sharing.listShareRequests(OWNER.id)).toEqual([]);
+  });
+
+  it('invites by email once approved, and never hands the token to the assistant', async () => {
+    const owner = await clientFor(OWNER.id);
+    const asked = await call(owner, 'share_folder', { path: 'Impulse Labs', email: 'nuevo@x.com' });
+    expect(JSON.stringify(asked.value)).not.toContain('/invite/accept/');
+
+    const approved = await shareApproved(owner, OWNER.id, {
       path: 'Impulse Labs',
       email: 'nuevo@x.com',
     });
-
-    expect(value).toMatchObject({ status: 'invited', invitedEmail: 'nuevo@x.com' });
-    // The accept URL is a bearer credential; it belongs in the inbox, not in
-    // the tool result the model gets to read and repeat.
-    expect(JSON.stringify(value)).not.toContain('/invite/accept/');
+    expect(approved).toMatchObject({ status: 'invited', email: 'nuevo@x.com' });
     expect(email.sent).toHaveLength(1);
     expect(email.sent[0]?.to).toBe('nuevo@x.com');
   });
@@ -174,25 +212,25 @@ describe('share_folder', () => {
       path: 'Impulse Labs',
       email: OWNER.email,
     });
-    // Falls through to the invite path, which mails the owner rather than
-    // creating a self-share — either way, no grant is made.
-    expect(await sharing.listMyShares(OWNER.id)).toHaveLength(0);
-    expect(error).toBeUndefined();
+    expect(error).toContain('yourself');
+    expect(await sharing.listShareRequests(OWNER.id)).toEqual([]);
   });
 
-  it('is idempotent', async () => {
+  it('asking twice is one request', async () => {
     const owner = await clientFor(OWNER.id);
     const a = await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
     const b = await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
-    expect((a.value as { shareId: string }).shareId).toBe((b.value as { shareId: string }).shareId);
-    expect(await sharing.listMyShares(OWNER.id)).toHaveLength(1);
+    expect((a.value as { requestId: string }).requestId).toBe(
+      (b.value as { requestId: string }).requestId,
+    );
+    expect(await sharing.listShareRequests(OWNER.id)).toHaveLength(1);
   });
 });
 
 describe('list_shares', () => {
   it('lists who can read what, and filters by folder', async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Impulse Labs', email: FRODO.email });
 
     const all = (await call(owner, 'list_shares')).value as Array<{ folderPath: string }>;
     expect(all).toHaveLength(1);
@@ -207,7 +245,7 @@ describe('list_shares', () => {
 
   it('shows nothing to someone who shared nothing', async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Impulse Labs', email: FRODO.email });
 
     const frodo = await clientFor(FRODO.id);
     expect((await call(frodo, 'list_shares')).value).toHaveLength(0);
@@ -219,7 +257,7 @@ describe('list_shared_with_me', () => {
   // awaited. Asserting on the contents is what pins it.
   it('returns the folders shared with me, not an empty object', async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Impulse Labs', email: FRODO.email });
 
     const frodo = await clientFor(FRODO.id);
     const rows = (await call(frodo, 'list_shared_with_me')).value;
@@ -241,7 +279,7 @@ describe('list_shared_with_me', () => {
 describe('unshare', () => {
   it('takes the access away', async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Impulse Labs', email: FRODO.email });
     expect(await sharing.canRead(FRODO.id, OWNER.id, 'Impulse Labs/nota.md')).toBe(true);
 
     const { value } = await call(owner, 'unshare', {
@@ -252,18 +290,28 @@ describe('unshare', () => {
     expect(await sharing.canRead(FRODO.id, OWNER.id, 'Impulse Labs/nota.md')).toBe(false);
   });
 
-  it('says so when the email has no account', async () => {
+  it('answers the same whether or not the email has an account', async () => {
     const owner = await clientFor(OWNER.id);
-    const { error } = await call(owner, 'unshare', {
-      path: 'Impulse Labs',
-      email: 'nadie@x.com',
-    });
-    expect(error).toContain('no account');
+    const unknown = await call(owner, 'unshare', { path: 'Impulse Labs', email: 'nadie@x.com' });
+    const member = await call(owner, 'unshare', { path: 'Impulse Labs', email: FRODO.email });
+    expect(unknown.error).toBeUndefined();
+    expect(Object.keys(unknown.value as object).sort()).toEqual(
+      Object.keys(member.value as object).sort(),
+    );
+    expect(member.value).not.toHaveProperty('revokedFrom');
+  });
+
+  it('also takes away grants on folders nested inside', async () => {
+    const owner = await clientFor(OWNER.id);
+    await shareApproved(owner, OWNER.id, { path: 'proj', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'proj/sub', email: FRODO.email, permission: 'write' });
+    await call(owner, 'unshare', { path: 'proj', email: FRODO.email });
+    expect(await sharing.canRead(FRODO.id, OWNER.id, 'proj/sub/x.md')).toBe(false);
   });
 
   it('cannot revoke a share it does not own', async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Impulse Labs', email: FRODO.email });
 
     // Frodo asking to unshare names himself as the owner, and owns nothing.
     const frodo = await clientFor(FRODO.id);
@@ -283,7 +331,7 @@ describe('unshare', () => {
 describe('writing to a path that names somebody else’s shared folder', () => {
   beforeEach(async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', { path: 'Impulse Labs', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Impulse Labs', email: FRODO.email });
   });
 
   it('refuses create_folder instead of making a private copy', async () => {
@@ -467,7 +515,7 @@ describe('the listing tools answer with their rows, not with a pending promise',
     });
     await call(owner, 'create_note', { path: 'Gondor/riesgos.md', content: '# Riesgos' });
     await call(owner, 'create_note', { path: 'Privado/secreto.md', content: '# Secreto' });
-    await call(owner, 'share_folder', { path: 'Gondor', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Gondor', email: FRODO.email });
     await call(frodo, 'create_note', {
       path: 'mio.md',
       content: '# Mío\n\nVer el Plan de Gondor.',
@@ -551,7 +599,7 @@ describe('the listing tools answer with their rows, not with a pending promise',
       path: 'Privado/diario.md',
       content: 'ver [[Proyectos/erebor]]',
     });
-    await call(owner, 'share_folder', { path: 'Proyectos', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'Proyectos', email: FRODO.email });
 
     const { value } = await call(frodo, 'list_links', {
       path: 'Proyectos/erebor.md',
@@ -568,7 +616,7 @@ describe('the listing tools answer with their rows, not with a pending promise',
 describe('writing into a folder shared with write permission', () => {
   beforeEach(async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', {
+    await shareApproved(owner, OWNER.id, {
       path: 'Impulse Labs',
       email: FRODO.email,
       permission: 'write',
@@ -641,7 +689,7 @@ describe('writing into a folder shared with write permission', () => {
 
   it('a read-only share still refuses the same call', async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', {
+    await shareApproved(owner, OWNER.id, {
       path: 'Solo Lectura',
       email: FRODO.email,
       permission: 'read',
@@ -675,7 +723,7 @@ describe('writing into a folder shared with write permission', () => {
 describe('migrar una carpeta de la bóveda personal a la compartida', () => {
   beforeEach(async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', {
+    await shareApproved(owner, OWNER.id, {
       path: 'Impulse Labs',
       email: FRODO.email,
       permission: 'write',
@@ -739,7 +787,7 @@ describe('migrar una carpeta de la bóveda personal a la compartida', () => {
 
   it('no deja sacar algo de la bóveda de otro sin permiso de escritura', async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', {
+    await shareApproved(owner, OWNER.id, {
       path: 'Solo Lectura',
       email: FRODO.email,
       permission: 'read',
@@ -761,7 +809,7 @@ describe('migrar una carpeta de la bóveda personal a la compartida', () => {
 describe('cuando el nombre coincide con una carpeta propia', () => {
   beforeEach(async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', { path: 'impulse-labs', email: FRODO.email });
+    await shareApproved(owner, OWNER.id, { path: 'impulse-labs', email: FRODO.email });
   });
 
   it('Frodo sigue pudiendo escribir en la suya si dice que es la suya', async () => {
@@ -791,7 +839,7 @@ describe('cuando el nombre coincide con una carpeta propia', () => {
 describe('una carpeta creada dentro de lo compartido se ve', () => {
   beforeEach(async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', {
+    await shareApproved(owner, OWNER.id, {
       path: 'Gondor',
       email: FRODO.email,
       permission: 'write',
@@ -939,7 +987,7 @@ describe('move_to_owner avisa lo que la transferencia le costó al dueño anteri
 describe('leer un path que cae bajo una carpeta compartida, sin decir de quién', () => {
   beforeEach(async () => {
     const owner = await clientFor(OWNER.id);
-    await call(owner, 'share_folder', {
+    await shareApproved(owner, OWNER.id, {
       path: 'impulse-labs',
       email: FRODO.email,
       permission: 'write',

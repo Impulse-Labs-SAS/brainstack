@@ -401,6 +401,48 @@ export const folderShareInvites = pgTable(
 );
 
 /**
+ * A share an assistant asked for, waiting for the owner to approve it in the
+ * web app. Nothing is granted until then.
+ */
+export const shareRequests = pgTable(
+  'share_requests',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    folderPath: text('folder_path').notNull(),
+    email: text('email').notNull(),
+    permission: text('permission').notNull().default('read').$type<'read' | 'write'>(),
+    /** Which credential asked: an API key name or an OAuth client, for the owner to see. */
+    requestedBy: text('requested_by'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({
+    permissionValues: check('share_requests_permission_check', sql`permission IN ('read', 'write')`),
+    ownerIdx: index('idx_share_requests_owner').on(t.ownerId, t.createdAt),
+  }),
+);
+
+/** Someone a user no longer accepts shares from. */
+export const shareBlocks = pgTable(
+  'share_blocks',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    blockedOwnerId: text('blocked_owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'share_blocks_pkey', columns: [t.userId, t.blockedOwnerId] }),
+  }),
+);
+
+/**
  * OAuth clients that connect MCP hosts (claude.ai, Claude Code, Cursor) to the
  * API. Most register themselves (RFC 7591): the row is the registration.
  *

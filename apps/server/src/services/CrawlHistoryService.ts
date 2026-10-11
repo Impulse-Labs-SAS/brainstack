@@ -235,7 +235,7 @@ export class CrawlHistoryService {
    * `oauth:<clientId>` for a client of this server's OAuth provider. An API
    * key is looked up among the user's own only.
    */
-  private async clientNames(
+  async clientNames(
     userId: string,
     refs: ReadonlyArray<string | null>,
   ): Promise<Map<string, string>> {

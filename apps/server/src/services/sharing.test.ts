@@ -377,3 +377,61 @@ describe('SharingService.revokeUnder', () => {
   });
 
 });
+
+describe('SharingService — leaving and blocking', () => {
+  it('a recipient can leave a folder, and what is nested in it', async () => {
+    await svc.grant({ ownerId: 'owner', sharedWithUserId: 'alice', folderPath: 'Inbox', grantedBy: 'owner' });
+    await svc.grant({ ownerId: 'owner', sharedWithUserId: 'alice', folderPath: 'Inbox/sub', grantedBy: 'owner' });
+    await svc.leave({ userId: 'alice', ownerId: 'owner', folderPath: 'Inbox' });
+    expect(await svc.listSharedRoots('alice')).toEqual([]);
+  });
+
+  it('blocking leaves every share from that person and refuses new ones', async () => {
+    await svc.grant({ ownerId: 'owner', sharedWithUserId: 'alice', folderPath: 'Inbox', grantedBy: 'owner' });
+    await svc.grant({ ownerId: 'owner', sharedWithUserId: 'alice', folderPath: 'ideas', grantedBy: 'owner' });
+    await svc.leave({ userId: 'alice', ownerId: 'owner', folderPath: 'Inbox', block: true });
+
+    expect(await svc.listSharedRoots('alice')).toEqual([]);
+    await expect(
+      svc.grant({ ownerId: 'owner', sharedWithUserId: 'alice', folderPath: 'other', grantedBy: 'owner' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await svc.listBlocked('alice')).toMatchObject([{ ownerId: 'owner', email: 'o@x.com' }]);
+
+    await svc.unblock('alice', 'owner');
+    await expect(
+      svc.grant({ ownerId: 'owner', sharedWithUserId: 'alice', folderPath: 'other', grantedBy: 'owner' }),
+    ).resolves.toEqual(expect.any(String));
+  });
+
+  it('a share nobody asked for no longer blocks the recipient once left', async () => {
+    await svc.grant({ ownerId: 'bob', sharedWithUserId: 'alice', folderPath: 'Inbox', grantedBy: 'bob' });
+    await expect(svc.assertNotShadowingShare('alice', 'Inbox/note.md')).rejects.toBeTruthy();
+    await svc.leave({ userId: 'alice', ownerId: 'bob', folderPath: 'Inbox', block: true });
+    await expect(svc.assertNotShadowingShare('alice', 'Inbox/note.md')).resolves.toBeUndefined();
+  });
+
+  it('re-granting changes the permission in one row', async () => {
+    const a = await svc.grant({ ownerId: 'owner', sharedWithUserId: 'bob', folderPath: 'p', grantedBy: 'owner' });
+    const b = await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'bob',
+      folderPath: 'p',
+      grantedBy: 'owner',
+      permission: 'write',
+    });
+    expect(b).toBe(a);
+    expect(await svc.canWrite('bob', 'owner', 'p/x.md')).toBe(true);
+  });
+});
+
+describe('SharingService — share requests', () => {
+  it('holds a request until it is taken, once', async () => {
+    const { id } = await svc.requestShare({ ownerId: 'owner', folderPath: 'proj', email: 'B@x.com' });
+    expect(await svc.listShareRequests('owner')).toMatchObject([{ id, email: 'b@x.com' }]);
+    expect(await svc.canRead('bob', 'owner', 'proj/x.md')).toBe(false);
+
+    expect(await svc.takeShareRequest('alice', id)).toBeNull();
+    expect(await svc.takeShareRequest('owner', id)).toMatchObject({ folderPath: 'proj' });
+    expect(await svc.takeShareRequest('owner', id)).toBeNull();
+  });
+});
