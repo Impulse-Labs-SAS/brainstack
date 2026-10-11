@@ -61,7 +61,7 @@ import {
 } from './crawl/view-choice';
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
 import { GraphLayersMenu } from './graph-layers';
-import { GLASS, GraphPreview, edited } from './graph-preview';
+import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
 import { FilterChips, GraphSearch } from './graph-search';
 
 interface GraphViewProps {
@@ -459,7 +459,7 @@ export function GraphView({
             const next = [...keys][0] as ViewChoice | undefined;
             if (next) choose(next);
           }}
-          className={cn(GLASS, 'pointer-events-auto flex gap-0.5 rounded-lg p-[3px]')}
+          className={cn(FLOAT_GLASS, 'pointer-events-auto flex gap-0.5 rounded-xl p-[3px]')}
         >
           <ToggleButton
             id="sentinel"
@@ -467,7 +467,7 @@ export function GraphView({
             className={cn(
               'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
               'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
-              'selected:bg-bg-elevated selected:text-fg-primary selected:shadow-[inset_0_0_0_1px_var(--border-strong)]',
+              'selected:bg-accent/15 selected:text-fg-primary selected:ring-1 selected:ring-inset selected:ring-accent/35',
             )}
           >
             <ScanEye size={14} aria-hidden />
@@ -481,7 +481,7 @@ export function GraphView({
               className={cn(
                 'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
                 'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
-                'selected:bg-bg-elevated selected:text-fg-primary selected:shadow-[inset_0_0_0_1px_var(--border-strong)]',
+                'selected:bg-accent/15 selected:text-fg-primary selected:ring-1 selected:ring-inset selected:ring-accent/35',
               )}
             >
               <v.icon size={14} aria-hidden />
@@ -799,7 +799,12 @@ export function GraphView({
             )}
           </div>
         )}
-        <div className={cn(GLASS, 'flex items-center gap-1 rounded-lg p-1 font-mono text-[11px]')}>
+        <div
+          className={cn(
+            FLOAT_GLASS,
+            'flex items-center gap-1 rounded-xl p-1 font-mono text-[11px]',
+          )}
+        >
           <ZoomButton label="Fit to view" onPress={() => c()?.fit()}>
             fit
           </ZoomButton>
