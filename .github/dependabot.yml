@@ -1,0 +1,28 @@
+# Dependency updates. The lockfile had fallen months behind, with critical
+# advisories in packages the public origin serves, before anyone noticed.
+#
+# Security updates arrive on their own schedule; these weekly runs keep the
+# rest moving in small grouped pull requests rather than one large catch-up.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
