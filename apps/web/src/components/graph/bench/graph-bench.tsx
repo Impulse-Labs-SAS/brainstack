@@ -123,7 +123,9 @@ function BenchReadout({
   return (
     <div
       role="status"
-      className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded border border-border bg-bg-surface px-3 py-1.5 font-mono text-[12px] text-fg-secondary"
+      // On a phone it would sit over the preview's sheet: there the numbers are read through
+      // window.__graphBench, from a desktop's remote inspector.
+      className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded border border-border bg-bg-surface px-3 py-1.5 font-mono text-[12px] text-fg-secondary max-md:hidden"
     >
       <span>
         bench · {notes.toLocaleString('en')} notes · {links.toLocaleString('en')} links · seed{' '}

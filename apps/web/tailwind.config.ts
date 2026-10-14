@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss';
+import plugin from 'tailwindcss/plugin';
 import reactAriaPlugin from 'tailwindcss-react-aria-components';
 
 const config: Config = {
@@ -72,7 +73,12 @@ const config: Config = {
       },
     },
   },
-  plugins: [reactAriaPlugin()],
+  plugins: [
+    reactAriaPlugin(),
+    // `touch:` styles a screen pointed at with a finger: a control there gets a 44px target
+    // (WCAG 2.5.5, the AAA level; AA asks for 24px), where with a mouse it can stay compact.
+    plugin(({ addVariant }) => addVariant('touch', '@media (pointer: coarse)')),
+  ],
 };
 
 export default config;

@@ -116,7 +116,7 @@ export function GraphSearch({ model, query, onQueryChange, filters, onFiltersCha
   return (
     <>
       <div className="pointer-events-auto relative">
-        <div className={cn(GLASS, 'flex h-9 items-center gap-1.5 rounded-lg pl-2.5 pr-1.5 focus-within:border-border-strong')}>
+        <div className={cn(GLASS, 'flex h-9 items-center gap-1.5 rounded-lg pl-2.5 pr-1.5 focus-within:border-border-strong touch:h-11')}>
           <Search size={14} aria-hidden className="shrink-0 text-fg-muted" />
           <input
             ref={inputRef}
@@ -242,7 +242,7 @@ function Results({
           <Button
             onPress={onFrame}
             preventFocusOnPress
-            className={cn('flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-fg-secondary hover:bg-bg-hover hover:text-fg-primary', FOCUS_RING)}
+            className={cn('flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-fg-secondary hover:bg-bg-hover hover:text-fg-primary touch:min-h-11', FOCUS_RING)}
           >
             <Scan size={12} aria-hidden />
             Frame all
@@ -268,7 +268,7 @@ function Results({
               aria-selected={i === index}
               onMouseEnter={() => onPreview(n)}
               onClick={() => onGo(n)}
-              className={cn('flex cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 hover:bg-bg-hover', i === index && 'bg-bg-elevated shadow-[inset_0_0_0_1px_var(--border-strong)]')}
+              className={cn('flex cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 hover:bg-bg-hover touch:min-h-11', i === index && 'bg-bg-elevated shadow-[inset_0_0_0_1px_var(--border-strong)]')}
             >
               <NodeGlyph node={n} color={colorOf(model, n).hue} />
               <span className="grid min-w-0 flex-1">
@@ -337,7 +337,7 @@ function FiltersMenu({ model, filters, onChange }: { model: GraphModel; filters:
       <Button
         className={cn(
           GLASS,
-          'pointer-events-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-fg-primary',
+          'pointer-events-auto flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-sm text-fg-primary touch:h-11 touch:min-w-11',
           'hover:bg-bg-hover pressed:bg-bg-elevated',
           FOCUS_RING,
         )}
@@ -403,7 +403,7 @@ function FiltersMenu({ model, filters, onChange }: { model: GraphModel; filters:
           {changed && (
             <>
               <Divider />
-              <Button onPress={() => onChange(DEFAULT_FILTERS)} className={cn('w-full rounded px-1.5 py-1 text-left text-xs text-fg-secondary hover:bg-bg-hover hover:text-fg-primary', FOCUS_RING)}>
+              <Button onPress={() => onChange(DEFAULT_FILTERS)} className={cn('w-full rounded px-1.5 py-1 text-left text-xs text-fg-secondary hover:bg-bg-hover hover:text-fg-primary touch:min-h-11', FOCUS_RING)}>
                 Reset filters
               </Button>
             </>
@@ -444,7 +444,7 @@ function Segmented<T extends string>({
           key={o.id}
           id={o.id}
           className={cn(
-            'flex-1 rounded px-1.5 py-1 text-xs text-fg-secondary hover:text-fg-primary',
+            'flex-1 rounded px-1.5 py-1 text-xs text-fg-secondary hover:text-fg-primary touch:min-h-11',
             'selected:bg-bg-elevated selected:text-fg-primary selected:shadow-[inset_0_0_0_1px_var(--border-strong)]',
             FOCUS_RING,
           )}
@@ -524,7 +524,7 @@ export function FilterChips({ model, filters, onChange }: { model: GraphModel; f
   return (
     <ul data-graph-chrome="children" aria-label="Active filters" className="pointer-events-auto flex basis-full flex-wrap items-center gap-1.5">
       {chips.map((c) => (
-        <li key={c.key} className={cn(GLASS, 'flex h-7 items-center gap-1 rounded-full pl-2.5 pr-1 text-xs text-fg-primary')}>
+        <li key={c.key} className={cn(GLASS, 'flex h-7 items-center gap-1 rounded-full pl-2.5 pr-1 text-xs text-fg-primary touch:h-11')}>
           <span className="max-w-[220px] truncate">{c.label}</span>
           <IconButton label={`Remove filter: ${c.label}`} onPress={() => onChange(c.clear)}>
             <X size={11} />
@@ -535,7 +535,7 @@ export function FilterChips({ model, filters, onChange }: { model: GraphModel; f
         <li>
           <Button
             onPress={() => onChange({ ...DEFAULT_FILTERS, fields: filters.fields })}
-            className={cn('rounded px-1.5 text-xs text-fg-secondary hover:text-fg-primary', FOCUS_RING)}
+            className={cn('rounded px-1.5 text-xs text-fg-secondary hover:text-fg-primary touch:min-h-11 touch:min-w-11', FOCUS_RING)}
           >
             Clear all
           </Button>
@@ -548,7 +548,7 @@ export function FilterChips({ model, filters, onChange }: { model: GraphModel; f
 // Buttons beside the field leave focus in it: moving it would close the list.
 function IconButton({ label, onPress, children }: { label: string; onPress(): void; children: ReactNode }) {
   return (
-    <Button aria-label={label} onPress={onPress} preventFocusOnPress className={cn('rounded p-1 text-fg-muted hover:bg-bg-hover hover:text-fg-primary', FOCUS_RING)}>
+    <Button aria-label={label} onPress={onPress} preventFocusOnPress className={cn('rounded p-1 text-fg-muted hover:bg-bg-hover hover:text-fg-primary touch:flex touch:h-11 touch:w-11 touch:items-center touch:justify-center', FOCUS_RING)}>
       {children}
     </Button>
   );

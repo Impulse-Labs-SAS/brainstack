@@ -41,7 +41,7 @@ export function Row({
   trailing?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-bg-hover">
+    <div className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-bg-hover touch:min-h-11">
       <Checkbox
         isSelected={isSelected}
         isDisabled={isDisabled}
@@ -101,7 +101,7 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
       <Button
         className={cn(
           GLASS,
-          'pointer-events-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-fg-primary outline-none',
+          'pointer-events-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-fg-primary outline-none touch:h-11',
           'hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 pressed:bg-bg-elevated',
         )}
       >
@@ -135,7 +135,7 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
                     {model.vaults.length > 1 && (
                       <Button
                         onPress={() => solo(v.id)}
-                        className="rounded px-1 text-[11px] text-fg-tertiary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40"
+                        className="rounded px-1 text-[11px] text-fg-tertiary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11 touch:px-3"
                       >
                         {alone ? 'all' : 'only'}
                       </Button>
