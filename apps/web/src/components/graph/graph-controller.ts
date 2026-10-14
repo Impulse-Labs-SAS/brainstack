@@ -48,6 +48,7 @@ import {
   type LandPaths,
   type MinimapTransform,
 } from './graph-overlay';
+import type { CamOffset, ReturnEntry, ReturnStep } from './graph-return';
 import { GraphScene } from './graph-scene';
 import { LabelMemory, type Rect } from './labels/placer';
 
@@ -182,6 +183,11 @@ type TrailStep = { selection: Picked; cam: Camera; view: GraphView };
 /** A horizontal strip of the stage, in CSS pixels from its top. */
 type Band = { top: number; bottom: number };
 
+/** The note the camera came back to from that note's page, and where it was relative to it. */
+type Follow = { node: GraphNode; cam: CamOffset };
+
+type Point = { x: number; y: number; z: number };
+
 const CLICK_SLOP = 4;
 /** A finger wobbles more than a mouse: a tap that moved this little is still a tap. */
 const TAP_SLOP = 10;
@@ -197,6 +203,8 @@ const DOUBLE_TAP_MS = 500;
 const REPEAT_PX = 6;
 /** How many selections Back remembers: past that, the oldest goes. */
 const TRAIL_MAX = 50;
+/** How quickly the camera catches up with a note it came back to as the layout carries it, ms. */
+const FOLLOW_MS = 250;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
 /** How far left of centre a framed note goes, clear of the preview docked beside the graph. */
 const PREVIEW_OFFSET = 160;
@@ -246,6 +254,66 @@ function pickLabel(p: Picked): string {
   return `${p.path.nodes[0]!.label} → ${p.path.nodes.at(-1)!.label}`;
 }
 
+/**
+ * `steps` without what left the model, without a second step to the same note in a row, and
+ * without a last one to what is selected (`now`): a Back that would go nowhere.
+ */
+function tidyTrail(
+  steps: readonly TrailStep[],
+  present: ReadonlySet<GraphNode>,
+  now: Picked | null,
+): TrailStep[] {
+  const kept: TrailStep[] = [];
+  for (const step of steps) {
+    const s = step.selection;
+    if (!(s.kind === 'note' ? present.has(s.node) : s.path.nodes.every((n) => present.has(n))))
+      continue;
+    // The same note twice running, once what was between them left: the later camera stays.
+    if (kept.length && samePick(kept.at(-1)!.selection, s)) kept.pop();
+    kept.push(step);
+  }
+  if (now && kept.length && samePick(kept.at(-1)!.selection, now)) kept.pop();
+  return kept;
+}
+
+/** The path through `nodes` in that order, or null where two of them are no longer linked. */
+function pathThrough(model: GraphModel, nodes: GraphNode[]): GraphPath | null {
+  const edges: GraphEdge[] = [];
+  for (let i = 1; i < nodes.length; i++) {
+    const links = (model.adjacency.get(nodes[i - 1]!) ?? []).filter((l) => l.node === nodes[i]);
+    // What people wrote before what is only drawn, as `findPath` goes.
+    const link =
+      links.find((l) => l.edge.kind === 'link' || l.edge.kind === 'structure') ?? links[0];
+    if (!link) return null;
+    edges.push(link.edge);
+  }
+  return { nodes, edges, implicit: edges.some((e) => e.kind === 'affinity' || e.kind === 'topic') };
+}
+
+/** Where a note is drawn, a search's spring included: what a flight to it frames. */
+const drawn = (n: GraphNode): Point => ({ x: n.x + n.ox, y: n.y + n.oy, z: (n.z || 0) + n.oz });
+/** Where a note is laid out: what the camera follows, the spring of a search aside. */
+const laidOut = (n: GraphNode): Point => ({ x: n.x, y: n.y, z: n.z || 0 });
+
+/** `cam` relative to a note at `p`; null for a note with no place yet. */
+function offsetFrom(cam: Camera, p: Point): CamOffset | null {
+  if (!(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z))) return null;
+  const { yaw, pitch, dist } = cam;
+  return { dx: cam.tx - p.x, dy: cam.ty - p.y, dz: cam.tz - p.z, yaw, pitch, dist };
+}
+
+/** The camera at `o` from a note at `p`. */
+function placeAt(o: CamOffset, p: Point): Camera {
+  return {
+    tx: p.x + o.dx,
+    ty: p.y + o.dy,
+    tz: p.z + o.dz,
+    yaw: o.yaw,
+    pitch: o.pitch,
+    dist: o.dist,
+  };
+}
+
 export class GraphController {
   readonly webgl: boolean;
   private readonly engine: GraphEngine;
@@ -274,6 +342,10 @@ export class GraphController {
   private pathPick = false;
   /** What was selected before, oldest first: where Back goes, and the camera it was seen from. */
   private trail: TrailStep[] = [];
+  /** Back from a note (`restore`): the graph as it was left, held until the first layout shows. */
+  private returning: ReturnEntry | null = null;
+  /** Then the note the camera rides with, until the user takes the camera or picks another. */
+  private following: Follow | null = null;
   private focus: GraphNode | null = null;
   private focusT0 = 0;
   private hops: Map<GraphNode, number> | null = null;
@@ -504,6 +576,7 @@ export class GraphController {
   setView(view: GraphView): void {
     if (view === this.engine.view) return;
     if (view === 'brain' && !this.webgl) return;
+    this.stopFollowing();
     const was3D = this.engine.is3D;
     this.stopGrowth();
     this.setHotCountry(null);
@@ -580,6 +653,7 @@ export class GraphController {
     if (this.staged) return;
     const nodes = this.matches?.filter((n) => Number.isFinite(n.x));
     if (!nodes?.length) return;
+    this.stopFollowing();
     if (nodes.length === 1) {
       this.flyTo(nodes[0]!);
       return;
@@ -603,6 +677,7 @@ export class GraphController {
 
   select(node: GraphNode): void {
     if (this.staged) return;
+    this.stopFollowing();
     this.leave({ kind: 'note', node });
     this.selected = node;
     this.path = null;
@@ -615,6 +690,7 @@ export class GraphController {
   }
 
   clearSelection(): void {
+    this.stopFollowing();
     this.selected = null;
     this.path = null;
     this.pathFrom = null;
@@ -635,6 +711,7 @@ export class GraphController {
     if (this.staged) return false;
     const step = this.trail.pop();
     if (!step) return false;
+    this.stopFollowing();
     const s = step.selection;
     this.selected = s.kind === 'note' ? s.node : null;
     this.path = s.kind === 'path' ? s.path : null;
@@ -658,6 +735,46 @@ export class GraphController {
     return true;
   }
 
+  /**
+   * The graph as it is, for coming back to it from `node`, about to be opened: the camera relative
+   * to the note, where it is drawn, and the way back. A note other than the one selected (a double
+   * click that picked nothing first) comes back framed as a click on it would frame it, with what
+   * is selected now on the way back, as that click would leave it. Null over a stage, or for a
+   * note the graph does not hold.
+   */
+  returnState(node: GraphNode): ReturnEntry | null {
+    if (this.staged || !this.model?.nodes.includes(node)) return null;
+    const step = node === this.selected ? null : this.stepLeaving({ kind: 'note', node });
+    const cam = offsetFrom(
+      node === this.selected ? (this.tween?.to ?? this.cam) : this.noteTarget(node),
+      drawn(node),
+    );
+    if (!cam) return null;
+    const trail: ReturnStep[] = [];
+    for (const t of step ? [...this.trail, step] : this.trail) {
+      const s = t.selection;
+      const at = offsetFrom(t.cam, drawn(s.kind === 'note' ? s.node : s.path.nodes[0]!));
+      if (!at) continue;
+      if (s.kind === 'note') trail.push({ node: s.node.id, cam: at, view: t.view });
+      else trail.push({ path: s.path.nodes.map((n) => n.id), cam: at, view: t.view });
+    }
+    return { view: this.engine.view, node: node.id, cam, trail };
+  }
+
+  /**
+   * Back from a note's page to the graph as `returnState` left it: the note selected, the camera
+   * where it was relative to the note, the way back as it was, less whatever the graph no longer
+   * holds (without the note itself, nothing comes back). Applied once the first layout shows — at
+   * once where there is none to wait for, as in Territories — after which the camera rides with
+   * the note while the layout cools, or a refetch reheats it, until the user takes the camera or
+   * the selection changes. Ignored over a stage, or for another view than this one.
+   */
+  restore(entry: ReturnEntry): void {
+    if (!this.model || this.staged || entry.view !== this.engine.view) return;
+    this.returning = entry;
+    if (!this.engine.warming) this.applyReturn();
+  }
+
   /** Pick the other end of a path with the next click. */
   startPathFrom(node: GraphNode): void {
     if (this.staged) return;
@@ -674,6 +791,7 @@ export class GraphController {
       this.zoomStage(stage, factor);
       return;
     }
+    this.stopFollowing();
     this.zoomAt(this.vp.width / 2, this.vp.height / 2, factor);
   }
 
@@ -687,12 +805,14 @@ export class GraphController {
       this.animateTo({ ...this.cam, tx: o.tx, ty: o.ty, tz: o.tz, dist: o.dist });
       return;
     }
+    this.stopFollowing();
     this.animateTo({ ...this.cam, ...this.fitTarget() });
     this.userMoved = false;
   }
 
   setAngle(angle: AnglePreset): void {
     if (this.staged) return;
+    this.stopFollowing();
     this.setSpin(false);
     this.animateTo({ ...this.cam, ...this.fitTarget(), ...ANGLES[angle] }, 900);
     this.userMoved = true;
@@ -734,6 +854,7 @@ export class GraphController {
   pointerDown(e: PointerEvent): void {
     const model = this.model;
     if (!model) return;
+    this.stopFollowing();
     const { x, y } = this.local(e);
     // A primary pointer is the first of its kind down. Any of its kind still recorded is a ghost
     // whose lifting never reached the page (an app switch, a system gesture): left, it would
@@ -920,6 +1041,7 @@ export class GraphController {
       return;
     }
     this.setSpin(false);
+    this.stopFollowing();
     this.plugin?.onUserCamera();
     const { x, y } = this.local(e);
     this.zoomAt(x, y, e.deltaY < 0 ? 1.12 : 1 / 1.12);
@@ -987,6 +1109,7 @@ export class GraphController {
   minimapPoint(e: PointerEvent): void {
     const t = this.minimapTransform;
     if (!t || this.staged) return;
+    this.stopFollowing();
     const r = this.el.minimap.getBoundingClientRect();
     this.cam = {
       ...this.cam,
@@ -1031,14 +1154,17 @@ export class GraphController {
    * seen from: where its flight was going, if it had not landed. Selecting it again keeps no step.
    */
   private leave(next: Picked): void {
-    const now = this.picked;
-    if (!now || samePick(now, next)) return;
-    this.trail.push({
-      selection: now,
-      cam: { ...(this.tween?.to ?? this.cam) },
-      view: this.engine.view,
-    });
+    const step = this.stepLeaving(next);
+    if (!step) return;
+    this.trail.push(step);
     if (this.trail.length > TRAIL_MAX) this.trail.shift();
+  }
+
+  /** The step `leave(next)` puts on the trail: none with nothing selected, or `next` itself. */
+  private stepLeaving(next: Picked): TrailStep | null {
+    const now = this.picked;
+    if (!now || samePick(now, next)) return null;
+    return { selection: now, cam: { ...(this.tween?.to ?? this.cam) }, view: this.engine.view };
   }
 
   /** The selection to the view, with what Back would return to while there is anything. */
@@ -1055,19 +1181,75 @@ export class GraphController {
   private pruneTrail(present: ReadonlySet<GraphNode>): void {
     if (!this.trail.length) return;
     const top = this.trail.at(-1);
-    const kept: TrailStep[] = [];
-    for (const step of this.trail) {
-      const s = step.selection;
-      if (!(s.kind === 'note' ? present.has(s.node) : s.path.nodes.every((n) => present.has(n))))
-        continue;
-      // The same note twice running, once what was between them left: the later camera stays.
-      if (kept.length && samePick(kept.at(-1)!.selection, s)) kept.pop();
-      kept.push(step);
-    }
     const now = this.picked;
-    if (now && kept.length && samePick(kept.at(-1)!.selection, now)) kept.pop();
-    this.trail = kept;
-    if (now && kept.at(-1) !== top) this.announce(now);
+    this.trail = tidyTrail(this.trail, present, now);
+    if (now && this.trail.at(-1) !== top) this.announce(now);
+  }
+
+  /**
+   * `restore`, now that the notes show: the note and the way back found in this model by id, and
+   * the camera cut to where it was left rather than flown there from the whole graph. From here
+   * it follows the note (`followNote`).
+   */
+  private applyReturn(): void {
+    const entry = this.returning;
+    const model = this.model;
+    this.returning = null;
+    if (!entry || !model) return;
+    const byId = new Map(model.nodes.map((n) => [n.id, n]));
+    const node = byId.get(entry.node);
+    if (!node) return;
+    const steps: TrailStep[] = [];
+    for (const step of entry.trail) {
+      const nodes = ('node' in step ? [step.node] : step.path).map((id) => byId.get(id));
+      if (!nodes.every((n): n is GraphNode => n !== undefined)) continue;
+      let selection: Picked = { kind: 'note', node: nodes[0]! };
+      if ('path' in step) {
+        const path = pathThrough(model, nodes);
+        if (!path) continue;
+        selection = { kind: 'path', path };
+      }
+      steps.push({ selection, cam: placeAt(step.cam, laidOut(nodes[0]!)), view: step.view });
+    }
+    const picked: Picked = { kind: 'note', node };
+    this.selected = node;
+    this.path = null;
+    this.pathFrom = null;
+    this.pathPick = false;
+    this.trail = tidyTrail(steps, new Set(model.nodes), picked);
+    this.edgesDirty = true;
+    this.announce(picked);
+    this.setSpin(false);
+    this.tween = null;
+    this.cam = placeAt(entry.cam, laidOut(node));
+    this.userMoved = true;
+    this.following = { node, cam: entry.cam };
+  }
+
+  /**
+   * The camera eased after the note it came back to, at the offset it was left at: as the layout
+   * cools, or a refetch reheats it, the note stays where it was on the screen. Taken over the
+   * ease to the whole graph that a reheat starts.
+   */
+  private followNote(f: Follow, dt: number): void {
+    const to = placeAt(f.cam, laidOut(f.node));
+    const k = this.reduceMotion ? 1 : 1 - Math.exp(-dt / FOLLOW_MS);
+    this.cam = {
+      ...this.cam,
+      tx: this.cam.tx + (to.tx - this.cam.tx) * k,
+      ty: this.cam.ty + (to.ty - this.cam.ty) * k,
+      tz: this.cam.tz + (to.tz - this.cam.tz) * k,
+    };
+  }
+
+  /**
+   * The user took the camera, or the selection changed: a way back not yet applied goes, and the
+   * camera stops following the note it came back to. So does a stage coming up, which clears
+   * the selection, and the note leaving the model, which does too.
+   */
+  private stopFollowing(): void {
+    this.returning = null;
+    this.following = null;
   }
 
   /** The last plain click, when (x, y) is near enough to it in time and place to be its double. */
@@ -1223,23 +1405,18 @@ export class GraphController {
   }
 
   private flyTo(node: GraphNode): void {
+    this.animateTo(this.noteTarget(node));
+    this.userMoved = true;
+  }
+
+  /** Where a flight to `node` goes from here: close enough to read it, clear of the preview. */
+  private noteTarget(node: GraphNode): Camera {
     const dist = this.engine.is3D
       ? Math.min(this.cam.dist, this.engine.brainScale * 1.9)
       : Math.min(this.cam.dist, this.vp.height / 2 / (TAN_HALF_FOV * 1.35));
     // Where it is drawn: a search match may have sprung out of its place.
-    this.animateTo(
-      this.withPreviewOffset(
-        {
-          ...this.cam,
-          tx: node.x + node.ox,
-          ty: node.y + node.oy,
-          tz: (node.z || 0) + node.oz,
-          dist,
-        },
-        this.sheetBand(),
-      ),
-    );
-    this.userMoved = true;
+    const { x, y, z } = drawn(node);
+    return this.withPreviewOffset({ ...this.cam, tx: x, ty: y, tz: z, dist }, this.sheetBand());
   }
 
   private animateTo(to: Camera, duration = 700): void {
@@ -1753,6 +1930,8 @@ export class GraphController {
 
     const warming = this.engine.warming;
     const moved = this.engine.advance(now);
+    // Back from a note: once the notes show, the graph comes up as it was left, not framed whole.
+    if (this.returning && !this.engine.warming) this.applyReturn();
     if (warming && !this.engine.warming && !this.userMoved) {
       // The notes are shown only now; frame where they settled, as the first frame used to.
       this.cam = { ...this.cam, ...this.fitTarget() };
@@ -1760,6 +1939,8 @@ export class GraphController {
       const p = clamp((now - this.tween.t0) / this.tween.duration, 0, 1);
       this.cam = interpolate(this.tween.from, this.tween.to, p);
       if (p >= 1) this.tween = null;
+    } else if (this.following && !this.drag) {
+      this.followNote(this.following, dt);
     } else if (!this.userMoved && moved) {
       const t = this.fitTarget();
       this.cam = {

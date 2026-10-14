@@ -31,6 +31,7 @@ import {
   type PluginStage,
   type Selection,
 } from './graph-controller';
+import type { ReturnEntry } from './graph-return';
 import type { SceneFrame } from './graph-scene';
 
 // -- Stand-ins ----------------------------------------------------------------------------------
@@ -2322,5 +2323,219 @@ describe('GraphController on a phone', () => {
     const { top, bottom } = freeBand(h);
     expect(b.sx).toBeCloseTo(652 / 2, 0);
     expect(Math.abs(b.sy - (top + bottom) / 2)).toBeLessThan(2);
+  });
+});
+
+// -- Back from a note ----------------------------------------------------------------------------
+
+/**
+ * The graph opened on `view`, `walk` selected in turn and the last of it opened: what the graph
+ * kept for the way back, through JSON as session storage keeps it, where that note was on the
+ * screen, and the layout it left for the next visit to start from.
+ */
+function leaveFrom(view: GraphView, walk: (h: Harness, model: GraphModel) => GraphNode[]) {
+  const h = harness(GraphController);
+  const c = h.controller;
+  const model = twoVaults();
+  c.initView(view);
+  c.setModel(model, 'init');
+  h.step(400);
+  const notes = walk(h, model);
+  for (const n of notes) {
+    c.select(n);
+    h.step(60);
+  }
+  const a = notes.at(-1)!;
+  const entry = c.returnState(a);
+  expect(entry).not.toBeNull();
+  return {
+    a: { id: a.id, sx: a.sx, sy: a.sy },
+    entry: JSON.parse(JSON.stringify(entry)) as ReturnEntry,
+    saved: new Map(Object.entries(c.snapshot()).map(([id, [x, y, z]]) => [id, { x, y, z }])),
+  };
+}
+
+/** /graph mounted afresh on `view`, as on the way back, from the layout the last visit left. */
+function comeBack(
+  view: GraphView,
+  saved?: ReadonlyMap<string, { x: number; y: number; z: number }>,
+  cache = new Map<string, GraphNode>(),
+) {
+  const h = harness(GraphController);
+  const model = twoVaults(cache);
+  h.controller.initView(view);
+  h.controller.setModel(model, 'init', saved);
+  return { h, c: h.controller, model, cache };
+}
+
+const byId = (model: GraphModel, id: string) => model.nodes.find((n) => n.id === id)!;
+
+describe('GraphController back from a note', () => {
+  it('comes back with the note selected where it was on the screen, once the notes show', () => {
+    for (const view of ['network', 'brain'] as const) {
+      const left = leaveFrom(view, (h, model) => [loneNote(h, model)]);
+      const { h, c, model } = comeBack(view, left.saved);
+      c.restore(left.entry);
+      // Not yet: the first layout settles out of sight, from where the last visit left it.
+      expect(selections(h)).toEqual([]);
+      h.step(1);
+      const a = byId(model, left.a.id);
+      expect(selections(h)).toEqual([{ kind: 'note', node: a }]);
+      expect(a.sx).toBeCloseTo(left.a.sx, 3);
+      expect(a.sy).toBeCloseTo(left.a.sy, 3);
+      // And there it stays while the layout cools, rather than the camera snapping to the whole.
+      for (let i = 0; i < 20; i++) {
+        h.step(20);
+        expect(Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy)).toBeLessThan(2);
+      }
+    }
+  });
+
+  it('brings the way back along, less whatever the graph no longer holds', () => {
+    const left = leaveFrom('network', (h, model) => loneNotes(h, model).slice(0, 2));
+    const [b] = left.entry.trail;
+    expect(b).toMatchObject({ view: 'network' });
+    const cam = b!.cam;
+    left.entry.trail = [
+      { node: 'me/Orbit/gone.md', cam, view: 'network' },
+      ...left.entry.trail,
+      { path: ['me/Orbit/n0.md', 'me/Orbit/gone.md'], cam, view: 'network' },
+    ];
+    const { h, c, model } = comeBack('network', left.saved);
+    c.restore(left.entry);
+    h.step(1);
+    const n = byId(model, (b as { node: string }).node);
+    expect(selections(h).at(-1)!.back).toBe(n.label);
+    // Seen from where it was relative to the note, from where the note was when the graph came up.
+    const { x, y, z } = n;
+    expect(c.back()).toBe(true);
+    expect(selections(h).at(-1)).toEqual({ kind: 'note', node: n });
+    h.step(60);
+    const { dx, dy, dz, yaw, pitch, dist } = cam;
+    expectCam(lastCam(), { tx: x + dx, ty: y + dy, tz: (z || 0) + dz, yaw, pitch, dist });
+    expect(c.back()).toBe(false);
+  });
+
+  it('brings a path on the way back along, through the same notes', () => {
+    const h = harness(GraphController);
+    const c = h.controller;
+    const model = twoVaults();
+    c.initView('network');
+    c.setModel(model, 'init');
+    h.step(400);
+    const [p, q] = pathEnds(h, model);
+    h.click(p.sx, p.sy, { shift: true });
+    h.click(q.sx, q.sy, { shift: true });
+    h.step(60);
+    const traced = (selections(h).at(-1) as Extract<Selection, { kind: 'path' }>).path;
+    const b = model.nodes.find((n) => !traced.nodes.includes(n))!;
+    c.select(b);
+    h.step(60);
+    const entry = JSON.parse(JSON.stringify(c.returnState(b))) as ReturnEntry;
+    const saved = new Map(Object.entries(c.snapshot()).map(([id, [x, y, z]]) => [id, { x, y, z }]));
+
+    const back = comeBack('network', saved);
+    back.c.restore(entry);
+    back.h.step(1);
+    expect(selections(back.h).at(-1)!.back).toBe(`${p.label} → ${q.label}`);
+    expect(back.c.back()).toBe(true);
+    const restored = selections(back.h).at(-1)!;
+    expect(restored.kind).toBe('path');
+    const path = (restored as Extract<Selection, { kind: 'path' }>).path;
+    expect(path.nodes.map((n) => n.id)).toEqual(traced.nodes.map((n) => n.id));
+    expect(path.edges.map((e) => [e.source.id, e.target.id])).toEqual(
+      traced.edges.map((e) => [e.source.id, e.target.id]),
+    );
+  });
+
+  it('keeps the note where it was on the screen through a refetch that reheats the layout', () => {
+    const run = (restore: boolean) => {
+      const left = leaveFrom('network', (h, model) => [loneNote(h, model)]);
+      const { h, c, model, cache } = comeBack('network', left.saved);
+      const a = byId(model, left.a.id);
+      if (restore) c.restore(left.entry);
+      h.step(1);
+      // Merely selected, it lands where a click frames it: about where it was left.
+      if (!restore) c.select(a);
+      h.step(60);
+      expect(Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy)).toBeLessThan(5);
+      // A note came in meanwhile: the layout reheats, and the camera would ease to the whole.
+      c.setModel(twoVaults(cache, true), 'data');
+      h.step(400);
+      expect(selections(h).at(-1)).toMatchObject({ kind: 'note', node: a });
+      return Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy);
+    };
+    expect(run(true)).toBeLessThan(0.5);
+    expect(run(false)).toBeGreaterThan(40);
+  });
+
+  it('stops following the note once the user takes the camera', () => {
+    const left = leaveFrom('network', (h, model) => [loneNote(h, model)]);
+    const { h, c, model, cache } = comeBack('network', left.saved);
+    c.restore(left.entry);
+    h.step(60);
+    const a = byId(model, left.a.id);
+    const from = h.events.length;
+    // Pressed and let go without a click: nothing selected or cleared, but the camera is theirs.
+    h.down(5, 5);
+    h.up(5, 5, true);
+    c.setModel(twoVaults(cache, true), 'data');
+    h.step(400);
+    expect(selections(h, from)).toEqual([]);
+    expect(Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy)).toBeGreaterThan(40);
+  });
+
+  it('brings nothing back without its note, and comes up as on any visit', () => {
+    const left = leaveFrom('network', (h, model) => [loneNote(h, model)]);
+    const visit = (entry: ReturnEntry | null) => {
+      const { h, c } = comeBack('network', left.saved);
+      if (entry) expect(() => c.restore(entry)).not.toThrow();
+      h.step(60);
+      return { told: selections(h), cam: lastCam() };
+    };
+    const plain = visit(null);
+    const gone = visit({ ...left.entry, node: 'me/Orbit/gone.md' });
+    expect(gone.told).toEqual([]);
+    expectCam(gone.cam, plain.cam);
+    // Nor for another view than the one it was left in.
+    const other = visit({ ...left.entry, view: 'brain' });
+    expect(other.told).toEqual([]);
+    expectCam(other.cam, plain.cam);
+  });
+
+  it('comes back at once in Territories, where there is no layout to wait for', () => {
+    const left = leaveFrom('territories', (h, model) => [reachable(h, model)[0]!]);
+    const { h, c, model } = comeBack('territories');
+    c.restore(left.entry);
+    const a = byId(model, left.a.id);
+    expect(selections(h)).toEqual([{ kind: 'note', node: a }]);
+    h.step(1);
+    expect(a.sx).toBeCloseTo(left.a.sx, 3);
+    expect(a.sy).toBeCloseTo(left.a.sy, 3);
+  });
+
+  it('keeps, for a note other than the one selected, the framing and the way back a click on it leaves', () => {
+    const h = harness(GraphController);
+    const c = h.controller;
+    const model = twoVaults();
+    c.initView('network');
+    c.setModel(model, 'init');
+    h.step(400);
+    const [a, b] = loneNotes(h, model) as [GraphNode, GraphNode];
+    c.select(a);
+    h.step(60);
+    const opened = c.returnState(b)!;
+    c.select(b);
+    h.step(60);
+    const clicked = c.returnState(b)!;
+    expect(opened.trail.map((s) => 'node' in s && s.node)).toEqual([a.id]);
+    expect(clicked.trail.map((s) => 'node' in s && s.node)).toEqual([a.id]);
+    for (const [x, y] of [
+      [opened.cam, clicked.cam],
+      [opened.trail[0]!.cam, clicked.trail[0]!.cam],
+    ] as const) {
+      for (const k of ['dx', 'dy', 'dz', 'yaw', 'pitch', 'dist'] as const)
+        expect(x[k]).toBeCloseTo(y[k], 1);
+    }
   });
 });

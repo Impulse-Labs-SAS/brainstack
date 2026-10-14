@@ -63,6 +63,7 @@ import { GraphController, type CountryHover, type Selection } from './graph-cont
 import { reachesGraph, withoutPointer, type KeyOrigin } from './graph-keys';
 import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
+import { readReturn, writeReturn } from './graph-return';
 import { FilterChips, GraphSearch } from './graph-search';
 import type { Rect } from './labels/placer';
 
@@ -249,6 +250,18 @@ function writePref(key: string, value: unknown): void {
   }
 }
 
+/**
+ * This tab's session storage, where the way back from a note is kept (graph-return): per tab, as
+ * Back is. Null where the browser refuses it.
+ */
+function tabStore(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
@@ -283,6 +296,8 @@ export function GraphView({
   const controllerRef = useRef<GraphController | null>(null);
   const cacheRef = useRef(new Map<string, GraphNode>());
   const builtRef = useRef<{ nodes: InputNode[]; edges: InputEdge[] } | null>(null);
+  /** The page opened on the Sentinel: no way back from a note is taken up under it. */
+  const openedOnSentinel = useRef(false);
 
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>('brain');
@@ -309,11 +324,19 @@ export function GraphView({
 
   const open = useCallback(
     (node: GraphNode) => {
+      const c = controllerRef.current;
       // A topic is not a note: "opening" it shows the notes that carry it.
-      if (node.kind === 'topic') controllerRef.current?.select(node);
-      else router.push(noteHref(node));
+      if (node.kind === 'topic') {
+        c?.select(node);
+        return;
+      }
+      // Back from the note, the graph comes up as it is now (see the first layout, below).
+      // Not from the Sentinel: its walk is no place to come back to.
+      const back = persist && !sentinel ? c?.returnState(node) : null;
+      if (back) writeReturn(tabStore(), back, Date.now());
+      router.push(noteHref(node));
     },
-    [router],
+    [router, persist, sentinel],
   );
   const openRef = useRef(open);
   useEffect(() => {
@@ -372,6 +395,7 @@ export function GraphView({
     // Before the first frame: opening on the Sentinel, the brain must not show while its panel's
     // code arrives and its stage starts.
     controller.awaitPlugin(opening.sentinel);
+    openedOnSentinel.current = opening.sentinel;
     controller.initView(opening.view);
     setView(opening.view);
     setSentinel(opening.sentinel);
@@ -458,6 +482,13 @@ export function GraphView({
       // First layout: start from where the notes were last time, if it was this view.
       const saved = persist ? storedPositions(readPref<unknown>(LAYOUT_KEY), c.view) : undefined;
       c.setModel(model, 'init', saved);
+      // Back from a note opened here: the graph comes up as it was left, in the view it was left
+      // in. Taken here, not on mount: StrictMode mounts twice, and the first would take it from
+      // the second.
+      if (persist) {
+        const back = readReturn(tabStore(), c.view, Date.now());
+        if (back && !openedOnSentinel.current) c.restore(back);
+      }
     } else {
       c.setModel(model, previous.nodes !== nodes || previous.edges !== edges ? 'data' : 'layers');
     }
