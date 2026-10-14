@@ -42,7 +42,9 @@ export class LabelSpace {
   /** Whether `r` lies inside the bounds and clear of everything reserved or taken. */
   fits(r: Rect): boolean {
     const b = this.bounds;
-    if (r.x < b.x || r.y < b.y || r.x + r.w > b.x + b.w || r.y + r.h > b.y + b.h) return false;
+    // Written as what must hold, so a NaN anywhere fails it rather than slipping through.
+    const within = r.x >= b.x && r.y >= b.y && r.x + r.w <= b.x + b.w && r.y + r.h <= b.y + b.h;
+    if (!within) return false;
     let hit = false;
     this.visit(r, (list) => {
       for (const other of list ?? []) {

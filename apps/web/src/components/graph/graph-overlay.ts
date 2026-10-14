@@ -98,10 +98,17 @@ const LABEL_MARGIN = 4;
 /** Chips and small names: the floor every label keeps. */
 const SMALL_PX = 12;
 /**
- * In the brain a note's label fades with its depth. Under this much of it the
- * ink falls below 4.5:1 on the dark, so the label is dropped, not drawn faint.
+ * In the brain a note fades with its depth (`sFade`). Its label used to fade
+ * with it, and under this much the ink fell below 4.5:1 on the dark; now a
+ * label is drawn at full strength, and dropped for a note further back.
  */
 const MIN_LABEL_FADE = 0.75;
+/**
+ * Chips over a region never sit higher than this: the toolbar's usual height.
+ * The measured chrome keeps them from under it as well, but a chip pushed down
+ * is still named where one dropped against the toolbar would not be.
+ */
+const CHIP_TOP = 70;
 /** On the map, country names show until this zoom; past it, the cities say where you are. */
 const COUNTRY_NAMES_UNTIL = 2.2;
 /** Project names come with the clouds, once they are this far in, and at full strength. */
@@ -788,7 +795,7 @@ function drawMatchZones(ctx: CanvasRenderingContext2D, f: OverlayFrame, project:
     const text = `${truncate(p.label, 24).toUpperCase()} · ${counts.get(p.id)}`;
     const w = measure(ctx, text, ctx.font);
     const x = clamp(c.x, w / 2 + 16, f.vp.width - w / 2 - 16);
-    const y = clamp(f.is3D ? c.y - 30 : c.top - 26, 70, f.vp.height - 16);
+    const y = clamp(f.is3D ? c.y - 30 : c.top - 26, CHIP_TOP, f.vp.height - 16);
     const rect = space.place([{ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 }]);
     if (!rect) continue;
     ctx.globalAlpha = 0.92;
@@ -821,7 +828,7 @@ function drawVaultLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project
     const text = `${vault.label.toUpperCase()} · ${c.count}`;
     const w = ctx.measureText(text).width;
     const x = clamp(c.x, w / 2 + 16, f.vp.width - w / 2 - 16);
-    const y = clamp(f.is3D ? c.y - 40 : c.top - 26, 70, f.vp.height - 16);
+    const y = clamp(f.is3D ? c.y - 40 : c.top - 26, CHIP_TOP, f.vp.height - 16);
     if (!space.place([{ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 }])) continue;
     ctx.globalAlpha = 0.92;
     ctx.fillStyle = 'rgba(12,12,15,0.8)';

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { boundsOf, fitBounds, type Camera, type Viewport } from '@/lib/graph-camera';
+import { layoutTerritories } from '@/lib/graph-map';
 import { hopsFrom, type GraphModel, type GraphNode } from '@/lib/graph-model';
 
 import { largeVault } from './crawl/space/large-vault';
@@ -119,16 +120,51 @@ function frame(model: GraphModel, cam: Camera, over: Partial<OverlayFrame> = {})
   };
 }
 
-/** Notes well inside the stage, in model order. */
-const inside = (model: GraphModel) =>
-  model.nodes.filter(
+/**
+ * Notes well inside the stage, in model order, whose title no other note shares: the large
+ * vault repeats titles across projects, and a label is told apart by where it is as well.
+ */
+const inside = (model: GraphModel) => {
+  const count = new Map<string, number>();
+  for (const n of model.nodes) count.set(n.label, (count.get(n.label) ?? 0) + 1);
+  return model.nodes.filter(
     (n) =>
-      n.onScreen && n.sx > 200 && n.sx < VP.width - 200 && n.sy > 150 && n.sy < VP.height - 150,
+      count.get(n.label) === 1 &&
+      n.onScreen &&
+      n.sx > 200 &&
+      n.sx < VP.width - 200 &&
+      n.sy > 150 &&
+      n.sy < VP.height - 150,
+  );
+};
+
+/** The label drawn for `n`: its text, under, over or beside its dot. */
+const labelOf = (drawn: Drawn[], n: GraphNode) =>
+  drawn.find(
+    (d) =>
+      d.baseline === 'top' &&
+      n.label.startsWith(d.text.replace(/…$/, '')) &&
+      Math.abs(d.rect.x + d.rect.w / 2 - n.sx) <= d.rect.w / 2 + 30 &&
+      d.rect.y > n.sy - 40 &&
+      d.rect.y < n.sy + 30,
   );
 
-/** The label drawn for `n`: its text, under or beside it. */
-const labelOf = (drawn: Drawn[], n: GraphNode) =>
-  drawn.find((d) => d.baseline === 'top' && n.label.startsWith(d.text.replace(/…$/, '')));
+/** Every piece of text: at least 12px, at full strength, clear of the rest and of the chrome. */
+function expectReadable(drawn: Drawn[], chrome: Rect[] = []) {
+  for (const d of drawn) {
+    expect(d.px, d.text).toBeGreaterThanOrEqual(12);
+    expect(d.alpha, d.text).toBeGreaterThanOrEqual(0.88);
+    for (const c of chrome) expect(intersects(d.rect, c), d.text).toBe(false);
+  }
+  for (let i = 0; i < drawn.length; i++) {
+    for (let j = i + 1; j < drawn.length; j++) {
+      expect(
+        intersects(drawn[i]!.rect, drawn[j]!.rect),
+        `${drawn[i]!.text} / ${drawn[j]!.text}`,
+      ).toBe(false);
+    }
+  }
+}
 
 describe('drawOverlay labels', () => {
   it('never draws one label over another, at any zoom, with or without a note in focus', () => {
@@ -203,6 +239,41 @@ describe('drawOverlay labels', () => {
       for (const c of [toolbar, panel, legend]) expect(intersects(d.rect, c), d.text).toBe(false);
     }
     expect(labelOf(drawn, selected)).toBeDefined();
+  });
+
+  it('names continents and countries readably on the map, as cities come in', () => {
+    const { model } = largeVault(11, 1600);
+    const territory = layoutTerritories(model.nodes, model.vaults);
+    for (const [n, p] of territory.positions) Object.assign(n, { x: p.x, y: p.y, z: 0 });
+    const fit = fitBounds(boundsOf([...territory.positions.keys()])!, VP);
+    const toolbar = { x: 0, y: 0, w: VP.width, h: 56 };
+    for (const zoom of [1, 3]) {
+      const cam: Camera = { ...fit, dist: fit.dist / zoom, yaw: 0, pitch: 0 };
+      projectNodes(model, cam, VP, false, 300, 1);
+      const { ctx, drawn } = recorder();
+      drawOverlay(
+        ctx,
+        frame(model, cam, { view: 'territories', landAlpha: 1, territory, chrome: [toolbar] }),
+      );
+      expect(drawn.length).toBeGreaterThan(3);
+      expectReadable(drawn, [toolbar]);
+    }
+  });
+
+  it('names projects, vaults, search zones and the ring of loose notes readably', () => {
+    const { model, cam } = scene(0.7);
+    const matches = model.nodes.filter((n) => n.kind === 'note').slice(0, 30);
+    const cases: Partial<OverlayFrame>[] = [
+      { cloud: 0.8, ring: { r: 250, count: 12 } },
+      { vaultLabels: true },
+      { matches, matched: new Set(matches) },
+    ];
+    for (const over of cases) {
+      const { ctx, drawn } = recorder();
+      drawOverlay(ctx, frame(model, cam, over));
+      expect(drawn.length).toBeGreaterThan(1);
+      expectReadable(drawn);
+    }
   });
 
   it('keeps the labels it drew last frame when there is room for them', () => {

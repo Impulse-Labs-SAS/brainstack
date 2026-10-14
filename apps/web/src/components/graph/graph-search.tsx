@@ -522,7 +522,7 @@ export function FilterChips({ model, filters, onChange }: { model: GraphModel; f
   }
   if (!chips.length) return null;
   return (
-    <ul aria-label="Active filters" className="pointer-events-auto flex basis-full flex-wrap items-center gap-1.5">
+    <ul data-graph-chrome="children" aria-label="Active filters" className="pointer-events-auto flex basis-full flex-wrap items-center gap-1.5">
       {chips.map((c) => (
         <li key={c.key} className={cn(GLASS, 'flex h-7 items-center gap-1 rounded-full pl-2.5 pr-1 text-xs text-fg-primary')}>
           <span className="max-w-[220px] truncate">{c.label}</span>

@@ -45,6 +45,12 @@ describe('LabelSpace', () => {
     expect(space.count).toBe(0);
   });
 
+  it('places nothing whose position is not a number', () => {
+    const space = new LabelSpace(VIEW);
+    expect(space.fits({ x: NaN, y: 10, w: 40, h: 17 })).toBe(false);
+    expect(space.fits({ x: 10, y: 10, w: Infinity, h: 17 })).toBe(false);
+  });
+
   it('places the first slot that fits, or none', () => {
     const space = new LabelSpace(VIEW);
     space.reserve({ x: 0, y: 200, w: 800, h: 20 });
@@ -54,10 +60,13 @@ describe('LabelSpace', () => {
     expect(space.place([below, above])).toBeNull();
   });
 
-  it('decides exactly as a check against every placed label would, for any mix of sizes', () => {
+  it('decides exactly as a check against every placed label would, for any mix of sizes and bounds', () => {
     const rnd = rng(42);
-    for (let round = 0; round < 20; round++) {
-      const space = new LabelSpace(VIEW);
+    // The stage less a margin, as the overlay uses it, and bounds that do not start at 0.
+    const BOUNDS = [VIEW, { x: 4, y: 4, w: 792, h: 592 }, { x: -50, y: 30, w: 700, h: 500 }];
+    for (let round = 0; round < 30; round++) {
+      const b = BOUNDS[round % BOUNDS.length]!;
+      const space = new LabelSpace(b);
       const taken: Rect[] = [];
       for (let i = 0; i < 400; i++) {
         const r = {
@@ -66,7 +75,7 @@ describe('LabelSpace', () => {
           w: 10 + rnd() * (i % 9 === 0 ? 400 : 120),
           h: 12 + rnd() * 30,
         };
-        const inside = r.x >= 0 && r.y >= 0 && r.x + r.w <= 800 && r.y + r.h <= 600;
+        const inside = r.x >= b.x && r.y >= b.y && r.x + r.w <= b.x + b.w && r.y + r.h <= b.y + b.h;
         const expected = inside && !taken.some((t) => overlap(r, t));
         expect(space.fits(r)).toBe(expected);
         if (i % 5 === 0) {

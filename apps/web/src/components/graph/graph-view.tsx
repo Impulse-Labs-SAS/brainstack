@@ -68,13 +68,19 @@ import type { Rect } from './labels/placer';
 /**
  * What floats over the graph, in CSS pixels from the stage's corner: every element marked
  * `data-graph-chrome`, or each child of one marked `data-graph-chrome="children"` (a row of
- * controls, whose gaps are graph). Hidden elements measure nothing.
+ * controls, whose gaps are graph). A child marked itself is measured as it says, not whole.
+ * Hidden elements measure nothing.
  */
 function chromeRects(stage: HTMLElement): Rect[] {
   const base = stage.getBoundingClientRect();
   const rects: Rect[] = [];
   for (const el of stage.querySelectorAll<HTMLElement>('[data-graph-chrome]')) {
-    const parts = el.dataset.graphChrome === 'children' ? [...el.children] : [el];
+    const parts =
+      el.dataset.graphChrome === 'children'
+        ? [...el.children].filter(
+            (c) => !(c instanceof HTMLElement && c.dataset.graphChrome !== undefined),
+          )
+        : [el];
     for (const part of parts) {
       const r = part.getBoundingClientRect();
       if (r.width > 0 && r.height > 0) {
@@ -357,11 +363,16 @@ export function GraphView({
   }, [saveLayout, persist]);
 
   // The chrome's rectangles for the labels to keep clear of, measured again whenever something
-  // in the stage appears, goes or changes class (a panel, the search's results, the legend
-  // hiding) or the stage resizes — at most once a frame.
+  // in the stage appears, goes, changes class or changes its text (a panel, the search's
+  // results, the legend hiding, the growth chip counting up) or the stage resizes — at most
+  // once a frame. Not under the Sentinel: its stage draws no graph labels.
   useEffect(() => {
     const stage = stageRef.current;
     if (!ready || !stage) return;
+    if (sentinel) {
+      controllerRef.current?.setChrome([]);
+      return;
+    }
     let raf = 0;
     const schedule = () => {
       if (raf) return;
@@ -376,6 +387,7 @@ export function GraphView({
     mutations.observe(stage, {
       subtree: true,
       childList: true,
+      characterData: true,
       attributes: true,
       attributeFilter: ['class', 'hidden'],
     });
@@ -385,7 +397,7 @@ export function GraphView({
       resize.disconnect();
       mutations.disconnect();
     };
-  }, [ready]);
+  }, [ready, sentinel]);
 
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
