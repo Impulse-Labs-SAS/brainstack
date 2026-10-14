@@ -48,6 +48,7 @@ import {
   type MinimapTransform,
 } from './graph-overlay';
 import { GraphScene } from './graph-scene';
+import { LabelMemory, type Rect } from './labels/placer';
 
 /**
  * Something a feature built over the graph draws — the Sentinel view. It sees the frame, never
@@ -193,6 +194,11 @@ export class GraphController {
   private readonly minimapCtx: CanvasRenderingContext2D;
   private readonly resizeObserver: ResizeObserver;
   private readonly fonts: { sans: string; mono: string };
+  /** A note label's size: a point larger where a finger points, on a touch screen. */
+  private readonly labelPx: number;
+  private readonly labels = new LabelMemory();
+  /** What floats over the graph, from the view (`setChrome`): no label goes under it. */
+  private chrome: readonly Rect[] = [];
   private cam: Camera = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, dist: 800 };
   private vp: Viewport = { width: 800, height: 600 };
   private dpr = 1;
@@ -291,6 +297,10 @@ export class GraphController {
       mono: css.getPropertyValue('--font-mono').trim() || 'ui-monospace, monospace',
     };
     void document.fonts?.ready.then(() => forgetTextWidths());
+    this.labelPx =
+      typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+        ? 13
+        : 12;
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(el.stage);
     this.resize();
@@ -448,6 +458,11 @@ export class GraphController {
   /** Territories: every link drawn faintly over the map, not only the routes of what you point at. */
   setRoutes(on: boolean): void {
     this.routesLayer = on;
+  }
+
+  /** What floats over the graph now, in CSS pixels from the stage's corner: labels keep clear of it. */
+  setChrome(rects: readonly Rect[]): void {
+    this.chrome = rects;
   }
 
   /**
@@ -1454,6 +1469,9 @@ export class GraphController {
       appear,
       reduceMotion: this.reduceMotion,
       fonts: this.fonts,
+      chrome: this.chrome,
+      labels: this.labels,
+      labelPx: this.labelPx,
     });
     this.plugin?.draw(this.ctx, {
       now,

@@ -63,6 +63,27 @@ import { GraphController, type CountryHover, type Selection } from './graph-cont
 import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
 import { FilterChips, GraphSearch } from './graph-search';
+import type { Rect } from './labels/placer';
+
+/**
+ * What floats over the graph, in CSS pixels from the stage's corner: every element marked
+ * `data-graph-chrome`, or each child of one marked `data-graph-chrome="children"` (a row of
+ * controls, whose gaps are graph). Hidden elements measure nothing.
+ */
+function chromeRects(stage: HTMLElement): Rect[] {
+  const base = stage.getBoundingClientRect();
+  const rects: Rect[] = [];
+  for (const el of stage.querySelectorAll<HTMLElement>('[data-graph-chrome]')) {
+    const parts = el.dataset.graphChrome === 'children' ? [...el.children] : [el];
+    for (const part of parts) {
+      const r = part.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        rects.push({ x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height });
+      }
+    }
+  }
+  return rects;
+}
 
 interface GraphViewProps {
   nodes: InputNode[];
@@ -335,6 +356,37 @@ export function GraphView({
     };
   }, [saveLayout, persist]);
 
+  // The chrome's rectangles for the labels to keep clear of, measured again whenever something
+  // in the stage appears, goes or changes class (a panel, the search's results, the legend
+  // hiding) or the stage resizes — at most once a frame.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!ready || !stage) return;
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        controllerRef.current?.setChrome(chromeRects(stage));
+      });
+    };
+    const resize = new ResizeObserver(schedule);
+    resize.observe(stage);
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(stage, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class', 'hidden'],
+    });
+    schedule();
+    return () => {
+      cancelAnimationFrame(raf);
+      resize.disconnect();
+      mutations.disconnect();
+    };
+  }, [ready]);
+
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
   const modelLayers = useMemo(
@@ -487,7 +539,10 @@ export function GraphView({
       />
       <WheelBinder target={overlayRef} controller={controllerRef} />
 
-      <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2">
+      <div
+        data-graph-chrome="children"
+        className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2"
+      >
         <ToggleButtonGroup
           aria-label="View"
           selectionMode="single"
@@ -628,6 +683,7 @@ export function GraphView({
       <div
         ref={chipRef}
         hidden
+        data-graph-chrome
         aria-live="polite"
         className={cn(
           GLASS,
@@ -636,6 +692,7 @@ export function GraphView({
       />
 
       <div
+        data-graph-chrome
         className={cn(
           GLASS,
           'absolute bottom-3 left-3 z-10 grid max-w-[calc(100%-1.5rem)] gap-1.5 rounded-lg px-3 py-2.5 text-xs text-fg-secondary md:max-w-[min(560px,calc(100%-15rem))]',
@@ -792,7 +849,10 @@ export function GraphView({
         </ul>
       </div>
 
-      <div className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[6.5rem]">
+      <div
+        data-graph-chrome="children"
+        className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[6.5rem]"
+      >
         <canvas
           ref={minimapRef}
           hidden={is3D}
@@ -858,6 +918,7 @@ export function GraphView({
       {toast && (
         <div
           role="status"
+          data-graph-chrome
           className={cn(
             GLASS,
             'absolute bottom-6 left-1/2 z-30 max-w-[min(520px,calc(100%-2rem))] -translate-x-1/2 rounded-lg px-3.5 py-2 text-center text-sm text-fg-primary',

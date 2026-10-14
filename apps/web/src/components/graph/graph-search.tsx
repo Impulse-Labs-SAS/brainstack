@@ -230,6 +230,7 @@ function Results({
   return (
     // Pressing in the list must not take focus from the field: the list closes on blur.
     <div
+      data-graph-chrome
       onMouseDown={(e) => e.preventDefault()}
       className={cn(GLASS, 'absolute left-0 top-full z-30 mt-1.5 flex max-h-[min(440px,60vh)] w-[min(360px,calc(100vw-1.5rem))] flex-col rounded-lg text-sm shadow-2xl')}
     >

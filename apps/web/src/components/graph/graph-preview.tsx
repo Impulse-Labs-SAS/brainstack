@@ -70,6 +70,7 @@ interface GraphPreviewProps {
 export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, onClose }: GraphPreviewProps) {
   return (
     <aside
+      data-graph-chrome
       aria-live="polite"
       aria-label={selection.kind === 'path' ? 'Path between notes' : 'Note preview'}
       className={cn(
