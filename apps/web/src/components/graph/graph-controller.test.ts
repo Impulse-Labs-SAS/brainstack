@@ -698,22 +698,22 @@ describe('GraphController without a plugin', () => {
       counts: Object.fromEntries(h.tape.counts),
       digest: h.tape.digest.hex(),
     }).toMatchInlineSnapshot(`
-        {
-          "counts": {
-            "<canvas>": 14,
-            "dom": 312,
-            "event": 74,
-            "key": 5,
-            "minimap": 11216,
-            "overlay": 142038,
-            "path": 495,
-            "scene": 850,
-            "snapshot": 1,
-          },
-          "digest": "0f55b04bfe1c86",
-          "lines": 155005,
-        }
-      `);
+      {
+        "counts": {
+          "<canvas>": 14,
+          "dom": 312,
+          "event": 74,
+          "key": 5,
+          "minimap": 11216,
+          "overlay": 161413,
+          "path": 495,
+          "scene": 850,
+          "snapshot": 1,
+        },
+        "digest": "090588cf2662dc",
+        "lines": 174380,
+      }
+    `);
   });
 });
 
@@ -781,12 +781,12 @@ describe('GraphController without a plugin, one view at a time', () => {
           "dom": 115,
           "event": 52,
           "key": 3,
-          "overlay": 59592,
+          "overlay": 64815,
           "scene": 422,
           "snapshot": 1,
         },
-        "digest": "00fe80ab77d3e2",
-        "lines": 60199,
+        "digest": "12da39ad219da9",
+        "lines": 65422,
       }
     `);
   });
@@ -849,12 +849,12 @@ describe('GraphController without a plugin, one view at a time', () => {
           "event": 45,
           "key": 4,
           "minimap": 11096,
-          "overlay": 59727,
+          "overlay": 82763,
           "scene": 453,
           "snapshot": 1,
         },
-        "digest": "09d3905344f090",
-        "lines": 71455,
+        "digest": "173c0f355d7b81",
+        "lines": 94491,
       }
     `);
   });
@@ -907,13 +907,13 @@ describe('GraphController without a plugin, one view at a time', () => {
           "event": 29,
           "key": 2,
           "minimap": 10078,
-          "overlay": 61360,
+          "overlay": 67228,
           "path": 1457,
           "scene": 429,
           "snapshot": 1,
         },
-        "digest": "1f0e8d0f8513eb",
-        "lines": 73618,
+        "digest": "07a43aa19fdf29",
+        "lines": 79486,
       }
     `);
   });

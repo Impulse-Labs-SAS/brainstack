@@ -230,6 +230,7 @@ function Results({
   return (
     // Pressing in the list must not take focus from the field: the list closes on blur.
     <div
+      data-graph-chrome
       onMouseDown={(e) => e.preventDefault()}
       className={cn(GLASS, 'absolute left-0 top-full z-30 mt-1.5 flex max-h-[min(440px,60vh)] w-[min(360px,calc(100vw-1.5rem))] flex-col rounded-lg text-sm shadow-2xl')}
     >
@@ -521,7 +522,7 @@ export function FilterChips({ model, filters, onChange }: { model: GraphModel; f
   }
   if (!chips.length) return null;
   return (
-    <ul aria-label="Active filters" className="pointer-events-auto flex basis-full flex-wrap items-center gap-1.5">
+    <ul data-graph-chrome="children" aria-label="Active filters" className="pointer-events-auto flex basis-full flex-wrap items-center gap-1.5">
       {chips.map((c) => (
         <li key={c.key} className={cn(GLASS, 'flex h-7 items-center gap-1 rounded-full pl-2.5 pr-1 text-xs text-fg-primary')}>
           <span className="max-w-[220px] truncate">{c.label}</span>

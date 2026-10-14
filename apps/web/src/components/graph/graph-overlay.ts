@@ -4,8 +4,12 @@
 // notes and edges themselves.
 //
 // Labels are drawn in screen space and dropped when they would collide, so
-// text stays 12px at any zoom and never piles up. Vault chips and project
-// names claim their space first; note labels fit around them.
+// text stays at least 12px at any zoom and never piles up. They are placed by
+// importance (labels/placer.ts): the selected note and the one pointed at,
+// which are never dropped; the path; what they link to; what a search found;
+// then the names of places (vault chips, countries, projects); then any note
+// there is room for. None goes under the chrome floating over the graph, and
+// none is faded until it is hard to read: a label that would be is dropped.
 
 import { projector, pixelsPerUnit, type Camera, type Viewport } from '@/lib/graph-camera';
 import { MAP_SPACING, type MapLand, type TerritoryLayout } from '@/lib/graph-map';
@@ -13,6 +17,7 @@ import { LIFT_POP, cityRadius, colorOf, type GraphEdge, type GraphModel, type Gr
 import { LABEL_COLORS } from '@/lib/graph-palette';
 
 import type { LooseRing } from './graph-engine';
+import { LabelSpace, shownFirst, type LabelMemory, type Rect } from './labels/placer';
 
 /** The map's lines as paths in world units, built once per land. */
 export interface LandPaths {
@@ -78,10 +83,36 @@ export interface OverlayFrame {
   appear(n: GraphNode): number;
   reduceMotion: boolean;
   fonts: { sans: string; mono: string };
+  /** What floats over the graph (toolbar, legend, panels), in CSS pixels from the stage's corner. */
+  chrome: readonly Rect[];
+  /** Which labels were drawn last frame, so they keep their place. */
+  labels: LabelMemory;
+  /** A note label's size in CSS pixels: larger on a touch screen. */
+  labelPx: number;
 }
 
-type Rect = { x: number; y: number; w: number; h: number };
 type Curve = [number, number, number, number, number, number];
+
+/** How close a label may come to the stage's edge, or to the chrome. */
+const LABEL_MARGIN = 4;
+/** Chips and small names: the floor every label keeps. */
+const SMALL_PX = 12;
+/**
+ * In the brain a note fades with its depth (`sFade`). Its label used to fade
+ * with it, and under this much the ink fell below 4.5:1 on the dark; now a
+ * label is drawn at full strength, and dropped for a note further back.
+ */
+const MIN_LABEL_FADE = 0.75;
+/**
+ * Chips over a region never sit higher than this: the toolbar's usual height.
+ * The measured chrome keeps them from under it as well, but a chip pushed down
+ * is still named where one dropped against the toolbar would not be.
+ */
+const CHIP_TOP = 70;
+/** On the map, country names show until this zoom; past it, the cities say where you are. */
+const COUNTRY_NAMES_UNTIL = 2.2;
+/** Project names come with the clouds, once they are this far in, and at full strength. */
+const PROJECT_NAMES_FROM = 0.5;
 
 const MAX_NODE_PX = 11;
 const screenRadius = (n: GraphNode) => Math.min(MAX_NODE_PX, Math.max(1.8, n.drawRadius * n.sScale)) * (1 + LIFT_POP * n.lift);
@@ -89,10 +120,6 @@ const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
-function overlaps(a: Rect, placed: Rect[]): boolean {
-  for (const b of placed) if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) return true;
-  return false;
 }
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
@@ -224,18 +251,32 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): voi
   ring(ctx, f.selected, 5, '#ffffff', 1.6);
   if (f.pathFrom && !f.path) ring(ctx, f.pathFrom, 6, '#ffffff', 1.4, true);
 
-  const placed: Rect[] = [];
-  if (f.landAlpha > 0.01 && f.territory) {
-    drawContinentLabels(ctx, f, project, placed);
-    drawCountryLabels(ctx, f, project, placed);
-  } else if (f.matches) {
-    drawMatchZones(ctx, f, project, placed);
-  } else if (f.vaultLabels) {
-    drawVaultLabels(ctx, f, project, placed);
+  // Labels, most important first: each takes its room before the next looks for some.
+  const m = LABEL_MARGIN;
+  const space = new LabelSpace({ x: m, y: m, w: vp.width - 2 * m, h: vp.height - 2 * m });
+  for (const r of f.chrome) space.reserve({ x: r.x - m, y: r.y - m, w: r.w + 2 * m, h: r.h + 2 * m });
+  f.labels.begin();
+  const key = keyNotes(f);
+  // No label covers a note that matters.
+  for (const { n } of key) {
+    if (!n.onScreen) continue;
+    const r = screenRadius(n) * (n.isIndex ? 1.3 : 1) + 2;
+    space.reserve({ x: n.sx - r, y: n.sy - r, w: 2 * r, h: 2 * r });
   }
+  for (const { n, level, force } of key) noteLabel(ctx, f, space, n, level, force);
+
+  if (f.landAlpha > 0.01 && f.territory) {
+    drawContinentLabels(ctx, f, project, space);
+    drawCountryLabels(ctx, f, project, space);
+  } else if (f.matches) {
+    drawMatchZones(ctx, f, project, space);
+  } else if (f.vaultLabels) {
+    drawVaultLabels(ctx, f, project, space);
+  }
+  drawLooseRingLabel(ctx, f, project, space);
   // While searching, the zone chips name the projects that matter.
-  if (f.cloud > 0.01 && !f.matches) drawProjectLabels(ctx, f, project, placed);
-  drawNoteLabels(ctx, f, placed);
+  if (f.cloud >= PROJECT_NAMES_FROM && !f.matches) drawProjectLabels(ctx, f, project, space);
+  drawRestLabels(ctx, f, space, new Set(key.map((k) => k.n)));
   ctx.globalAlpha = 1;
 }
 
@@ -284,7 +325,7 @@ function drawLand(ctx: CanvasRenderingContext2D, f: OverlayFrame) {
   ctx.restore();
 }
 
-/** Network: a dotted ring where the notes without a single link wait, and how many there are. */
+/** Network: a dotted ring where the notes without a single link wait. */
 function drawLooseRing(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>) {
   if (!f.ring || f.view !== 'network') return;
   const c = project(0, 0, 0);
@@ -298,15 +339,25 @@ function drawLooseRing(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: 
   ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
   ctx.stroke();
   ctx.setLineDash([]);
-  const y = c.y - r - 12;
-  if (y < 60) return;
-  ctx.globalAlpha = 0.7;
-  ctx.font = `500 10.5px ${f.fonts.mono}`;
+  ctx.globalAlpha = 1;
+}
+
+/** Over the ring, how many notes wait on it: a name of a place, placed with the others. */
+function drawLooseRingLabel(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace) {
+  if (!f.ring || f.view !== 'network') return;
+  const c = project(0, 0, 0);
+  if (!c) return;
+  const y = c.y - f.ring.r * c.scale - 12;
+  const text = `NO LINKS · ${f.ring.count}`;
+  const font = `500 ${SMALL_PX}px ${f.fonts.mono}`;
+  const w = measure(ctx, text, font);
+  if (!space.place([{ x: c.x - w / 2 - 3, y: y - SMALL_PX / 2 - 3, w: w + 6, h: SMALL_PX + 6 }])) return;
+  ctx.globalAlpha = 1;
+  ctx.font = font;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = LABEL_COLORS.topic;
-  ctx.fillText(`NO LINKS · ${f.ring.count}`, c.x, y);
-  ctx.globalAlpha = 1;
+  ctx.fillText(text, c.x, y);
 }
 
 function setSpacing(ctx: CanvasRenderingContext2D, px: number) {
@@ -314,10 +365,10 @@ function setSpacing(ctx: CanvasRenderingContext2D, px: number) {
 }
 
 /** A chip over each continent, like the vault chips of the other views. */
-function drawContinentLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+function drawContinentLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `500 11px ${f.fonts.mono}`;
+  ctx.font = `500 ${SMALL_PX}px ${f.fonts.mono}`;
   const counts = new Map<string, number>();
   for (const n of f.model.nodes) if (n.kind === 'note' && f.appear(n) > 0) counts.set(n.vault, (counts.get(n.vault) ?? 0) + 1);
   for (const c of f.territory!.continents) {
@@ -330,8 +381,7 @@ function drawContinentLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, pro
     const w = ctx.measureText(text).width;
     const x = p.x;
     const y = p.y - 18;
-    if (x < -w || x > f.vp.width + w || y < -20 || y > f.vp.height + 20) continue;
-    placed.push({ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 });
+    if (!space.place([{ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 }])) continue;
     ctx.globalAlpha = 0.92 * f.landAlpha;
     ctx.fillStyle = 'rgba(12,12,15,0.8)';
     ctx.beginPath();
@@ -350,37 +400,38 @@ function drawContinentLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, pro
 
 /**
  * Country names, as on a map: spaced capitals, as big as the country allows,
- * fading as you zoom in far enough to read the cities themselves.
+ * until you are close enough to read the cities themselves. Then only the
+ * country under the pointer keeps its name. A name is shown whole or not at
+ * all: one faded to a ghost would be text nobody can read, over cities that
+ * could have been named.
  */
-function drawCountryLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+function drawCountryLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace) {
   const k = pixelsPerUnit(f.cam, f.vp);
-  const fade = k < 1.7 ? 1 : k > 2.8 ? 0.22 : 1 - ((k - 1.7) / 1.1) * 0.78;
+  const all = k < COUNTRY_NAMES_UNTIL;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   const list = [...f.territory!.countries].filter((c) => !f.landed || f.landed.has(c.id)).sort((a, b) => b.count - a.count);
   for (const c of list) {
+    const hot = f.hotCountry === c.id;
+    if (!all && !hot) continue;
     const p = project(c.x, c.y, 0);
     if (!p || p.x < -200 || p.x > f.vp.width + 200 || p.y < -40 || p.y > f.vp.height + 40) continue;
     const text = c.label.toUpperCase();
     // Within the country's own width, so a neighbour's name still fits beside it.
     const fitting = (1.75 * (c.r + 0.5 * MAP_SPACING) * k) / (text.length * 0.78);
-    const size = Math.round(Math.max(9, Math.min(24, fitting, (7 + Math.sqrt(c.count) * 1.7) * clamp(k, 0.75, 1.5))));
+    const size = Math.round(Math.max(SMALL_PX, Math.min(24, fitting, (7 + Math.sqrt(c.count) * 1.7) * clamp(k, 0.75, 1.5))));
     const spacing = size * 0.16;
     const font = `600 ${size}px ${f.fonts.sans}`;
     ctx.font = font;
     setSpacing(ctx, spacing);
     const w = ctx.measureText(text).width;
-    const rect = { x: p.x - w / 2 - 2, y: p.y - size / 2 - 2, w: w + 4, h: size + 4 };
-    const hot = f.hotCountry === c.id;
-    if (overlaps(rect, placed)) {
+    if (!space.place([{ x: p.x - w / 2 - 2, y: p.y - size / 2 - 2, w: w + 4, h: size + 4 }])) {
       setSpacing(ctx, 0);
       continue;
     }
-    // Once faded, a name no longer keeps the cities under it from being labelled.
-    if (hot || fade > 0.5) placed.push(rect);
     const vault = f.model.vaults.find((v) => v.id === c.vault);
-    ctx.globalAlpha = (hot ? 1 : 0.9 * fade) * f.landAlpha;
+    ctx.globalAlpha = (hot ? 1 : 0.9) * f.landAlpha;
     ctx.strokeStyle = 'rgba(10,10,10,0.75)';
     ctx.lineWidth = 3;
     ctx.strokeText(text, p.x + spacing / 2, p.y);
@@ -568,64 +619,108 @@ function ring(ctx: CanvasRenderingContext2D, n: GraphNode | null, gap: number, c
   ctx.setLineDash([]);
 }
 
-function drawNoteLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, placed: Rect[]) {
+/** How many of the focused note's neighbours, and of a search's matches, are named. */
+const NAMED_NEIGHBOURS = 28;
+const NAMED_MATCHES = 40;
+
+/**
+ * The notes whose names matter most, in the order they get room. Level 2: the
+ * selected note, the one pointed at and where a path starts — never dropped —
+ * then the notes on the path. Level 1: the neighbours of the focus, biggest
+ * first, and then what a search found, best first.
+ */
+function keyNotes(f: OverlayFrame): { n: GraphNode; level: 1 | 2; force: boolean }[] {
+  const out: { n: GraphNode; level: 1 | 2; force: boolean }[] = [];
+  const seen = new Set<GraphNode>();
+  const add = (n: GraphNode | null, level: 1 | 2, force: boolean) => {
+    if (!n || seen.has(n) || f.appear(n) <= 0.5) return;
+    seen.add(n);
+    out.push({ n, level, force });
+  };
+  add(f.selected, 2, true);
+  add(f.focus, 2, true);
+  add(f.pathFrom, 2, true);
+  for (const n of f.path?.nodes ?? []) add(n, 2, false);
+  if (f.hops) {
+    const near: GraphNode[] = [];
+    for (const [n, h] of f.hops) if (h === 1) near.push(n);
+    near.sort((a, b) => b.size - a.size);
+    for (const n of shownFirst(near.slice(0, NAMED_NEIGHBOURS), (x) => x.id, f.labels)) add(n, 1, false);
+  }
+  for (const n of f.matches?.slice(0, NAMED_MATCHES) ?? []) add(n, 1, false);
+  return out;
+}
+
+/**
+ * A note's name, under it if there is room; a name that matters (level 1 or 2)
+ * may go above or to either side instead. Dropped when it finds no room,
+ * unless `force`: then it is drawn under the note whatever it covers.
+ */
+function noteLabel(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelSpace, n: GraphNode, level: 0 | 1 | 2, force = false): boolean {
+  // A note off the stage has no name on it: its label would point at nothing.
+  if (!n.onScreen || n.sx < 0 || n.sx > f.vp.width || n.sy < 0 || n.sy > f.vp.height) return false;
+  const px = f.labelPx;
   const { sans } = f.fonts;
-  const fontBase = `500 12px ${sans}`;
-  const fontHub = `600 12.5px ${sans}`;
-  const fontStrong = `600 13.5px ${sans}`;
+  const font = level === 2 ? `600 ${px + 1.5}px ${sans}` : n.isIndex || n.size >= 5 ? `600 ${px + 0.5}px ${sans}` : `500 ${px}px ${sans}`;
+  const text = truncate(n.label, 34);
+  const w = measure(ctx, text, font) + 6;
+  const h = px + 5;
+  const r = screenRadius(n) * (n.isIndex ? 1.25 : 1);
+  const below = { x: n.sx - w / 2, y: n.sy + r + 3, w, h };
+  const slots =
+    level === 0
+      ? [below]
+      : [below, { ...below, y: n.sy - r - 3 - h }, { x: n.sx + r + 4, y: n.sy - h / 2, w, h }, { x: n.sx - r - 4 - w, y: n.sy - h / 2, w, h }];
+  let rect = space.place(slots);
+  if (!rect && force) {
+    rect = below;
+    space.take(rect);
+  }
+  if (!rect) return false;
+  f.labels.shown(n.id);
+  const x = rect.x + rect.w / 2;
+  const y = rect.y + 2;
+  ctx.font = font;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.lineJoin = 'round';
+  ctx.globalAlpha = level ? 1 : 0.88;
+  ctx.strokeStyle = 'rgba(10,10,10,0.92)';
+  ctx.lineWidth = 4;
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle =
+    level === 2 ? LABEL_COLORS.strong : level === 1 ? LABEL_COLORS.neighbour : n.kind === 'topic' ? LABEL_COLORS.topic : n.isIndex ? LABEL_COLORS.index : LABEL_COLORS.note;
+  ctx.fillText(text, x, y);
+  return true;
+}
 
-  // level 2: focused, on the path; 1: a neighbour or a match; 0: everything else.
-  const label = (n: GraphNode, level: 0 | 1 | 2) => {
-    if (!n.onScreen || n.sx < -120 || n.sx > f.vp.width + 120 || n.sy < -30 || n.sy > f.vp.height + 30) return;
-    const text = truncate(n.label, 34);
-    const font = level === 2 ? fontStrong : n.isIndex || n.size >= 5 ? fontHub : fontBase;
-    const w = measure(ctx, text, font);
-    const top = n.sy + screenRadius(n) * (n.isIndex ? 1.25 : 1) + 5;
-    const rect = { x: n.sx - w / 2 - 3, y: top - 2, w: w + 6, h: 17 };
-    if (level < 2 && overlaps(rect, placed)) return;
-    placed.push(rect);
-    ctx.font = font;
-    ctx.globalAlpha = (level ? 1 : 0.88) * (level === 2 ? 1 : n.sFade);
-    ctx.strokeStyle = 'rgba(10,10,10,0.92)';
-    ctx.lineWidth = 4;
-    ctx.strokeText(text, n.sx, top);
-    ctx.fillStyle =
-      level === 2 ? LABEL_COLORS.strong : level === 1 ? LABEL_COLORS.neighbour : n.kind === 'topic' ? LABEL_COLORS.topic : n.isIndex ? LABEL_COLORS.index : LABEL_COLORS.note;
-    ctx.fillText(text, n.sx, top);
-  };
-
-  const seen = new Set<GraphNode>();
-  const special = (n: GraphNode | null, level: 1 | 2) => {
-    if (!n || seen.has(n) || f.appear(n) <= 0.5) return;
-    seen.add(n);
-    label(n, level);
-  };
-  special(f.focus, 2);
-  for (const n of f.path?.nodes ?? []) special(n, 2);
-  special(f.pathFrom, 2);
-  if (f.hops) {
-    let c = 0;
-    for (const [n, h] of f.hops) if (h === 1 && c++ < 28) special(n, 1);
-  }
-  for (const n of f.matches?.slice(0, 40) ?? []) special(n, 1);
-  if (f.focus || f.matched || f.path || f.cloud >= 0.65) return;
-
+/**
+ * Every other note there is room for, the most connected first and those
+ * named last frame before the rest. Not while a search or a path is on
+ * screen, nor once the clouds name the projects; with a note in focus, half
+ * as many, so its neighbours still stand out.
+ */
+function drawRestLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelSpace, named: ReadonlySet<GraphNode>) {
+  if (f.matched || f.path || f.cloud >= 0.65) return;
   const k = pixelsPerUnit(f.cam, f.vp);
-  const minSize = f.is3D ? (k >= 1.8 ? 0 : k >= 1.1 ? 2 : k >= 0.6 ? 4 : 8) : k >= 1 ? 0 : k >= 0.7 ? 1.2 : k >= 0.45 ? 3 : 7;
-  const cap = Math.round((f.vp.width * f.vp.height) / (f.is3D ? 10000 : 5200));
   // On the map the country names speak first; the cities get theirs once you
-  // are close enough that the names have faded. A capital's name would only
+  // are close enough that they no longer show. A capital's name would only
   // repeat its country's.
   const onMap = f.landAlpha > 0.5;
+  if (onMap && k < 1.9) return;
+  const minSize = f.is3D ? (k >= 1.8 ? 0 : k >= 1.1 ? 2 : k >= 0.6 ? 4 : 8) : k >= 1 ? 0 : k >= 0.7 ? 1.2 : k >= 0.45 ? 3 : 7;
+  const cap = Math.round((f.vp.width * f.vp.height) / (f.is3D ? 10000 : 5200) / (f.focus ? 2 : 1));
+  const candidates: GraphNode[] = [];
   for (const n of f.model.labelOrder) {
-    if (placed.length > cap) break;
-    if (seen.has(n) || f.appear(n) < 0.9) continue;
-    if (onMap ? k < 1.9 : n.size < minSize) continue;
-    if (f.is3D && n.sFade < 0.45) continue;
-    label(n, 0);
+    if (named.has(n) || f.appear(n) < 0.9 || !n.onScreen) continue;
+    if (!onMap && n.size < minSize) continue;
+    if (f.is3D && n.sFade < MIN_LABEL_FADE) continue;
+    if (n.sx < 0 || n.sx > f.vp.width || n.sy < 0 || n.sy > f.vp.height) continue;
+    candidates.push(n);
+  }
+  for (const n of shownFirst(candidates, (x) => x.id, f.labels)) {
+    if (space.count > cap) break;
+    noteLabel(ctx, f, space, n, 0);
   }
 }
 
@@ -648,9 +743,10 @@ function centroid(nodes: GraphNode[], f: OverlayFrame, project: ReturnType<typeo
   return p ? { x: p.x, y: p.y, count, top } : null;
 }
 
-function drawProjectLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+/** Project names over their notes, once zoomed out far enough for the clouds; drawn at full strength. */
+function drawProjectLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace) {
   const font = `600 14px ${f.fonts.sans}`;
-  const small = `500 11px ${f.fonts.mono}`;
+  const small = `500 ${SMALL_PX}px ${f.fonts.mono}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
@@ -661,11 +757,10 @@ function drawProjectLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, proje
   for (const { p, c } of list) {
     if (c.x < -80 || c.x > f.vp.width + 80 || c.y < -20 || c.y > f.vp.height + 20) continue;
     const text = truncate(p.label, 26);
-    const w = measure(ctx, text, font);
-    const rect = { x: c.x - w / 2 - 4, y: c.y - 11, w: w + 8, h: 30 };
-    if (overlaps(rect, placed)) continue;
-    placed.push(rect);
-    ctx.globalAlpha = f.cloud;
+    const count = `${c.count} notes`;
+    const w = Math.max(measure(ctx, text, font), measure(ctx, count, small));
+    if (!space.place([{ x: c.x - w / 2 - 4, y: c.y - 11, w: w + 8, h: 32 }])) continue;
+    ctx.globalAlpha = 1;
     ctx.font = font;
     ctx.strokeStyle = 'rgba(10,10,10,0.85)';
     ctx.lineWidth = 4;
@@ -673,8 +768,9 @@ function drawProjectLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, proje
     ctx.fillStyle = colorOf(f.model, { kind: 'note', vault: p.vault }).core;
     ctx.fillText(text, c.x, c.y);
     ctx.font = small;
-    ctx.fillStyle = 'rgba(200,198,210,0.7)';
-    ctx.fillText(`${c.count} notes`, c.x, c.y + 15);
+    ctx.strokeText(count, c.x, c.y + 16);
+    ctx.fillStyle = LABEL_COLORS.topic;
+    ctx.fillText(count, c.x, c.y + 16);
   }
   ctx.globalAlpha = 1;
 }
@@ -684,13 +780,13 @@ function drawProjectLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, proje
  * so the zone reads before the notes do. Placed over the whole project,
  * where it lives, not over the matches that sprang out of it.
  */
-function drawMatchZones(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+function drawMatchZones(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace) {
   const counts = new Map<string, number>();
   for (const n of f.matches ?? []) if (n.project) counts.set(n.project.id, (counts.get(n.project.id) ?? 0) + 1);
   if (!counts.size) return;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `500 11px ${f.fonts.mono}`;
+  ctx.font = `500 ${SMALL_PX}px ${f.fonts.mono}`;
   const zones = f.model.projects.filter((p) => counts.has(p.id)).sort((a, b) => counts.get(b.id)! - counts.get(a.id)!);
   for (const p of zones.slice(0, 12)) {
     const c = centroid(p.nodes, f, project);
@@ -699,10 +795,9 @@ function drawMatchZones(ctx: CanvasRenderingContext2D, f: OverlayFrame, project:
     const text = `${truncate(p.label, 24).toUpperCase()} · ${counts.get(p.id)}`;
     const w = measure(ctx, text, ctx.font);
     const x = clamp(c.x, w / 2 + 16, f.vp.width - w / 2 - 16);
-    const y = clamp(f.is3D ? c.y - 30 : c.top - 26, 70, f.vp.height - 16);
-    const rect = { x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 };
-    if (overlaps(rect, placed)) continue;
-    placed.push(rect);
+    const y = clamp(f.is3D ? c.y - 30 : c.top - 26, CHIP_TOP, f.vp.height - 16);
+    const rect = space.place([{ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 }]);
+    if (!rect) continue;
     ctx.globalAlpha = 0.92;
     ctx.fillStyle = 'rgba(12,12,15,0.85)';
     ctx.beginPath();
@@ -718,10 +813,10 @@ function drawMatchZones(ctx: CanvasRenderingContext2D, f: OverlayFrame, project:
   }
 }
 
-function drawVaultLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, placed: Rect[]) {
+function drawVaultLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `500 11px ${f.fonts.mono}`;
+  ctx.font = `500 ${SMALL_PX}px ${f.fonts.mono}`;
   for (const vault of f.model.vaults) {
     if (vault.hidden) continue;
     const c = centroid(
@@ -733,8 +828,8 @@ function drawVaultLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project
     const text = `${vault.label.toUpperCase()} · ${c.count}`;
     const w = ctx.measureText(text).width;
     const x = clamp(c.x, w / 2 + 16, f.vp.width - w / 2 - 16);
-    const y = clamp(f.is3D ? c.y - 40 : c.top - 26, 70, f.vp.height - 16);
-    placed.push({ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 });
+    const y = clamp(f.is3D ? c.y - 40 : c.top - 26, CHIP_TOP, f.vp.height - 16);
+    if (!space.place([{ x: x - w / 2 - 10, y: y - 11, w: w + 20, h: 22 }])) continue;
     ctx.globalAlpha = 0.92;
     ctx.fillStyle = 'rgba(12,12,15,0.8)';
     ctx.beginPath();
