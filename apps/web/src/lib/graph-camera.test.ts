@@ -61,6 +61,21 @@ describe('fitBounds', () => {
       expect(s.y).toBeLessThanOrEqual(vp.height);
     }
   });
+
+  it('fits a band of the height asked, round the target, when given one', () => {
+    const points = [
+      { x: -100, y: -300, z: 0 },
+      { x: 100, y: 300, z: 0 },
+    ];
+    const b = boundsOf(points)!;
+    const ys = (cam: Camera) => points.map((p) => projector(cam, vp)(p.x, p.y, p.z)!.y);
+    // The whole height, as before.
+    const whole = ys({ ...flat, ...fitBounds(b, vp) });
+    expect(Math.max(...whole) - Math.min(...whole)).toBeGreaterThan(400);
+    for (const y of ys({ ...flat, ...fitBounds(b, vp, { frameHeight: 200 }) })) {
+      expect(Math.abs(y - vp.height / 2)).toBeLessThanOrEqual(100);
+    }
+  });
 });
 
 describe('zoomFlatAt', () => {

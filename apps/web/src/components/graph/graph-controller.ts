@@ -179,6 +179,9 @@ type Tween = { from: Camera; to: Camera; t0: number; duration: number };
 /** A selection Back can return to: the camera it was seen from, and in which view. */
 type TrailStep = { selection: Picked; cam: Camera; view: GraphView };
 
+/** A horizontal strip of the stage, in CSS pixels from its top. */
+type Band = { top: number; bottom: number };
+
 const CLICK_SLOP = 4;
 /** A finger wobbles more than a mouse: a tap that moved this little is still a tap. */
 const TAP_SLOP = 10;
@@ -195,7 +198,20 @@ const REPEAT_PX = 6;
 /** How many selections Back remembers: past that, the oldest goes. */
 const TRAIL_MAX = 50;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
+/** How far left of centre a framed note goes, clear of the preview docked beside the graph. */
 const PREVIEW_OFFSET = 160;
+/**
+ * Where the preview docks beside the graph; narrower, it is a sheet along the bottom. The
+ * sheet's own breakpoint, Tailwind's md, which reads the window: wider than the stage by the rail.
+ */
+const PREVIEW_BESIDE = '(min-width: 768px)';
+/** The sheet at its tallest, as a share of the stage, and how far it stands off the stage's bottom. */
+const SHEET_MAX = 0.52;
+const SHEET_INSET = 8;
+/** Where the toolbar's first row ends: the top of the free band before the chrome is measured. */
+const TOOLBAR_BOTTOM = 56;
+/** The least band kept above the sheet when the chrome reaches down to it, a phone on its side. */
+const BAND_MIN = 80;
 const SPIN_PER_MS = 0.00008;
 /** How far a search match springs out of the brain, as a share of its size. */
 const LIFT_REACH = 0.13;
@@ -1096,10 +1112,14 @@ export class GraphController {
     this.userMoved = true;
   }
 
-  /** The whole of a path in view, clear of the preview beside it. */
+  /** The whole of a path in view, clear of the preview: beside it, or between it and the chrome. */
   private framePath(path: GraphPath): void {
-    const target = { ...this.cam, ...this.fitTarget(path.nodes, 1.4) };
-    this.animateTo(this.withPreviewOffset(target));
+    const band = this.sheetBand();
+    const target = {
+      ...this.cam,
+      ...this.fitTarget(path.nodes, 1.4, band ? band.bottom - band.top : undefined),
+    };
+    this.animateTo(this.withPreviewOffset(target, band));
   }
 
   /** Territories: the project whose land is under the screen point (x, y). */
@@ -1146,9 +1166,11 @@ export class GraphController {
     this.userMoved = true;
   }
 
+  /** `frameHeight`: `nodes` fitted into a band that tall rather than into the whole stage. */
   private fitTarget(
     nodes?: GraphNode[],
     maxScale?: number,
+    frameHeight?: number,
   ): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
     if (this.engine.is3D && !nodes) return fitBrain(this.engine.brainScale, this.vp);
     const map = !nodes && !this.engine.growth ? this.engine.mapBounds() : null;
@@ -1156,11 +1178,42 @@ export class GraphController {
     const list = (nodes ?? this.model?.nodes ?? []).filter((n) => n.bornAt !== Infinity);
     const b = boundsOf(list);
     if (!b) return { tx: this.cam.tx, ty: this.cam.ty, tz: this.cam.tz, dist: this.cam.dist };
-    return fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D });
+    return fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D, frameHeight });
   }
 
-  private withPreviewOffset(cam: Camera): Camera {
-    if (this.vp.width <= 760) return cam;
+  /**
+   * Where the preview is a sheet along the bottom, the strip of graph left free above it: from
+   * the lowest chrome that ends above the middle (the toolbar's rows, the buttons beside them)
+   * down to the sheet at its tallest. The sheet is not on screen yet when the first flight is
+   * aimed, so where it can reach is all there is to go by. Null where the preview docks beside
+   * the graph. Asked when a flight is aimed, not once: a phone turns.
+   */
+  private sheetBand(): Band | null {
+    // No media queries to ask (Node): the stage's own width stands in for the window's.
+    const beside =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia(PREVIEW_BESIDE).matches
+        : this.vp.width > 760;
+    if (beside) return null;
+    const h = this.vp.height;
+    let top = -Infinity;
+    for (const r of this.chrome) if (r.y + r.h < h / 2) top = Math.max(top, r.y + r.h);
+    if (top === -Infinity) top = TOOLBAR_BOTTOM;
+    const bottom = h - h * SHEET_MAX - SHEET_INSET;
+    return { top: Math.min(top, bottom - BAND_MIN), bottom };
+  }
+
+  /**
+   * `cam` moved so what it centres lands clear of the preview: left of centre beside it, or in
+   * the middle of `band`, above the sheet. Up the screen is the camera's up, so in the brain it
+   * lands exactly at the target's depth.
+   */
+  private withPreviewOffset(cam: Camera, band: Band | null): Camera {
+    if (band) {
+      const s = (this.vp.height / 2 - (band.top + band.bottom) / 2) / pixelsPerUnit(cam, this.vp);
+      const { up } = basis(cam);
+      return { ...cam, tx: cam.tx - up[0] * s, ty: cam.ty - up[1] * s, tz: cam.tz - up[2] * s };
+    }
     const shift = PREVIEW_OFFSET / pixelsPerUnit(cam, this.vp);
     return {
       ...cam,
@@ -1175,13 +1228,16 @@ export class GraphController {
       : Math.min(this.cam.dist, this.vp.height / 2 / (TAN_HALF_FOV * 1.35));
     // Where it is drawn: a search match may have sprung out of its place.
     this.animateTo(
-      this.withPreviewOffset({
-        ...this.cam,
-        tx: node.x + node.ox,
-        ty: node.y + node.oy,
-        tz: (node.z || 0) + node.oz,
-        dist,
-      }),
+      this.withPreviewOffset(
+        {
+          ...this.cam,
+          tx: node.x + node.ox,
+          ty: node.y + node.oy,
+          tz: (node.z || 0) + node.oz,
+          dist,
+        },
+        this.sheetBand(),
+      ),
     );
     this.userMoved = true;
   }

@@ -319,6 +319,13 @@ interface HarnessOptions {
   /** Hash everything into the tape (the golden test); otherwise only the overlay's ops are kept. */
   golden?: boolean;
   reduceMotion?: boolean;
+  /** The stage's size: 800×600 unless said. */
+  size?: Box;
+  /**
+   * A window this wide that answers media queries, a finger's when `touch`. Without one there is
+   * no `matchMedia`, as in Node, and the controller goes by the stage's width.
+   */
+  media?: { width: number; touch: boolean };
 }
 
 /**
@@ -333,13 +340,23 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
   reset();
   const tape = new Tape(!!opts.golden);
   const clock = { now: 1000 };
-  const box: Box = { width: 800, height: 600 };
+  const box: Box = { ...(opts.size ?? { width: 800, height: 600 }) };
+  const media = opts.media ? { ...opts.media } : null;
   let pending: FrameRequestCallback | null = null;
   let rafId = 0;
   const observers: (() => void)[] = [];
   let seed = 7;
 
   vi.stubGlobal('window', globalThis);
+  // Read when asked, so a test can turn the phone between two queries.
+  if (media) {
+    vi.stubGlobal('matchMedia', (query: string) => {
+      const min = /^\(min-width: (\d+)px\)$/.exec(query);
+      return {
+        matches: min ? media.width >= Number(min[1]) : query === '(pointer: coarse)' && media.touch,
+      };
+    });
+  }
   vi.stubGlobal('devicePixelRatio', 1);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     pending = cb;
@@ -450,6 +467,8 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
     tape,
     el,
     box,
+    /** The window media queries read, when there is one: a test may change its width. */
+    media,
     clock,
     events,
     overlayOps,
@@ -2208,5 +2227,100 @@ describe('GraphController on Escape', () => {
       expectCam(lastCam(), fitted);
       expect(h.key('Escape')).toBe(false);
     }
+  });
+});
+
+// -- Phone ---------------------------------------------------------------------------------------
+
+/** A phone held upright: a window under md, so the preview is a sheet along the stage's bottom. */
+const PHONE: HarnessOptions = {
+  size: { width: 390, height: 700 },
+  media: { width: 390, touch: true },
+};
+
+/**
+ * The strip a framed note is centred in on a phone: from `top`, where the chrome ends (the
+ * toolbar's first row, before any was measured), to where the sheet's top is at its tallest.
+ */
+const freeBand = (h: Harness, top = 56) => ({ top, bottom: 0.48 * h.box.height - 8 });
+
+describe('GraphController on a phone', () => {
+  it('lands a selected note in the middle of the band above the sheet, flat and in the brain', () => {
+    for (const rest of [() => restingNetwork(twoVaults(), PHONE), () => restingBrain(PHONE)]) {
+      const { h, c, model } = rest();
+      const { top, bottom } = freeBand(h);
+      const [a] = reachable(h, model) as [GraphNode];
+      c.select(a);
+      h.step(60);
+      expect(a.sx).toBeCloseTo(h.box.width / 2, 0);
+      expect(Math.abs(a.sy - (top + bottom) / 2)).toBeLessThan(2);
+    }
+  });
+
+  it('starts the band below the lowest chrome that ends above the middle, as measured last', () => {
+    const { h, c, model } = restingNetwork(twoVaults(), PHONE);
+    const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+    // The toolbar's rows and the buttons beside them; low on the stage, the legend and the sheet.
+    c.setChrome([
+      { x: 12, y: 12, w: 300, h: 44 },
+      { x: 12, y: 64, w: 200, h: 44 },
+      { x: 250, y: 124, w: 128, h: 96 },
+      { x: 12, y: 600, w: 200, h: 88 },
+      { x: 8, y: 328, w: 374, h: 364 },
+    ]);
+    c.select(a);
+    h.step(60);
+    let band = freeBand(h, 220);
+    expect(Math.abs(a.sy - (band.top + band.bottom) / 2)).toBeLessThan(2);
+    // Measured again with the buttons beside the toolbar gone: the next flight has more room.
+    c.setChrome([
+      { x: 12, y: 12, w: 300, h: 44 },
+      { x: 12, y: 64, w: 200, h: 44 },
+    ]);
+    c.select(b);
+    h.step(60);
+    band = freeBand(h, 108);
+    expect(Math.abs(b.sy - (band.top + band.bottom) / 2)).toBeLessThan(2);
+  });
+
+  it('frames a path into the band, every note of it between the toolbar and the sheet', () => {
+    for (const rest of [() => restingNetwork(twoVaults(), PHONE), () => restingBrain(PHONE)]) {
+      const { h, model } = rest();
+      const [p, q] = pathEnds(h, model);
+      h.click(p.sx, p.sy, { shift: true });
+      h.click(q.sx, q.sy, { shift: true });
+      h.step(60);
+      const traced = selections(h).at(-1)!;
+      expect(traced.kind).toBe('path');
+      const { top, bottom } = freeBand(h);
+      for (const n of (traced as Extract<Selection, { kind: 'path' }>).path.nodes) {
+        expect(n.onScreen).toBe(true);
+        expect(n.sy).toBeGreaterThan(top);
+        expect(n.sy).toBeLessThan(bottom);
+        expect(n.sx).toBeGreaterThan(0);
+        expect(n.sx).toBeLessThan(h.box.width);
+      }
+    }
+  });
+
+  it('docks the preview by the window, as the sheet does, asked again for every flight', () => {
+    // A window past md with the rail beside the stage: 740px of graph, and the preview beside it.
+    const { h, c, model } = restingNetwork(twoVaults(), {
+      size: { width: 740, height: 600 },
+      media: { width: 788, touch: false },
+    });
+    const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+    c.select(a);
+    h.step(60);
+    expect(a.sx).toBeCloseTo(740 / 2 - 160, 0);
+    expect(a.sy).toBeCloseTo(300, 0);
+    // The window narrowed under md: the next flight lands above the sheet.
+    h.media!.width = 700;
+    h.resize(652, 600);
+    c.select(b);
+    h.step(60);
+    const { top, bottom } = freeBand(h);
+    expect(b.sx).toBeCloseTo(652 / 2, 0);
+    expect(Math.abs(b.sy - (top + bottom) / 2)).toBeLessThan(2);
   });
 });

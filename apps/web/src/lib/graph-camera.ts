@@ -144,11 +144,19 @@ export function boundsOf(points: Iterable<{ x: number; y: number; z: number; rad
   return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, cz: (z0 + z1) / 2, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0), d: Math.max(1, z1 - z0) };
 }
 
-/** Target and distance that fit `b` on screen, with room for the overlays. */
-export function fitBounds(b: Bounds, vp: Viewport, opts: { maxScale?: number; depth?: boolean } = {}): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
+/** Room above and below what is fitted into a band (`frameHeight`), for its labels: the band is clear of the overlays already. */
+const BAND_PAD = 16;
+
+/**
+ * Target and distance that fit `b` on screen, with room for the overlays; or, given a
+ * `frameHeight`, into a band that many pixels tall. Where the band is, the caller says by
+ * moving the target: this only sizes.
+ */
+export function fitBounds(b: Bounds, vp: Viewport, opts: { maxScale?: number; depth?: boolean; frameHeight?: number } = {}): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
   const padX = vp.width < 700 ? 30 : 80;
   const padY = 70;
-  const k = Math.min(opts.maxScale ?? 1.6, Math.max(0.03, Math.min((vp.width - padX * 2) / b.w, (vp.height - padY * 2) / b.h)));
+  const room = opts.frameHeight === undefined ? vp.height - padY * 2 : opts.frameHeight - BAND_PAD * 2;
+  const k = Math.min(opts.maxScale ?? 1.6, Math.max(0.03, Math.min((vp.width - padX * 2) / b.w, room / b.h)));
   let dist = vp.height / 2 / (TAN_HALF_FOV * k);
   if (opts.depth) dist += b.d / 2;
   return { tx: b.cx, ty: b.cy, tz: opts.depth ? b.cz : 0, dist };
