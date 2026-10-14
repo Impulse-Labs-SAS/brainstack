@@ -18,6 +18,7 @@ describe('benchParams', () => {
   it('keeps the size within what the vault can build, and ignores what it cannot read', () => {
     expect(benchParams('?notes=10').notes).toBe(60);
     expect(benchParams('?notes=999999').notes).toBe(20_000);
+    expect(benchParams('?notes=&seed=')).toEqual({ notes: 1600, seed: 11, view: 'territories' });
     expect(benchParams('?notes=lots&seed=1.5&view=sentinel')).toEqual({
       notes: 1600,
       seed: 11,

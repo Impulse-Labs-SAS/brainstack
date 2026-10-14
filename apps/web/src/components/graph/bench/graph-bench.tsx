@@ -39,9 +39,11 @@ declare global {
 
 const ms = (n: number) => `${n.toFixed(1)} ms`;
 
+/** The bench never fetches shared vaults: there is nothing to toggle. */
+const ignore = () => {};
+
 export function GraphBench() {
   const [params, setParams] = useState<BenchParams | null>(null);
-  const [stats, setStats] = useState<FrameStats | null>(null);
 
   // In the browser only: the query, and the hash the graph opens its view from.
   useEffect(() => {
@@ -55,25 +57,6 @@ export function GraphBench() {
   }, []);
 
   const vault = useMemo(() => (params ? largeVault(params.seed, params.notes) : null), [params]);
-
-  useEffect(() => {
-    if (!params || !vault) return;
-    const probe = new FrameProbe();
-    probe.start();
-    window.__graphBench = {
-      params,
-      notes: vault.inputs.nodes.length,
-      links: vault.inputs.edges.length,
-      report: () => probe.report(),
-      reset: () => probe.reset(),
-    };
-    const timer = window.setInterval(() => setStats(probe.report()), 500);
-    return () => {
-      window.clearInterval(timer);
-      probe.stop();
-      delete window.__graphBench;
-    };
-  }, [params, vault]);
 
   if (!params || !vault) {
     return (
@@ -92,29 +75,72 @@ export function GraphBench() {
         viewerId={vault.inputs.viewerId}
         vaultNames={vault.inputs.vaultNames}
         includeShared
-        onIncludeSharedChange={() => {}}
+        onIncludeSharedChange={ignore}
+        persist={false}
       />
-      <div
-        role="status"
-        className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded border border-border bg-bg-surface px-3 py-1.5 font-mono text-[12px] text-fg-secondary"
-      >
-        <span>
-          bench · {vault.inputs.nodes.length.toLocaleString('en')} notes ·{' '}
-          {vault.inputs.edges.length.toLocaleString('en')} links · seed {params.seed}
+      <BenchReadout
+        params={params}
+        notes={vault.inputs.nodes.length}
+        links={vault.inputs.edges.length}
+      />
+    </div>
+  );
+}
+
+/**
+ * The probe and its numbers. A component of its own, so the readout's updates every half
+ * second re-render only itself, never the graph it is measuring.
+ */
+function BenchReadout({
+  params,
+  notes,
+  links,
+}: {
+  params: BenchParams;
+  notes: number;
+  links: number;
+}) {
+  const [stats, setStats] = useState<FrameStats | null>(null);
+
+  useEffect(() => {
+    const probe = new FrameProbe();
+    probe.start();
+    window.__graphBench = {
+      params,
+      notes,
+      links,
+      report: () => probe.report(),
+      reset: () => probe.reset(),
+    };
+    const timer = window.setInterval(() => setStats(probe.report()), 500);
+    return () => {
+      window.clearInterval(timer);
+      probe.stop();
+      delete window.__graphBench;
+    };
+  }, [params, notes, links]);
+
+  return (
+    <div
+      role="status"
+      className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded border border-border bg-bg-surface px-3 py-1.5 font-mono text-[12px] text-fg-secondary"
+    >
+      <span>
+        bench · {notes.toLocaleString('en')} notes · {links.toLocaleString('en')} links · seed{' '}
+        {params.seed}
+      </span>
+      {stats && (
+        <span className="text-fg-primary">
+          p50 {ms(stats.p50)} · p95 {ms(stats.p95)} · max {ms(stats.max)} · {stats.fps.toFixed(0)}{' '}
+          fps · long tasks {stats.longTasks} ({ms(stats.longTaskMs)})
         </span>
-        {stats && (
-          <span className="text-fg-primary">
-            p50 {ms(stats.p50)} · p95 {ms(stats.p95)} · max {ms(stats.max)} · {stats.fps.toFixed(0)}{' '}
-            fps · long tasks {stats.longTasks} ({ms(stats.longTaskMs)})
-          </span>
-        )}
-        <Button
-          onPress={() => window.__graphBench?.reset()}
-          className="rounded border border-border px-2 py-0.5 text-fg-primary outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          Reset
-        </Button>
-      </div>
+      )}
+      <Button
+        onPress={() => window.__graphBench?.reset()}
+        className="rounded border border-border px-2 py-0.5 text-fg-primary outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        Reset
+      </Button>
     </div>
   );
 }

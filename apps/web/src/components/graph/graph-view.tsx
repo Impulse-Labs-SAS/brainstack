@@ -76,6 +76,12 @@ interface GraphViewProps {
   /** Whether shared vaults are fetched at all. */
   includeShared: boolean;
   onIncludeSharedChange(include: boolean): void;
+  /**
+   * Whether the browser's graph preferences are read and kept: layers, the last layout, the view
+   * last chosen. On by default; the bench turns it off, so every run starts cold and the
+   * graph page's own preferences stay as they were.
+   */
+  persist?: boolean;
 }
 
 const LAYERS_KEY = 'brainstack.graph.layers';
@@ -216,6 +222,7 @@ export function GraphView({
   vaultNames,
   includeShared,
   onIncludeSharedChange,
+  persist = true,
 }: GraphViewProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
@@ -263,8 +270,8 @@ export function GraphView({
 
   const saveLayout = useCallback(() => {
     const c = controllerRef.current;
-    if (c?.model) writePref(LAYOUT_KEY, { view: c.view, positions: c.snapshot() });
-  }, []);
+    if (persist && c?.model) writePref(LAYOUT_KEY, { view: c.view, positions: c.snapshot() });
+  }, [persist]);
 
   // One controller for the page's lifetime. Preferences load here, not during
   // render: localStorage and the hash exist only in the browser.
@@ -297,7 +304,7 @@ export function GraphView({
 
     const opening = openingView(
       window.location.hash,
-      rememberedChoice(readPref(CHOICE_KEY), readPref(LEGACY_VIEW_KEY)),
+      persist ? rememberedChoice(readPref(CHOICE_KEY), readPref(LEGACY_VIEW_KEY)) : null,
       controller.webgl,
     );
     if (opening.sentinel) {
@@ -313,7 +320,9 @@ export function GraphView({
     controller.initView(opening.view);
     setView(opening.view);
     setSentinel(opening.sentinel);
-    setLayers(storedLayersOr(readPref<unknown>(LAYERS_KEY), DEFAULT_LAYERS));
+    setLayers(
+      persist ? storedLayersOr(readPref<unknown>(LAYERS_KEY), DEFAULT_LAYERS) : DEFAULT_LAYERS,
+    );
     setReady(true);
 
     const onLeave = () => saveLayout();
@@ -324,7 +333,7 @@ export function GraphView({
       controller.dispose();
       controllerRef.current = null;
     };
-  }, [saveLayout]);
+  }, [saveLayout, persist]);
 
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
@@ -355,12 +364,12 @@ export function GraphView({
     builtRef.current = { nodes, edges };
     if (!previous) {
       // First layout: start from where the notes were last time, if it was this view.
-      const saved = storedPositions(readPref<unknown>(LAYOUT_KEY), c.view);
+      const saved = persist ? storedPositions(readPref<unknown>(LAYOUT_KEY), c.view) : undefined;
       c.setModel(model, 'init', saved);
     } else {
       c.setModel(model, previous.nodes !== nodes || previous.edges !== edges ? 'data' : 'layers');
     }
-  }, [model, nodes, edges]);
+  }, [model, nodes, edges, persist]);
 
   // The hash follows the view, so a reload stays on it; the choice is remembered only when picked (`choose`).
   useEffect(() => {
@@ -378,7 +387,7 @@ export function GraphView({
     if ((choice === 'brain' || choice === 'sentinel') && !webgl) return;
     setSentinel(choice === 'sentinel');
     setView(choice === 'sentinel' ? 'brain' : choice);
-    writePref(CHOICE_KEY, choice);
+    if (persist) writePref(CHOICE_KEY, choice);
   };
 
   // Into the Sentinel from another view, the brain goes dark at once rather than stay under an
@@ -395,9 +404,9 @@ export function GraphView({
   }, []);
 
   useEffect(() => {
-    if (ready) writePref(LAYERS_KEY, layers);
+    if (ready && persist) writePref(LAYERS_KEY, layers);
     controllerRef.current?.setRoutes(layers.routes);
-  }, [layers, ready]);
+  }, [layers, ready, persist]);
 
   // "Edited this week" is measured from when the search last changed, which is close enough for a filter.
   const matches = useMemo(

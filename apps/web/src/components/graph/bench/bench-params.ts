@@ -16,8 +16,10 @@ const MAX_NOTES = 20_000;
 export function benchParams(search: string): BenchParams {
   const q = new URLSearchParams(search);
   const int = (key: string, fallback: number) => {
-    const n = Number(q.get(key));
-    return q.has(key) && Number.isInteger(n) ? n : fallback;
+    const raw = q.get(key)?.trim();
+    // Number('') is 0: an empty value is a missing one, not a request for zero.
+    const n = raw ? Number(raw) : NaN;
+    return Number.isInteger(n) ? n : fallback;
   };
   const view = q.get('view');
   return {
