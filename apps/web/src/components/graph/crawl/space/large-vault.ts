@@ -30,10 +30,24 @@ import {
   type GraphNode,
   type InputEdge,
   type InputNode,
+  type SharedVaultName,
 } from '@/lib/graph-model';
 
 import { findWalk, walkable, type CrawlResult } from '../crawl-plan';
 import type { SampleVault } from '../sample-vault';
+
+/**
+ * The large vault, plus what it was built from: the notes, links and vault names the graph page
+ * takes as props, so a bench can mount the real graph over it without the API.
+ */
+export interface LargeVault extends SampleVault {
+  inputs: {
+    nodes: InputNode[];
+    edges: InputEdge[];
+    viewerId: string;
+    vaultNames: ReadonlyMap<string, SharedVaultName>;
+  };
+}
 
 /** The vault this module is tuned at: about 60 projects for 1,600 notes. */
 const BASE_NOTES = 1600;
@@ -251,9 +265,9 @@ interface Project {
  * `notes` notes (at least 60) in projects of Zipf sizes, with an index each,
  * folders, and links within and between them, beside a small shared vault and
  * an island; at the default size, 60 projects, a 40-note annex and 12 islanders.
- * Plus the four crawls the lab replays over it.
+ * Plus the four crawls the lab replays over it, and the inputs it was built from.
  */
-export function largeVault(seed = 11, notes = BASE_NOTES): SampleVault {
+export function largeVault(seed = 11, notes = BASE_NOTES): LargeVault {
   const rnd = seededRandom(seed);
   const pick = <T>(list: readonly T[]): T => list[Math.floor(rnd() * list.length)]!;
   const shuffled = <T>(list: readonly T[]): T[] => {
@@ -436,13 +450,14 @@ export function largeVault(seed = 11, notes = BASE_NOTES): SampleVault {
     if (rnd() < 0.4) link(island[i]!, island[Math.floor(rnd() * i)]!);
   }
 
+  const vaultNames = new Map([[ANNEX_OWNER, { label: ANNEX_NAME, owner: ANNEX_OWNER }]]);
   const model = buildGraphModel({
     nodes,
     edges,
     affinity: null,
     layers: DEFAULT_LAYERS,
     viewerId: 'me',
-    vaultNames: new Map([[ANNEX_OWNER, { label: ANNEX_NAME, owner: ANNEX_OWNER }]]),
+    vaultNames,
     cache: new Map(),
   });
   for (const n of model.nodes) {
@@ -450,7 +465,11 @@ export function largeVault(seed = 11, notes = BASE_NOTES): SampleVault {
     if (p) Object.assign(n, { x: p[0], y: p[1], z: p[2], ox: 0, oy: 0, oz: 0 });
   }
 
-  return { model, crawls: pickCrawls(model, projects, island, seed) };
+  return {
+    model,
+    crawls: pickCrawls(model, projects, island, seed),
+    inputs: { nodes, edges, viewerId: 'me', vaultNames },
+  };
 }
 
 /**

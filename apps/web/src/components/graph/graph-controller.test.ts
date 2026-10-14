@@ -1,8 +1,12 @@
 // The controller in Node, over stand-ins for the DOM, the 2D canvas and the WebGL scene, so what
-// it draws can be recorded. The golden test is what keeps a feature built over the graph (a
-// GraphPlugin) from changing Brain, Network or Territories: every scene call and every overlay
-// operation of a scripted session through the three views, hashed, must stay what it was before
-// the plugin seam existed.
+// it draws can be recorded. The golden tests are what keep a feature built over the graph (a
+// GraphPlugin, another style) from changing Brain, Network or Territories: every scene call and
+// every overlay operation of a scripted session, hashed, must stay what it was.
+//
+// One session walks through the three views in turn, so it also pins the moves between them; it
+// has been the same since before the plugin seam existed. Each view also has a session of its own,
+// from a fresh start, so a change meant for one view shows in that view's digest alone, and a
+// digest that moves where nothing was meant to change says which view it reached.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,6 +18,7 @@ import {
   buildGraphModel,
   type GraphModel,
   type GraphNode,
+  type GraphView,
   type InputEdge,
   type InputNode,
 } from '@/lib/graph-model';
@@ -547,6 +552,38 @@ function twoVaults(cache = new Map<string, GraphNode>(), extra = false): GraphMo
 /** Notes drawn on screen this frame, in model order. */
 const shown = (model: GraphModel) => model.nodes.filter((n) => n.onScreen && Number.isFinite(n.sx));
 
+/** Notes drawn this frame well inside the stage, where a pointer can reach them. */
+const reachable = (h: Harness, model: GraphModel) =>
+  shown(model).filter(
+    (n) => n.sx > 20 && n.sx < h.box.width - 20 && n.sy > 20 && n.sy < h.box.height - 20,
+  );
+
+/**
+ * One view's golden session: a fresh controller opened on `view`, the vault laid out, then
+ * `script`. What it drew comes back counted and hashed, the layout it left included.
+ */
+async function goldenView(
+  view: GraphView,
+  script: (h: Harness, model: GraphModel, cache: Map<string, GraphNode>) => void,
+) {
+  // A fresh graph-overlay, as in the session through the three views.
+  vi.resetModules();
+  const fresh = await import('./graph-controller');
+  const h = harness(fresh.GraphController, { golden: true });
+  const cache = new Map<string, GraphNode>();
+  const model = twoVaults(cache);
+  h.controller.initView(view);
+  h.controller.setModel(model, 'init');
+  script(h, model, cache);
+  h.tape.write('snapshot', JSON.stringify(h.controller.snapshot()));
+  h.controller.dispose();
+  return {
+    lines: h.tape.lines,
+    counts: Object.fromEntries(h.tape.counts),
+    digest: h.tape.digest.hex(),
+  };
+}
+
 /** Territories: a point over land and off every note, found by sweeping the pointer. */
 function countryUnderPointer(h: Harness): { x: number; y: number } | null {
   for (let y = 30; y < h.box.height; y += 30) {
@@ -677,6 +714,208 @@ describe('GraphController without a plugin', () => {
           "lines": 155005,
         }
       `);
+  });
+});
+
+describe('GraphController without a plugin, one view at a time', () => {
+  it('draws Brain as it did', async () => {
+    const run = await goldenView('brain', (h, model) => {
+      const c = h.controller;
+      h.step(90);
+      h.drag(20, 20, 140, 70);
+      h.step(10);
+      h.wheel(400, 300, -100);
+      h.wheel(400, 300, -100);
+      h.wheel(380, 320, 100);
+      h.step(10);
+      c.setMatches(model.nodes.filter((n) => n.project?.label === 'Atlas').slice(0, 5));
+      h.step(30);
+      c.frameMatches();
+      h.step(20);
+      c.preview(model.nodes[3]!);
+      h.step(5);
+      c.preview(null);
+      c.setMatches(null);
+      h.step(20);
+      const [a] = reachable(h, model);
+      expect(a).toBeTruthy();
+      h.move(a!.sx, a!.sy);
+      h.step(5);
+      h.click(a!.sx, a!.sy);
+      h.step(30);
+      h.key('ArrowRight');
+      h.step(10);
+      h.key('Enter');
+      h.key('Escape');
+      h.step(5);
+      const [p, q] = reachable(h, model).slice(4);
+      expect(p && q).toBeTruthy();
+      h.click(p!.sx, p!.sy, { shift: true });
+      h.step(3);
+      h.click(q!.sx, q!.sy, { shift: true });
+      h.step(30);
+      c.clearSelection();
+      const [r] = reachable(h, model).slice(6);
+      expect(r).toBeTruthy();
+      h.doubleClick(r!.sx, r!.sy);
+      h.drag(r!.sx, r!.sy, r!.sx + 40, r!.sy + 25);
+      h.step(10);
+      c.setAngle('top');
+      h.step(40);
+      c.setSpin(true);
+      h.step(20);
+      c.startGrowth();
+      h.step(40);
+      c.stopGrowth();
+      h.step(10);
+      c.zoom(1.25);
+      c.zoom(0.8);
+      h.step(5);
+      h.resize(1024, 640);
+      h.step(10);
+    });
+    expect(run).toMatchInlineSnapshot(`
+      {
+        "counts": {
+          "<canvas>": 14,
+          "dom": 115,
+          "event": 52,
+          "key": 3,
+          "overlay": 59592,
+          "scene": 422,
+          "snapshot": 1,
+        },
+        "digest": "00fe80ab77d3e2",
+        "lines": 60199,
+      }
+    `);
+  });
+
+  it('draws Network as it did', async () => {
+    const run = await goldenView('network', (h, model, cache) => {
+      const c = h.controller;
+      h.step(150);
+      const [a] = reachable(h, model);
+      expect(a).toBeTruthy();
+      h.move(a!.sx, a!.sy);
+      h.step(5);
+      h.leave();
+      h.click(a!.sx, a!.sy);
+      h.step(30);
+      h.key('ArrowRight');
+      h.step(10);
+      h.key('Escape');
+      h.step(5);
+      const [p, q] = reachable(h, model).slice(4);
+      expect(p && q).toBeTruthy();
+      h.click(p!.sx, p!.sy, { shift: true });
+      h.step(3);
+      h.click(q!.sx, q!.sy, { shift: true });
+      h.step(30);
+      c.clearSelection();
+      c.setMatches(model.nodes.filter((n) => n.project?.label === 'Ledger').slice(0, 4));
+      h.step(20);
+      c.frameMatches();
+      h.step(20);
+      c.setMatches(null);
+      c.setModel(twoVaults(cache, true), 'data');
+      h.step(30);
+      c.fit();
+      h.step(40);
+      h.minimap(60, 40);
+      h.step(5);
+      h.drag(30, 580, 120, 540);
+      h.step(10);
+      const [r] = reachable(h, c.model!).slice(6);
+      expect(r).toBeTruthy();
+      h.drag(r!.sx, r!.sy, r!.sx + 30, r!.sy + 20);
+      h.step(10);
+      h.wheel(400, 300, -100);
+      h.key('-');
+      h.key('+');
+      h.step(5);
+      c.startGrowth();
+      h.step(40);
+      c.stopGrowth();
+      h.step(10);
+      h.resize(1024, 640);
+      h.step(10);
+    });
+    expect(run).toMatchInlineSnapshot(`
+      {
+        "counts": {
+          "<canvas>": 14,
+          "dom": 115,
+          "event": 45,
+          "key": 4,
+          "minimap": 11096,
+          "overlay": 59727,
+          "scene": 453,
+          "snapshot": 1,
+        },
+        "digest": "09d3905344f090",
+        "lines": 71455,
+      }
+    `);
+  });
+
+  it('draws Territories as it did', async () => {
+    const run = await goldenView('territories', (h, model) => {
+      const c = h.controller;
+      h.step(150);
+      const spot = countryUnderPointer(h);
+      expect(spot).not.toBeNull();
+      h.step(10);
+      c.setRoutes(true);
+      h.step(20);
+      h.click(spot!.x, spot!.y);
+      h.step(30);
+      const [a] = reachable(h, model);
+      expect(a).toBeTruthy();
+      h.move(a!.sx, a!.sy);
+      h.step(5);
+      h.click(a!.sx, a!.sy);
+      h.step(30);
+      h.key('ArrowLeft');
+      h.step(10);
+      h.key('Escape');
+      h.step(5);
+      c.setRoutes(false);
+      c.setMatches(model.nodes.filter((n) => n.project?.label === 'Orbit').slice(0, 3));
+      h.step(20);
+      c.frameMatches();
+      h.step(20);
+      c.setMatches(null);
+      h.drag(400, 300, 460, 340);
+      h.step(5);
+      h.wheel(400, 300, -100);
+      h.step(5);
+      c.fit();
+      h.step(40);
+      c.startGrowth();
+      h.step(40);
+      c.stopGrowth();
+      h.step(10);
+      h.resize(1024, 640);
+      h.step(10);
+    });
+    expect(run).toMatchInlineSnapshot(`
+      {
+        "counts": {
+          "<canvas>": 14,
+          "dom": 248,
+          "event": 29,
+          "key": 2,
+          "minimap": 10078,
+          "overlay": 61360,
+          "path": 1457,
+          "scene": 429,
+          "snapshot": 1,
+        },
+        "digest": "1f0e8d0f8513eb",
+        "lines": 73618,
+      }
+    `);
   });
 });
 
