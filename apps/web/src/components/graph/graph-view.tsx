@@ -26,7 +26,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Button, ToggleButton, ToggleButtonGroup } from 'react-aria-components';
+import { Button, ToggleButton, ToggleButtonGroup, type PressEvent } from 'react-aria-components';
 
 import type { AnglePreset } from '@/lib/graph-camera';
 import {
@@ -60,6 +60,7 @@ import {
   type ViewChoice,
 } from './crawl/view-choice';
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
+import { reachesGraph, withoutPointer, type KeyOrigin } from './graph-keys';
 import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
 import { FilterChips, GraphSearch } from './graph-search';
@@ -90,6 +91,25 @@ function chromeRects(stage: HTMLElement): Rect[] {
   }
   return rects;
 }
+
+/** The preview sheet's heading, where focus goes after a pick made from the keyboard. */
+const SHEET_HEADING = '[data-graph-sheet] h3';
+
+/** Where on the stage a key was pressed, for `reachesGraph`. */
+function keyOrigin(target: HTMLElement, canvas: HTMLCanvasElement | null): KeyOrigin {
+  if (target === canvas) return 'canvas';
+  if (!target.closest('[data-graph-sheet]')) return 'elsewhere';
+  return target.matches(SHEET_HEADING) ? 'sheet-heading' : 'sheet';
+}
+
+/**
+ * How a pointer focuses the canvas: for its keys, without the ring. Chrome shows the ring on a
+ * script's focus() unless what had focus before was focused by the mouse — so on the first click
+ * after a reload, or after typing in the search — and `focusVisible: false` says not to. It is
+ * newer than TypeScript's DOM types, hence a constant rather than a literal; a browser that does
+ * not know it ignores it.
+ */
+const POINTER_FOCUS = { preventScroll: true, focusVisible: false };
 
 interface GraphViewProps {
   nodes: InputNode[];
@@ -272,6 +292,11 @@ export function GraphView({
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_LAYERS);
   const [webgl, setWebgl] = useState(true);
   const [selection, setSelection] = useState<Selection | null>(null);
+  // The selection as the controller last told it: read right after a key or a press in the
+  // sheet, to see what it did, when the state is still a render behind.
+  const selectionRef = useRef<Selection | null>(null);
+  // Focus goes to the sheet's heading once the selection now on its way renders.
+  const headingNext = useRef(false);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const [hoveredCountry, setHoveredCountry] = useState<CountryHover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -314,7 +339,10 @@ export function GraphView({
     const controller = new GraphController(
       el,
       {
-        onSelection: setSelection,
+        onSelection: (s) => {
+          selectionRef.current = s;
+          setSelection(s);
+        },
         onHover: setHovered,
         onHoverCountry: setHoveredCountry,
         onToast: setToast,
@@ -505,6 +533,34 @@ export function GraphView({
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const focusCanvas = () => overlayRef.current?.focus({ preventScroll: true });
+
+  /**
+   * After the keyboard or a screen reader acted from the sheet, focus follows what it did: the
+   * element that had it may be gone — a row of the note left behind, the sheet itself — and with
+   * it every key the graph listens for. With nothing selected any more, to the canvas; with
+   * something else, to its heading once it renders, so its title is read out and Tab goes on
+   * through its connections.
+   */
+  const refocus = (before: Selection | null) => {
+    const now = selectionRef.current;
+    if (!now) focusCanvas();
+    else if (now !== before) headingNext.current = true;
+  };
+
+  /** A press in the sheet; focus moves with what it did only when no pointer made it. */
+  const fromSheet = (e: PressEvent, act: () => void) => {
+    const before = selectionRef.current;
+    act();
+    if (withoutPointer(e.pointerType)) refocus(before);
+  };
+
+  useEffect(() => {
+    if (!headingNext.current) return;
+    headingNext.current = false;
+    stageRef.current?.querySelector<HTMLElement>(SHEET_HEADING)?.focus();
+  }, [selection]);
+
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
     // Popovers render through a portal but their key events still bubble here.
@@ -516,8 +572,12 @@ export function GraphView({
       e.preventDefault();
       return;
     }
-    if (t === overlayRef.current && controllerRef.current?.keyDown(e.nativeEvent))
-      e.preventDefault();
+    const origin = keyOrigin(t, overlayRef.current);
+    if (!reachesGraph(e.key, origin)) return;
+    const before = selectionRef.current;
+    if (!controllerRef.current?.keyDown(e.nativeEvent)) return;
+    e.preventDefault();
+    if (origin !== 'canvas') refocus(before);
   };
 
   const c = () => controllerRef.current;
@@ -536,10 +596,12 @@ export function GraphView({
         ref={overlayRef}
         tabIndex={0}
         aria-label={sentinel ? SENTINEL_LABEL : GRAPH_LABEL}
-        className="absolute inset-0 block h-full w-full outline-none"
+        // The ring for keyboard focus is an outline drawn inside: the stage clips anything outside,
+        // and a ring's inset shadow would paint under the canvas's bitmap.
+        className="absolute inset-0 block h-full w-full outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/60"
         style={{ touchAction: 'none', cursor: 'grab' }}
         onPointerDown={(e) => {
-          e.currentTarget.focus({ preventScroll: true });
+          e.currentTarget.focus(POINTER_FOCUS);
           c()?.pointerDown(e.nativeEvent);
         }}
         onPointerMove={(e) => c()?.pointerMove(e.nativeEvent)}
@@ -661,11 +723,15 @@ export function GraphView({
         <GraphPreview
           selection={selection}
           model={model}
-          onSelect={(n) => c()?.select(n)}
+          onSelect={(n, e) => fromSheet(e, () => c()?.select(n))}
           onOpen={open}
           onPathFrom={(n) => c()?.startPathFrom(n)}
-          onBack={() => c()?.back()}
-          onClose={() => c()?.clearSelection()}
+          onBack={(e) => fromSheet(e, () => c()?.back())}
+          onClose={() => {
+            c()?.clearSelection();
+            // Whatever pressed it: the button goes with the sheet, and the keys stay the graph's.
+            focusCanvas();
+          }}
         />
       )}
 

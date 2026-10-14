@@ -6,7 +6,7 @@
 
 import { ChevronLeft, X } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { Button as AriaButton } from 'react-aria-components';
+import { Button as AriaButton, type PressEvent } from 'react-aria-components';
 
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
@@ -27,6 +27,11 @@ export const FLOAT_GLASS = 'float-glass border backdrop-blur-xl backdrop-saturat
 const KIND_LABEL: Record<EdgeKind, string> = { link: 'link', structure: 'index', affinity: 'shared topic', topic: 'topic' };
 const KIND_RANK: Record<EdgeKind, number> = { link: 0, structure: 1, topic: 2, affinity: 3 };
 const MAX_LISTED = 12;
+/**
+ * The sheet's heading: where a pick made from the keyboard leaves focus (graph-view), so the new
+ * title is read out and Tab goes on from it. Not in the tab order; the ring shows only then.
+ */
+const HEADING_FOCUS = 'rounded outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
 const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 export function edited(updatedAt: number): string {
@@ -60,11 +65,12 @@ function KindGlyph({ kind }: { kind: EdgeKind }) {
 interface GraphPreviewProps {
   selection: Selection;
   model: GraphModel;
-  onSelect(node: GraphNode): void;
+  /** A connection or a step of the path, with the press that picked it: focus follows a keyboard's. */
+  onSelect(node: GraphNode, e: PressEvent): void;
   onOpen(node: GraphNode): void;
   onPathFrom(node: GraphNode): void;
   /** Back to what was selected before: offered while `selection.back` names it. */
-  onBack(): void;
+  onBack(e: PressEvent): void;
   onClose(): void;
 }
 
@@ -72,6 +78,7 @@ export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, o
   return (
     <aside
       data-graph-chrome
+      data-graph-sheet
       aria-live="polite"
       aria-label={selection.kind === 'path' ? 'Path between notes' : 'Note preview'}
       className={cn(
@@ -89,7 +96,21 @@ export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, o
   );
 }
 
-function Header({ children, back, onBack, onClose }: { children: ReactNode; back?: string; onBack(): void; onClose(): void }) {
+function Header({
+  children,
+  heading = false,
+  back,
+  onBack,
+  onClose,
+}: {
+  children: ReactNode;
+  /** This line is the sheet's heading: a path has no title of its own. */
+  heading?: boolean;
+  back?: string;
+  onBack(e: PressEvent): void;
+  onClose(): void;
+}) {
+  const Title = heading ? 'h3' : 'span';
   return (
     <div className="flex items-center justify-between gap-2">
       {back && (
@@ -105,7 +126,12 @@ function Header({ children, back, onBack, onClose }: { children: ReactNode; back
           </AriaButton>
         </span>
       )}
-      <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-xs text-fg-secondary">{children}</span>
+      <Title
+        tabIndex={heading ? -1 : undefined}
+        className={cn('flex min-w-0 flex-1 items-center gap-1.5 truncate text-xs text-fg-secondary', heading && HEADING_FOCUS)}
+      >
+        {children}
+      </Title>
       <AriaButton onPress={onClose} aria-label="Close preview" className="rounded p-1 text-fg-muted outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:flex touch:h-11 touch:w-11 touch:items-center touch:justify-center">
         <X size={14} />
       </AriaButton>
@@ -126,10 +152,10 @@ function NodeBody({
   node: GraphNode;
   back?: string;
   model: GraphModel;
-  onSelect(node: GraphNode): void;
+  onSelect(node: GraphNode, e: PressEvent): void;
   onOpen(node: GraphNode): void;
   onPathFrom(node: GraphNode): void;
-  onBack(): void;
+  onBack(e: PressEvent): void;
   onClose(): void;
 }) {
   const vault = model.vaults.find((v) => v.id === node.vault);
@@ -146,7 +172,9 @@ function NodeBody({
           {topic ? ' · topic' : node.project ? ` · ${node.project.label}` : ''}
         </span>
       </Header>
-      <h3 className="text-lg font-semibold leading-tight tracking-tight text-fg-primary">{node.label}</h3>
+      <h3 tabIndex={-1} className={cn('text-lg font-semibold leading-tight tracking-tight text-fg-primary', HEADING_FOCUS)}>
+        {node.label}
+      </h3>
       {topic ? (
         <p className="text-xs text-fg-secondary">Carried by {node.carriers} notes in your vault</p>
       ) : (
@@ -173,7 +201,7 @@ function NodeBody({
         {neighbours.slice(0, MAX_LISTED).map(({ node: other, edge }) => (
           <li key={`${other.id}:${edge.kind}`}>
             <AriaButton
-              onPress={() => onSelect(other)}
+              onPress={(e) => onSelect(other, e)}
               className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
             >
               <KindGlyph kind={edge.kind} />
@@ -211,15 +239,15 @@ function PathBody({
 }: {
   selection: Extract<Selection, { kind: 'path' }>;
   model: GraphModel;
-  onSelect(node: GraphNode): void;
-  onBack(): void;
+  onSelect(node: GraphNode, e: PressEvent): void;
+  onBack(e: PressEvent): void;
   onClose(): void;
 }) {
   const { path } = selection;
   const hops = path.edges.length;
   return (
     <>
-      <Header back={selection.back} onBack={onBack} onClose={onClose}>
+      <Header heading back={selection.back} onBack={onBack} onClose={onClose}>
         How they connect · {hops} {hops === 1 ? 'hop' : 'hops'}
       </Header>
       <ol className="grid gap-px">
@@ -234,7 +262,7 @@ function PathBody({
                 </span>
               )}
               <AriaButton
-                onPress={() => onSelect(node)}
+                onPress={(e) => onSelect(node, e)}
                 className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
               >
                 <Swatch color={colorOf(model, node).hue} />
