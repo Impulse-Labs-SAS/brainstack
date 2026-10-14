@@ -161,7 +161,12 @@ type Drag = {
   slop: number;
   /** A tap between two notes too close to tell apart: it zooms in rather than pick one. */
   ambiguous: boolean;
+  /** The second press of a double click: it picked nothing, and its click does nothing. */
+  repeat: boolean;
 };
+
+/** A plain click or tap: what it picked, where it was pressed, when it ended and with what. */
+type Click = { node: GraphNode | null; x: number; y: number; at: number; type: string };
 
 type Tween = { from: Camera; to: Camera; t0: number; duration: number };
 
@@ -174,8 +179,10 @@ const TOUCH_RADIUS = 22;
 const AMBIGUOUS_PX = 8;
 /** How much an ambiguous tap zooms in, so the two notes it fell between come apart. */
 const AMBIGUOUS_ZOOM = 2;
-/** Two taps this close in time are one double tap. */
+/** Two clicks or taps this close in time are one double click. */
 const DOUBLE_TAP_MS = 500;
+/** How near the first click a mouse's second lands, in a double click; a finger's, TOUCH_RADIUS. */
+const REPEAT_PX = 6;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
 const PREVIEW_OFFSET = 160;
 const SPIN_PER_MS = 0.00008;
@@ -260,8 +267,12 @@ export class GraphController {
   private pinch: { dist: number; cx: number; cy: number } | null = null;
   /** The last press was a finger: a double tap then opens what a finger could tap. */
   private lastTouch = false;
-  /** When a tap last zoomed in between two notes, rather than pick one: the double tap it began opens nothing. */
-  private tapZoomedAt = -Infinity;
+  /**
+   * The last plain click or tap, and the note it picked: none on empty space, or when it zoomed
+   * in between two notes. A note it picks flies to the side, so a press soon after and close by
+   * is the rest of a double click, not a pick of whatever has come under the pointer since.
+   */
+  private lastClick: Click | null = null;
   private raf = 0;
   private lastFrame = 0;
   private frameNo = 0;
@@ -566,6 +577,7 @@ export class GraphController {
     this.path = null;
     this.pathFrom = null;
     this.pathPick = false;
+    this.lastClick = null;
     this.edgesDirty = true;
     this.events.onSelection(null);
   }
@@ -669,10 +681,16 @@ export class GraphController {
     }
     const touch = e.pointerType === 'touch';
     this.lastTouch = touch;
+    // The second press of a double click comes down where the first click's note was, and that
+    // note is flying off: picking again would select another, clear it, or zoom to a country.
+    const last = e.shiftKey ? null : this.clickNear(x, y);
+    const repeat = !!last && last.type === e.pointerType;
     const appear = (n: GraphNode) => this.engine.appear(n, performance.now());
     // A finger gets a target a finger can hit, and the benefit of the doubt between two notes
     // only in the flat views: in the brain, notes that look close may lie far apart in depth.
-    const hit = pickNearest(model, x, y, appear, touch ? TOUCH_RADIUS : 0);
+    const hit = repeat
+      ? { node: null, dist: Infinity, next: Infinity }
+      : pickNearest(model, x, y, appear, touch ? TOUCH_RADIUS : 0);
     const node = hit.node;
     // A finger dragged across notes means to move the view: on a touch screen notes stay put.
     const kind =
@@ -690,6 +708,7 @@ export class GraphController {
       origin: node ? { x: node.x, y: node.y, z: node.z } : null,
       slop: touch ? TAP_SLOP : CLICK_SLOP,
       ambiguous: touch && !!node && !this.engine.is3D && hit.next - hit.dist < AMBIGUOUS_PX,
+      repeat,
     };
   }
 
@@ -782,15 +801,27 @@ export class GraphController {
     if (!drag) return;
     const click = drag.travel <= drag.slop && !cancelled;
     if (drag.kind === 'node' && drag.node) this.engine.release(drag.node);
-    if (click && drag.ambiguous && this.zoomBetween(drag.startX, drag.startY)) {
-      // Zoomed in between two notes: the next tap can tell them apart.
+    // Read before clickNode, which starts and ends a path pick: only a plain click begins a
+    // double click.
+    const plain = !drag.shift && !this.pathPick;
+    const here = { x: drag.startX, y: drag.startY, at: performance.now(), type: e.pointerType };
+    if (click && drag.repeat) {
+      // The rest of a double click: the first click's record stays, for the double click to open.
+    } else if (click && drag.ambiguous && this.zoomBetween(drag.startX, drag.startY)) {
+      // Zoomed in between two notes: the next tap can tell them apart, and the double tap this
+      // one began opens nothing.
+      this.lastClick = { node: null, ...here };
     } else if (click && drag.node) {
       this.clickNode(drag.node, drag.shift);
+      this.lastClick = plain ? { node: drag.node, ...here } : null;
     } else if (click && !drag.node && !this.pathPick) {
       const { x, y } = this.local(e);
       const country = this.countryAt(x, y);
       this.clearSelection();
       if (country) this.zoomToCountry(country);
+      this.lastClick = plain ? { node: null, ...here } : null;
+    } else {
+      this.lastClick = null;
     }
     this.el.overlay.style.cursor = this.hover || this.hotCountry ? 'pointer' : 'grab';
   }
@@ -821,9 +852,15 @@ export class GraphController {
   doubleClick(e: MouseEvent): void {
     const model = this.model;
     if (!model || this.staged) return;
-    // Its first tap zoomed in between two notes: what lies under the second was not aimed at.
-    if (performance.now() - this.tapZoomedAt < DOUBLE_TAP_MS) return;
     const { x, y } = this.local(e);
+    // What its first click picked, before that note flew off from under the pointer; nothing
+    // when it fell on empty space or zoomed in between two notes.
+    const last = this.clickNear(x, y);
+    this.lastClick = null;
+    if (last) {
+      if (last.node) this.events.onOpen(last.node);
+      return;
+    }
     const appear = (n: GraphNode) => this.engine.appear(n, performance.now());
     // A double tap reaches as far as a tap does.
     const node = pickNearest(model, x, y, appear, this.lastTouch ? TOUCH_RADIUS : 0).node;
@@ -884,6 +921,14 @@ export class GraphController {
   }
 
   // -- Internals -------------------------------------------------------------------
+
+  /** The last plain click, when (x, y) is near enough to it in time and place to be its double. */
+  private clickNear(x: number, y: number): Click | null {
+    const last = this.lastClick;
+    if (!last || performance.now() - last.at >= DOUBLE_TAP_MS) return null;
+    const reach = last.type === 'touch' ? TOUCH_RADIUS : REPEAT_PX;
+    return Math.hypot(x - last.x, y - last.y) <= reach ? last : null;
+  }
 
   private clickNode(node: GraphNode, shift: boolean): void {
     this.setSpin(false);
@@ -1341,6 +1386,7 @@ export class GraphController {
       origin: null,
       slop: e.pointerType === 'touch' ? TAP_SLOP : CLICK_SLOP,
       ambiguous: false,
+      repeat: false,
     };
   }
 
@@ -1372,6 +1418,7 @@ export class GraphController {
     }
     if (this.drag?.kind === 'node' && this.drag.node) this.engine.release(this.drag.node);
     this.drag = null;
+    this.lastClick = null;
     if (this.hover) {
       this.hover = null;
       this.events.onHover(null);
@@ -1435,6 +1482,7 @@ export class GraphController {
       origin: null,
       slop: TAP_SLOP,
       ambiguous: false,
+      repeat: false,
     };
   }
 
@@ -1459,9 +1507,7 @@ export class GraphController {
   private zoomBetween(x: number, y: number): boolean {
     const before = this.cam.dist;
     this.zoomAt(x, y, AMBIGUOUS_ZOOM);
-    if (this.cam.dist === before) return false;
-    this.tapZoomedAt = performance.now();
-    return true;
+    return this.cam.dist !== before;
   }
 
   /** Orbit zoom between the stage's limits: it is not a flat map to zoom under the pointer. */

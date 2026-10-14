@@ -1509,8 +1509,8 @@ describe('GraphController with a plugin', () => {
 // -- Touch ---------------------------------------------------------------------------------------
 
 /** Network with its first layout settled: flat, so a finger zooms and pans under itself. */
-function restingNetwork(model: GraphModel = twoVaults()) {
-  const h = harness(GraphController);
+function restingNetwork(model: GraphModel = twoVaults(), opts: HarnessOptions = {}) {
+  const h = harness(GraphController, opts);
   h.controller.initView('network');
   h.controller.setModel(model, 'init');
   h.step(400);
@@ -1771,3 +1771,165 @@ describe('GraphController on a touch screen', () => {
 
 /** Two notes closer than this on screen are within the ambiguous margin of a tap between them. */
 const AMBIGUOUS_GAP_PX = 16;
+
+// -- Double click --------------------------------------------------------------------------------
+
+/**
+ * A note with no other within 30px, far from where a flight to it ends (left of the stage's
+ * centre, clear of the preview): while it flies, the point it was clicked at comes over something
+ * else.
+ */
+function farFromLanding(h: Harness, model: GraphModel): GraphNode {
+  const landing = { x: h.box.width / 2 - 160, y: h.box.height / 2 };
+  const n = reachable(h, model).find(
+    (a) =>
+      Math.hypot(a.sx - landing.x, a.sy - landing.y) > 150 &&
+      model.nodes.every((b) => b === a || !b.onScreen || Math.hypot(b.sx - a.sx, b.sy - a.sy) > 30),
+  );
+  expect(n).toBeDefined();
+  return n!;
+}
+
+/**
+ * A note pressed, its flight under way, then pressed again where it was and double-clicked there,
+ * as a browser sends a double click. What was selected and opened meanwhile comes back.
+ */
+function doubleClickInFlight(h: Harness, model: GraphModel, press: (x: number, y: number) => void) {
+  const a = farFromLanding(h, model);
+  const { sx: x, sy: y } = a;
+  const from = h.events.length;
+  press(x, y);
+  h.step(20);
+  expect(Math.hypot(a.sx - x, a.sy - y)).toBeGreaterThan(30);
+  press(x, y);
+  h.doubleClick(x, y);
+  const since = eventsSince(h, from);
+  return {
+    a,
+    selected: since.filter((e) => e.startsWith('onSelection')),
+    opened: since.filter((e) => e.startsWith('onOpen')),
+  };
+}
+
+describe('GraphController on a double click', () => {
+  it('opens the note the first click picked, though its flight took it from under the pointer', () => {
+    const { h, model } = restingNetwork();
+    const { a, selected, opened } = doubleClickInFlight(h, model, (x, y) => h.click(x, y));
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked under reduced motion, where the camera cuts', () => {
+    const { h, model } = restingNetwork(twoVaults(), { reduceMotion: true });
+    const { a, selected, opened } = doubleClickInFlight(h, model, (x, y) => h.click(x, y));
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked in the brain, where the second press would orbit', () => {
+    const { h, model } = restingBrain();
+    const { a, selected, opened } = doubleClickInFlight(h, model, (x, y) => h.click(x, y));
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+    expect(pinned(model)).toEqual([]);
+  });
+
+  it('opens the note the first tap picked with a double tap', () => {
+    const { h, model } = restingNetwork();
+    const tap = (x: number, y: number) => {
+      h.finger.down(1, x, y);
+      h.finger.up(1, x, y);
+    };
+    const { a, selected, opened } = doubleClickInFlight(h, model, tap);
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('takes a click for the second of a double click only within 500ms and a few px of the first', () => {
+    const { h, c, model } = restingNetwork();
+    const a = loneNote(h, model);
+    c.select(a);
+    h.step(60);
+    // Landed where a flight leaves it: a click on it now flies nowhere, so it stays under the point.
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    h.step(20);
+    expect(Math.hypot(a.sx - x, a.sy - y)).toBeLessThan(1);
+    h.click(x, y);
+    expect(selectedSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    // 512ms after the first: a click of its own.
+    h.step(12);
+    h.click(x, y);
+    expect(selectedSince(h, from)).toEqual([
+      `onSelection note ${a.id}`,
+      `onSelection note ${a.id}`,
+    ]);
+    // At once, but 40px or more away: a click of its own too.
+    const [b] = reachable(h, model)
+      .filter((n) => n !== a && Math.hypot(n.sx - x, n.sy - y) >= 40)
+      .sort((p, q) => Math.hypot(p.sx - x, p.sy - y) - Math.hypot(q.sx - x, q.sy - y));
+    expect(b).toBeDefined();
+    h.click(b!.sx, b!.sy);
+    expect(selectedSince(h, from)).toEqual([
+      `onSelection note ${a.id}`,
+      `onSelection note ${a.id}`,
+      `onSelection note ${b!.id}`,
+    ]);
+  });
+
+  it('clears and zooms to a country once for a double click on land, and opens nothing', () => {
+    const run = (double: boolean) => {
+      const h = harness(GraphController);
+      h.controller.initView('territories');
+      h.controller.setModel(twoVaults(), 'init');
+      h.step(400);
+      const spot = countryUnderPointer(h);
+      expect(spot).not.toBeNull();
+      const { x, y } = spot!;
+      const from = h.events.length;
+      const start = renders().length;
+      h.click(x, y);
+      h.step(10);
+      if (double) {
+        h.click(x, y);
+        h.doubleClick(x, y);
+      }
+      h.step(60);
+      const frames = renders().slice(start);
+      return { events: eventsSince(h, from), cams: frames.map((f) => f.cam) };
+    };
+    const once = run(false);
+    expect(once.events.filter((e) => e.startsWith('onSelection'))).toEqual(['onSelection null']);
+    expect(once.cams.at(-1)!.dist).toBeLessThan(once.cams[0]!.dist);
+    const twice = run(true);
+    expect(twice.events).toEqual(once.events);
+    expect(twice.cams).toEqual(once.cams);
+  });
+
+  it('zooms in once for a double tap between two notes, and selects and opens nothing', () => {
+    const { h, c, model } = restingNetwork(linkedPair());
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    // Zoomed out until the two are about a fingertip apart.
+    for (let i = 0; i < 60 && Math.hypot(a.sx - b.sx, a.sy - b.sy) > 14; i++) {
+      c.zoom(0.85);
+      h.step(1);
+    }
+    expect(Math.hypot(a.sx - b.sx, a.sy - b.sy)).toBeLessThanOrEqual(14);
+    const before = lastCam();
+    const from = h.events.length;
+    const mx = (a.sx + b.sx) / 2;
+    const my = (a.sy + b.sy) / 2;
+    h.finger.down(1, mx, my);
+    h.finger.up(1, mx, my);
+    h.step(5);
+    h.finger.down(1, mx, my);
+    h.finger.up(1, mx, my);
+    h.doubleClick(mx, my);
+    h.step(1);
+    expect(lastCam().dist).toBeCloseTo(before.dist / 2, 6);
+    expect(
+      eventsSince(h, from).filter((e) => e.startsWith('onSelection') || e.startsWith('onOpen')),
+    ).toEqual([]);
+  });
+});
