@@ -570,7 +570,7 @@ export function GraphView({
             id="sentinel"
             isDisabled={!webgl}
             className={cn(
-              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none touch:min-h-11',
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none touch:min-h-11 max-sm:[&>svg]:hidden',
               'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
               'selected:bg-accent/15 selected:text-fg-primary selected:ring-1 selected:ring-inset selected:ring-accent/35',
             )}
@@ -584,7 +584,7 @@ export function GraphView({
               id={v.id}
               isDisabled={v.id === 'brain' && !webgl}
               className={cn(
-                'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none touch:min-h-11',
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none touch:min-h-11 max-sm:[&>svg]:hidden',
                 'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
                 'selected:bg-accent/15 selected:text-fg-primary selected:ring-1 selected:ring-inset selected:ring-accent/35',
               )}
@@ -699,7 +699,8 @@ export function GraphView({
         aria-live="polite"
         className={cn(
           GLASS,
-          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary',
+          // On a phone the toolbar's 44px rows reach further down: the chip waits under them.
+          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary max-md:touch:top-48',
         )}
       />
 
@@ -863,7 +864,8 @@ export function GraphView({
 
       <div
         data-graph-chrome="children"
-        className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[6.5rem]"
+        // On a phone, beside the toolbar's last row: one row lower where the rows are 44px.
+        className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[6.5rem] max-md:touch:top-[7.75rem]"
       >
         <canvas
           ref={minimapRef}

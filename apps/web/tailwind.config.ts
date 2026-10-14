@@ -75,8 +75,8 @@ const config: Config = {
   },
   plugins: [
     reactAriaPlugin(),
-    // `touch:` styles a screen pointed at with a finger: a control there needs a 44px target
-    // (WCAG 2.5.5), where with a mouse it can stay compact.
+    // `touch:` styles a screen pointed at with a finger: a control there gets a 44px target
+    // (WCAG 2.5.5, the AAA level; AA asks for 24px), where with a mouse it can stay compact.
     plugin(({ addVariant }) => addVariant('touch', '@media (pointer: coarse)')),
   ],
 };

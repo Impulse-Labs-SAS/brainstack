@@ -421,13 +421,20 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
   const pointer = (
     x: number,
     y: number,
-    o: { shift?: boolean; button?: number; deltaY?: number; id?: number; touch?: boolean } = {},
+    o: {
+      shift?: boolean;
+      button?: number;
+      deltaY?: number;
+      id?: number;
+      touch?: boolean;
+      primary?: boolean;
+    } = {},
   ) =>
     ({
       clientX: x,
       clientY: y,
       pointerId: o.id ?? 1,
-      ...(o.touch ? { pointerType: 'touch' } : {}),
+      ...(o.touch ? { pointerType: 'touch', isPrimary: !!o.primary } : {}),
       button: o.button ?? 0,
       shiftKey: !!o.shift,
       deltaY: o.deltaY ?? 0,
@@ -435,6 +442,8 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
     }) as unknown as PointerEvent & WheelEvent;
 
   const c = controller;
+  /** Fingers on the glass, by pointer id. */
+  const fingers = new Set<number>();
   return {
     controller: c,
     tape,
@@ -474,11 +483,23 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
       c.pointerDown(pointer(x, y, o));
       c.pointerUp(pointer(x, y, o));
     },
-    /** A finger, by its pointer id: down, moved, lifted. */
+    /**
+     * A finger, by its pointer id: down, moved, lifted. The first finger on the glass is the
+     * primary one, as a browser says; `primary` overrides it, for a finger whose lifting the
+     * page never heard of.
+     */
     finger: {
-      down: (id: number, x: number, y: number) => c.pointerDown(pointer(x, y, { id, touch: true })),
+      down: (id: number, x: number, y: number, primary = fingers.size === 0) => {
+        fingers.add(id);
+        c.pointerDown(pointer(x, y, { id, touch: true, primary }));
+      },
       move: (id: number, x: number, y: number) => c.pointerMove(pointer(x, y, { id, touch: true })),
-      up: (id: number, x: number, y: number) => c.pointerUp(pointer(x, y, { id, touch: true })),
+      up: (id: number, x: number, y: number) => {
+        fingers.delete(id);
+        c.pointerUp(pointer(x, y, { id, touch: true }));
+      },
+      /** The finger left the glass, but the page was not told. */
+      lost: (id: number) => fingers.delete(id),
     },
     wheel: (x: number, y: number, deltaY: number) => c.wheel(pointer(x, y, { deltaY })),
     doubleClick: (x: number, y: number) => c.doubleClick(pointer(x, y)),
@@ -1656,10 +1677,97 @@ describe('GraphController on a touch screen', () => {
     h.step(1);
     expect(selectedSince(h, from)).toEqual([]);
     expect(lastCam().dist).toBeCloseTo(before.dist / 2, 6);
+    // A double tap whose first tap zoomed opens nothing, whatever the second lands on.
+    h.doubleClick(mx, my);
+    expect(h.events.filter((e) => e.name === 'onOpen')).toEqual([]);
 
     // Right on one of them, it is that one.
     h.finger.down(1, a.sx, a.sy);
     h.finger.up(1, a.sx, a.sy);
     expect(selectedSince(h, from)).toEqual([`onSelection note ${a.id}`]);
   });
+
+  it('picks the nearer of two notes once the zoom can go no further in', () => {
+    const { h, c, model } = restingNetwork(linkedPair());
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    for (let i = 0; i < 40; i++) c.zoom(1.25);
+    h.step(1);
+    // The two a pixel or so apart in the world, under the middle of the stage.
+    const cam = lastCam();
+    Object.assign(a, { x: cam.tx - 0.5, y: cam.ty });
+    Object.assign(b, { x: cam.tx + 0.5, y: cam.ty });
+    h.step(1);
+    expect(Math.hypot(a.sx - b.sx, a.sy - b.sy)).toBeLessThan(AMBIGUOUS_GAP_PX);
+    const before = lastCam().dist;
+    const from = h.events.length;
+    h.finger.down(1, (a.sx + b.sx) / 2, a.sy);
+    h.finger.up(1, (a.sx + b.sx) / 2, a.sy);
+    expect(selectedSince(h, from)).toHaveLength(1);
+    h.step(1);
+    expect(lastCam().dist).toBeLessThanOrEqual(before);
+  });
+
+  it('forgets a finger whose lifting never arrived, so the next touch is a tap, not a pinch', () => {
+    const { h, model } = restingNetwork();
+    const n = loneNote(h, model);
+    // Down, then an app switch: the page never hears it lift.
+    h.finger.down(1, 100, 100);
+    h.finger.lost(1);
+    const from = h.events.length;
+    h.finger.down(2, n.sx, n.sy);
+    h.finger.up(2, n.sx, n.sy);
+    expect(selectedSince(h, from)).toEqual([`onSelection note ${n.id}`]);
+  });
+
+  it('goes on pinching between the two fingers left when one of three lifts, without a jump', () => {
+    const { h } = restingNetwork();
+    h.finger.down(1, 200, 300);
+    h.finger.down(2, 400, 300);
+    h.finger.down(3, 700, 300);
+    h.step(1);
+    h.finger.up(1, 200, 300);
+    h.step(1);
+    const before = lastCam();
+    h.finger.move(2, 400, 300);
+    h.step(1);
+    expectCam(lastCam(), before);
+    // Spread from 300px to 450px apart.
+    h.finger.move(3, 850, 300);
+    h.step(1);
+    expect(lastCam().dist).toBeCloseTo(before.dist / 1.5, 6);
+  });
+
+  it('lets no finger turn a stage that holds its camera, before or after a pinch', () => {
+    const { h } = restingBrain();
+    const { stage } = staged(h, true);
+    h.step(1);
+    const held = stage.rendered.at(-1)!.cam;
+    h.finger.down(1, 300, 300);
+    h.finger.down(2, 500, 300);
+    h.finger.up(2, 500, 300);
+    for (let i = 1; i <= 5; i++) {
+      h.finger.move(1, 300 + i * 20, 300 + i * 10);
+      h.step(1);
+    }
+    h.finger.up(1, 400, 350);
+    expect(stage.rendered.at(-1)!.cam).toEqual(held);
+  });
+
+  it('opens with a double tap what a finger could tap, and with a double click only what a mouse could', () => {
+    const { h, model } = restingNetwork();
+    const n = loneNote(h, model);
+    const opened = () =>
+      h.events.filter((e) => e.name === 'onOpen').map((e) => (e.args[0] as GraphNode).id);
+    h.finger.down(1, n.sx + 18, n.sy);
+    h.finger.up(1, n.sx + 18, n.sy);
+    h.doubleClick(n.sx + 18, n.sy);
+    expect(opened()).toEqual([n.id]);
+    // A mouse pressed elsewhere: its double click 18px off the note is a miss.
+    h.click(n.sx + 200, n.sy + 200);
+    h.doubleClick(n.sx + 18, n.sy);
+    expect(opened()).toEqual([n.id]);
+  });
 });
+
+/** Two notes closer than this on screen are within the ambiguous margin of a tap between them. */
+const AMBIGUOUS_GAP_PX = 16;

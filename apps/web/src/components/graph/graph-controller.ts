@@ -174,6 +174,8 @@ const TOUCH_RADIUS = 22;
 const AMBIGUOUS_PX = 8;
 /** How much an ambiguous tap zooms in, so the two notes it fell between come apart. */
 const AMBIGUOUS_ZOOM = 2;
+/** Two taps this close in time are one double tap. */
+const DOUBLE_TAP_MS = 500;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
 const PREVIEW_OFFSET = 160;
 const SPIN_PER_MS = 0.00008;
@@ -253,9 +255,13 @@ export class GraphController {
 
   private drag: Drag | null = null;
   /** The pointers down on the overlay, where they are now: a second one turns a drag into a pinch. */
-  private readonly pointers = new Map<number, { x: number; y: number }>();
+  private readonly pointers = new Map<number, { x: number; y: number; type: string }>();
   /** Two fingers down: how far apart and where between them at the last move. */
   private pinch: { dist: number; cx: number; cy: number } | null = null;
+  /** The last press was a finger: a double tap then opens what a finger could tap. */
+  private lastTouch = false;
+  /** When a tap last zoomed in between two notes, rather than pick one: the double tap it began opens nothing. */
+  private tapZoomedAt = -Infinity;
   private raf = 0;
   private lastFrame = 0;
   private frameNo = 0;
@@ -641,7 +647,11 @@ export class GraphController {
     const model = this.model;
     if (!model) return;
     const { x, y } = this.local(e);
-    this.pointers.set(e.pointerId, { x, y });
+    // A primary pointer is the first of its kind down. Any of its kind still recorded is a ghost
+    // whose lifting never reached the page (an app switch, a system gesture): left, it would
+    // turn the next touch into a pinch with a finger that is not there.
+    if (e.isPrimary) this.forgetPointers(e.pointerType);
+    this.pointers.set(e.pointerId, { x, y, type: e.pointerType });
     // A second finger: the drag the first one began becomes a pinch. A third does nothing.
     if (this.pointers.size === 2) {
       this.startPinch(e);
@@ -652,8 +662,13 @@ export class GraphController {
       this.stageDown(e, this.staged);
       return;
     }
-    this.el.overlay.setPointerCapture(e.pointerId);
+    try {
+      this.el.overlay.setPointerCapture(e.pointerId);
+    } catch {
+      // a pointer the browser no longer tracks cannot be captured; the drag works without it
+    }
     const touch = e.pointerType === 'touch';
+    this.lastTouch = touch;
     const appear = (n: GraphNode) => this.engine.appear(n, performance.now());
     // A finger gets a target a finger can hit, and the benefit of the doubt between two notes
     // only in the flat views: in the brain, notes that look close may lie far apart in depth.
@@ -746,16 +761,20 @@ export class GraphController {
   }
 
   pointerUp(e: PointerEvent, cancelled = false): void {
-    this.pointers.delete(e.pointerId);
+    const known = this.pointers.delete(e.pointerId);
     try {
       this.el.overlay.releasePointerCapture(e.pointerId);
     } catch {
       // the pointer was never captured; nothing to release
     }
     if (this.pinch) {
-      if (this.pointers.size < 2) this.endPinch();
+      // Of three fingers one lifted: the pinch goes on between the two left, measured afresh.
+      if (this.pointers.size >= 2) this.pinch = this.pinchSpan();
+      else this.endPinch();
       return;
     }
+    // A pointer that came down before the graph had notes began nothing here to end.
+    if (!known) return;
     const drag = this.drag;
     this.drag = null;
     // Over a stage a drag only turns the camera: no click selects, clears or zooms to anything.
@@ -763,8 +782,8 @@ export class GraphController {
     if (!drag) return;
     const click = drag.travel <= drag.slop && !cancelled;
     if (drag.kind === 'node' && drag.node) this.engine.release(drag.node);
-    if (click && drag.ambiguous) {
-      this.zoomAt(drag.startX, drag.startY, AMBIGUOUS_ZOOM);
+    if (click && drag.ambiguous && this.zoomBetween(drag.startX, drag.startY)) {
+      // Zoomed in between two notes: the next tap can tell them apart.
     } else if (click && drag.node) {
       this.clickNode(drag.node, drag.shift);
     } else if (click && !drag.node && !this.pathPick) {
@@ -802,8 +821,12 @@ export class GraphController {
   doubleClick(e: MouseEvent): void {
     const model = this.model;
     if (!model || this.staged) return;
+    // Its first tap zoomed in between two notes: what lies under the second was not aimed at.
+    if (performance.now() - this.tapZoomedAt < DOUBLE_TAP_MS) return;
     const { x, y } = this.local(e);
-    const node = pickNode(model, x, y, (n) => this.engine.appear(n, performance.now()));
+    const appear = (n: GraphNode) => this.engine.appear(n, performance.now());
+    // A double tap reaches as far as a tap does.
+    const node = pickNearest(model, x, y, appear, this.lastTouch ? TOUCH_RADIUS : 0).node;
     if (node) this.events.onOpen(node);
   }
 
@@ -1324,7 +1347,7 @@ export class GraphController {
   /** A drag over a stage orbits or pans, past the same slop as the graph's; nothing is picked. */
   private stageMove(e: PointerEvent): void {
     const drag = this.drag;
-    if (!drag) return;
+    if (!drag || this.staged?.locked) return;
     const { x, y } = this.local(e);
     const dx = x - drag.lastX;
     const dy = y - drag.lastY;
@@ -1354,15 +1377,7 @@ export class GraphController {
       this.events.onHover(null);
     }
     this.setHotCountry(null);
-    const [a, b] = [...this.pointers.values()] as [
-      { x: number; y: number },
-      { x: number; y: number },
-    ];
-    this.pinch = {
-      dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
-      cx: (a.x + b.x) / 2,
-      cy: (a.y + b.y) / 2,
-    };
+    this.pinch = this.pinchSpan();
     if (this.staged?.locked) return;
     this.setSpin(false);
     this.events.onAngle(null);
@@ -1370,34 +1385,44 @@ export class GraphController {
     this.plugin?.onUserCamera();
   }
 
-  /** The fingers moved: zoom by how much they spread, under the point between them, and follow it. */
+  /** How far apart the first two pointers down are, and the point between them. Called with two or more down. */
+  private pinchSpan(): { dist: number; cx: number; cy: number } {
+    const down = [...this.pointers.values()];
+    const a = down[0]!;
+    const b = down[1]!;
+    return {
+      dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+    };
+  }
+
+  /**
+   * The fingers moved: zoom by how much they spread, about the point that was between them,
+   * then carry that point to where it is between them now.
+   */
   private pinchMove(): void {
     const pinch = this.pinch;
     if (!pinch || this.pointers.size < 2) return;
-    const [a, b] = [...this.pointers.values()] as [
-      { x: number; y: number },
-      { x: number; y: number },
-    ];
-    const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
-    const cx = (a.x + b.x) / 2;
-    const cy = (a.y + b.y) / 2;
-    this.pinch = { dist, cx, cy };
+    const now = this.pinchSpan();
+    this.pinch = now;
     const stage = this.staged;
     if (stage?.locked) return;
-    if (stage) this.zoomStage(stage, dist / pinch.dist);
-    else this.zoomAt(cx, cy, dist / pinch.dist);
-    this.cam = panBy(this.cam, this.vp, cx - pinch.cx, cy - pinch.cy);
+    if (stage) this.zoomStage(stage, now.dist / pinch.dist);
+    else this.zoomAt(pinch.cx, pinch.cy, now.dist / pinch.dist);
+    this.cam = panBy(this.cam, this.vp, now.cx - pinch.cx, now.cy - pinch.cy);
     this.userMoved = true;
   }
 
   /**
    * One of the two fingers lifted. The other, still down, moves the view from where it is —
-   * orbiting the brain and the stage, panning the flat views — and its lifting is no tap.
+   * orbiting the brain and the stage, panning the flat views — and its lifting is no tap. Over
+   * a stage that holds its camera it moves nothing, as no drag would there.
    */
   private endPinch(): void {
     this.pinch = null;
     const rest = [...this.pointers.values()][0];
-    if (!rest) return;
+    if (!rest || this.staged?.locked) return;
     this.drag = {
       kind: this.engine.is3D || this.staged ? 'orbit' : 'pan',
       node: null,
@@ -1411,6 +1436,32 @@ export class GraphController {
       slop: TAP_SLOP,
       ambiguous: false,
     };
+  }
+
+  /** Forget every pointer of `type` still recorded, and whatever drag or pinch they made. */
+  private forgetPointers(type: string): void {
+    let forgot = false;
+    for (const [id, p] of this.pointers) {
+      if (p.type !== type) continue;
+      this.pointers.delete(id);
+      forgot = true;
+    }
+    if (!forgot) return;
+    this.pinch = null;
+    if (this.drag?.kind === 'node' && this.drag.node) this.engine.release(this.drag.node);
+    this.drag = null;
+  }
+
+  /**
+   * An ambiguous tap zooms in about where it fell, so the notes it fell between come apart.
+   * False when the zoom is already as far in as it goes: then the tap picks the nearer note.
+   */
+  private zoomBetween(x: number, y: number): boolean {
+    const before = this.cam.dist;
+    this.zoomAt(x, y, AMBIGUOUS_ZOOM);
+    if (this.cam.dist === before) return false;
+    this.tapZoomedAt = performance.now();
+    return true;
   }
 
   /** Orbit zoom between the stage's limits: it is not a flat map to zoom under the pointer. */
