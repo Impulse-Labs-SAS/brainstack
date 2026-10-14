@@ -570,7 +570,7 @@ export function GraphView({
             id="sentinel"
             isDisabled={!webgl}
             className={cn(
-              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none touch:min-h-11',
               'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
               'selected:bg-accent/15 selected:text-fg-primary selected:ring-1 selected:ring-inset selected:ring-accent/35',
             )}
@@ -584,7 +584,7 @@ export function GraphView({
               id={v.id}
               isDisabled={v.id === 'brain' && !webgl}
               className={cn(
-                'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none',
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-secondary outline-none touch:min-h-11',
                 'hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
                 'selected:bg-accent/15 selected:text-fg-primary selected:ring-1 selected:ring-inset selected:ring-accent/35',
               )}
@@ -633,7 +633,7 @@ export function GraphView({
             isDisabled={!model?.nodes.length}
             className={cn(
               GLASS,
-              'pointer-events-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-fg-primary outline-none',
+              'pointer-events-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-fg-primary outline-none touch:h-11',
               'hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
             )}
           >
@@ -893,7 +893,7 @@ export function GraphView({
                 key={a}
                 isSelected={angle === a}
                 onChange={() => c()?.setAngle(a)}
-                className="rounded-md px-2 py-1 text-xs capitalize text-fg-secondary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 selected:bg-bg-elevated selected:text-fg-primary"
+                className="rounded-md px-2 py-1 text-xs capitalize text-fg-secondary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 selected:bg-bg-elevated selected:text-fg-primary touch:min-h-11"
               >
                 {a}
               </ToggleButton>
@@ -902,7 +902,7 @@ export function GraphView({
               <ToggleButton
                 isSelected={spinning}
                 onChange={(on) => c()?.setSpin(on)}
-                className="rounded-md px-2 py-1 text-xs text-fg-secondary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 selected:bg-bg-elevated selected:text-fg-primary"
+                className="rounded-md px-2 py-1 text-xs text-fg-secondary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 selected:bg-bg-elevated selected:text-fg-primary touch:min-h-11"
               >
                 Spin
               </ToggleButton>
@@ -1025,7 +1025,7 @@ function ZoomButton({
     <Button
       aria-label={label}
       onPress={onPress}
-      className="h-[26px] min-w-[26px] rounded-md border border-border-subtle bg-bg-elevated px-1.5 text-fg-secondary outline-none hover:border-border-strong hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="h-[26px] min-w-[26px] rounded-md border border-border-subtle bg-bg-elevated px-1.5 text-fg-secondary outline-none hover:border-border-strong hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:h-11 touch:min-w-11"
     >
       {children}
     </Button>

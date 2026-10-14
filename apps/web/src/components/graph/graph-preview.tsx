@@ -91,7 +91,7 @@ function Header({ children, onClose }: { children: ReactNode; onClose(): void })
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-fg-secondary">{children}</span>
-      <AriaButton onPress={onClose} aria-label="Close preview" className="rounded p-1 text-fg-muted outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40">
+      <AriaButton onPress={onClose} aria-label="Close preview" className="rounded p-1 text-fg-muted outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:flex touch:h-11 touch:w-11 touch:items-center touch:justify-center">
         <X size={14} />
       </AriaButton>
     </div>
@@ -155,7 +155,7 @@ function NodeBody({
           <li key={`${other.id}:${edge.kind}`}>
             <AriaButton
               onPress={() => onSelect(other)}
-              className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
             >
               <KindGlyph kind={edge.kind} />
               <span className="min-w-0 flex-1 truncate text-fg-primary">{other.label}</span>
@@ -170,11 +170,11 @@ function NodeBody({
       {neighbours.length > MAX_LISTED && <p className="pl-1.5 text-xs text-fg-tertiary">and {neighbours.length - MAX_LISTED} more</p>}
       <div className="flex flex-wrap gap-1.5">
         {!topic && (
-          <Button intent="primary" size="sm" onPress={() => onOpen(node)}>
+          <Button intent="primary" size="sm" className="touch:h-11" onPress={() => onOpen(node)}>
             Open note <Kbd className="h-4 border-white/25 bg-white/15 text-white">↵</Kbd>
           </Button>
         )}
-        <Button size="sm" onPress={() => onPathFrom(node)}>
+        <Button size="sm" className="touch:h-11" onPress={() => onPathFrom(node)}>
           Path from here
         </Button>
       </div>
@@ -214,7 +214,7 @@ function PathBody({
               )}
               <AriaButton
                 onPress={() => onSelect(node)}
-                className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
               >
                 <Swatch color={colorOf(model, node).hue} />
                 <span className="min-w-0 flex-1 truncate text-fg-primary">{node.label}</span>
