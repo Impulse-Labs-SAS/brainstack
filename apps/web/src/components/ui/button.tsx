@@ -17,9 +17,10 @@ const button = tv({
   ),
   variants: {
     intent: {
+      // The solid accent: white on it reads at 4.5:1 or more, hovered too.
       primary: cn(
-        'bg-accent border-accent text-accent-fg',
-        'hover:bg-accent-hover hover:border-accent-hover',
+        'bg-accent-solid border-accent-solid text-accent-fg',
+        'hover:bg-accent-solid-hover hover:border-accent-solid-hover',
       ),
       secondary: cn(
         'bg-bg-elevated border-border text-fg-primary',

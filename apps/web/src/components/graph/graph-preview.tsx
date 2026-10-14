@@ -15,15 +15,14 @@ import { cn } from '@/lib/utils';
 
 import type { Selection } from './graph-controller';
 
-export const GLASS = 'border border-border-subtle bg-[rgba(17,17,17,0.86)] backdrop-blur-md';
+export const GLASS = 'glass border border-border-subtle backdrop-blur-md';
 /**
  * The controls that float over the graph's canvas — the views, zoom, the
  * replay — as glass the scene shows through: a lighter tint, a deeper blur
  * that keeps the colour behind it, a lit top edge and a soft drop shadow, so
  * they sit in the space rather than on top of it as flat panels.
  */
-export const FLOAT_GLASS =
-  'border border-white/[0.07] bg-[linear-gradient(180deg,rgba(28,30,46,0.6),rgba(10,11,18,0.6))] backdrop-blur-xl backdrop-saturate-150 shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_10px_30px_rgba(0,0,0,0.45)]';
+export const FLOAT_GLASS = 'float-glass border backdrop-blur-xl backdrop-saturate-150';
 
 const KIND_LABEL: Record<EdgeKind, string> = { link: 'link', structure: 'index', affinity: 'shared topic', topic: 'topic' };
 const KIND_RANK: Record<EdgeKind, number> = { link: 0, structure: 1, topic: 2, affinity: 3 };
@@ -133,7 +132,7 @@ function NodeBody({
         <p className="text-xs text-fg-secondary">Carried by {node.carriers} notes in your vault</p>
       ) : (
         <>
-          <p className="break-all font-mono text-[11px] text-fg-muted">{node.path}</p>
+          <p className="break-all font-mono text-[11px] text-fg-tertiary">{node.path}</p>
           <p className="text-xs text-fg-secondary">
             Created {dateFormat.format(node.createdAt)} · {edited(node.updatedAt)}
           </p>
@@ -148,7 +147,7 @@ function NodeBody({
           )}
         </>
       )}
-      <div className="border-t border-border-subtle pt-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted">
+      <div className="border-t border-border-subtle pt-2 font-mono text-[11px] uppercase tracking-wider text-fg-tertiary">
         {topic ? 'Notes' : 'Connections'} <span className="text-fg-secondary">{neighbours.length}</span>
       </div>
       <ul className="grid gap-px">
@@ -160,7 +159,7 @@ function NodeBody({
             >
               <KindGlyph kind={edge.kind} />
               <span className="min-w-0 flex-1 truncate text-fg-primary">{other.label}</span>
-              <span className="shrink-0 text-[11px] text-fg-muted">
+              <span className="shrink-0 text-[11px] text-fg-tertiary">
                 {KIND_LABEL[edge.kind]}
                 {other.vault !== node.vault ? ` · ${model.vaults.find((v) => v.id === other.vault)?.label ?? ''}` : ''}
               </span>
@@ -168,7 +167,7 @@ function NodeBody({
           </li>
         ))}
       </ul>
-      {neighbours.length > MAX_LISTED && <p className="pl-1.5 text-xs text-fg-muted">and {neighbours.length - MAX_LISTED} more</p>}
+      {neighbours.length > MAX_LISTED && <p className="pl-1.5 text-xs text-fg-tertiary">and {neighbours.length - MAX_LISTED} more</p>}
       <div className="flex flex-wrap gap-1.5">
         {!topic && (
           <Button intent="primary" size="sm" onPress={() => onOpen(node)}>
@@ -179,7 +178,7 @@ function NodeBody({
           Path from here
         </Button>
       </div>
-      <p className="text-[11px] text-fg-muted">Arrows walk its links · Esc closes</p>
+      <p className="text-[11px] text-fg-tertiary">Arrows walk its links · Esc closes</p>
     </>
   );
 }
@@ -208,7 +207,7 @@ function PathBody({
           return (
             <li key={node.id}>
               {edge && (
-                <span className="block pl-6 font-mono text-[10.5px] text-fg-muted">
+                <span className="block pl-6 font-mono text-[11px] text-fg-tertiary">
                   {KIND_LABEL[edge.kind]}
                   {edge.shared.length ? `: ${edge.shared.slice(0, 2).join(', ')}` : ''}
                 </span>
@@ -219,13 +218,13 @@ function PathBody({
               >
                 <Swatch color={colorOf(model, node).hue} />
                 <span className="min-w-0 flex-1 truncate text-fg-primary">{node.label}</span>
-                <span className="shrink-0 text-[11px] text-fg-muted">{node.kind === 'topic' ? 'topic' : node.project?.label}</span>
+                <span className="shrink-0 text-[11px] text-fg-tertiary">{node.kind === 'topic' ? 'topic' : node.project?.label}</span>
               </AriaButton>
             </li>
           );
         })}
       </ol>
-      <p className="text-[11px] text-fg-muted">
+      <p className="text-[11px] text-fg-tertiary">
         {path.implicit ? 'Goes through a shared topic somewhere: nobody linked the whole way.' : 'Only links people wrote.'} Shift+click
         another note for another path.
       </p>

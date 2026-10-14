@@ -60,7 +60,7 @@ export function Row({
               {on && <Check size={10} strokeWidth={3} />}
             </span>
             {glyph}
-            <span className={cn('min-w-0 flex-1 truncate', on && !isDisabled ? 'text-fg-primary' : 'text-fg-muted')}>{children}</span>
+            <span className={cn('min-w-0 flex-1 truncate', on && !isDisabled ? 'text-fg-primary' : isDisabled ? 'text-fg-muted' : 'text-fg-tertiary')}>{children}</span>
           </>
         )}
       </Checkbox>
@@ -70,7 +70,7 @@ export function Row({
 }
 
 export const Heading = ({ children }: { children: ReactNode }) => (
-  <div className="px-1.5 pb-1 pt-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-muted first:pt-0.5">{children}</div>
+  <div className="px-1.5 pb-1 pt-2 font-mono text-[11px] uppercase tracking-wider text-fg-tertiary first:pt-0.5">{children}</div>
 );
 
 export function GraphLayersMenu({ model, layers, onChange, view, includeShared, onIncludeSharedChange }: GraphLayersMenuProps) {
@@ -131,11 +131,11 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
                 glyph={<span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: v.color.hue, boxShadow: `0 0 6px ${v.color.hue}` }} />}
                 trailing={
                   <>
-                    <span className="font-mono text-[11px] text-fg-muted">{v.hidden ? v.total : (shown.get(v.id) ?? 0)}</span>
+                    <span className="font-mono text-[11px] text-fg-tertiary">{v.hidden ? v.total : (shown.get(v.id) ?? 0)}</span>
                     {model.vaults.length > 1 && (
                       <Button
                         onPress={() => solo(v.id)}
-                        className="rounded px-1 text-[11px] text-fg-muted outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40"
+                        className="rounded px-1 text-[11px] text-fg-tertiary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40"
                       >
                         {alone ? 'all' : 'only'}
                       </Button>
@@ -148,7 +148,7 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
                 </span>
                 {/* Who shared it, as the file tree shows it: the menu is too narrow for both on one line. */}
                 {v.owner && (
-                  <span className="block truncate font-mono text-[10px] text-fg-muted" title={`Shared by ${v.owner}`}>
+                  <span className="block truncate font-mono text-[11px] text-fg-tertiary" title={`Shared by ${v.owner}`}>
                     @{v.owner}
                   </span>
                 )}

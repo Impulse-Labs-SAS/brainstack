@@ -142,10 +142,10 @@ export function GraphSearch({ model, query, onQueryChange, filters, onFiltersCha
               onPreview(null);
             }}
             onKeyDown={onKeyDown}
-            className="w-28 bg-transparent text-sm text-fg-primary outline-none placeholder:text-fg-muted md:w-44"
+            className="w-28 bg-transparent text-sm text-fg-primary outline-none placeholder:text-fg-tertiary md:w-44"
           />
           {matches !== null && (
-            <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-fg-muted" aria-hidden>
+            <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-fg-tertiary" aria-hidden>
               {count === 0 ? 'none' : index >= 0 ? `${index + 1}/${count}` : count}
             </span>
           )}
@@ -235,7 +235,7 @@ function Results({
       className={cn(GLASS, 'absolute left-0 top-full z-30 mt-1.5 flex max-h-[min(440px,60vh)] w-[min(360px,calc(100vw-1.5rem))] flex-col rounded-lg text-sm shadow-2xl')}
     >
       <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
-        <span className="flex-1 font-mono text-[11px] uppercase tracking-wider text-fg-muted">
+        <span className="flex-1 font-mono text-[11px] uppercase tracking-wider text-fg-tertiary">
           {matches.length} {matches.length === 1 ? 'result' : 'results'}
         </span>
         {matches.length > 1 && (
@@ -253,7 +253,7 @@ function Results({
         <div className="grid gap-2 px-3 py-4 text-fg-secondary">
           <span>No notes match{filtering ? ' with these filters' : ''}.</span>
           {filtering && (
-            <Button onPress={onClearFilters} preventFocusOnPress className={cn('justify-self-start rounded text-xs text-accent hover:underline', FOCUS_RING)}>
+            <Button onPress={onClearFilters} preventFocusOnPress className={cn('justify-self-start rounded text-xs text-accent-text hover:underline', FOCUS_RING)}>
               Clear filters
             </Button>
           )}
@@ -275,14 +275,14 @@ function Results({
                 <span className="truncate text-fg-primary">
                   <Highlighted text={n.label} query={query} />
                 </span>
-                <span className="truncate font-mono text-[11px] text-fg-muted">
+                <span className="truncate font-mono text-[11px] text-fg-tertiary">
                   {n.kind === 'topic' ? `topic · ${n.carriers} notes` : `${n.project?.label ?? ''} · ${edited(n.updatedAt)}`}
                 </span>
               </span>
             </li>
           ))}
           {matches.length > LISTED && (
-            <li role="presentation" className="px-2 py-1.5 text-xs text-fg-muted">
+            <li role="presentation" className="px-2 py-1.5 text-xs text-fg-tertiary">
               {matches.length - LISTED} more in the graph. Add a word or a filter to narrow it.
             </li>
           )}
@@ -345,7 +345,7 @@ function FiltersMenu({ model, filters, onChange }: { model: GraphModel; filters:
         <SlidersHorizontal size={14} aria-hidden />
         <span className="max-md:sr-only">Filters</span>
         {active > 0 && (
-          <span aria-label={`(${active} active)`} className="min-w-[18px] rounded-full bg-accent px-1 text-center font-mono text-[10.5px] leading-[18px] text-accent-fg">
+          <span aria-label={`(${active} active)`} className="min-w-[18px] rounded-full bg-accent-solid px-1 text-center font-mono text-[11px] leading-[18px] text-accent-fg">
             {active}
           </span>
         )}
@@ -475,7 +475,7 @@ function OptionList({ title, options, selected, onChange }: { title: string; opt
           placeholder={`Find ${title.toLowerCase()}…`}
           value={find}
           onChange={(e) => setFind(e.target.value)}
-          className="mx-1.5 mb-1 w-[calc(100%-0.75rem)] rounded border border-border-subtle bg-transparent px-2 py-1 text-xs text-fg-primary outline-none placeholder:text-fg-muted focus:border-border-strong"
+          className="mx-1.5 mb-1 w-[calc(100%-0.75rem)] rounded border border-border-subtle bg-transparent px-2 py-1 text-xs text-fg-primary outline-none placeholder:text-fg-tertiary focus:border-border-strong"
         />
       )}
       {/* `relative` keeps each checkbox's visually hidden input inside this
@@ -489,12 +489,12 @@ function OptionList({ title, options, selected, onChange }: { title: string; opt
             isSelected={selected.includes(o.id)}
             onChange={(on) => onChange(on ? [...selected, o.id] : selected.filter((id) => id !== o.id))}
             glyph={null}
-            trailing={<span className="font-mono text-[11px] text-fg-muted">{o.count}</span>}
+            trailing={<span className="font-mono text-[11px] text-fg-tertiary">{o.count}</span>}
           >
             {o.label}
           </Row>
         ))}
-        {!shown.length && <p className="px-1.5 py-1 text-xs text-fg-muted">Nothing matches.</p>}
+        {!shown.length && <p className="px-1.5 py-1 text-xs text-fg-tertiary">Nothing matches.</p>}
       </div>
     </>
   );

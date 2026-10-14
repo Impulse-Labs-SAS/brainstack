@@ -976,7 +976,7 @@ function Tooltip({ node, vaultLabel }: { node: GraphNode; vaultLabel: string }) 
       <span className="text-fg-secondary">
         {node.isIndex ? 'Project index' : node.project?.label} · {vaultLabel}
       </span>
-      <span className="font-mono text-[11px] text-fg-muted">
+      <span className="font-mono text-[11px] text-fg-tertiary">
         {edited(node.updatedAt)} · {node.degree} connections
       </span>
     </>
@@ -993,7 +993,7 @@ function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultL
           ` · ${country.folders} ${country.folders === 1 ? 'folder' : 'folders'}`}{' '}
         · {vaultLabel}
       </span>
-      <span className="font-mono text-[11px] text-fg-muted">
+      <span className="font-mono text-[11px] text-fg-tertiary">
         {country.routes} {country.routes === 1 ? 'route' : 'routes'} to other projects · click to
         zoom in
       </span>
