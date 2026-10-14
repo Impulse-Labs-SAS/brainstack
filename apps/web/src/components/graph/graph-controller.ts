@@ -112,7 +112,13 @@ export interface PluginFrame {
   settled: boolean;
 }
 
-export type Selection = { kind: 'note'; node: GraphNode } | { kind: 'path'; path: GraphPath };
+/** A note or a path: what is selected, and what Back remembers. */
+type Picked = { kind: 'note'; node: GraphNode } | { kind: 'path'; path: GraphPath };
+
+export type Selection = Picked & {
+  /** What Back returns to, by name: a note's label, a path's two ends. Absent with none. */
+  back?: string;
+};
 
 /** Territories: the country under the pointer, for its tooltip. */
 export interface CountryHover {
@@ -170,6 +176,9 @@ type Click = { node: GraphNode | null; x: number; y: number; at: number; type: s
 
 type Tween = { from: Camera; to: Camera; t0: number; duration: number };
 
+/** A selection Back can return to: the camera it was seen from, and in which view. */
+type TrailStep = { selection: Picked; cam: Camera; view: GraphView };
+
 const CLICK_SLOP = 4;
 /** A finger wobbles more than a mouse: a tap that moved this little is still a tap. */
 const TAP_SLOP = 10;
@@ -183,6 +192,8 @@ const AMBIGUOUS_ZOOM = 2;
 const DOUBLE_TAP_MS = 500;
 /** How near the first click a mouse's second lands, in a double click; a finger's, TOUCH_RADIUS. */
 const REPEAT_PX = 6;
+/** How many selections Back remembers: past that, the oldest goes. */
+const TRAIL_MAX = 50;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
 const PREVIEW_OFFSET = 160;
 const SPIN_PER_MS = 0.00008;
@@ -207,6 +218,17 @@ function easeOutBack(t: number): number {
 }
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
+
+const samePick = (a: Picked, b: Picked) =>
+  a.kind === 'note'
+    ? b.kind === 'note' && a.node === b.node
+    : b.kind === 'path' && a.path === b.path;
+
+/** What the Back button names: a note by its label, a path by its two ends. */
+function pickLabel(p: Picked): string {
+  if (p.kind === 'note') return p.node.label;
+  return `${p.path.nodes[0]!.label} → ${p.path.nodes.at(-1)!.label}`;
+}
 
 export class GraphController {
   readonly webgl: boolean;
@@ -234,6 +256,8 @@ export class GraphController {
   private path: GraphPath | null = null;
   private pathT0 = 0;
   private pathPick = false;
+  /** What was selected before, oldest first: where Back goes, and the camera it was seen from. */
+  private trail: TrailStep[] = [];
   private focus: GraphNode | null = null;
   private focusT0 = 0;
   private hops: Map<GraphNode, number> | null = null;
@@ -445,6 +469,7 @@ export class GraphController {
     this.setHotCountry(null);
     if (this.selected && !keep(this.selected)) this.clearSelection();
     if (this.path && !this.path.nodes.every((n) => model.nodes.includes(n))) this.clearSelection();
+    this.pruneTrail(present);
     this.hover = keep(this.hover);
     this.previewed = keep(this.previewed);
     this.focus = null;
@@ -562,12 +587,13 @@ export class GraphController {
 
   select(node: GraphNode): void {
     if (this.staged) return;
+    this.leave({ kind: 'note', node });
     this.selected = node;
     this.path = null;
     this.pathFrom = null;
     this.pathPick = false;
     this.edgesDirty = true;
-    this.events.onSelection({ kind: 'note', node });
+    this.announce({ kind: 'note', node });
     this.setSpin(false);
     this.flyTo(node);
   }
@@ -578,8 +604,42 @@ export class GraphController {
     this.pathFrom = null;
     this.pathPick = false;
     this.lastClick = null;
+    // Closed, the walk is over: Back starts again from the next selection.
+    this.trail = [];
     this.edgesDirty = true;
     this.events.onSelection(null);
+  }
+
+  /**
+   * Back to what was selected before, seen from where it was; framed afresh when that was in
+   * another view, whose camera fits another layout. False with nothing to go back to, or over a
+   * stage.
+   */
+  back(): boolean {
+    if (this.staged) return false;
+    const step = this.trail.pop();
+    if (!step) return false;
+    const s = step.selection;
+    this.selected = s.kind === 'note' ? s.node : null;
+    this.path = s.kind === 'path' ? s.path : null;
+    // A path keeps the note it was traced from, as it did when it was found.
+    this.pathFrom = s.kind === 'path' ? s.path.nodes[0]! : null;
+    this.pathPick = false;
+    this.pathT0 = performance.now();
+    this.edgesDirty = true;
+    this.announce(s);
+    this.setSpin(false);
+    if (step.view !== this.engine.view) {
+      if (s.kind === 'note') this.flyTo(s.node);
+      else this.framePath(s.path);
+    } else {
+      // Seen from another angle than now: the preset the view shows as chosen no longer holds.
+      const going = this.tween?.to ?? this.cam;
+      if (step.cam.yaw !== going.yaw || step.cam.pitch !== going.pitch) this.events.onAngle(null);
+      this.animateTo({ ...step.cam });
+    }
+    this.userMoved = true;
+    return true;
   }
 
   /** Pick the other end of a path with the next click. */
@@ -867,7 +927,10 @@ export class GraphController {
     if (node) this.events.onOpen(node);
   }
 
-  /** Arrows walk the selected note's links in the direction pressed. Returns whether it handled the key. */
+  /**
+   * Arrows walk the selected note's links in the direction pressed, Backspace goes back along
+   * what was selected, Escape steps out a level at a time. Returns whether it handled the key.
+   */
   keyDown(e: KeyboardEvent): boolean {
     if (this.staged) {
       // Over a stage there is no selection to clear or walk: only the zoom keys.
@@ -876,10 +939,8 @@ export class GraphController {
       else return false;
       return true;
     }
-    if (e.key === 'Escape') {
-      this.clearSelection();
-      return true;
-    }
+    if (e.key === 'Escape') return this.escape();
+    if (e.key === 'Backspace') return this.back();
     if (e.key === '+' || e.key === '=') {
       this.zoom(1.25);
       return true;
@@ -922,6 +983,77 @@ export class GraphController {
 
   // -- Internals -------------------------------------------------------------------
 
+  /**
+   * Escape, one level at a time: a path's other end being picked, then what is selected, then
+   * the camera the user moved, back over the whole graph (the whole map, in Territories). Past
+   * that the key is the page's: false.
+   */
+  private escape(): boolean {
+    if (this.pathPick) {
+      // The pick ends and the note it began from stays: the next click selects, not traces.
+      this.pathPick = false;
+      this.pathFrom = this.path?.nodes[0] ?? null;
+      return true;
+    }
+    if (this.selected || this.path) {
+      this.clearSelection();
+      return true;
+    }
+    if (!this.userMoved) return false;
+    this.fit();
+    return true;
+  }
+
+  /** What is selected now, as the trail keeps it. */
+  private get picked(): Picked | null {
+    if (this.path) return { kind: 'path', path: this.path };
+    return this.selected ? { kind: 'note', node: this.selected } : null;
+  }
+
+  /**
+   * `next` takes the place of what is selected, which goes on the trail with the camera it was
+   * seen from: where its flight was going, if it had not landed. Selecting it again keeps no step.
+   */
+  private leave(next: Picked): void {
+    const now = this.picked;
+    if (!now || samePick(now, next)) return;
+    this.trail.push({
+      selection: now,
+      cam: { ...(this.tween?.to ?? this.cam) },
+      view: this.engine.view,
+    });
+    if (this.trail.length > TRAIL_MAX) this.trail.shift();
+  }
+
+  /** The selection to the view, with what Back would return to while there is anything. */
+  private announce(s: Picked): void {
+    const last = this.trail.at(-1);
+    this.events.onSelection(last ? { ...s, back: pickLabel(last.selection) } : s);
+  }
+
+  /**
+   * Notes left the model: every step they were in goes, and so does a second step to the same
+   * note in a row, or one to what is selected — a Back that would go nowhere. When that changes
+   * what Back names, the view hears it.
+   */
+  private pruneTrail(present: ReadonlySet<GraphNode>): void {
+    if (!this.trail.length) return;
+    const top = this.trail.at(-1);
+    const kept: TrailStep[] = [];
+    for (const step of this.trail) {
+      const s = step.selection;
+      if (!(s.kind === 'note' ? present.has(s.node) : s.path.nodes.every((n) => present.has(n))))
+        continue;
+      // The same note twice running, once what was between them left: the later camera stays.
+      if (kept.length && samePick(kept.at(-1)!.selection, s)) kept.pop();
+      kept.push(step);
+    }
+    const now = this.picked;
+    if (now && kept.length && samePick(kept.at(-1)!.selection, now)) kept.pop();
+    this.trail = kept;
+    if (now && kept.at(-1) !== top) this.announce(now);
+  }
+
   /** The last plain click, when (x, y) is near enough to it in time and place to be its double. */
   private clickNear(x: number, y: number): Click | null {
     const last = this.lastClick;
@@ -937,12 +1069,13 @@ export class GraphController {
       return;
     }
     if (!this.pathFrom || this.path) {
+      this.leave({ kind: 'note', node });
       this.selected = node;
       this.pathFrom = node;
       this.path = null;
       this.pathPick = true;
       this.edgesDirty = true;
-      this.events.onSelection({ kind: 'note', node });
+      this.announce({ kind: 'note', node });
       this.events.onToast('Now Shift+click the note to trace a path to.');
       return;
     }
@@ -953,14 +1086,20 @@ export class GraphController {
       this.events.onToast('No path: those notes are on separate islands.');
       return;
     }
+    this.leave({ kind: 'path', path });
     this.path = path;
     this.pathT0 = performance.now();
     this.selected = null;
     this.edgesDirty = true;
-    this.events.onSelection({ kind: 'path', path });
+    this.announce({ kind: 'path', path });
+    this.framePath(path);
+    this.userMoved = true;
+  }
+
+  /** The whole of a path in view, clear of the preview beside it. */
+  private framePath(path: GraphPath): void {
     const target = { ...this.cam, ...this.fitTarget(path.nodes, 1.4) };
     this.animateTo(this.withPreviewOffset(target));
-    this.userMoved = true;
   }
 
   /** Territories: the project whose land is under the screen point (x, y). */

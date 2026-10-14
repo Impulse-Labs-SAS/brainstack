@@ -29,6 +29,7 @@ import {
   type GraphPlugin,
   type PluginFrame,
   type PluginStage,
+  type Selection,
 } from './graph-controller';
 import type { SceneFrame } from './graph-scene';
 
@@ -1931,5 +1932,281 @@ describe('GraphController on a double click', () => {
     expect(
       eventsSince(h, from).filter((e) => e.startsWith('onSelection') || e.startsWith('onOpen')),
     ).toEqual([]);
+  });
+});
+
+// -- Back and Escape -----------------------------------------------------------------------------
+
+/** What the view was told is selected since `from`, every time it was told. */
+const selections = (h: Harness, from = 0) =>
+  h.events
+    .slice(from)
+    .filter((e) => e.name === 'onSelection')
+    .map((e) => e.args[0] as Selection | null);
+
+/** Notes on screen a click picks for sure: no other within `px`. */
+const loneNotes = (h: Harness, model: GraphModel, px = 20) =>
+  reachable(h, model).filter((a) =>
+    model.nodes.every((b) => b === a || !b.onScreen || Math.hypot(b.sx - a.sx, b.sy - a.sy) > px),
+  );
+
+/** Two notes a click picks for sure, in one project: its links make a path between them. */
+function pathEnds(h: Harness, model: GraphModel): [GraphNode, GraphNode] {
+  const lone = loneNotes(h, model);
+  for (const p of lone) {
+    const q = lone.find((n) => n !== p && n.project?.id === p.project?.id);
+    if (q) return [p, q];
+  }
+  throw new Error('no two lone notes in one project');
+}
+
+describe('GraphController going back', () => {
+  it('goes back to the note before, seen from where it was', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+    const from = h.events.length;
+    c.select(a);
+    h.step(60);
+    const camA = lastCam();
+    // The preview's call, as for a connection in its list.
+    c.select(b);
+    h.step(60);
+    expect(Math.hypot(lastCam().tx - camA.tx, lastCam().ty - camA.ty)).toBeGreaterThan(1);
+    expect(c.back()).toBe(true);
+    h.step(60);
+    expectCam(lastCam(), camA);
+    expect(selectedSince(h, from)).toEqual([
+      `onSelection note ${a.id}`,
+      `onSelection note ${b.id}`,
+      `onSelection note ${a.id}`,
+    ]);
+  });
+
+  it('goes back mid-flight to where the first flight was going, not to where it had got', () => {
+    const land = (back: boolean) => {
+      const { h, c, model } = restingNetwork();
+      const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+      c.select(a);
+      h.step(10);
+      if (back) {
+        c.select(b);
+        h.step(10);
+        expect(c.back()).toBe(true);
+      }
+      h.step(60);
+      return lastCam();
+    };
+    const landed = land(false);
+    expectCam(land(true), landed);
+  });
+
+  it('frames the note afresh when it was left in another view, whose camera fits another layout', () => {
+    const land = (back: boolean) => {
+      const { h, c, model } = restingNetwork();
+      const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+      c.select(a);
+      h.step(60);
+      const camA = lastCam();
+      c.select(b);
+      h.step(60);
+      c.setView('territories');
+      h.step(150);
+      if (back) expect(c.back()).toBe(true);
+      else c.select(a);
+      h.step(60);
+      return { camA, cam: lastCam() };
+    };
+    const selected = land(false);
+    const back = land(true);
+    expectCam(back.cam, selected.cam);
+    expect(Math.hypot(back.cam.tx - back.camA.tx, back.cam.ty - back.camA.ty)).toBeGreaterThan(1);
+  });
+
+  it('goes back from a note to the path it left, and from the path to the note it was traced from', () => {
+    const { h, c, model } = restingNetwork();
+    const [p, q] = pathEnds(h, model);
+    h.click(p.sx, p.sy, { shift: true });
+    h.click(q.sx, q.sy, { shift: true });
+    h.step(60);
+    const camPath = lastCam();
+    const traced = selections(h).at(-1)!;
+    expect(traced).toMatchObject({ kind: 'path', back: p.label });
+    const path = (traced as Extract<Selection, { kind: 'path' }>).path;
+    expect([path.nodes[0], path.nodes.at(-1)]).toEqual([p, q]);
+
+    const b = model.nodes.find((n) => !path.nodes.includes(n))!;
+    c.select(b);
+    expect(selections(h).at(-1)!.back).toBe(`${p.label} → ${q.label}`);
+    h.step(60);
+    expect(c.back()).toBe(true);
+    const restored = selections(h).at(-1)!;
+    expect(restored.kind).toBe('path');
+    expect((restored as Extract<Selection, { kind: 'path' }>).path).toBe(path);
+    expect(restored.back).toBe(p.label);
+    h.step(60);
+    expectCam(lastCam(), camPath);
+
+    expect(c.back()).toBe(true);
+    const first = selections(h).at(-1)!;
+    expect(first.kind).toBe('note');
+    expect((first as Extract<Selection, { kind: 'note' }>).node).toBe(p);
+    expect(first.back).toBeUndefined();
+    expect(c.back()).toBe(false);
+  });
+
+  it('names what Back returns to while there is anything, and keeps no step for the same note again', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    c.select(a);
+    expect(selections(h).at(-1)!.back).toBeUndefined();
+    c.select(b);
+    expect(selections(h).at(-1)!.back).toBe(a.label);
+    c.select(b);
+    expect(selections(h).at(-1)!.back).toBe(a.label);
+    expect(c.back()).toBe(true);
+    expect(selections(h).at(-1)!.back).toBeUndefined();
+    expect(c.back()).toBe(false);
+  });
+
+  it('forgets the way back when the selection closes', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b, d] = model.nodes as [GraphNode, GraphNode, GraphNode];
+    c.select(a);
+    c.select(b);
+    c.clearSelection();
+    expect(c.back()).toBe(false);
+    c.select(d);
+    expect(selections(h).at(-1)!.back).toBeUndefined();
+    expect(c.back()).toBe(false);
+  });
+
+  it('drops what left the model from the way back, and tells the view what Back names now', () => {
+    const run = (again: boolean) => {
+      const cache = new Map<string, GraphNode>();
+      const { h, c, model } = restingNetwork(twoVaults(cache, true));
+      const gone = model.nodes.find((n) => n.id === 'ana/Lumen/m12.md')!;
+      const [a, d] = model.nodes as [GraphNode, GraphNode];
+      c.select(a);
+      c.select(gone);
+      c.select(again ? a : d);
+      expect(selections(h).at(-1)!.back).toBe(gone.label);
+      const from = h.events.length;
+      c.setModel(twoVaults(cache), 'data');
+      return { c, a, d, told: selections(h, from) };
+    };
+
+    const { c, a, d, told } = run(false);
+    expect(told).toEqual([{ kind: 'note', node: d, back: a.label }]);
+    expect(c.back()).toBe(true);
+    expect(c.back()).toBe(false);
+
+    // Back to the note selected now would go nowhere: no way back is left.
+    const same = run(true);
+    expect(same.told).toEqual([{ kind: 'note', node: same.a }]);
+    expect(same.c.back()).toBe(false);
+  });
+
+  it('remembers the last 50 selections', () => {
+    const { h, c, model } = restingNetwork();
+    const notes = model.nodes;
+    for (let i = 0; i < 52; i++) c.select(notes[i % notes.length]!);
+    let backs = 0;
+    for (let i = 0; i < 60 && c.back(); i++) backs++;
+    expect(backs).toBe(50);
+    // 51 steps and the oldest gone: the second note selected is as far back as it goes.
+    expect((selections(h).at(-1) as Extract<Selection, { kind: 'note' }>).node).toBe(notes[1]);
+  });
+
+  it('goes back with Backspace, and leaves the key alone with nowhere to go back to', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    expect(h.key('Backspace')).toBe(false);
+    c.select(a);
+    c.select(b);
+    const from = h.events.length;
+    expect(h.key('Backspace')).toBe(true);
+    expect(selectedSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    expect(h.key('Backspace')).toBe(false);
+  });
+
+  it('has nowhere to go back to over a stage, nor once it goes', () => {
+    const { h, c, model } = restingBrain();
+    const plugin = fakePlugin(h);
+    c.setPlugin(plugin);
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    c.select(a);
+    c.select(b);
+    plugin.stage = fakeStage(h);
+    h.step(1);
+    const from = h.events.length;
+    expect(h.key('Backspace')).toBe(false);
+    expect(c.back()).toBe(false);
+    plugin.stage = null;
+    h.step(1);
+    expect(c.back()).toBe(false);
+    expect(selections(h, from)).toEqual([]);
+    c.setPlugin(null);
+  });
+});
+
+describe('GraphController on Escape', () => {
+  it('ends a path pick first, keeping the note it began from, then closes the selection', () => {
+    const { h, c, model } = restingNetwork();
+    const [a] = loneNotes(h, model) as [GraphNode];
+    c.select(a);
+    h.step(60);
+    c.startPathFrom(a);
+    const b = loneNotes(h, model).find((n) => n !== a)!;
+    expect(b).toBeDefined();
+    let from = h.events.length;
+    expect(h.key('Escape')).toBe(true);
+    expect(selections(h, from)).toEqual([]);
+    // Picking no more: a click selects the note rather than tracing a path to it.
+    h.click(b.sx, b.sy);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onSelection'))).toEqual([
+      `onSelection note ${b.id}`,
+    ]);
+    from = h.events.length;
+    expect(h.key('Escape')).toBe(true);
+    expect(selections(h, from)).toEqual([null]);
+  });
+
+  it('closes the selection, then fits the graph the user moved, then lets the key go', () => {
+    const { h, c, model } = restingNetwork();
+    c.select(model.nodes[0]!);
+    h.step(60);
+    const from = h.events.length;
+    const atNote = lastCam();
+    expect(h.key('Escape')).toBe(true);
+    h.step(60);
+    expectCam(lastCam(), atNote);
+    expect(h.key('Escape')).toBe(true);
+    h.step(60);
+    expect(Math.hypot(lastCam().tx - atNote.tx, lastCam().ty - atNote.ty)).toBeGreaterThan(1);
+    expect(selections(h, from)).toEqual([null]);
+    expect(h.key('Escape')).toBe(false);
+  });
+
+  it('fits the whole brain, network or map, as Fit does, only once the user moved it', () => {
+    for (const view of ['brain', 'network', 'territories'] as const) {
+      const h = harness(GraphController);
+      const c = h.controller;
+      c.initView(view);
+      c.setModel(twoVaults(), 'init');
+      h.step(400);
+      expect(h.key('Escape')).toBe(false);
+      h.wheel(400, 300, -100);
+      h.wheel(400, 300, -100);
+      h.step(1);
+      const zoomed = lastCam();
+      expect(h.key('Escape')).toBe(true);
+      h.step(60);
+      const fitted = lastCam();
+      expect(fitted.dist).toBeGreaterThan(zoomed.dist);
+      c.fit();
+      h.step(60);
+      expectCam(lastCam(), fitted);
+      expect(h.key('Escape')).toBe(false);
+    }
   });
 });

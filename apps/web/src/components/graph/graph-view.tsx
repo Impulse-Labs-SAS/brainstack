@@ -664,6 +664,7 @@ export function GraphView({
           onSelect={(n) => c()?.select(n)}
           onOpen={open}
           onPathFrom={(n) => c()?.startPathFrom(n)}
+          onBack={() => c()?.back()}
           onClose={() => c()?.clearSelection()}
         />
       )}

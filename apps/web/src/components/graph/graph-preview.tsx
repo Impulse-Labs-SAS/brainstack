@@ -4,7 +4,7 @@
 // topic with the notes that carry it, or the path between two notes. The
 // graph stays on screen; opening the note is one more click, or Enter.
 
-import { X } from 'lucide-react';
+import { ChevronLeft, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Button as AriaButton } from 'react-aria-components';
 
@@ -63,10 +63,12 @@ interface GraphPreviewProps {
   onSelect(node: GraphNode): void;
   onOpen(node: GraphNode): void;
   onPathFrom(node: GraphNode): void;
+  /** Back to what was selected before: offered while `selection.back` names it. */
+  onBack(): void;
   onClose(): void;
 }
 
-export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, onClose }: GraphPreviewProps) {
+export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, onBack, onClose }: GraphPreviewProps) {
   return (
     <aside
       data-graph-chrome
@@ -79,18 +81,31 @@ export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, o
       )}
     >
       {selection.kind === 'path' ? (
-        <PathBody selection={selection} model={model} onSelect={onSelect} onClose={onClose} />
+        <PathBody selection={selection} model={model} onSelect={onSelect} onBack={onBack} onClose={onClose} />
       ) : (
-        <NodeBody node={selection.node} model={model} onSelect={onSelect} onOpen={onOpen} onPathFrom={onPathFrom} onClose={onClose} />
+        <NodeBody node={selection.node} back={selection.back} model={model} onSelect={onSelect} onOpen={onOpen} onPathFrom={onPathFrom} onBack={onBack} onClose={onClose} />
       )}
     </aside>
   );
 }
 
-function Header({ children, onClose }: { children: ReactNode; onClose(): void }) {
+function Header({ children, back, onBack, onClose }: { children: ReactNode; back?: string; onBack(): void; onClose(): void }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-fg-secondary">{children}</span>
+      {back && (
+        // The title goes on a wrapper: react-aria's Button drops one of its own.
+        <span title={`Back to ${back}`} className="flex shrink-0">
+          <AriaButton
+            onPress={onBack}
+            aria-label={`Back to ${back}`}
+            className="flex items-center gap-0.5 rounded p-1 text-xs text-fg-muted outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:h-11 touch:min-w-11 touch:justify-center"
+          >
+            <ChevronLeft size={14} aria-hidden />
+            Back
+          </AriaButton>
+        </span>
+      )}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-xs text-fg-secondary">{children}</span>
       <AriaButton onPress={onClose} aria-label="Close preview" className="rounded p-1 text-fg-muted outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:flex touch:h-11 touch:w-11 touch:items-center touch:justify-center">
         <X size={14} />
       </AriaButton>
@@ -100,17 +115,21 @@ function Header({ children, onClose }: { children: ReactNode; onClose(): void })
 
 function NodeBody({
   node,
+  back,
   model,
   onSelect,
   onOpen,
   onPathFrom,
+  onBack,
   onClose,
 }: {
   node: GraphNode;
+  back?: string;
   model: GraphModel;
   onSelect(node: GraphNode): void;
   onOpen(node: GraphNode): void;
   onPathFrom(node: GraphNode): void;
+  onBack(): void;
   onClose(): void;
 }) {
   const vault = model.vaults.find((v) => v.id === node.vault);
@@ -120,7 +139,7 @@ function NodeBody({
   const topic = node.kind === 'topic';
   return (
     <>
-      <Header onClose={onClose}>
+      <Header back={back} onBack={onBack} onClose={onClose}>
         <Swatch color={colorOf(model, node).hue} />
         <span className="truncate">
           {vault?.label}
@@ -178,7 +197,7 @@ function NodeBody({
           Path from here
         </Button>
       </div>
-      <p className="text-[11px] text-fg-tertiary">Arrows walk its links · Esc closes</p>
+      <p className="text-[11px] text-fg-tertiary">Arrows walk its links{back ? ' · Backspace goes back' : ''} · Esc closes</p>
     </>
   );
 }
@@ -187,18 +206,20 @@ function PathBody({
   selection,
   model,
   onSelect,
+  onBack,
   onClose,
 }: {
   selection: Extract<Selection, { kind: 'path' }>;
   model: GraphModel;
   onSelect(node: GraphNode): void;
+  onBack(): void;
   onClose(): void;
 }) {
   const { path } = selection;
   const hops = path.edges.length;
   return (
     <>
-      <Header onClose={onClose}>
+      <Header back={selection.back} onBack={onBack} onClose={onClose}>
         How they connect · {hops} {hops === 1 ? 'hop' : 'hops'}
       </Header>
       <ol className="grid gap-px">
