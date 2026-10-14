@@ -187,18 +187,38 @@ export function projectNodes(model: GraphModel, cam: Camera, vp: Viewport, is3D:
 
 /** The note under (x, y); the hit area is a little larger than the dot. */
 export function pickNode(model: GraphModel, x: number, y: number, appear: (n: GraphNode) => number): GraphNode | null {
+  return pickNearest(model, x, y, appear).node;
+}
+
+/**
+ * The note nearest (x, y) whose hit area takes it in — at least `minRadius` px round its
+ * centre, however small it is drawn — with its distance, and the next nearest's that also
+ * took it in (Infinity when none did): how sure a finger can be of what it meant.
+ */
+export function pickNearest(
+  model: GraphModel,
+  x: number,
+  y: number,
+  appear: (n: GraphNode) => number,
+  minRadius = 0,
+): { node: GraphNode | null; dist: number; next: number } {
   let best: GraphNode | null = null;
   let bestD = Infinity;
+  let nextD = Infinity;
   for (const n of model.nodes) {
     if (!n.onScreen || appear(n) < 0.5) continue;
-    const r = screenRadius(n) * (n.isIndex ? 1.3 : 1) + 6;
+    const r = Math.max(minRadius, screenRadius(n) * (n.isIndex ? 1.3 : 1) + 6);
     const d = (n.sx - x) ** 2 + (n.sy - y) ** 2;
-    if (d <= r * r && d < bestD) {
+    if (d > r * r) continue;
+    if (d < bestD) {
+      nextD = bestD;
       bestD = d;
       best = n;
+    } else if (d < nextD) {
+      nextD = d;
     }
   }
-  return best;
+  return { node: best, dist: Math.sqrt(bestD), next: Math.sqrt(nextD) };
 }
 
 function curveOf(e: GraphEdge, project: ReturnType<typeof projector>): Curve | null {
