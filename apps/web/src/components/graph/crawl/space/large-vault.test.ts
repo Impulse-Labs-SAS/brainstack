@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { findPath, hopsFrom, type GraphModel, type GraphNode } from '@/lib/graph-model';
+import {
+  DEFAULT_LAYERS,
+  buildGraphModel,
+  findPath,
+  hopsFrom,
+  type GraphModel,
+  type GraphNode,
+} from '@/lib/graph-model';
 
 import { findWalk, planCrawl, walkable } from '../crawl-plan';
 import type { SampleVault } from '../sample-vault';
@@ -36,6 +43,22 @@ describe('largeVault', () => {
     });
     expect(shape(largeVault(5))).toEqual(shape(largeVault(5)));
     expect(shape(largeVault(6)).nodes).not.toEqual(shape(largeVault(5)).nodes);
+  });
+
+  it('hands back the inputs it was built from, which the graph page rebuilds the same model from', () => {
+    const v = largeVault(11, 400);
+    const again = buildGraphModel({
+      ...v.inputs,
+      affinity: null,
+      layers: DEFAULT_LAYERS,
+      cache: new Map(),
+    });
+    expect(again.nodes.map((n) => [n.id, n.vault, n.project?.id, n.isIndex])).toEqual(
+      v.model.nodes.map((n) => [n.id, n.vault, n.project?.id, n.isIndex]),
+    );
+    expect(again.edges.map((e) => [e.source.id, e.target.id, e.kind])).toEqual(
+      v.model.edges.map((e) => [e.source.id, e.target.id, e.kind]),
+    );
   });
 
   it('holds as many notes as asked for', () => {
