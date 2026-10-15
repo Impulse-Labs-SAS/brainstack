@@ -124,11 +124,12 @@ const COUNTRY_NAMES_UNTIL = 2.2;
 /** On the map, every country's cities are named from this zoom. */
 const CITY_NAMES_FROM = 1.9;
 /**
- * Further out, a country whose radius on screen is at least this share of the stage's shorter
- * side names its cities all the same: flown to, a big one lands below CITY_NAMES_FROM, and would
- * fill the stage with its own name and nothing else.
+ * Further out, a country this many px round on screen or more names its cities all the same:
+ * it has room for some beside its own name, and flown to, a big one lands below
+ * CITY_NAMES_FROM and would otherwise fill the stage with land and that name alone. In the
+ * atlas no country is this big, and the map reads by country names.
  */
-const BIG_COUNTRY = 0.3;
+const BIG_COUNTRY_PX = 120;
 /** Project names come with the clouds, once they are this far in, and at full strength. */
 const PROJECT_NAMES_FROM = 0.5;
 
@@ -801,11 +802,10 @@ function drawRestLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: L
   }
 }
 
-/** The countries with land so far whose radius on screen, at `k`, makes them big (BIG_COUNTRY). */
+/** The countries with land so far whose radius on screen, at `k`, makes them big (BIG_COUNTRY_PX). */
 function bigCountries(f: OverlayFrame, k: number): Set<string> {
   const out = new Set<string>();
-  const min = BIG_COUNTRY * Math.min(f.vp.width, f.vp.height);
-  for (const c of f.territory?.countries ?? []) if (c.r * k >= min && (!f.landed || f.landed.has(c.id))) out.add(c.id);
+  for (const c of f.territory?.countries ?? []) if (c.r * k >= BIG_COUNTRY_PX && (!f.landed || f.landed.has(c.id))) out.add(c.id);
   return out;
 }
 

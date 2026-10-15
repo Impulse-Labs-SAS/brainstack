@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { brainScaleFor } from '@/lib/graph-brain';
 import { ANGLES, fitBrain, pixelsPerUnit, type Camera, type Viewport } from '@/lib/graph-camera';
-import type { MapLand } from '@/lib/graph-map';
+import type { MapLand, TerritoryLayout } from '@/lib/graph-map';
 import {
   DEFAULT_LAYERS,
   buildGraphModel,
@@ -2529,6 +2529,40 @@ describe('GraphController on a phone', () => {
     expect(quill.filter(onStage).length).toBeGreaterThan(3);
     expect(beside.cities.length).toBeGreaterThan(0);
     for (const d of beside.cities) expect(countryOf(d.text), d.text).toBe('Meridian');
+  });
+});
+
+describe('GraphController on the map', () => {
+  it('names the cities of a country 120px round or more, however small a share of the stage', () => {
+    const h = harness(GraphController);
+    const c = h.controller;
+    const model = bigCountry();
+    c.initView('territories');
+    c.setModel(model, 'init');
+    h.step(150);
+    const spot = countryUnderPointer(h, 'me|Meridian');
+    expect(spot).not.toBeNull();
+    h.click(spot!.x, spot!.y);
+    h.step(60);
+    // Out from where the click flew, below the zoom every city is named from, until the country is
+    // under 160px round: still big enough to name some, though under a third of the stage.
+    const { territory } = (c as unknown as { engine: { territory: TerritoryLayout | null } })
+      .engine;
+    const meridian = territory!.countries.find((t) => t.label === 'Meridian')!;
+    const round = () => meridian.r * pixelsPerUnit(lastCam(), h.box);
+    for (let i = 0; i < 40 && round() >= 160; i++) {
+      c.zoom(0.95);
+      h.step(1);
+    }
+    expect(pixelsPerUnit(lastCam(), h.box)).toBeLessThan(1.9);
+    expect(round()).toBeGreaterThanOrEqual(120);
+    expect(round()).toBeLessThan(0.3 * Math.min(h.box.width, h.box.height));
+    h.overlayOps!.length = 0;
+    h.step(1);
+    const cities = textDrawn(h.overlayOps!).filter((d) => d.baseline === 'top');
+    const byLabel = new Map(model.nodes.map((n) => [n.label, n]));
+    expect(cities.length).toBeGreaterThan(5);
+    for (const d of cities) expect(byLabel.get(d.text)?.project?.label, d.text).toBe('Meridian');
   });
 });
 
