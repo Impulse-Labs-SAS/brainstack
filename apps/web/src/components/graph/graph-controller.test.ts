@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { brainScaleFor } from '@/lib/graph-brain';
-import { ANGLES, fitBrain, type Camera, type Viewport } from '@/lib/graph-camera';
+import { ANGLES, fitBrain, pixelsPerUnit, type Camera, type Viewport } from '@/lib/graph-camera';
 import type { MapLand } from '@/lib/graph-map';
 import {
   DEFAULT_LAYERS,
@@ -33,6 +33,7 @@ import {
 } from './graph-controller';
 import type { ReturnEntry } from './graph-return';
 import type { SceneFrame } from './graph-scene';
+import type { Rect } from './labels/placer';
 
 // -- Stand-ins ----------------------------------------------------------------------------------
 
@@ -633,13 +634,18 @@ async function goldenView(
   };
 }
 
-/** Territories: a point over land and off every note, found by sweeping the pointer. */
-function countryUnderPointer(h: Harness): { x: number; y: number } | null {
+/**
+ * Territories: a point over land and off every note, found by sweeping the pointer; over the
+ * land of country `id`, when one is named.
+ */
+function countryUnderPointer(h: Harness, id?: string): { x: number; y: number } | null {
   for (let y = 30; y < h.box.height; y += 30) {
     for (let x = 30; x < h.box.width; x += 30) {
       h.move(x, y);
       const last = h.events.at(-1);
-      if (last?.name === 'onHoverCountry' && last.args[0]) return { x, y };
+      const country =
+        last?.name === 'onHoverCountry' ? (last.args[0] as { id: string } | null) : null;
+      if (country && (!id || country.id === id)) return { x, y };
     }
   }
   return null;
@@ -2245,6 +2251,79 @@ const PHONE: HarnessOptions = {
  */
 const freeBand = (h: Harness, top = 56) => ({ top, bottom: 0.48 * h.box.height - 8 });
 
+/**
+ * One vault of two countries (invented names): Meridian, too big for a phone to fit at the zoom
+ * every city is named from, and Quill, a small one beside it. Each a tree of links, a few hops
+ * deep, so every note has come in by the time the test looks.
+ */
+function bigCountry(): GraphModel {
+  const nodes: InputNode[] = [];
+  const edges: InputEdge[] = [];
+  for (const [p, count] of [
+    ['Meridian', 120],
+    ['Quill', 8],
+  ] as const) {
+    for (let i = 0; i < count; i++) {
+      nodes.push({
+        id: `me/${p}/n${i}.md`,
+        path: `${p}/${i % 3 ? 'notes/' : ''}n${i}.md`,
+        title: `${p} note ${i}`,
+        ownerId: 'me',
+        project: { id: `me|${p}`, label: p },
+        createdAt: T0 + i * HOUR,
+        updatedAt: T0 + i * HOUR,
+      });
+      if (i)
+        edges.push({
+          source: `me/${p}/n${i}.md`,
+          target: `me/${p}/n${(i - 1) >> 1}.md`,
+          weight: 1,
+        });
+    }
+  }
+  return buildGraphModel({
+    nodes,
+    edges,
+    affinity: null,
+    layers: DEFAULT_LAYERS,
+    viewerId: 'me',
+    vaultNames: new Map(),
+    cache: new Map(),
+  });
+}
+
+/**
+ * The text among `ops`, each piece with the box it covers: as wide as the stand-in measured it
+ * (6px a character), as tall as its font. Inside the room the overlay took for it, so two that
+ * meet mean two labels placed over each other.
+ */
+function textDrawn(ops: readonly Op[]): { text: string; baseline: string; box: Rect }[] {
+  let font = '10px sans-serif';
+  let align = 'start';
+  let baseline = 'alphabetic';
+  const out: { text: string; baseline: string; box: Rect }[] = [];
+  for (const { op, args } of ops) {
+    if (op === 'set:font') font = String(args[0]);
+    else if (op === 'set:textAlign') align = String(args[0]);
+    else if (op === 'set:textBaseline') baseline = String(args[0]);
+    else if (op === 'fillText') {
+      const [text, x, y] = args as [string, number, number];
+      const px = Number(/(\d+(?:\.\d+)?)px/.exec(font)?.[1]);
+      const w = text.length * 6;
+      const left = align === 'center' ? x - w / 2 : x;
+      out.push({
+        text,
+        baseline,
+        box: { x: left, y: baseline === 'top' ? y : y - px / 2, w, h: px },
+      });
+    }
+  }
+  return out;
+}
+
+const meet = (a: Rect, b: Rect) =>
+  a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
 describe('GraphController on a phone', () => {
   it('lands a selected note in the middle of the band above the sheet, flat and in the brain', () => {
     for (const rest of [() => restingNetwork(twoVaults(), PHONE), () => restingBrain(PHONE)]) {
@@ -2323,6 +2402,60 @@ describe('GraphController on a phone', () => {
     const { top, bottom } = freeBand(h);
     expect(b.sx).toBeCloseTo(652 / 2, 0);
     expect(Math.abs(b.sy - (top + bottom) / 2)).toBeLessThan(2);
+  });
+
+  it('names the cities of a country a click flew to, though it lands too far out for the rest', () => {
+    const h = harness(GraphController, PHONE);
+    const c = h.controller;
+    const model = bigCountry();
+    c.initView('territories');
+    c.setModel(model, 'init');
+    h.step(150);
+    const spot = countryUnderPointer(h, 'me|Meridian');
+    expect(spot).not.toBeNull();
+    h.click(spot!.x, spot!.y);
+    h.step(60);
+    /** The next frame's text, and its cities': a city's name hangs under it, a place's is centred. */
+    const next = () => {
+      h.overlayOps!.length = 0;
+      h.step(1);
+      const drawn = textDrawn(h.overlayOps!);
+      return { drawn, cities: drawn.filter((d) => d.baseline === 'top') };
+    };
+    const byLabel = new Map(model.nodes.map((n) => [n.label, n]));
+    const countryOf = (text: string) => byLabel.get(text)?.project?.label;
+    const onStage = (n: GraphNode) =>
+      n.onScreen && n.sx > 0 && n.sx < h.box.width && n.sy > 0 && n.sy < h.box.height;
+    const quill = model.nodes.filter((n) => n.project?.label === 'Quill');
+
+    // The flight is over, below the zoom every city is named from.
+    const landed = lastCam();
+    const there = next();
+    expectCam(lastCam(), landed);
+    expect(pixelsPerUnit(landed, h.box)).toBeLessThan(1.9);
+    expect(there.cities.length).toBeGreaterThan(5);
+    for (const d of there.cities) expect(countryOf(d.text), d.text).toBe('Meridian');
+    // The country's name stays, and nothing is drawn over anything else.
+    expect(there.drawn.map((d) => d.text)).toContain('MERIDIAN');
+    const { drawn } = there;
+    for (let i = 0; i < drawn.length; i++) {
+      for (let j = i + 1; j < drawn.length; j++) {
+        expect(meet(drawn[i]!.box, drawn[j]!.box), `${drawn[i]!.text} / ${drawn[j]!.text}`).toBe(
+          false,
+        );
+      }
+    }
+
+    // Moved over to Quill at the same zoom: small on the stage, it keeps its cities unnamed.
+    const qx = quill.reduce((sum, n) => sum + n.sx, 0) / quill.length;
+    const qy = quill.reduce((sum, n) => sum + n.sy, 0) / quill.length;
+    const mid = { x: h.box.width / 2, y: h.box.height / 2 };
+    h.drag(mid.x, mid.y, 2 * mid.x - qx, 2 * mid.y - qy);
+    const beside = next();
+    expect(pixelsPerUnit(lastCam(), h.box)).toBeCloseTo(pixelsPerUnit(landed, h.box), 6);
+    expect(quill.filter(onStage).length).toBeGreaterThan(3);
+    expect(beside.cities.length).toBeGreaterThan(0);
+    for (const d of beside.cities) expect(countryOf(d.text), d.text).toBe('Meridian');
   });
 });
 

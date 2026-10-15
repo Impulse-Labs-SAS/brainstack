@@ -111,6 +111,14 @@ const MIN_LABEL_FADE = 0.75;
 const CHIP_TOP = 70;
 /** On the map, country names show until this zoom; past it, the cities say where you are. */
 const COUNTRY_NAMES_UNTIL = 2.2;
+/** On the map, every country's cities are named from this zoom. */
+const CITY_NAMES_FROM = 1.9;
+/**
+ * Further out, a country whose radius on screen is at least this share of the stage's shorter
+ * side names its cities all the same: flown to, a big one lands below CITY_NAMES_FROM, and would
+ * fill the stage with its own name and nothing else.
+ */
+const BIG_COUNTRY = 0.3;
 /** Project names come with the clouds, once they are this far in, and at full strength. */
 const PROJECT_NAMES_FROM = 0.5;
 
@@ -723,16 +731,18 @@ function noteLabel(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelS
 function drawRestLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelSpace, named: ReadonlySet<GraphNode>) {
   if (f.matched || f.path || f.cloud >= 0.65) return;
   const k = pixelsPerUnit(f.cam, f.vp);
-  // On the map the country names speak first; the cities get theirs once you
-  // are close enough that they no longer show. A capital's name would only
-  // repeat its country's.
+  // On the map the country names speak first, and are placed first, so no
+  // city covers one; the cities get theirs once you are close enough, and
+  // further out only in a country that fills much of the stage.
   const onMap = f.landAlpha > 0.5;
-  if (onMap && k < 1.9) return;
+  const only = onMap && k < CITY_NAMES_FROM ? bigCountries(f, k) : null;
+  if (only && !only.size) return;
   const minSize = f.is3D ? (k >= 1.8 ? 0 : k >= 1.1 ? 2 : k >= 0.6 ? 4 : 8) : k >= 1 ? 0 : k >= 0.7 ? 1.2 : k >= 0.45 ? 3 : 7;
   const cap = Math.round((f.vp.width * f.vp.height) / (f.is3D ? 10000 : 5200) / (f.focus ? 2 : 1));
   const candidates: GraphNode[] = [];
   for (const n of f.model.labelOrder) {
     if (named.has(n) || f.appear(n) < 0.9 || !n.onScreen) continue;
+    if (only && !(n.project && only.has(n.project.id))) continue;
     if (!onMap && n.size < minSize) continue;
     if (f.is3D && n.sFade < MIN_LABEL_FADE) continue;
     if (n.sx < 0 || n.sx > f.vp.width || n.sy < 0 || n.sy > f.vp.height) continue;
@@ -742,6 +752,14 @@ function drawRestLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: L
     if (space.count > cap) break;
     noteLabel(ctx, f, space, n, 0);
   }
+}
+
+/** The countries with land so far whose radius on screen, at `k`, makes them big (BIG_COUNTRY). */
+function bigCountries(f: OverlayFrame, k: number): Set<string> {
+  const out = new Set<string>();
+  const min = BIG_COUNTRY * Math.min(f.vp.width, f.vp.height);
+  for (const c of f.territory?.countries ?? []) if (c.r * k >= min && (!f.landed || f.landed.has(c.id))) out.add(c.id);
+  return out;
 }
 
 function centroid(nodes: GraphNode[], f: OverlayFrame, project: ReturnType<typeof projector>) {
