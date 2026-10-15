@@ -111,6 +111,8 @@ function keyOrigin(target: HTMLElement, canvas: HTMLCanvasElement | null): KeyOr
  * not know it ignores it.
  */
 const POINTER_FOCUS = { preventScroll: true, focusVisible: false };
+/** Between the toolbar and what a phone puts under it, px: the toolbar's own gap between rows. */
+const TOOLBAR_GAP = 8;
 
 interface GraphViewProps {
   nodes: InputNode[];
@@ -292,6 +294,8 @@ export function GraphView({
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const chipRef = useRef<HTMLDivElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const toolsRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const controllerRef = useRef<GraphController | null>(null);
   const cacheRef = useRef(new Map<string, GraphNode>());
@@ -452,6 +456,29 @@ export function GraphView({
       mutations.disconnect();
     };
   }, [ready, sentinel]);
+
+  // On a phone the toolbar wraps onto as many rows as its controls need, one more while a search
+  // is typed, and the zoom controls and the growth chip go under it wherever it ends: at fixed
+  // offsets, a longer toolbar ran under them. Two variables on the stage say where.
+  useEffect(() => {
+    const stage = stageRef.current;
+    const bar = toolbarRef.current;
+    const tools = toolsRef.current;
+    if (!stage || !bar || !tools) return;
+    const place = () => {
+      const below = bar.offsetTop + bar.offsetHeight + TOOLBAR_GAP;
+      stage.style.setProperty('--graph-below-toolbar', `${below}px`);
+      stage.style.setProperty(
+        '--graph-below-tools',
+        `${below + tools.offsetHeight + TOOLBAR_GAP}px`,
+      );
+    };
+    const resize = new ResizeObserver(place);
+    resize.observe(bar);
+    resize.observe(tools);
+    place();
+    return () => resize.disconnect();
+  }, []);
 
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
@@ -661,6 +688,7 @@ export function GraphView({
       <WheelBinder target={overlayRef} controller={controllerRef} />
 
       <div
+        ref={toolbarRef}
         data-graph-chrome="children"
         className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2"
       >
@@ -815,8 +843,9 @@ export function GraphView({
         aria-live="polite"
         className={cn(
           GLASS,
-          // On a phone the toolbar's 44px rows reach further down: the chip waits under them.
-          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary max-md:touch:top-48',
+          // On a phone the toolbar wraps further down, and the zoom controls sit under it: the
+          // chip waits under both.
+          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary max-md:top-[var(--graph-below-tools,12rem)]',
         )}
       />
 
@@ -979,9 +1008,10 @@ export function GraphView({
       </div>
 
       <div
+        ref={toolsRef}
         data-graph-chrome="children"
-        // On a phone, beside the toolbar's last row: one row lower where the rows are 44px.
-        className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[6.5rem] max-md:touch:top-[7.75rem]"
+        // On a phone, under the toolbar, however many rows it has wrapped onto.
+        className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[var(--graph-below-toolbar,6.5rem)]"
       >
         <canvas
           ref={minimapRef}
