@@ -6,10 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 import { boundsOf, fitBounds, type Camera, type Viewport } from '@/lib/graph-camera';
 import { layoutTerritories } from '@/lib/graph-map';
-import { hopsFrom, type GraphModel, type GraphNode } from '@/lib/graph-model';
+import { hopsFrom, type GraphModel, type GraphNode, type GraphPath } from '@/lib/graph-model';
 
 import { largeVault } from './crawl/space/large-vault';
-import { drawOverlay, projectNodes, type OverlayFrame } from './graph-overlay';
+import { drawOverlay, overlayMovesUntil, projectNodes, type OverlayFrame } from './graph-overlay';
 import { LabelMemory, type Rect } from './labels/placer';
 
 interface Drawn {
@@ -286,3 +286,54 @@ describe('drawOverlay labels', () => {
     expect(second.drawn.map((d) => d.text)).toEqual(first.drawn.map((d) => d.text));
   });
 });
+
+describe('overlayMovesUntil', () => {
+  const still = {
+    hops: null,
+    hotCountry: null,
+    countryRoutes: null,
+    focusT0: 1000,
+    path: null,
+    pathT0: 1000,
+    matches: null,
+    searchT0: 1000,
+    reduceMotion: false,
+  };
+  const pathOf = (edges: number) =>
+    ({ nodes: [], edges: Array.from({ length: edges }), implicit: false }) as unknown as GraphPath;
+
+  /** A focused note's hops: itself, and `linked` notes a hop away. */
+  const hopsOf = (linked: number) =>
+    new Map(Array.from({ length: linked + 1 }, (_, i) => [{} as GraphNode, Math.min(i, 1)]));
+
+  it('is long past with nothing moving, and under reduced motion whatever there is', () => {
+    expect(overlayMovesUntil(still)).toBe(-Infinity);
+    // A note with no links: nothing for the signal to run along.
+    expect(overlayMovesUntil({ ...still, hops: hopsOf(0) })).toBe(-Infinity);
+    const moving = { ...still, hops: hopsOf(3), path: pathOf(3), matches: model5() };
+    expect(overlayMovesUntil(moving)).toBeGreaterThan(1000);
+    expect(overlayMovesUntil({ ...moving, reduceMotion: true })).toBe(-Infinity);
+  });
+
+  it('plays nothing of its own past five seconds, the light along a path in whole runs', () => {
+    const signal = overlayMovesUntil({ ...still, hops: hopsOf(2) }) - 1000;
+    expect(signal).toBeGreaterThan(3000);
+    expect(signal).toBeLessThanOrEqual(5000);
+    const pings = overlayMovesUntil({ ...still, matches: model5() }) - 1000;
+    expect(pings).toBeGreaterThan(1000);
+    expect(pings).toBeLessThanOrEqual(5000);
+    for (let edges = 1; edges <= 40; edges++) {
+      // At 430 ms an edge, or faster where one run would not fit in five seconds.
+      const run = Math.min(430 * edges, 5000);
+      const played = overlayMovesUntil({ ...still, path: pathOf(edges) }) - 1000;
+      const runs = played / run;
+      expect(runs, `${edges} edges`).toBeCloseTo(Math.round(runs), 9);
+      expect(runs, `${edges} edges`).toBeGreaterThanOrEqual(1 - 1e-9);
+      expect(played, `${edges} edges`).toBeLessThanOrEqual(5000 + 1e-9);
+      expect(played + run, `${edges} edges: one run more would fit`).toBeGreaterThan(5000);
+    }
+  });
+});
+
+/** Five notes a search found: only how many counts. */
+const model5 = () => Array.from({ length: 5 }, () => ({}) as GraphNode);

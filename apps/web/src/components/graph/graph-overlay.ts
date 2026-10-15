@@ -103,6 +103,56 @@ export interface KeepClear {
 
 type Curve = [number, number, number, number, number, number];
 
+/**
+ * The overlay's motion: the signal out of the focused note (one run per hop level, the next
+ * this much later), the light along a path (per edge), the sonar pings of a search. None of it
+ * loops for ever: each plays a few seconds after what started it, then the graph comes to rest
+ * — what WCAG 2.2.2 asks of anything that moves by itself.
+ */
+const SIGNAL_RUN_MS = 950;
+const SIGNAL_STAGGER_MS = 420;
+/** The second hop's last run ends 4.2 s in. */
+const SIGNAL_RUNS = 4;
+const PATH_EDGE_MS = 430;
+/** How long the light may keep going along a path: as many whole runs as fit, at least one. */
+const PATH_PLAY_MS = 5000;
+const PING_MS = 1300;
+const PING_STAGGER_MS = 35;
+/** The second ping trails the first by this share of one. */
+const PING_ECHO = 0.32;
+
+/** How long the light takes over one edge of a path: faster on a path too long to run once in PATH_PLAY_MS. */
+const pathEdgeMs = (edges: number) => Math.min(PATH_EDGE_MS, PATH_PLAY_MS / edges);
+/** How many times the light runs along a path of `edges` edges: as many as PATH_PLAY_MS holds. */
+const pathRuns = (edges: number) =>
+  Math.max(1, Math.floor(PATH_PLAY_MS / (pathEdgeMs(edges) * edges)));
+
+/**
+ * Until when the overlay keeps moving with nothing else changing: the latest moment its signal,
+ * its pings or a path's light is still under way. Before that a frame differs from the last one
+ * however still the rest is; from then on, it is the same frame again.
+ */
+export function overlayMovesUntil(
+  f: Pick<
+    OverlayFrame,
+    'hops' | 'hotCountry' | 'countryRoutes' | 'focusT0' | 'path' | 'pathT0' | 'matches' | 'searchT0' | 'reduceMotion'
+  >,
+): number {
+  if (f.reduceMotion) return -Infinity;
+  let until = -Infinity;
+  // A note with no links has its hops all the same: nothing for the signal to run along.
+  if ((f.hops && f.hops.size > 1) || (f.hotCountry && f.countryRoutes?.length))
+    until = f.focusT0 + SIGNAL_STAGGER_MS + SIGNAL_RUNS * SIGNAL_RUN_MS;
+  const edges = f.path?.edges.length ?? 0;
+  if (edges) until = Math.max(until, f.pathT0 + pathRuns(edges) * pathEdgeMs(edges) * edges);
+  const pinged = Math.min(f.matches?.length ?? 0, MARKED_MATCHES);
+  if (pinged) {
+    const last = Math.min(pinged - 1, 24) * PING_STAGGER_MS;
+    until = Math.max(until, f.searchT0 + last + (1 + PING_ECHO) * PING_MS);
+  }
+  return until;
+}
+
 /** How close a label may come to the stage's edge, or to the chrome. */
 const LABEL_MARGIN = 4;
 /** Chips and small names: the floor every label keeps. */
@@ -590,10 +640,10 @@ function drawSignal(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: Ret
   ctx.setLineDash([]);
   if (f.reduceMotion) return;
 
-  // The signal travels out from the focused note, one hop, then the next.
+  // The signal travels out from the focused note, one hop, then the next, a few times over.
   lit.slice(0, 240).forEach((h) => {
-    const t = (f.now - f.focusT0 - (h.level - 1) * 420) / 950;
-    if (t < 0) return;
+    const t = (f.now - f.focusT0 - (h.level - 1) * SIGNAL_STAGGER_MS) / SIGNAL_RUN_MS;
+    if (t < 0 || t >= SIGNAL_RUNS) return;
     const u = t % 1;
     const [x, y] = pointOn(h.c, u, h.fromSource);
     const r = h.level === 1 ? 8 : 5.5;
@@ -604,9 +654,10 @@ function drawSignal(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: Ret
     ctx.drawImage(glowSprite(WHITE), x - r * 0.45, y - r * 0.45, r * 0.9, r * 0.9);
   });
 
-  if (f.path && pathCurves.length) {
-    const count = pathCurves.length;
-    const s = (((f.now - f.pathT0) / (430 * count)) % 1) * count;
+  const count = pathCurves.length;
+  const run = (f.now - f.pathT0) / (pathEdgeMs(count) * count);
+  if (f.path && count && run < pathRuns(count)) {
+    const s = (run % 1) * count;
     for (let j = 0; j < 5; j++) {
       const sj = s - j * 0.07;
       if (sj < 0) continue;
@@ -624,7 +675,6 @@ function drawSignal(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: Ret
 
 /** How many matches get rings, pings and anchors: past this, they only glow. */
 const MARKED_MATCHES = 150;
-const PING_MS = 1300;
 
 /**
  * What makes a search's matches findable: in the brain, a dotted anchor from
@@ -669,8 +719,8 @@ function drawSearch(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: Ret
     ctx.stroke();
     if (f.reduceMotion) return;
     // Two pings, the best matches first.
-    const t = (f.now - f.searchT0 - Math.min(i, 24) * 35) / PING_MS;
-    for (const k of [0, 0.32]) {
+    const t = (f.now - f.searchT0 - Math.min(i, 24) * PING_STAGGER_MS) / PING_MS;
+    for (const k of [0, PING_ECHO]) {
       const u = t - k;
       if (u < 0 || u > 1) continue;
       const eased = 1 - (1 - u) ** 3;
