@@ -132,6 +132,11 @@ interface GraphViewProps {
    * graph page's own preferences stay as they were.
    */
   persist?: boolean;
+  /**
+   * Whether the preview reads each note's first lines from the server. On by default; the bench
+   * turns it off: its vault is invented, and a read without a session signs the page out.
+   */
+  excerpts?: boolean;
 }
 
 const LAYERS_KEY = 'brainstack.graph.layers';
@@ -285,6 +290,7 @@ export function GraphView({
   includeShared,
   onIncludeSharedChange,
   persist = true,
+  excerpts = true,
 }: GraphViewProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
@@ -602,7 +608,7 @@ export function GraphView({
    * element that had it may be gone — a row of the note left behind, the sheet itself — and with
    * it every key the graph listens for. With nothing selected any more, to the canvas; with
    * something else, to its heading once it renders, so its title is read out and Tab goes on
-   * through its connections.
+   * from there through the note's actions and its connections.
    */
   const refocus = (before: Selection | null) => {
     const now = selectionRef.current;
@@ -637,8 +643,13 @@ export function GraphView({
 
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
-    // Popovers render through a portal but their key events still bubble here.
-    if (/^(INPUT|TEXTAREA)$/.test(t.tagName) || t.closest('[role=dialog]')) return;
+    // Popovers render through a portal but their key events still bubble here. A field keeps its
+    // keys, but for Escape in the sheet's filter once it is empty (it empties it first): from
+    // anywhere in the sheet, Escape closes.
+    const sheetEscape =
+      e.key === 'Escape' && !e.nativeEvent.isComposing && !!t.closest('[data-graph-sheet]');
+    if ((/^(INPUT|TEXTAREA)$/.test(t.tagName) && !sheetEscape) || t.closest('[role=dialog]'))
+      return;
     // The keys follow the tabs: the Sentinel first, then the three layouts.
     const index = ['1', '2', '3', '4'].indexOf(e.key);
     if (index >= 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -803,6 +814,8 @@ export function GraphView({
           onOpen={open}
           onPathFrom={(n) => c()?.startPathFrom(n)}
           onBack={(e) => fromSheet(e, () => c()?.back())}
+          onFrame={(notes) => c()?.frameNotes(notes)}
+          excerpts={excerpts}
           onClose={() => {
             c()?.clearSelection();
             // Whatever pressed it: the button goes with the sheet, and the keys stay the graph's.

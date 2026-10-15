@@ -6,6 +6,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
+import { excerpt } from '@/lib/note-excerpt';
 import { trpc } from '@/lib/trpc';
 
 export interface PeekTarget {
@@ -14,19 +15,6 @@ export interface PeekTarget {
   /** Vault path of the note (with `.md`), or null when unresolved. */
   path: string | null;
   rect: DOMRect;
-}
-
-function excerpt(body: string): string {
-  return body
-    .split('\n')
-    .filter((l, i) => !(i === 0 && /^#\s/.test(l)))
-    .join(' ')
-    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
-    .replace(/\[\[([^\]]+)\]\]/g, '$1')
-    .replace(/[#>*_`]|^\s*[-+]\s/gm, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 260);
 }
 
 export function LinkPeek({ target, onEnter, onLeave }: {

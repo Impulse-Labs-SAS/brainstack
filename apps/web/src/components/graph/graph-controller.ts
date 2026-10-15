@@ -662,6 +662,35 @@ export class GraphController {
     this.previewed = node;
   }
 
+  /**
+   * Bring `notes` into view beside the preview, the selection kept: a step up from a note to its
+   * folder, its project or its vault. As close as a click on one note would go, at most.
+   */
+  frameNotes(notes: readonly GraphNode[]): void {
+    if (this.staged) return;
+    const list = notes.filter((n) => Number.isFinite(n.x));
+    if (!list.length) return;
+    this.stopFollowing();
+    this.setSpin(false);
+    const band = this.sheetBand();
+    const maxScale = this.engine.is3D
+      ? this.vp.height / 2 / (TAN_HALF_FOV * this.engine.brainScale * 1.9)
+      : 1.6;
+    // Beside a docked preview, fitted to the strip left of it before it is moved there: fitted to
+    // the whole stage, a vault or a project wider than tall ran off the left and under the sheet.
+    const target = {
+      ...this.cam,
+      ...this.fitTarget(
+        list,
+        maxScale,
+        band ? band.bottom - band.top : undefined,
+        band ? undefined : this.vp.width - 2 * PREVIEW_OFFSET,
+      ),
+    };
+    this.animateTo(this.withPreviewOffset(target, band));
+    this.userMoved = true;
+  }
+
   /** Bring every match into view. */
   frameMatches(): void {
     if (this.staged) return;
@@ -1392,6 +1421,7 @@ export class GraphController {
     nodes?: GraphNode[],
     maxScale?: number,
     frameHeight?: number,
+    frameWidth?: number,
   ): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
     if (this.engine.is3D && !nodes) return fitBrain(this.engine.brainScale, this.vp);
     const map = !nodes && !this.engine.growth ? this.engine.mapBounds() : null;
@@ -1399,7 +1429,7 @@ export class GraphController {
     const list = (nodes ?? this.model?.nodes ?? []).filter((n) => n.bornAt !== Infinity);
     const b = boundsOf(list);
     if (!b) return { tx: this.cam.tx, ty: this.cam.ty, tz: this.cam.tz, dist: this.cam.dist };
-    return fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D, frameHeight });
+    return fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D, frameHeight, frameWidth });
   }
 
   /**

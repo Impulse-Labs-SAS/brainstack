@@ -163,6 +163,8 @@ export interface GraphEdge {
   weight: number;
   /** Topics the two ends share (affinity), or the topic itself (topic). */
   shared: string[];
+  /** A link both notes make to each other, merged into this one edge: `source` is only the first. */
+  mutual?: boolean;
 }
 export interface Neighbour {
   node: GraphNode;
@@ -481,6 +483,7 @@ export function buildGraphModel(input: {
     const existing = linked.get(key);
     if (existing) {
       existing.weight += e.weight;
+      if (existing.source === target) existing.mutual = true;
       continue;
     }
     const kind: EdgeKind = isStructureEdge(source.path, target.path) ? 'structure' : 'link';
@@ -577,9 +580,16 @@ export function buildGraphModel(input: {
  */
 export function noteHref(node: Pick<GraphNode, 'path' | 'foreign' | 'ownerId'>): string {
   const route = node.path.replace(/\.md$/i, '').split('/').map(encodeURIComponent).join('/');
-  return node.foreign && node.ownerId
-    ? `/notes/shared/${encodeURIComponent(node.ownerId)}/${route}`
-    : `/notes/${route}`;
+  const owner = foreignOwner(node);
+  return owner ? `/notes/shared/${encodeURIComponent(owner)}/${route}` : `/notes/${route}`;
+}
+
+/**
+ * Whose vault a note is read from, when it is not the viewer's: its path is a path in theirs.
+ * Null for your own note, read and routed as yours.
+ */
+export function foreignOwner(node: Pick<GraphNode, 'foreign' | 'ownerId'>): string | null {
+  return node.foreign && node.ownerId ? node.ownerId : null;
 }
 
 /**

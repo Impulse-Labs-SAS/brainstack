@@ -77,6 +77,7 @@ export function GraphBench() {
         includeShared
         onIncludeSharedChange={ignore}
         persist={false}
+        excerpts={false}
       />
       <BenchReadout
         params={params}
