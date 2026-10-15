@@ -2869,3 +2869,60 @@ describe('GraphController tooltip', () => {
     clear(during, b);
   });
 });
+
+// -- A step up from a note -----------------------------------------------------------------------
+
+describe('GraphController framing a step up from a note', () => {
+  it('fits a set wider than tall into the strip beside the docked preview, the selection kept', () => {
+    const { h, c, model } = restingNetwork();
+    const [a] = reachable(h, model) as [GraphNode];
+    c.select(a);
+    h.step(60);
+    const from = h.events.length;
+    // The two notes furthest apart across the stage, of those near its middle row: a wide set.
+    const row = model.nodes.filter((n) => n.onScreen && Math.abs(n.sy - h.box.height / 2) < 40);
+    const left = row.reduce((m, n) => (n.sx < m.sx ? n : m));
+    const right = row.reduce((m, n) => (n.sx > m.sx ? n : m));
+    const wide = [left, right];
+    expect(Math.abs(right.x - left.x)).toBeGreaterThan(3 * Math.abs(right.y - left.y));
+    c.frameNotes(wide);
+    h.step(60);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onSelection'))).toEqual([]);
+    // The preview docks at the right, 310px wide and 12px in: nothing goes under it or off the left.
+    const panel = h.box.width - 12 - 310;
+    for (const n of wide) {
+      expect(n.sx, n.label).toBeGreaterThan(0);
+      expect(n.sx, n.label).toBeLessThan(panel);
+      expect(n.sy, n.label).toBeGreaterThan(0);
+      expect(n.sy, n.label).toBeLessThan(h.box.height);
+    }
+  });
+
+  it('fits a project into the band above the sheet on a phone', () => {
+    for (const rest of [() => restingNetwork(twoVaults(), PHONE), () => restingBrain(PHONE)]) {
+      const { h, c, model } = rest();
+      const [a] = reachable(h, model) as [GraphNode];
+      c.select(a);
+      h.step(60);
+      const project = model.projects.find((p) => p.id === a.project!.id)!.nodes;
+      c.frameNotes(project);
+      h.step(60);
+      const { top, bottom } = freeBand(h);
+      for (const n of project) {
+        expect(n.sy, n.label).toBeGreaterThan(top);
+        expect(n.sy, n.label).toBeLessThan(bottom);
+        expect(n.sx, n.label).toBeGreaterThan(0);
+        expect(n.sx, n.label).toBeLessThan(h.box.width);
+      }
+    }
+  });
+
+  it('leaves the camera where it is for notes not laid out yet', () => {
+    const { h, c, model } = restingNetwork();
+    const before = lastCam();
+    c.frameNotes([{ ...model.nodes[0]!, x: NaN }]);
+    c.frameNotes([]);
+    h.step(10);
+    expectCam(lastCam(), before);
+  });
+});

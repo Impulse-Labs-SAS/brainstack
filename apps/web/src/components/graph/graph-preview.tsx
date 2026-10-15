@@ -5,13 +5,13 @@
 // The graph stays on screen; opening the note is one more click, or Enter.
 
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button as AriaButton, type PressEvent } from 'react-aria-components';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
-import { colorOf, type EdgeKind, type GraphModel, type GraphNode } from '@/lib/graph-model';
+import { colorOf, foreignOwner, type EdgeKind, type GraphModel, type GraphNode } from '@/lib/graph-model';
 import { connectionGroups, crumbsOf, type Crumb } from '@/lib/graph-sheet';
 import { excerpt } from '@/lib/note-excerpt';
 import { trpc } from '@/lib/trpc';
@@ -92,7 +92,6 @@ export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, o
     <aside
       data-graph-chrome
       data-graph-sheet
-      aria-live="polite"
       aria-label={selection.kind === 'path' ? 'Path between notes' : 'Note preview'}
       className={cn(
         GLASS,
@@ -100,6 +99,16 @@ export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, o
         'inset-x-2 bottom-2 max-h-[52%] md:inset-x-auto md:bottom-auto md:right-3 md:top-14 md:max-h-[calc(100%-11rem)] md:w-[310px]',
       )}
     >
+      {/*
+        What a screen reader hears when the selection changes: its name, not the whole sheet. The
+        sheet itself is not live: its lists run long, grow with "Show all" and change with the
+        filter, and the note's first lines arrive after it.
+      */}
+      <p role="status" className="sr-only">
+        {selection.kind === 'path'
+          ? `Path between ${selection.path.nodes[0]?.label ?? ''} and ${selection.path.nodes.at(-1)?.label ?? ''}`
+          : selection.node.label}
+      </p>
       {selection.kind === 'path' ? (
         <PathBody selection={selection} model={model} onSelect={onSelect} onBack={onBack} onClose={onClose} />
       ) : (
@@ -236,11 +245,9 @@ function NodeBody({
 function Crumbs({ node, model, onFrame }: { node: GraphNode; model: GraphModel; onFrame(notes: readonly GraphNode[]): void }) {
   const crumbs = useMemo(() => crumbsOf(model, node), [model, node]);
   return (
-    <nav aria-label="Where it is filed" className="min-w-0">
+    <nav aria-label="Where it is filed" className="flex min-w-0 items-center gap-1">
+      <Swatch color={colorOf(model, node).hue} />
       <ol className="flex min-w-0 flex-wrap items-center gap-y-0.5">
-        <li className="mr-1 flex">
-          <Swatch color={colorOf(model, node).hue} />
-        </li>
         {crumbs.map((c, i) => (
           // The title on the item: react-aria's Button drops one of its own, and a long name is cut.
           <li key={`${c.kind}:${i}`} title={c.label} className="flex min-w-0 items-center">
@@ -262,15 +269,27 @@ function Crumbs({ node, model, onFrame }: { node: GraphNode; model: GraphModel; 
 
 /** The note's first lines, read when it is picked: through the sharing service, as every read is. */
 function NoteExcerpt({ node }: { node: GraphNode }) {
-  const note = trpc.notes.get.useQuery(
-    { path: node.path, ...(node.foreign && node.ownerId ? { ownerId: node.ownerId } : {}) },
-    { staleTime: EXCERPT_STALE_MS, retry: false },
+  const owner = foreignOwner(node);
+  const options = { staleTime: EXCERPT_STALE_MS, retry: false };
+  // Someone else's note through the same query its own page reads it with, which that page
+  // refreshes when it saves: read another way, an edit there left these lines stale.
+  const own = trpc.notes.get.useQuery({ path: node.path }, { ...options, enabled: !owner });
+  const shared = trpc.notes.getForOwner.useQuery(
+    { ownerId: owner ?? '', path: node.path },
+    { ...options, enabled: !!owner },
   );
+  const note = owner ? shared : own;
   // A note that cannot be read here says nothing more: its title and dates are still there.
   if (note.isError) return null;
   const text = note.data ? excerpt(note.data.body) : '';
   return (
-    <p className="line-clamp-4 text-[12.5px] leading-[19px] text-fg-secondary">
+    // While it is read, as tall as the lines it may bring: the buttons below do not jump mid-tap.
+    <p
+      className={cn(
+        'line-clamp-4 text-[12.5px] leading-[19px] text-fg-secondary [overflow-wrap:anywhere]',
+        note.isPending && 'min-h-[76px]',
+      )}
+    >
       {note.isPending ? (
         <span className="text-fg-tertiary">Reading the note…</span>
       ) : (
@@ -286,9 +305,21 @@ function Connections({ node, model, onSelect }: { node: GraphNode; model: GraphM
   const [full, setFull] = useState<ReadonlySet<string>>(new Set());
   const total = model.adjacency.get(node)?.length ?? 0;
   const groups = useMemo(() => connectionGroups(model, node, query), [model, node, query]);
+  const filtering = query.trim() !== '';
+  const matched = useMemo(() => new Set(groups.flatMap((g) => g.items.map((i) => i.node))).size, [groups]);
   const topic = node.kind === 'topic';
+  // "Show all" goes as it is pressed, and focus would go with it, out of the stage, where no key
+  // reaches the graph: it lands on the first row it revealed instead.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const revealed = useRef<string | null>(null);
+  useEffect(() => {
+    const key = revealed.current;
+    if (!key) return;
+    revealed.current = null;
+    listRef.current?.querySelector<HTMLElement>(`[data-group="${key}"] li:nth-child(${GROUP_SHOWN + 1}) button`)?.focus();
+  });
   return (
-    <>
+    <div ref={listRef} className="contents">
       <div className="border-t border-border-subtle pt-2 font-mono text-[11px] uppercase tracking-wider text-fg-tertiary">
         {topic ? 'Notes' : 'Connections'} <span className="text-fg-secondary">{total}</span>
       </div>
@@ -298,21 +329,25 @@ function Connections({ node, model, onSelect }: { node: GraphNode; model: GraphM
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            // Escape empties the filter first; with nothing in it, the sheet's own Escape is next.
-            if (e.key === 'Escape' && query) {
-              setQuery('');
-              e.stopPropagation();
-            }
+            // Escape empties the filter first; with nothing in it, the sheet's own Escape is next
+            // (graph-view lets it through from here). Not while an IME is composing: it is its.
+            if (e.key !== 'Escape' || e.nativeEvent.isComposing || !query) return;
+            setQuery('');
+            e.preventDefault();
+            e.stopPropagation();
           }}
           placeholder={topic ? 'Filter its notes' : 'Filter connections'}
           aria-label={topic ? 'Filter its notes' : 'Filter connections'}
           className="h-8 bg-bg-elevated text-xs placeholder:text-fg-tertiary touch:h-11"
         />
       )}
+      <p role="status" className="sr-only">
+        {filtering ? `${matched} of ${total} ${topic ? 'notes' : 'connections'} match` : ''}
+      </p>
       {groups.map((g) => {
-        const shown = query || full.has(g.key) ? g.items : g.items.slice(0, GROUP_SHOWN);
+        const shown = filtering || full.has(g.key) ? g.items : g.items.slice(0, GROUP_SHOWN);
         return (
-          <section key={g.key} aria-label={g.label} className="grid gap-px">
+          <div key={g.key} data-group={g.key} className="grid gap-px">
             <h4 className="px-1.5 pt-1 font-mono text-[10.5px] uppercase tracking-wider text-fg-tertiary">
               {g.label} <span className="text-fg-secondary">{g.items.length}</span>
             </h4>
@@ -338,19 +373,24 @@ function Connections({ node, model, onSelect }: { node: GraphNode; model: GraphM
             </ul>
             {shown.length < g.items.length && (
               <AriaButton
-                onPress={() => setFull(new Set(full).add(g.key))}
+                onPress={() => {
+                  revealed.current = g.key;
+                  setFull(new Set(full).add(g.key));
+                }}
                 className="justify-self-start rounded px-1.5 py-1 text-xs text-fg-tertiary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
               >
                 Show all {g.items.length}
               </AriaButton>
             )}
-          </section>
+          </div>
         );
       })}
-      {query && !groups.length && (
-        <p className="px-1.5 text-xs text-fg-tertiary">No connection’s title has “{query.trim()}” in it.</p>
+      {filtering && !groups.length && (
+        <p className="px-1.5 text-xs text-fg-tertiary [overflow-wrap:anywhere]">
+          No connection’s title has “{query.trim()}” in it.
+        </p>
       )}
-    </>
+    </div>
   );
 }
 

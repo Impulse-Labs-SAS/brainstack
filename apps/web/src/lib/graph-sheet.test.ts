@@ -58,12 +58,14 @@ const affinity: AffinityInput = {
   ],
 };
 
-function build(): GraphModel {
+function build(
+  input: { nodes?: InputNode[]; edges?: InputEdge[]; indexes?: boolean } = {},
+): GraphModel {
   return buildGraphModel({
-    nodes,
-    edges,
+    nodes: input.nodes ?? nodes,
+    edges: input.edges ?? edges,
     affinity,
-    layers: { ...DEFAULT_LAYERS, topics: true },
+    layers: { ...DEFAULT_LAYERS, topics: true, indexes: input.indexes ?? true },
     viewerId: VIEWER,
     vaultNames: new Map(),
     cache: new Map(),
@@ -116,6 +118,38 @@ describe('crumbsOf', () => {
     ]);
   });
 
+  it('takes the project’s folder from the project, whichever of its notes a layer hides', () => {
+    // With the index hidden, what the notes left share is Atlas/Design: the project is Atlas.
+    const model = build({
+      nodes: [
+        note('Atlas/_Atlas.md', 'Atlas'),
+        note('Atlas/Design/a.md', 'Atlas'),
+        note('Atlas/Design/b.md', 'Atlas'),
+      ],
+      edges: [],
+      indexes: false,
+    });
+    expect(crumbsOf(model, byPath(model, 'Atlas/Design/a.md')).map((c) => c.label)).toEqual([
+      model.vaults[0]!.label,
+      'Atlas',
+      'Design',
+    ]);
+  });
+
+  it('steps through a tag project’s folders from what its notes share', () => {
+    const tagged = (path: string): InputNode => ({
+      ...note(path, 'Launch'),
+      project: { id: 'tag:|project/launch', label: 'Launch' },
+    });
+    const model = build({
+      nodes: [tagged('Atlas/Design/x.md'), tagged('Atlas/Ops/y.md')],
+      edges: [],
+    });
+    const crumbs = crumbsOf(model, byPath(model, 'Atlas/Design/x.md'));
+    expect(crumbs.map((c) => c.label)).toEqual([model.vaults[0]!.label, 'Launch', 'Design']);
+    expect(paths(crumbs[2]!.notes)).toEqual(['Atlas/Design/x.md']);
+  });
+
   it('gives a topic its vault alone', () => {
     const model = build();
     const topic = model.nodes.find((n) => n.kind === 'topic')!;
@@ -134,6 +168,67 @@ describe('connectionGroups', () => {
       ['Topics', [model.nodes.find((n) => n.kind === 'topic')!.path]],
       ['Shared topics', ['Atlas/Design/Specs/schema.md']],
     ]);
+  });
+
+  it('lists a note linked both ways under the links it makes and the links to it', () => {
+    const model = build({
+      edges: [...edges, { source: 'Orbit/plan.md', target: 'Atlas/Design/brief.md', weight: 1 }],
+    });
+    const brief = connectionGroups(model, byPath(model, 'Atlas/Design/brief.md'));
+    const plan = connectionGroups(model, byPath(model, 'Orbit/plan.md'));
+    const linked = (groups: typeof brief) =>
+      groups
+        .filter((g) => g.key === 'out' || g.key === 'in')
+        .map((g) => [g.label, paths(g.items.map((i) => i.node))]);
+    expect(linked(brief)).toEqual([
+      ['Links to', ['Atlas/Design/Specs/api.md', 'Orbit/plan.md']],
+      ['Linked from', ['Atlas/Ops/runbook.md', 'Orbit/plan.md']],
+    ]);
+    expect(linked(plan)).toEqual([
+      ['Links to', ['Atlas/Design/brief.md']],
+      ['Linked from', ['Atlas/Design/brief.md']],
+    ]);
+  });
+
+  it('has an index list the indexes in the folders below it, whichever way they link', () => {
+    const model = build({
+      nodes: [
+        note('Atlas/_Atlas.md', 'Atlas'),
+        note('Atlas/Design/_Design.md', 'Atlas'),
+        note('Atlas/Design/brief.md', 'Atlas'),
+      ],
+      edges: [
+        { source: 'Atlas/Design/_Design.md', target: 'Atlas/_Atlas.md', weight: 1 },
+        { source: 'Atlas/Design/_Design.md', target: 'Atlas/Design/brief.md', weight: 1 },
+      ],
+    });
+    const groups = (path: string) =>
+      connectionGroups(model, byPath(model, path)).map((g) => [
+        g.label,
+        paths(g.items.map((i) => i.node)),
+      ]);
+    expect(groups('Atlas/_Atlas.md')).toEqual([['Listed here', ['Atlas/Design/_Design.md']]]);
+    expect(groups('Atlas/Design/_Design.md')).toEqual([
+      ['Indexes', ['Atlas/_Atlas.md']],
+      ['Listed here', ['Atlas/Design/brief.md']],
+    ]);
+  });
+
+  it('puts the best-connected first in each group', () => {
+    // The hub links to three: b is linked by two others, c by one, a by none.
+    const model = build({
+      nodes: ['hub', 'a', 'b', 'c', 'x', 'y'].map((n) => note(`Orbit/${n}.md`, 'Orbit')),
+      edges: [
+        { source: 'Orbit/hub.md', target: 'Orbit/a.md', weight: 1 },
+        { source: 'Orbit/hub.md', target: 'Orbit/b.md', weight: 1 },
+        { source: 'Orbit/hub.md', target: 'Orbit/c.md', weight: 1 },
+        { source: 'Orbit/x.md', target: 'Orbit/b.md', weight: 1 },
+        { source: 'Orbit/y.md', target: 'Orbit/b.md', weight: 1 },
+        { source: 'Orbit/x.md', target: 'Orbit/c.md', weight: 1 },
+      ],
+    });
+    const [out] = connectionGroups(model, byPath(model, 'Orbit/hub.md'));
+    expect(out!.items.map((i) => i.node.path)).toEqual(['Orbit/b.md', 'Orbit/c.md', 'Orbit/a.md']);
   });
 
   it('lists what an index lists, and a topic’s notes', () => {
