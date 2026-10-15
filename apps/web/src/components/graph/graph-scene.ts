@@ -47,6 +47,11 @@ export interface SceneFrame {
   edgesDirty: boolean;
   appear(n: GraphNode): number;
   flash(n: GraphNode): number;
+  /**
+   * How much the notes edited this week pulse: fully for a few seconds after anything changed,
+   * then less and less, until they only glow and the graph can rest.
+   */
+  pulse: number;
   reduceMotion: boolean;
 }
 
@@ -278,7 +283,9 @@ export class GraphScene {
   private litCountries: ReadonlySet<string> | null = null;
   private brain: { group: THREE.Group; points: THREE.ShaderMaterial; lines: THREE.ShaderMaterial } | null = null;
   private brainAlpha = 0;
+  private brainWanted = false;
   private buffers: Buffers | null = null;
+  private pulsed = false;
 
   /** Throws when the browser gives no WebGL context; the view falls back to 2D. */
   constructor(canvas: HTMLCanvasElement) {
@@ -419,7 +426,11 @@ export class GraphScene {
     const wantsBrain = frame.is3D;
     if (wantsBrain && !this.brain) this.brain = this.buildBrain();
     const ease = frame.reduceMotion ? 1 : 1 - Math.exp(-frame.dt / 250);
-    this.brainAlpha += ((wantsBrain ? 1 : 0) - this.brainAlpha) * ease;
+    const target = wantsBrain ? 1 : 0;
+    // Arrived once it is this close, or it would creep for ever and no frame would be the last.
+    this.brainAlpha =
+      Math.abs(target - this.brainAlpha) < 0.004 ? target : this.brainAlpha + (target - this.brainAlpha) * ease;
+    this.brainWanted = wantsBrain;
 
     if (frame.moved || !b.placed) {
       this.uploadPositions(b);
@@ -471,6 +482,16 @@ export class GraphScene {
       this.camera.updateProjectionMatrix();
     }
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** The brain's mesh is still fading in or out: the next frame differs from the last. */
+  get easing(): boolean {
+    return this.brainAlpha !== (this.brainWanted ? 1 : 0);
+  }
+
+  /** The last frame drew notes that pulse: some were edited this week. */
+  get pulses(): boolean {
+    return this.pulsed;
   }
 
   dispose(): void {
@@ -577,6 +598,7 @@ export class GraphScene {
     const ppu = f.vp.height / 2 / (TAN_HALF_FOV * f.cam.dist);
     const scaleMul = Math.min(1, Math.max(0.45, 1.2 - b.model.nodes.length / 2000));
     const focused = !!(f.hops || f.pathNodes);
+    this.pulsed = false;
     b.model.nodes.forEach((n, i) => {
       b.size[i] = n.drawRadius;
       const ap = f.appear(n);
@@ -588,7 +610,10 @@ export class GraphScene {
       }
       const act = activity(n.updatedAt, f.wallClock);
       let level = act;
-      if (!f.reduceMotion && n.kind === 'note' && isActive(n.updatedAt, f.wallClock)) level *= 0.8 + 0.2 * Math.sin(f.now / 620 + n.phase);
+      if (!f.reduceMotion && n.kind === 'note' && isActive(n.updatedAt, f.wallClock)) {
+        level *= 0.8 + 0.2 * f.pulse * Math.sin(f.now / 620 + n.phase);
+        this.pulsed = true;
+      }
       if (f.hops) {
         const h = f.hops.get(n);
         level *= h === 0 ? 1.6 : h === 1 ? 1.2 : h === 2 ? 0.6 : 0.1;
