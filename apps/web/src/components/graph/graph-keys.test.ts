@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { reachesGraph, withoutPointer } from './graph-keys';
+import { browserShortcut, reachesGraph, withoutPointer } from './graph-keys';
 
 const ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
 
@@ -43,5 +43,24 @@ describe('withoutPointer', () => {
     expect(withoutPointer('mouse')).toBe(false);
     expect(withoutPointer('pen')).toBe(false);
     expect(withoutPointer('touch')).toBe(false);
+  });
+});
+
+describe('browserShortcut', () => {
+  const keys = (o: Partial<Record<'altKey' | 'ctrlKey' | 'metaKey', boolean>>) => ({
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    ...o,
+  });
+
+  it('leaves a key held with Alt, Ctrl or Meta to the browser: Back, its zoom', () => {
+    expect(browserShortcut(keys({ altKey: true }))).toBe(true);
+    expect(browserShortcut(keys({ ctrlKey: true }))).toBe(true);
+    expect(browserShortcut(keys({ metaKey: true }))).toBe(true);
+  });
+
+  it('takes a plain key, or one held with Shift, for the graph', () => {
+    expect(browserShortcut(keys({}))).toBe(false);
   });
 });

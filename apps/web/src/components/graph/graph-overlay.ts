@@ -127,9 +127,11 @@ const CITY_NAMES_FROM = 1.9;
  * Further out, a country this many px round on screen or more names its cities all the same:
  * it has room for some beside its own name, and flown to, a big one lands below
  * CITY_NAMES_FROM and would otherwise fill the stage with land and that name alone. In the
- * atlas no country is this big, and the map reads by country names.
+ * atlas only a country that dwarfs the rest is this big, and names some of its cities there.
  */
 const BIG_COUNTRY_PX = 120;
+/** How many candidates the rest of the labels may try, for each one a frame may draw. */
+const LABEL_TRIES = 4;
 /** Project names come with the clouds, once they are this far in, and at full strength. */
 const PROJECT_NAMES_FROM = 0.5;
 
@@ -781,7 +783,7 @@ function drawRestLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: L
   const k = pixelsPerUnit(f.cam, f.vp);
   // On the map the country names speak first, and are placed first, so no
   // city covers one; the cities get theirs once you are close enough, and
-  // further out only in a country that fills much of the stage.
+  // further out only in a country big enough on screen (BIG_COUNTRY_PX).
   const onMap = f.landAlpha > 0.5;
   const only = onMap && k < CITY_NAMES_FROM ? bigCountries(f, k) : null;
   if (only && !only.size) return;
@@ -796,8 +798,11 @@ function drawRestLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: L
     if (n.sx < 0 || n.sx > f.vp.width || n.sy < 0 || n.sy > f.vp.height) continue;
     candidates.push(n);
   }
+  // A dense stretch turns most candidates away: past a few tries a label, the rest would only
+  // cost the frame time, thousands of them in a big country, to place nothing more.
+  let tries = 0;
   for (const n of shownFirst(candidates, (x) => x.id, f.labels)) {
-    if (space.count > cap) break;
+    if (space.count > cap || ++tries > cap * LABEL_TRIES) break;
     noteLabel(ctx, f, space, n, 0);
   }
 }

@@ -60,7 +60,7 @@ import {
   type ViewChoice,
 } from './crawl/view-choice';
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
-import { reachesGraph, withoutPointer, type KeyOrigin } from './graph-keys';
+import { browserShortcut, reachesGraph, withoutPointer, type KeyOrigin } from './graph-keys';
 import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
 import { readReturn, writeReturn } from './graph-return';
@@ -447,7 +447,7 @@ export function GraphView({
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['class', 'hidden'],
+      attributeFilter: ['class', 'hidden', 'data-toolbar-bottom'],
     });
     schedule();
     return () => {
@@ -466,12 +466,14 @@ export function GraphView({
     const tools = toolsRef.current;
     if (!stage || !bar || !tools) return;
     const place = () => {
+      // Both read before either is written: a write between them would lay the page out twice.
       const below = bar.offsetTop + bar.offsetHeight + TOOLBAR_GAP;
+      const tall = tools.offsetHeight;
       stage.style.setProperty('--graph-below-toolbar', `${below}px`);
-      stage.style.setProperty(
-        '--graph-below-tools',
-        `${below + tools.offsetHeight + TOOLBAR_GAP}px`,
-      );
+      stage.style.setProperty('--graph-below-tools', `${below + tall + TOOLBAR_GAP}px`);
+      // Moved, they are chrome somewhere else: the attribute tells the labels' measuring to look
+      // again, which watches attributes, not styles (the tooltip writes its own every frame).
+      stage.dataset.toolbarBottom = String(below);
     };
     const resize = new ResizeObserver(place);
     resize.observe(bar);
@@ -644,8 +646,7 @@ export function GraphView({
       e.preventDefault();
       return;
     }
-    // Alt+Left is the browser's Back, Ctrl+- its zoom: a key with a modifier is never the graph's.
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (browserShortcut(e)) return;
     const origin = keyOrigin(t, overlayRef.current);
     if (!reachesGraph(e.key, origin)) return;
     const before = selectionRef.current;

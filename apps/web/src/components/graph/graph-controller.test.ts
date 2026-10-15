@@ -1940,6 +1940,42 @@ describe('GraphController on a double click', () => {
     expect(far.selected.length).toBeGreaterThan(1);
   });
 
+  it('opens nothing when the second press of a double click drags the view', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    h.step(10);
+    // Down where the first click was, then a pan: the browser still pairs its click with the
+    // first, and what is under the pointer at the end of a pan was not aimed at.
+    h.down(x, y);
+    h.move(x + 30, y + 10);
+    h.step(1);
+    h.move(x + 60, y + 20);
+    h.step(1);
+    h.up(x + 60, y + 20);
+    h.doubleClick(x + 60, y + 20);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([]);
+  });
+
+  it('opens the note the first tap picked though the second rolls a little before it lifts', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.finger.down(1, x, y);
+    h.finger.up(1, x, y);
+    h.step(10);
+    // Down 18px off, within a finger's reach of the first tap, and lifted 8px further on.
+    h.finger.down(1, x + 18, y);
+    h.finger.move(1, x + 26, y);
+    h.finger.up(1, x + 26, y);
+    h.doubleClick(x + 26, y);
+    expect(choicesSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([`onOpen ${a.id}`]);
+  });
+
   it('does not take a mouse press for the rest of a tap, however near', () => {
     const { selected } = secondPressAway(0, 'mouse', 'touch');
     expect(selected.length).toBeGreaterThan(1);

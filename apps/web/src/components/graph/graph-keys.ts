@@ -28,6 +28,15 @@ export function reachesGraph(key: string, origin: KeyOrigin): boolean {
 }
 
 /**
+ * A key held with Alt, Ctrl or Meta: the browser's, never the graph's. Alt+Left is Back, Ctrl+-
+ * the page's zoom, and both were walking or zooming the graph instead. Shift is not one: it
+ * makes the + that zooms in.
+ */
+export function browserShortcut(e: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey'>): boolean {
+  return e.altKey || e.ctrlKey || e.metaKey;
+}
+
+/**
  * A press made without a pointer: the keyboard, or a screen reader's virtual click. Focus
  * follows what such a press picks; after a mouse or a finger it stays where it was.
  */

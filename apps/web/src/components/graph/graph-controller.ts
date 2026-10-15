@@ -393,8 +393,12 @@ export class GraphController {
    * is the rest of a double click, not a pick of whatever has come under the pointer since.
    */
   private lastClick: Click | null = null;
-  /** The first click of the pair a double click would complete: what the double click opens. */
-  private pairStart: Click | null = null;
+  /**
+   * The last two clicks, for a double click that completes them: the first, which it opens, and
+   * whether the second came as its repeat (then nothing else is checked); 'dragged' when the
+   * second press moved the view, so nothing under the pointer was aimed at.
+   */
+  private pair: { first: Click; repeat: boolean } | 'dragged' | null = null;
   private raf = 0;
   private lastFrame = 0;
   private frameNo = 0;
@@ -706,7 +710,7 @@ export class GraphController {
     this.pathFrom = null;
     this.pathPick = false;
     this.lastClick = null;
-    this.pairStart = null;
+    this.pair = null;
     // Closed, the walk is over: Back starts again from the next selection.
     this.trail = [];
     this.edgesDirty = true;
@@ -1016,28 +1020,30 @@ export class GraphController {
     const here = { x: drag.startX, y: drag.startY, at: performance.now(), type: e.pointerType };
     // The click before this one: if the browser makes a double click of the two, it began it.
     const before = this.lastClick;
+    const after = (first: Click | null) => (first ? { first, repeat: false } : null);
     if (click && drag.repeat) {
       // The rest of a double click: the first click's record stays, for the double click to open.
-      this.pairStart = before;
+      this.pair = before && { first: before, repeat: true };
     } else if (click && drag.ambiguous && this.zoomBetween(drag.startX, drag.startY)) {
       // Zoomed in between two notes: the next tap can tell them apart, and the double tap this
       // one began opens nothing.
       this.lastClick = { node: null, ...here };
-      this.pairStart = before;
+      this.pair = after(before);
     } else if (click && drag.node) {
       this.clickNode(drag.node, drag.shift);
       this.lastClick = plain ? { node: drag.node, ...here } : null;
-      this.pairStart = plain ? before : null;
+      this.pair = plain ? after(before) : null;
     } else if (click && !drag.node && !this.pathPick) {
       const { x, y } = this.local(e);
       const country = this.countryAt(x, y);
       this.clearSelection();
       if (country) this.zoomToCountry(country);
       this.lastClick = plain ? { node: null, ...here } : null;
-      this.pairStart = plain ? before : null;
+      this.pair = plain ? after(before) : null;
     } else {
       this.lastClick = null;
-      this.pairStart = null;
+      // A press that moved the view still ends in a click the browser may pair with the last.
+      this.pair = click ? null : 'dragged';
     }
     this.el.overlay.style.cursor = this.hover || this.hotCountry ? 'pointer' : 'grab';
   }
@@ -1073,12 +1079,17 @@ export class GraphController {
     // What its first click picked, before that note flew off from under the pointer; nothing
     // when it fell on empty space or zoomed in between two notes. Not timed again: the event
     // is the browser's word that the two clicks were one double click, by the system's own
-    // speed, however long the second press was held. Without a second click on record (it was
-    // dragged, or never reached the canvas), the last one if it was just now and here.
-    const first = this.pairStart ?? this.clickNear(x, y);
-    this.pairStart = null;
+    // speed, however long the second press was held. Its second press moved the view: nothing.
+    // Without a second click on record (it never reached the canvas), the last one if it was
+    // just now and here.
+    const pair = this.pair;
+    this.pair = null;
+    const last = this.clickNear(x, y);
     this.lastClick = null;
-    if (first && this.near(first, x, y)) {
+    if (pair === 'dragged') return;
+    // A repeat was judged near when it came down; a finger may roll a little before it lifts.
+    const first = pair ? (pair.repeat || this.near(pair.first, x, y) ? pair.first : null) : last;
+    if (first) {
       if (first.node) this.events.onOpen(first.node);
       return;
     }
@@ -1851,7 +1862,7 @@ export class GraphController {
     if (this.drag?.kind === 'node' && this.drag.node) this.engine.release(this.drag.node);
     this.drag = null;
     this.lastClick = null;
-    this.pairStart = null;
+    this.pair = null;
     if (this.hover) {
       this.hover = null;
       this.events.onHover(null);
