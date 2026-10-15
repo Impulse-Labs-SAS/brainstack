@@ -91,6 +91,16 @@ export interface OverlayFrame {
   labelPx: number;
 }
 
+/**
+ * What a frame drew that the tooltip must not cover: the dot and label of the note pointed at
+ * and of the selected note, and the name of the country pointed at. `anchor` is the note pointed
+ * at with its label, which the tooltip goes beside; null with none on the stage.
+ */
+export interface KeepClear {
+  anchor: Rect | null;
+  keep: Rect[];
+}
+
 type Curve = [number, number, number, number, number, number];
 
 /** How close a label may come to the stage's edge, or to the chrome. */
@@ -122,9 +132,22 @@ const BIG_COUNTRY = 0.3;
 /** Project names come with the clouds, once they are this far in, and at full strength. */
 const PROJECT_NAMES_FROM = 0.5;
 
+/** How far round a note's dot the tooltip stays clear: past the widest ring drawn round one, a path's start. */
+const RING_ROOM = 7;
+
 const MAX_NODE_PX = 11;
 const screenRadius = (n: GraphNode) => Math.min(MAX_NODE_PX, Math.max(1.8, n.drawRadius * n.sScale)) * (1 + LIFT_POP * n.lift);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
+/** A note's dot, with `pad` px round it. */
+function dotRect(n: GraphNode, pad: number): Rect {
+  const r = screenRadius(n) * (n.isIndex ? 1.3 : 1) + pad;
+  return { x: n.sx - r, y: n.sy - r, w: 2 * r, h: 2 * r };
+}
+function union(a: Rect, b: Rect): Rect {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+}
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
@@ -257,7 +280,8 @@ function stroke(ctx: CanvasRenderingContext2D, c: Curve) {
   ctx.stroke();
 }
 
-export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): void {
+/** One frame of the overlay; what it returns is for the tooltip, which goes over it. */
+export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): KeepClear {
   const { vp, model } = f;
   ctx.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
   ctx.globalCompositeOperation = 'source-over';
@@ -286,16 +310,17 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): voi
   f.labels.begin();
   const key = keyNotes(f);
   // No label covers a note that matters.
-  for (const { n } of key) {
-    if (!n.onScreen) continue;
-    const r = screenRadius(n) * (n.isIndex ? 1.3 : 1) + 2;
-    space.reserve({ x: n.sx - r, y: n.sy - r, w: 2 * r, h: 2 * r });
+  for (const { n } of key) if (n.onScreen) space.reserve(dotRect(n, 2));
+  const labels = new Map<GraphNode, Rect>();
+  for (const { n, level, force } of key) {
+    const rect = noteLabel(ctx, f, space, n, level, force);
+    if (rect) labels.set(n, rect);
   }
-  for (const { n, level, force } of key) noteLabel(ctx, f, space, n, level, force);
 
+  let hotName: Rect | null = null;
   if (f.landAlpha > 0.01 && f.territory) {
     drawContinentLabels(ctx, f, project, space);
-    drawCountryLabels(ctx, f, project, space);
+    hotName = drawCountryLabels(ctx, f, project, space);
   } else if (f.matches) {
     drawMatchZones(ctx, f, project, space);
   } else if (f.vaultLabels) {
@@ -306,6 +331,22 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, f: OverlayFrame): voi
   if (f.cloud >= PROJECT_NAMES_FROM && !f.matches) drawProjectLabels(ctx, f, project, space);
   drawRestLabels(ctx, f, space, new Set(key.map((k) => k.n)));
   ctx.globalAlpha = 1;
+  return keepClear(f, labels, hotName);
+}
+
+/** What the tooltip must leave in sight (KeepClear), from the labels this frame gave the key notes. */
+function keepClear(f: OverlayFrame, labels: ReadonlyMap<GraphNode, Rect>, hotName: Rect | null): KeepClear {
+  const keep: Rect[] = hotName ? [hotName] : [];
+  let anchor: Rect | null = null;
+  for (const n of new Set([f.hover, f.selected])) {
+    if (!n?.onScreen) continue;
+    const dot = dotRect(n, RING_ROOM);
+    const label = labels.get(n);
+    keep.push(dot);
+    if (label) keep.push(label);
+    if (n === f.hover) anchor = label ? union(dot, label) : dot;
+  }
+  return { anchor, keep };
 }
 
 /**
@@ -431,15 +472,17 @@ function drawContinentLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, pro
  * until you are close enough to read the cities themselves. Then only the
  * country under the pointer keeps its name. A name is shown whole or not at
  * all: one faded to a ghost would be text nobody can read, over cities that
- * could have been named.
+ * could have been named. Returns where the name of the country under the
+ * pointer went, if it found room.
  */
-function drawCountryLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace) {
+function drawCountryLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, project: ReturnType<typeof projector>, space: LabelSpace): Rect | null {
   const k = pixelsPerUnit(f.cam, f.vp);
   const all = k < COUNTRY_NAMES_UNTIL;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   const list = [...f.territory!.countries].filter((c) => !f.landed || f.landed.has(c.id)).sort((a, b) => b.count - a.count);
+  let hotName: Rect | null = null;
   for (const c of list) {
     const hot = f.hotCountry === c.id;
     if (!all && !hot) continue;
@@ -454,10 +497,12 @@ function drawCountryLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, proje
     ctx.font = font;
     setSpacing(ctx, spacing);
     const w = ctx.measureText(text).width;
-    if (!space.place([{ x: p.x - w / 2 - 2, y: p.y - size / 2 - 2, w: w + 4, h: size + 4 }])) {
+    const rect = space.place([{ x: p.x - w / 2 - 2, y: p.y - size / 2 - 2, w: w + 4, h: size + 4 }]);
+    if (!rect) {
       setSpacing(ctx, 0);
       continue;
     }
+    if (hot) hotName = rect;
     const vault = f.model.vaults.find((v) => v.id === c.vault);
     ctx.globalAlpha = (hot ? 1 : 0.9) * f.landAlpha;
     ctx.strokeStyle = 'rgba(10,10,10,0.75)';
@@ -468,6 +513,7 @@ function drawCountryLabels(ctx: CanvasRenderingContext2D, f: OverlayFrame, proje
     setSpacing(ctx, 0);
   }
   ctx.globalAlpha = 1;
+  return hotName;
 }
 
 /** Without WebGL: straight edges and flat dots, enough to use the flat views. */
@@ -683,10 +729,11 @@ function keyNotes(f: OverlayFrame): { n: GraphNode; level: 1 | 2; force: boolean
  * A note's name, under it if there is room; a name that matters (level 1 or 2)
  * may go above or to either side instead. Dropped when it finds no room,
  * unless `force`: then it is drawn under the note whatever it covers.
+ * Returns the room it took, or null when it was dropped.
  */
-function noteLabel(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelSpace, n: GraphNode, level: 0 | 1 | 2, force = false): boolean {
+function noteLabel(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelSpace, n: GraphNode, level: 0 | 1 | 2, force = false): Rect | null {
   // A note off the stage has no name on it: its label would point at nothing.
-  if (!n.onScreen || n.sx < 0 || n.sx > f.vp.width || n.sy < 0 || n.sy > f.vp.height) return false;
+  if (!n.onScreen || n.sx < 0 || n.sx > f.vp.width || n.sy < 0 || n.sy > f.vp.height) return null;
   const px = f.labelPx;
   const { sans } = f.fonts;
   const font = level === 2 ? `600 ${px + 1.5}px ${sans}` : n.isIndex || n.size >= 5 ? `600 ${px + 0.5}px ${sans}` : `500 ${px}px ${sans}`;
@@ -704,7 +751,7 @@ function noteLabel(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelS
     rect = below;
     space.take(rect);
   }
-  if (!rect) return false;
+  if (!rect) return null;
   f.labels.shown(n.id);
   const x = rect.x + rect.w / 2;
   const y = rect.y + 2;
@@ -719,7 +766,7 @@ function noteLabel(ctx: CanvasRenderingContext2D, f: OverlayFrame, space: LabelS
   ctx.fillStyle =
     level === 2 ? LABEL_COLORS.strong : level === 1 ? LABEL_COLORS.neighbour : n.kind === 'topic' ? LABEL_COLORS.topic : n.isIndex ? LABEL_COLORS.index : LABEL_COLORS.note;
   ctx.fillText(text, x, y);
-  return true;
+  return rect;
 }
 
 /**

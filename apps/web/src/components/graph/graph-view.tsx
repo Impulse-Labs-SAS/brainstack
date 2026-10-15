@@ -769,6 +769,8 @@ export function GraphView({
       <div
         ref={tooltipRef}
         // Display comes from a class, not the `hidden` attribute: `grid` would override [hidden].
+        // Not chrome: the controller places it clear of the labels, and labels that dodged it
+        // as well would chase it from frame to frame.
         className={cn(
           GLASS,
           'pointer-events-none absolute z-20 max-w-[280px] gap-px rounded-lg px-2.5 py-2 text-xs',

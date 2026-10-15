@@ -756,7 +756,7 @@ describe('GraphController without a plugin', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 312,
+          "dom": 315,
           "event": 74,
           "key": 5,
           "minimap": 11216,
@@ -765,8 +765,8 @@ describe('GraphController without a plugin', () => {
           "scene": 850,
           "snapshot": 1,
         },
-        "digest": "090588cf2662dc",
-        "lines": 174380,
+        "digest": "021e573ba20f60",
+        "lines": 174383,
       }
     `);
   });
@@ -833,15 +833,15 @@ describe('GraphController without a plugin, one view at a time', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 115,
+          "dom": 218,
           "event": 52,
           "key": 3,
           "overlay": 64815,
           "scene": 422,
           "snapshot": 1,
         },
-        "digest": "12da39ad219da9",
-        "lines": 65422,
+        "digest": "1b043f86b24163",
+        "lines": 65525,
       }
     `);
   });
@@ -900,7 +900,7 @@ describe('GraphController without a plugin, one view at a time', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 115,
+          "dom": 116,
           "event": 45,
           "key": 4,
           "minimap": 11096,
@@ -908,8 +908,8 @@ describe('GraphController without a plugin, one view at a time', () => {
           "scene": 453,
           "snapshot": 1,
         },
-        "digest": "173c0f355d7b81",
-        "lines": 94491,
+        "digest": "15171b7b5a2106",
+        "lines": 94492,
       }
     `);
   });
@@ -958,7 +958,7 @@ describe('GraphController without a plugin, one view at a time', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 248,
+          "dom": 392,
           "event": 29,
           "key": 2,
           "minimap": 10078,
@@ -967,8 +967,8 @@ describe('GraphController without a plugin, one view at a time', () => {
           "scene": 429,
           "snapshot": 1,
         },
-        "digest": "07a43aa19fdf29",
-        "lines": 79486,
+        "digest": "1eb8f146c5cef7",
+        "lines": 79630,
       }
     `);
   });
@@ -2670,5 +2670,59 @@ describe('GraphController back from a note', () => {
       for (const k of ['dx', 'dy', 'dz', 'yaw', 'pitch', 'dist'] as const)
         expect(x[k]).toBeCloseTo(y[k], 1);
     }
+  });
+});
+
+// -- Tooltip -------------------------------------------------------------------------------------
+
+describe('GraphController tooltip', () => {
+  it('goes beside the note pointed at, clear of its label and the selected note’s, through a flight', () => {
+    const { h, c, model } = restingNetwork();
+    const [a] = loneNotes(h, model) as [GraphNode];
+    c.select(a);
+    h.step(60);
+    const tip = h.el.tooltip;
+    /** The next frame: where the tooltip went, at its size until measured, and the text drawn. */
+    const next = () => {
+      h.overlayOps!.length = 0;
+      h.step(1);
+      const box = { x: parseFloat(tip.style.left), y: parseFloat(tip.style.top), w: 280, h: 90 };
+      return { box, shown: tip.style.visibility !== 'hidden', drawn: textDrawn(h.overlayOps!) };
+    };
+    const labelOf = (drawn: ReturnType<typeof textDrawn>, n: GraphNode) => {
+      const d = drawn.find((t) => t.text === n.label);
+      expect(d, n.label).toBeDefined();
+      return d!.box;
+    };
+    const clear = ({ box, shown, drawn }: ReturnType<typeof next>, b: GraphNode) => {
+      expect(shown).toBe(true);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.w).toBeLessThanOrEqual(h.box.width);
+      expect(box.y + box.h).toBeLessThanOrEqual(h.box.height);
+      expect(meet(box, labelOf(drawn, b)), `over ${b.label}`).toBe(false);
+      expect(meet(box, labelOf(drawn, a)), `over ${a.label} from ${b.label}`).toBe(false);
+    };
+
+    // The notes nearest the selected one, each pointed at in turn.
+    const near = shown(model)
+      .filter((n) => n !== a)
+      .sort((p, q) => Math.hypot(p.sx - a.sx, p.sy - a.sy) - Math.hypot(q.sx - a.sx, q.sy - a.sy))
+      .slice(0, 4);
+    for (const b of near) {
+      h.move(b.sx, b.sy);
+      expect(h.events.at(-1)).toMatchObject({ name: 'onHover', args: [b] });
+      clear(next(), b);
+    }
+
+    // Still pointed at while the camera flies out: the tooltip goes along with the note.
+    const b = near[0]!;
+    h.move(b.sx, b.sy);
+    const before = next();
+    c.fit();
+    h.step(8);
+    const during = next();
+    expect(during.box).not.toEqual(before.box);
+    clear(during, b);
   });
 });

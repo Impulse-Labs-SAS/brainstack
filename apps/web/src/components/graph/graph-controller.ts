@@ -45,12 +45,14 @@ import {
   pickNearest,
   pickNode,
   projectNodes,
+  type KeepClear,
   type LandPaths,
   type MinimapTransform,
 } from './graph-overlay';
 import type { CamOffset, ReturnEntry, ReturnStep } from './graph-return';
 import { GraphScene } from './graph-scene';
 import { LabelMemory, type Rect } from './labels/placer';
+import { tooltipSlot, type TooltipSide } from './labels/tooltip';
 
 /**
  * Something a feature built over the graph draws — the Sentinel view. It sees the frame, never
@@ -220,6 +222,8 @@ const SHEET_INSET = 8;
 const TOOLBAR_BOTTOM = 56;
 /** The least band kept above the sheet when the chrome reaches down to it, a phone on its side. */
 const BAND_MIN = 80;
+/** The tooltip's size until it is measured: as wide as it may grow, three lines tall. */
+const TOOLTIP_SIZE = { w: 280, h: 90 };
 const SPIN_PER_MS = 0.00008;
 /** How far a search match springs out of the brain, as a share of its size. */
 const LIFT_REACH = 0.13;
@@ -335,6 +339,10 @@ export class GraphController {
   private spin = false;
 
   private hover: GraphNode | null = null;
+  /** Where the pointer last moved over the graph: the tooltip keeps clear of the cursor. */
+  private pointerAt: { x: number; y: number } | null = null;
+  /** Which side of what it names the tooltip took last frame; null when it was not shown. */
+  private tooltipSide: TooltipSide | null = null;
   private selected: GraphNode | null = null;
   private pathFrom: GraphNode | null = null;
   private path: GraphPath | null = null;
@@ -936,7 +944,8 @@ export class GraphController {
       const country = node ? null : this.countryAt(x, y);
       this.setHotCountry(country);
       this.el.overlay.style.cursor = node || country ? 'pointer' : 'grab';
-      if (node || country) this.placeTooltip(x, y);
+      // Placed by the next frame, beside the label it draws: not here, under the pointer.
+      this.pointerAt = { x, y };
       return;
     }
     const dx = x - drag.lastX;
@@ -1448,9 +1457,41 @@ export class GraphController {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  private placeTooltip(x: number, y: number): void {
-    this.el.tooltip.style.left = `${Math.min(x + 16, this.vp.width - 290)}px`;
-    this.el.tooltip.style.top = `${Math.min(y + 16, this.vp.height - 90)}px`;
+  /**
+   * The tooltip beside the note or country pointed at, from what the overlay just drew: placed
+   * every frame, so it rides along with a flight, clear of the note's label, the selection's and
+   * the chrome. With no room it is hidden rather than put over them; the label still names the
+   * note.
+   */
+  private placeTooltip(drawn: KeepClear): void {
+    const pointer = this.pointerAt;
+    if (!(this.hover || this.hotCountry) || !pointer) {
+      this.tooltipSide = null;
+      return;
+    }
+    const tip = this.el.tooltip;
+    const slot = tooltipSlot({
+      // As shown; 0 while React has yet to show it, and in the tests' stand-in, with no layout.
+      size: { w: tip.offsetWidth || TOOLTIP_SIZE.w, h: tip.offsetHeight || TOOLTIP_SIZE.h },
+      anchor: this.hover ? drawn.anchor : null,
+      pointer,
+      keep: drawn.keep,
+      chrome: this.chrome,
+      vp: this.vp,
+      previous: this.tooltipSide,
+    });
+    this.tooltipSide = slot?.side ?? null;
+    if (slot) {
+      this.tooltipStyle('left', `${slot.rect.x}px`);
+      this.tooltipStyle('top', `${slot.rect.y}px`);
+    }
+    this.tooltipStyle('visibility', slot ? '' : 'hidden');
+  }
+
+  /** Only what changed: at rest a frame writes nothing, rather than restyle the tooltip. */
+  private tooltipStyle(key: 'left' | 'top' | 'visibility', value: string): void {
+    const style = this.el.tooltip.style;
+    if (style[key] !== value) style[key] = value;
   }
 
   private resize(): void {
@@ -2033,7 +2074,7 @@ export class GraphController {
     this.edgesDirty = false;
     this.reupload = false;
 
-    drawOverlay(this.ctx, {
+    const drawn = drawOverlay(this.ctx, {
       now,
       vp: this.vp,
       dpr: this.dpr,
@@ -2070,6 +2111,7 @@ export class GraphController {
       labels: this.labels,
       labelPx: this.labelPx,
     });
+    this.placeTooltip(drawn);
     this.plugin?.draw(this.ctx, {
       now,
       dt,
