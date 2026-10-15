@@ -41,6 +41,9 @@ import type { Rect } from './labels/placer';
 const scene = vi.hoisted(() => ({
   calls: [] as { name: string; args: unknown[] }[],
   listener: null as ((name: string, args: readonly unknown[]) => void) | null,
+  /** What the scene says of itself: it drew notes that pulse, its brain is still fading. */
+  pulses: false,
+  easing: false,
 }));
 
 vi.mock('./graph-scene', () => {
@@ -67,6 +70,12 @@ vi.mock('./graph-scene', () => {
       }
       render(frame: SceneFrame) {
         note('render', [{ ...frame, cam: { ...frame.cam } }]);
+      }
+      get pulses() {
+        return scene.pulses;
+      }
+      get easing() {
+        return scene.easing;
       }
       dispose() {
         note('dispose', []);
@@ -181,6 +190,8 @@ type FakeElement = HTMLCanvasElement & {
   removed: number;
   inserted: unknown[];
   captured: number;
+  /** What listens to it, by event: a test fires them. */
+  listeners: Map<string, () => void>;
 };
 
 /** An element: a box, a style and a 2D context, every write recorded. */
@@ -197,11 +208,13 @@ function element(tape: Tape, name: string, box: Box, ops: Op[] | null = null): F
     },
   );
   const ctx = recorder(tape, name, ops);
+  const listeners = new Map<string, () => void>();
   const base: Record<string, unknown> = {
     ops,
     removed: 0,
     inserted: [],
     captured: 0,
+    listeners,
     style,
     hidden: false,
     width: 300,
@@ -217,6 +230,8 @@ function element(tape: Tape, name: string, box: Box, ops: Op[] | null = null): F
       bottom: box.height,
     }),
     getContext: () => ctx,
+    addEventListener: (type: string, cb: () => void) => listeners.set(type, cb),
+    removeEventListener: (type: string) => listeners.delete(type),
     setPointerCapture: (id: number) => {
       (base.captured as number)++;
       tape.write('dom', `${name}.capture(${id})`);
@@ -377,9 +392,17 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
       disconnect() {}
     },
   );
+  // Fonts that never finish loading by themselves (a test says when one comes, by `fonts`), so a
+  // cache of text widths emptied at some moment of its own cannot move what is drawn.
+  const fonts = new Map<string, () => void>();
   vi.stubGlobal('document', {
     documentElement: {},
     createElement: (tag: string) => element(tape, `<${tag}>`, { width: 64, height: 64 }),
+    fonts: {
+      ready: new Promise(() => {}),
+      addEventListener: (type: string, cb: () => void) => fonts.set(type, cb),
+      removeEventListener: (type: string) => fonts.delete(type),
+    },
   });
   vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }));
   vi.stubGlobal('Path2D', function Path2D() {
@@ -468,6 +491,8 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
     controller: c,
     tape,
     el,
+    /** The page's fonts' listeners, by event. */
+    fonts,
     box,
     /** The window media queries read, when there is one: a test may change its width. */
     media,
@@ -487,6 +512,15 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
       box.width = width;
       box.height = height;
       for (const cb of observers) cb();
+    },
+    /**
+     * One frame drawn whatever changed, as after a resize to the same size: at rest a frame draws
+     * nothing, so this is how a test reads what is on the stage, or shows notes it moved behind
+     * the engine's back.
+     */
+    redraw() {
+      this.resize(box.width, box.height);
+      this.step(1);
     },
     down: (x: number, y: number, o?: { shift?: boolean; button?: number }) =>
       c.pointerDown(pointer(x, y, o)),
@@ -541,6 +575,8 @@ function reset(): void {
   vi.restoreAllMocks();
   scene.calls.length = 0;
   scene.listener = null;
+  scene.pulses = false;
+  scene.easing = false;
 }
 
 afterEach(reset);
@@ -1068,7 +1104,14 @@ function restingBrain(opts: HarnessOptions = {}) {
   h.controller.initView('brain');
   h.controller.setModel(model, 'init');
   h.step(400);
-  expect(renders().at(-1)!.moved).toBe(false);
+  // Drawn or not (it does not spin under reduced motion), the next frame moves no note.
+  const drawn = renders().length;
+  h.step(1);
+  expect(
+    renders()
+      .slice(drawn)
+      .every((f) => !f.moved),
+  ).toBe(true);
   return { h, c: h.controller, model };
 }
 
@@ -1726,7 +1769,7 @@ describe('GraphController on a touch screen', () => {
     const cam = lastCam();
     Object.assign(a, { x: cam.tx - 0.5, y: cam.ty });
     Object.assign(b, { x: cam.tx + 0.5, y: cam.ty });
-    h.step(1);
+    h.redraw();
     expect(Math.hypot(a.sx - b.sx, a.sy - b.sy)).toBeLessThan(AMBIGUOUS_GAP_PX);
     const before = lastCam().dist;
     const from = h.events.length;
@@ -2524,10 +2567,13 @@ describe('GraphController on a phone', () => {
     expect(spot).not.toBeNull();
     h.click(spot!.x, spot!.y);
     h.step(60);
-    /** The next frame's text, and its cities': a city's name hangs under it, a place's is centred. */
+    /**
+     * The text on the stage, drawn again, and its cities': a city's name hangs under it, a
+     * place's is centred.
+     */
     const next = () => {
       h.overlayOps!.length = 0;
-      h.step(1);
+      h.redraw();
       const drawn = textDrawn(h.overlayOps!);
       return { drawn, cities: drawn.filter((d) => d.baseline === 'top') };
     };
@@ -2594,7 +2640,7 @@ describe('GraphController on the map', () => {
     expect(round()).toBeGreaterThanOrEqual(120);
     expect(round()).toBeLessThan(0.3 * Math.min(h.box.width, h.box.height));
     h.overlayOps!.length = 0;
-    h.step(1);
+    h.redraw();
     const cities = textDrawn(h.overlayOps!).filter((d) => d.baseline === 'top');
     const byLabel = new Map(model.nodes.map((n) => [n.label, n]));
     expect(cities.length).toBeGreaterThan(5);
@@ -2924,5 +2970,261 @@ describe('GraphController framing a step up from a note', () => {
     c.frameNotes([]);
     h.step(10);
     expectCam(lastCam(), before);
+  });
+});
+
+// -- At rest -------------------------------------------------------------------------------------
+
+/** How many scene frames, and overlay operations, `frames` more frames drew. */
+function drawnOver(h: Harness, frames: number) {
+  const scenes = renders().length;
+  const ops = h.overlayOps!.length;
+  h.step(frames);
+  return { scenes: renders().length - scenes, ops: h.overlayOps!.length - ops };
+}
+
+/**
+ * Frames, one by one, until a second goes by without one drawn: each frame drawn, when it was
+ * and what the overlay did in it.
+ */
+function untilRest(h: Harness, max = 2000) {
+  const drawn: { at: number; ops: string[] }[] = [];
+  for (let i = 0, idle = 0; i < max && idle < 60; i++) {
+    const scenes = renders().length;
+    const ops = h.overlayOps!.length;
+    h.step(1);
+    if (renders().length === scenes) {
+      idle++;
+      continue;
+    }
+    idle = 0;
+    drawn.push({ at: h.clock.now, ops: h.overlayOps!.slice(ops).map((o) => o.op) });
+  }
+  return drawn;
+}
+
+/** A glow sprite stamped: the signal's travelling light, a path's. */
+const glows = (ops: readonly string[]) => ops.filter((op) => op === 'drawImage').length;
+
+describe('GraphController at rest', () => {
+  it('draws nothing, and so uploads nothing, once nothing moves', () => {
+    for (const view of ['network', 'territories', 'brain'] as const) {
+      const h = harness(GraphController);
+      h.controller.initView(view);
+      h.controller.setModel(twoVaults(), 'init');
+      // The brain spins as it opens: a camera that turns is not at rest.
+      h.controller.setSpin(false);
+      untilRest(h);
+      expect(drawnOver(h, 600), view).toEqual({ scenes: 0, ops: 0 });
+    }
+  });
+
+  it('draws again whatever changes what the stage shows, and rests again after', () => {
+    const { h, c, model } = restingNetwork();
+    untilRest(h);
+    const wakes: [string, () => void][] = [
+      // A canvas resized is a canvas cleared.
+      ['resize', () => h.resize(820, 600)],
+      ['chrome', () => c.setChrome([{ x: 0, y: 0, w: 200, h: 40 }])],
+      ['zoom', () => c.zoom(1.25)],
+      ['drag', () => h.drag(300, 300, 340, 320)],
+      ['search', () => c.setMatches(model.nodes.slice(0, 3))],
+      ['no search', () => c.setMatches(null)],
+      ['a result pointed at', () => c.preview(model.nodes[2]!)],
+      ['and left', () => c.preview(null)],
+      ['a path begun', () => c.startPathFrom(model.nodes[4]!)],
+      ['and given up', () => h.key('Escape')],
+      ['view', () => c.setView('territories')],
+      ['routes', () => c.setRoutes(true)],
+      ['a note more', () => c.setModel(twoVaults(new Map(), true), 'data')],
+    ];
+    for (const [what, wake] of wakes) {
+      wake();
+      expect(untilRest(h).length, what).toBeGreaterThan(0);
+      expect(drawnOver(h, 120), what).toEqual({ scenes: 0, ops: 0 });
+    }
+    // The same chrome measured again, after a change that moved none of it: nothing to draw.
+    c.setChrome([{ x: 0, y: 0, w: 200, h: 40 }]);
+    expect(drawnOver(h, 30).scenes).toBe(0);
+  });
+
+  it('plays the signal from a selected note four seconds or so, then rests without it', () => {
+    const { h, c, model } = restingNetwork();
+    untilRest(h);
+    const [a] = loneNotes(h, model) as [GraphNode];
+    const t0 = h.clock.now;
+    c.select(a);
+    const drawn = untilRest(h);
+    const lastAt = drawn.at(-1)!.at - t0;
+    expect(lastAt).toBeGreaterThan(4000);
+    expect(lastAt).toBeLessThanOrEqual(5000);
+    expect(glows(drawn[90]!.ops)).toBeGreaterThan(0);
+    // The last frame drawn is the first without its light: none is left on the stage.
+    expect(glows(drawn.at(-1)!.ops)).toBe(0);
+    // Pointing at another note plays its signal, as long.
+    const b = loneNotes(h, model).find((n) => n !== a && n.degree > 0)!;
+    h.move(b.sx, b.sy);
+    expect(untilRest(h).length).toBeGreaterThan(240);
+  });
+
+  it('runs the light along a path a few times, then rests without it', () => {
+    const { h, model } = restingNetwork();
+    untilRest(h);
+    const [p, q] = pathEnds(h, model);
+    h.click(p.sx, p.sy, { shift: true });
+    h.click(q.sx, q.sy, { shift: true });
+    const drawn = untilRest(h);
+    expect(drawn.length).toBeGreaterThan(200);
+    expect(glows(drawn.at(-1)!.ops)).toBe(0);
+    expect(drawnOver(h, 600).scenes).toBe(0);
+  });
+
+  it('lets the notes edited this week pulse a few seconds after a change, then fade to a glow', () => {
+    const { h, c } = restingNetwork();
+    scene.pulses = true;
+    untilRest(h);
+    c.zoom(1.1);
+    // From the frame that drew the zoom: the last change.
+    const t0 = h.clock.now + 16;
+    untilRest(h);
+    const pulses = renders()
+      .filter((f) => f.now >= t0)
+      .map((f) => ({ at: f.now - t0, pulse: f.pulse }));
+    // Up from nothing in a few frames, never in one: each active note would jump.
+    const rising = pulses.filter((p) => p.at < 300).map((p) => p.pulse);
+    expect(rising[0]).toBeLessThan(0.1);
+    expect(rising.every((v, i) => i === 0 || v > rising[i - 1]!)).toBe(true);
+    expect(pulses.filter((p) => p.at >= 320 && p.at < 4000).every((p) => p.pulse === 1)).toBe(true);
+    const fading = pulses.filter((p) => p.at > 4000 && p.at < 5000).map((p) => p.pulse);
+    expect(fading.length).toBeGreaterThan(30);
+    expect(fading.every((v, i) => v < 1 && (i === 0 || v <= fading[i - 1]!))).toBe(true);
+    // It ends at nothing, drawn once there, and nothing is drawn after.
+    expect(pulses.at(-1)!.pulse).toBe(0);
+    expect(pulses.at(-2)!.pulse).toBeGreaterThan(0);
+    expect(drawnOver(h, 600).scenes).toBe(0);
+
+    // A change halfway through the fade takes it back up from where it was, not from the top.
+    c.zoom(1.1);
+    h.step(4500 / 16);
+    const before = renders().length;
+    c.zoom(1.1);
+    untilRest(h);
+    const after = renders()
+      .slice(before - 1)
+      .map((f) => f.pulse);
+    expect(after[0]).toBeGreaterThan(0.2);
+    expect(after[0]).toBeLessThan(0.8);
+    for (let i = 1; i < after.length; i++)
+      expect(Math.abs(after[i]! - after[i - 1]!)).toBeLessThanOrEqual(16 / 300 + 1e-9);
+  });
+
+  it('keeps drawing while the scene still fades, and stops when it is done', () => {
+    const { h } = restingNetwork();
+    untilRest(h);
+    scene.easing = true;
+    expect(drawnOver(h, 30).scenes).toBe(30);
+    // The frame that finished the fade was drawn: nothing is left to draw.
+    scene.easing = false;
+    expect(drawnOver(h, 30).scenes).toBe(0);
+  });
+
+  it('plays nothing by itself under reduced motion: at rest as soon as the camera lands', () => {
+    const { h, c, model } = restingNetwork(twoVaults(), { reduceMotion: true });
+    scene.pulses = true;
+    untilRest(h);
+    const [a] = loneNotes(h, model) as [GraphNode];
+    c.select(a);
+    expect(untilRest(h).length).toBeLessThan(5);
+    expect(renders().every((f) => f.pulse === 0)).toBe(true);
+  });
+
+  it('places the tooltip every frame, drawn or not', () => {
+    const { h, model } = restingNetwork();
+    untilRest(h);
+    const [a] = loneNotes(h, model) as [GraphNode];
+    h.move(a.sx, a.sy);
+    untilRest(h);
+    const tip = h.el.tooltip.style;
+    const left = tip.left;
+    expect(left).not.toBe('');
+    tip.left = '0px';
+    expect(drawnOver(h, 1).scenes).toBe(0);
+    expect(tip.left).toBe(left);
+  });
+
+  it('brings the minimap up to date with a camera that moved, then leaves it', () => {
+    const h = harness(GraphController, { golden: true });
+    h.controller.initView('network');
+    h.controller.setModel(twoVaults(), 'init');
+    h.step(800);
+    const minimap = () => h.tape.counts.get('minimap') ?? 0;
+    const before = minimap();
+    h.step(120);
+    expect(minimap()).toBe(before);
+    h.minimap(60, 40);
+    h.step(3);
+    expect(minimap()).toBeGreaterThan(before);
+    // The labels settle in a frame or two, and it with them.
+    h.step(60);
+    const after = minimap();
+    h.step(120);
+    expect(minimap()).toBe(after);
+  });
+
+  it('draws the notes coming in until the last has stopped flashing, on the map too', () => {
+    for (const view of ['territories', 'network'] as const) {
+      const h = harness(GraphController);
+      const c = h.controller;
+      const cache = new Map<string, GraphNode>();
+      c.initView(view);
+      c.setModel(twoVaults(cache), 'init');
+      for (const next of [() => {}, () => c.setModel(twoVaults(cache, true), 'data')]) {
+        next();
+        untilRest(h);
+        // What is on the stage is the last frame drawn: every note in, none still flashing.
+        const last = renders().at(-1)!;
+        for (const n of c.model!.nodes) {
+          expect(last.appear(n), `${view} ${n.id}`).toBe(1);
+          expect(last.flash(n), `${view} ${n.id}`).toBe(0);
+        }
+      }
+    }
+  });
+
+  it('draws the graph again over what a plugin left on the overlay, as it goes', () => {
+    const { h, c } = restingNetwork();
+    untilRest(h);
+    const plugin = fakePlugin(h);
+    c.setPlugin(plugin);
+    // Drawing over the graph, it draws as it likes: every frame.
+    expect(drawnOver(h, 30).scenes).toBe(30);
+    c.setPlugin(null);
+    const ops = h.overlayOps!.length;
+    expect(drawnOver(h, 1).scenes).toBe(1);
+    expect(h.overlayOps!.slice(ops).map((o) => o.op)).not.toContain('plugin.draw');
+    untilRest(h);
+    expect(drawnOver(h, 120).scenes).toBe(0);
+  });
+
+  it('draws again when a font comes in, or the WebGL context comes back', () => {
+    const { h } = restingNetwork();
+    untilRest(h);
+    h.fonts.get('loadingdone')!();
+    expect(drawnOver(h, 1).scenes).toBe(1);
+    untilRest(h);
+    h.el.gl.listeners.get('webglcontextrestored')!();
+    expect(drawnOver(h, 1).scenes).toBe(1);
+    untilRest(h);
+    h.controller.dispose();
+    expect(h.fonts.size).toBe(0);
+    expect(h.el.gl.listeners.size).toBe(0);
+  });
+
+  it('comes to rest riding with a note back from its page', () => {
+    const left = leaveFrom('network', (h, model) => [loneNote(h, model)]);
+    const { h, c } = comeBack('network', left.saved);
+    c.restore(left.entry);
+    untilRest(h, 4000);
+    expect(drawnOver(h, 600).scenes).toBe(0);
   });
 });

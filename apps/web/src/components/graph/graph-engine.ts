@@ -39,6 +39,8 @@ import type { EdgeKind, GraphEdge, GraphModel, GraphNode, GraphView } from '@/li
 
 const LINK_FACTOR: Record<EdgeKind, number> = { link: 1, structure: 0.35, affinity: 0.08, topic: 0.3 };
 const APPEAR_MS = 420;
+/** How long a note that appears flashes: past its fade-in. */
+const FLASH_MS = 1000;
 /** Fraction of the remaining way a note travels towards its place on the map, per frame. */
 const MAP_EASE = 0.14;
 /**
@@ -185,6 +187,11 @@ export class GraphEngine {
     return this.warmup > 0;
   }
 
+  /** Until when some note is still fading in, or flashing as it came: each frame differs till then. */
+  get arrivingUntil(): number {
+    return this.appearingUntil - APPEAR_MS + FLASH_MS;
+  }
+
   appear(n: GraphNode, now: number): number {
     if (n.bornAt === -Infinity) return 1;
     return clamp((now - n.bornAt) / APPEAR_MS, 0, 1);
@@ -192,8 +199,8 @@ export class GraphEngine {
   flash(n: GraphNode, now: number): number {
     if (this.reduceMotion) return 0;
     const dt = now - n.bornAt;
-    if (!(dt >= 0 && dt <= 1000)) return 0;
-    const f = 1 - dt / 1000;
+    if (!(dt >= 0 && dt <= FLASH_MS)) return 0;
+    const f = 1 - dt / FLASH_MS;
     return f * f * (this.growth ? 1 : 0.55);
   }
 
@@ -273,7 +280,9 @@ export class GraphEngine {
       }
     }
     this.stepGrowth(now);
-    this.brainScale += (this.brainTarget - this.brainScale) * 0.06;
+    // Arrived within a millionth: eased for ever, it would leave no frame the same as the last.
+    const gap = this.brainTarget - this.brainScale;
+    this.brainScale = Math.abs(gap) <= this.brainTarget * 1e-6 ? this.brainTarget : this.brainScale + gap * 0.06;
     return moving || !!this.growth;
   }
 

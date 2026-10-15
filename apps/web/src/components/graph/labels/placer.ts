@@ -130,6 +130,16 @@ export class LabelMemory {
   shown(key: string): void {
     this.now.add(key);
   }
+
+  /**
+   * The frame just drawn named what the one before it did. Placed with those first, the next
+   * frame would then place everything as this one did: drawing it again would change nothing.
+   */
+  get settled(): boolean {
+    if (this.now.size !== this.last.size) return false;
+    for (const key of this.now) if (!this.last.has(key)) return false;
+    return true;
+  }
 }
 
 /** `items` with those last shown first, each group in its given order. */

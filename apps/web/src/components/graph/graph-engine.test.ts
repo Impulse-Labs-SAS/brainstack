@@ -246,3 +246,27 @@ describe('dimensions', () => {
     expect(model.nodes.every((n) => n.z === 0)).toBe(true);
   });
 });
+
+describe('at rest', () => {
+  it('brings the brain to its size exactly, not ever closer', () => {
+    const engine = engineWith(importedVault(80), 'brain');
+    engine.brainScale = engine.brainTarget / 2;
+    settle(engine, 600);
+    expect(engine.brainScale).toBe(engine.brainTarget);
+  });
+
+  it('says until when notes coming in still change: their fade-in, and their flash after it', () => {
+    const model = importedVault(80);
+    const engine = new GraphEngine(false);
+    engine.view = 'network';
+    engine.setModel(model, 'init', 0);
+    settle(engine);
+    const until = engine.arrivingUntil;
+    expect(Number.isFinite(until)).toBe(true);
+    expect(model.nodes.some((n) => engine.flash(n, until - 20) > 0)).toBe(true);
+    for (const n of model.nodes) {
+      expect(engine.appear(n, until), n.id).toBe(1);
+      expect(engine.flash(n, until + 1), n.id).toBe(0);
+    }
+  });
+});

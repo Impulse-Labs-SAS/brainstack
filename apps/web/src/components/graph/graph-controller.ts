@@ -7,6 +7,8 @@
 //
 // Nothing here re-renders React while the graph animates: the loop runs on
 // refs and plain objects, and only changes a panel shows go through events.
+// Nor does a graph at rest cost a thing: a frame that would draw what the last
+// one drew draws nothing and uploads nothing (the end of `frame`).
 
 import {
   ANGLES,
@@ -42,6 +44,7 @@ import {
   drawOverlay,
   forgetTextWidths,
   landPaths,
+  overlayMovesUntil,
   pickNearest,
   pickNode,
   projectNodes,
@@ -236,6 +239,19 @@ const DROP_MS = 380;
 const STAGE_FADE_MS = 400;
 /** The graph's drawing buffer while a stage covers it: none of it shows, so it holds no memory. */
 const PARKED: Viewport = { width: 1, height: 1 };
+/**
+ * The notes edited this week pulse this long after anything changed, then stop over PULSE_FADE_MS
+ * and only glow: with nothing else moving, the graph comes to rest. What WCAG 2.2.2 asks of
+ * anything that moves by itself for more than five seconds. Back from rest the pulse rises over
+ * PULSE_RISE_MS: at once, every active note would jump by as much as a quarter of its light.
+ */
+const PULSE_MS = 4000;
+const PULSE_FADE_MS = 1000;
+const PULSE_RISE_MS = 300;
+/** Frames drawn again only so the labels settle where hysteresis leaves them, at most. */
+const SETTLE_FRAMES = 3;
+/** A camera riding with a note stops this close to where it is going, in CSS pixels. */
+const FOLLOW_ARRIVED_PX = 0.01;
 
 type LiftTween = { from: number; to: number; t0: number };
 
@@ -246,6 +262,12 @@ function easeOutBack(t: number): number {
 }
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
+/** Two lists alike item by item: numbers by value, anything else by identity. */
+const sameItems = (a: readonly unknown[], b: readonly unknown[]) =>
+  a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+const sameRects = (a: readonly Rect[], b: readonly Rect[]) =>
+  a.length === b.length &&
+  a.every((r, i) => r.x === b[i]!.x && r.y === b[i]!.y && r.w === b[i]!.w && r.h === b[i]!.h);
 
 const samePick = (a: Picked, b: Picked) =>
   a.kind === 'note'
@@ -434,6 +456,26 @@ export class GraphController {
   private reupload = false;
   private disposed = false;
 
+  // At rest: whether a frame draws at all (the end of `frame`).
+  /** What the last frame drawn was drawn from, but for the time. */
+  private drawnFrom: readonly unknown[] = [];
+  /** The canvases need drawing whatever the last frame drew: resized, a font come, a plugin gone. */
+  private stale = true;
+  /** When the graph last changed, by itself or at someone's hand: the pulse runs from here. */
+  private stirredAt = 0;
+  /** How much the notes edited this week pulse now, 0–1, and in the last frame drawn. */
+  private pulse = 0;
+  private drawnPulse = 0;
+  /** Frames drawn in a row only for the labels to settle. */
+  private settling = 0;
+  /** When the last frame drawn was. */
+  private drawnAt = -Infinity;
+  /** What the overlay drew last: the tooltip goes beside it every frame, drawn or not. */
+  private kept: KeepClear | null = null;
+  /** Frames drawn so far; the minimap catches up with the latest. */
+  private drawCount = 0;
+  private minimapAt = -1;
+
   constructor(
     private readonly el: Elements,
     private readonly events: ControllerEvents,
@@ -456,7 +498,12 @@ export class GraphController {
       sans: css.getPropertyValue('--font-sans').trim() || 'ui-sans-serif, system-ui, sans-serif',
       mono: css.getPropertyValue('--font-mono').trim() || 'ui-monospace, monospace',
     };
-    void document.fonts?.ready.then(() => forgetTextWidths());
+    // Labels measured and drawn in a stand-in font are drawn again in the real one: the page's
+    // fonts once they are in, and a face only the canvas asked for, whenever it comes.
+    void document.fonts?.ready.then(this.fontsCame);
+    document.fonts?.addEventListener('loadingdone', this.fontsCame);
+    // A lost context comes back blank: whatever was on screen has to be drawn again.
+    el.gl.addEventListener('webglcontextrestored', this.restored);
     this.labelPx =
       typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
         ? 13
@@ -475,6 +522,8 @@ export class GraphController {
    */
   setPlugin(plugin: GraphPlugin | null): void {
     if (plugin === this.plugin) return;
+    // What the plugin drew over the graph stays on the overlay until the graph is drawn again.
+    this.stale = true;
     if (this.plugin) {
       this.leaveStage();
       const spin = this.spinAfter ?? false;
@@ -526,6 +575,8 @@ export class GraphController {
     this.disposed = true;
     this.leaveStage();
     cancelAnimationFrame(this.raf);
+    this.el.gl.removeEventListener('webglcontextrestored', this.restored);
+    document.fonts?.removeEventListener('loadingdone', this.fontsCame);
     this.resizeObserver.disconnect();
     clearTimeout(this.chipTimer);
     this.scene?.dispose();
@@ -624,6 +675,9 @@ export class GraphController {
 
   /** What floats over the graph now, in CSS pixels from the stage's corner: labels keep clear of it. */
   setChrome(rects: readonly Rect[]): void {
+    // Measured again after a change that moved nothing (a tooltip's text): kept, so the graph is
+    // not drawn again for it.
+    if (sameRects(rects, this.chrome)) return;
     this.chrome = rects;
   }
 
@@ -1296,6 +1350,12 @@ export class GraphController {
    */
   private followNote(f: Follow, dt: number): void {
     const to = placeAt(f.cam, laidOut(f.node));
+    const gap = Math.hypot(to.tx - this.cam.tx, to.ty - this.cam.ty, to.tz - this.cam.tz);
+    // There, or as good as: eased on, it would creep for ever and no frame would be the last.
+    if (gap * pixelsPerUnit(this.cam, this.vp) < FOLLOW_ARRIVED_PX) {
+      if (gap) this.cam = { ...this.cam, tx: to.tx, ty: to.ty, tz: to.tz };
+      return;
+    }
     const k = this.reduceMotion ? 1 : 1 - Math.exp(-dt / FOLLOW_MS);
     this.cam = {
       ...this.cam,
@@ -1563,7 +1623,18 @@ export class GraphController {
     // Parked, the graph's buffer stays 1×1: it takes the new size when the stage goes.
     if (!this.parked) this.scene?.resize(this.vp, this.dpr);
     this.staged?.resize(this.vp, this.dpr);
+    // A canvas resized is a canvas cleared.
+    this.stale = true;
   }
+
+  private readonly restored = (): void => {
+    this.stale = true;
+  };
+
+  private readonly fontsCame = (): void => {
+    forgetTextWidths();
+    this.stale = true;
+  };
 
   private cloud(): number {
     const n = this.model?.nodes.length ?? 0;
@@ -2017,6 +2088,157 @@ export class GraphController {
     return true;
   }
 
+  /**
+   * How much the notes edited this week pulse this frame: up to all of it while anything changed
+   * within PULSE_MS, then down to none. Every frame, drawn or not, so it moves by the clock.
+   */
+  private easePulse(now: number, dt: number): number {
+    if (this.reduceMotion) return 0;
+    const target = now - this.stirredAt < PULSE_MS ? 1 : 0;
+    this.pulse =
+      target > this.pulse
+        ? Math.min(target, this.pulse + dt / PULSE_RISE_MS)
+        : Math.max(target, this.pulse - dt / PULSE_FADE_MS);
+    return this.pulse;
+  }
+
+  /**
+   * What a frame is drawn from, but for the time: the camera, the stage's size, the model and its
+   * layout's shape, what is pointed at, selected, found or traced, the map's fades, the chrome.
+   * A frame whose list is the last drawn one's, item by item, would draw that frame again.
+   */
+  private drawingFrom(model: GraphModel, visibleVaults: number): unknown[] {
+    const c = this.cam;
+    return [
+      c.tx,
+      c.ty,
+      c.tz,
+      c.yaw,
+      c.pitch,
+      c.dist,
+      this.vp,
+      this.dpr,
+      model,
+      visibleVaults,
+      this.engine.view,
+      this.engine.brainScale,
+      this.engine.territory,
+      this.engine.ring,
+      this.land,
+      this.hover,
+      this.previewed,
+      this.selected,
+      this.pathFrom,
+      this.path,
+      this.focus,
+      this.matches,
+      this.hotCountry,
+      this.countryRoutes,
+      this.landAlpha,
+      this.mapBlend,
+      this.edgeScale,
+      this.chrome,
+    ];
+  }
+
+  /** The graph drawn: the notes placed on the screen, the scene, the overlay, the plugin over it. */
+  private drawGraph(
+    now: number,
+    dt: number,
+    model: GraphModel,
+    f: {
+      moved: boolean;
+      lifting: boolean;
+      relit: boolean;
+      growth: boolean;
+      pulse: number;
+      visibleVaults: number;
+    },
+  ): void {
+    const is3D = this.engine.is3D;
+    const view = this.engine.view;
+    const cloud = this.cloud();
+    projectNodes(model, this.cam, this.vp, is3D, this.engine.brainScale, this.mapBlend);
+    const appear = (n: GraphNode) => this.engine.appear(n, now);
+    const pathNodes = this.path ? new Set(this.path.nodes) : null;
+    this.scene?.render({
+      now,
+      dt,
+      wallClock: Date.now(),
+      cam: this.cam,
+      vp: this.vp,
+      dpr: this.dpr,
+      is3D,
+      brainScale: this.engine.brainScale,
+      cloud,
+      view,
+      landAlpha: this.landAlpha,
+      mapBlend: this.mapBlend,
+      hotCountry: this.hover ? (this.hover.project?.id ?? null) : this.hotCountry,
+      edgeScale: this.edgeScale,
+      hops: this.hops,
+      pathNodes,
+      pathEdges: this.path ? new Set(this.path.edges) : null,
+      matched: this.matched,
+      moved: f.moved || !!this.drag || f.lifting || this.reupload,
+      edgesDirty: f.relit,
+      appear,
+      flash: (n) => this.engine.flash(n, now),
+      pulse: f.pulse,
+      reduceMotion: this.reduceMotion,
+    });
+    this.edgesDirty = false;
+    this.reupload = false;
+
+    this.kept = drawOverlay(this.ctx, {
+      now,
+      vp: this.vp,
+      dpr: this.dpr,
+      cam: this.cam,
+      is3D,
+      view,
+      brainScale: this.engine.brainScale,
+      cloud,
+      model,
+      landAlpha: this.landAlpha,
+      land: this.land?.paths ?? null,
+      landed: this.engine.growth ? (this.land?.landed ?? null) : null,
+      territory: this.engine.territory,
+      hotCountry: this.hotCountry,
+      countryRoutes: this.countryRoutes,
+      ring: this.engine.ring,
+      hover: this.hover ?? this.previewed,
+      selected: this.selected,
+      pathFrom: this.pathFrom,
+      path: this.path,
+      pathT0: this.pathT0,
+      focus: this.focus,
+      focusT0: this.focusT0,
+      hops: this.hops,
+      matched: this.matched,
+      matches: this.matches,
+      searchT0: this.searchT0,
+      vaultLabels: is3D && f.visibleVaults > 1,
+      fallback: !this.webgl,
+      appear,
+      reduceMotion: this.reduceMotion,
+      fonts: this.fonts,
+      chrome: this.chrome,
+      labels: this.labels,
+      labelPx: this.labelPx,
+    });
+    this.plugin?.draw(this.ctx, {
+      now,
+      dt,
+      cam: this.cam,
+      vp: this.vp,
+      dpr: this.dpr,
+      model,
+      reduceMotion: this.reduceMotion,
+      settled: !f.moved && !this.engine.warming && !f.growth,
+    });
+  }
+
   private readonly frame = (now: number): void => {
     this.raf = requestAnimationFrame(this.frame);
     const model = this.model;
@@ -2099,92 +2321,74 @@ export class GraphController {
     }
 
     const is3D = this.engine.is3D;
-    const view = this.engine.view;
-    const cloud = this.cloud();
-    const visibleVaults = model.vaults.filter((v) => !v.hidden).length;
     const edgesFading = this.easeViews(dt);
     const lifting = this.liftMatches(now, dt);
-    projectNodes(model, this.cam, this.vp, is3D, this.engine.brainScale, this.mapBlend);
-    const appear = (n: GraphNode) => this.engine.appear(n, now);
-    const pathNodes = this.path ? new Set(this.path.nodes) : null;
-    this.scene?.render({
-      now,
-      dt,
-      wallClock: Date.now(),
-      cam: this.cam,
-      vp: this.vp,
-      dpr: this.dpr,
-      is3D,
-      brainScale: this.engine.brainScale,
-      cloud,
-      view,
-      landAlpha: this.landAlpha,
-      mapBlend: this.mapBlend,
-      hotCountry: this.hover ? (this.hover.project?.id ?? null) : this.hotCountry,
-      edgeScale: this.edgeScale,
-      hops: this.hops,
-      pathNodes,
-      pathEdges: this.path ? new Set(this.path.edges) : null,
-      matched: this.matched,
-      moved: moved || !!this.drag || lifting || this.reupload,
-      edgesDirty: this.relightEdges(now, !!growth) || edgesFading,
-      appear,
-      flash: (n) => this.engine.flash(n, now),
-      reduceMotion: this.reduceMotion,
-    });
-    this.edgesDirty = false;
-    this.reupload = false;
+    const relit = this.relightEdges(now, !!growth) || edgesFading;
+    const visibleVaults = model.vaults.filter((v) => !v.hidden).length;
+    const from = this.drawingFrom(model, visibleVaults);
+    // Whatever moves by itself aside — the pulse, the signal, a path's light, settling labels —
+    // a frame differs from the last one drawn only if one of these does.
+    const changed =
+      this.stale ||
+      moved ||
+      !!growth ||
+      lifting ||
+      relit ||
+      // Notes fading in or flashing as they came, and the frame after the last of them.
+      this.drawnAt <= this.engine.arrivingUntil ||
+      this.reupload ||
+      this.edgesDirty ||
+      // A plugin's drawing over the graph moves as it likes.
+      !!this.plugin ||
+      !!this.scene?.easing ||
+      !sameItems(from, this.drawnFrom);
+    if (changed) this.stirredAt = now;
+    const pulse = this.easePulse(now, dt);
+    // Down to nothing, and once more at nothing, so it ends on the glow it settles to.
+    const pulsing = !!this.scene?.pulses && (pulse > 0 || this.drawnPulse > 0);
+    // The overlay's signal, pings or light along a path, and the frame after the last of them.
+    const playing =
+      this.drawnAt <
+      overlayMovesUntil({
+        hops: this.hops,
+        hotCountry: this.hotCountry,
+        countryRoutes: this.countryRoutes,
+        focusT0: this.focusT0,
+        path: this.path,
+        pathT0: this.pathT0,
+        matches: this.matches,
+        searchT0: this.searchT0,
+        reduceMotion: this.reduceMotion,
+      });
+    const settle = !this.labels.settled && this.settling < SETTLE_FRAMES;
+    if (changed || pulsing || playing || settle) {
+      this.settling = changed || pulsing || playing ? 0 : this.settling + 1;
+      this.drawGraph(now, dt, model, {
+        moved,
+        lifting,
+        relit,
+        growth: !!growth,
+        pulse,
+        visibleVaults,
+      });
+      this.drawnFrom = from;
+      this.drawnAt = now;
+      this.drawnPulse = pulse;
+      this.stale = false;
+      this.drawCount++;
+    }
+    // Every frame, drawn or not: the pointer moves over a note at rest, and the tooltip, once
+    // React has filled it, has its real size to be placed by.
+    if (this.kept) this.placeTooltip(this.kept);
 
-    const drawn = drawOverlay(this.ctx, {
-      now,
-      vp: this.vp,
-      dpr: this.dpr,
-      cam: this.cam,
-      is3D,
-      view,
-      brainScale: this.engine.brainScale,
-      cloud,
-      model,
-      landAlpha: this.landAlpha,
-      land: this.land?.paths ?? null,
-      landed: this.engine.growth ? (this.land?.landed ?? null) : null,
-      territory: this.engine.territory,
-      hotCountry: this.hotCountry,
-      countryRoutes: this.countryRoutes,
-      ring: this.engine.ring,
-      hover: this.hover ?? this.previewed,
-      selected: this.selected,
-      pathFrom: this.pathFrom,
-      path: this.path,
-      pathT0: this.pathT0,
-      focus: this.focus,
-      focusT0: this.focusT0,
-      hops: this.hops,
-      matched: this.matched,
-      matches: this.matches,
-      searchT0: this.searchT0,
-      vaultLabels: is3D && visibleVaults > 1,
-      fallback: !this.webgl,
-      appear,
-      reduceMotion: this.reduceMotion,
-      fonts: this.fonts,
-      chrome: this.chrome,
-      labels: this.labels,
-      labelPx: this.labelPx,
-    });
-    this.placeTooltip(drawn);
-    this.plugin?.draw(this.ctx, {
-      now,
-      dt,
-      cam: this.cam,
-      vp: this.vp,
-      dpr: this.dpr,
-      model,
-      reduceMotion: this.reduceMotion,
-      settled: !moved && !this.engine.warming && !growth,
-    });
-
-    if (!is3D && this.frameNo % 3 === 0 && !this.el.minimap.hidden) {
+    // Every third frame, if anything was drawn since it last was.
+    if (
+      !is3D &&
+      this.frameNo % 3 === 0 &&
+      !this.el.minimap.hidden &&
+      this.minimapAt !== this.drawCount
+    ) {
+      this.minimapAt = this.drawCount;
       const dpr = this.dpr;
       if (this.el.minimap.width !== 176 * dpr) {
         this.el.minimap.width = 176 * dpr;
@@ -2196,7 +2400,7 @@ export class GraphController {
         model,
         this.cam,
         this.vp,
-        appear,
+        (n) => this.engine.appear(n, now),
       );
     }
 

@@ -117,4 +117,22 @@ describe('LabelMemory', () => {
     memory.begin();
     expect(shownFirst(['a', 'b', 'c', 'd'], (k) => k, memory)).toEqual(['a', 'b', 'c', 'd']);
   });
+
+  it('is settled once a frame names just what the one before it did', () => {
+    const memory = new LabelMemory();
+    expect(memory.settled).toBe(true);
+    memory.begin();
+    memory.shown('a');
+    expect(memory.settled).toBe(false);
+    memory.begin();
+    memory.shown('a');
+    expect(memory.settled).toBe(true);
+    memory.begin();
+    memory.shown('a');
+    memory.shown('b');
+    expect(memory.settled).toBe(false);
+    memory.begin();
+    memory.shown('b');
+    expect(memory.settled).toBe(false);
+  });
 });

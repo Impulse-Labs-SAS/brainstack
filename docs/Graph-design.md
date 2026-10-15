@@ -202,10 +202,10 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
 | Double click, or `Enter` | Opens the note (a shared note opens under `/notes/shared/<owner>/…`). A double click opens what its first click picked, though the camera has since flown it from under the pointer.                                                                                                                        |
 | Back, or `Backspace`     | Returns to the previous selection, a note or a path, and the camera it was seen from. Closing the preview ends the trail.                                                                                                                                                                                   |
 | `Esc`                    | Steps out a level at a time: cancels a path being picked, then closes the preview, then fits the whole graph (the whole map in Territories).                                                                                                                                                                |
-| Shift+click two notes    | The shortest path between them, with a pulse travelling along it. Links first; shared topics only when no link path exists, and the panel says so.                                                                                                                                                          |
+| Shift+click two notes    | The shortest path between them, with a light running along it a few times. Links first; shared topics only when no link path exists, and the panel says so.                                                                                                                                                 |
 | Arrow keys               | With a note selected, move to the neighbour in that direction on screen.                                                                                                                                                                                                                                    |
 | `/`                      | Focus search. Matches light up; `Enter` flies to the best one.                                                                                                                                                                                                                                              |
-| Hover                    | The note fires: its neighbours light up at one and two hops, with pulses along the edges. On the map, a country fires the same way along the routes that leave it. The tooltip keeps clear of the note, its label and the selected note's.                                                                  |
+| Hover                    | The note fires: its neighbours light up at one and two hops, with pulses along the edges for a few seconds. On the map, a country fires the same way along the routes that leave it. The tooltip keeps clear of the note, its label and the selected note's.                                                |
 | Zoom out                 | Semantic zoom: note labels give way to project names and clouds; on the map, to country names, though a country that fills the screen keeps its notes named.                                                                                                                                                |
 | Drag the background      | Pans the flat views; turns the brain (Shift+drag pans it).                                                                                                                                                                                                                                                  |
 | Pinch, two fingers       | Zoom and pan on a touch screen. A finger dragged from a note moves the view; a tap reaches 22px round a note, and one between two notes zooms in rather than guess.                                                                                                                                         |
@@ -215,7 +215,11 @@ the selection, its trail for Back and the camera, which follows the note while t
 (`graph-return.ts`, kept in session storage and read once).
 
 The brain spins slowly until the user touches anything; side, top and front presets reorient
-it. With `prefers-reduced-motion`, nothing spins, pulses or fades in.
+it. Nothing else moves by itself for long: the notes edited this week pulse for a few seconds
+after anything changes, then only glow, and the signal out of a note, a path's light and a
+search's pings play for five seconds at most and stop — what WCAG 2.2.2 asks of motion nobody
+started.
+With `prefers-reduced-motion`, nothing spins, pulses or fades in.
 
 **Replay growth** shows the notes appearing one by one in order of creation, at an even pace,
 each beside the neighbour it links to — on the map, at its own place, so the countries grow —
@@ -333,6 +337,15 @@ are real, not before.
 The map costs nothing per frame once built. For 1,600 notes, placing them takes about 7 ms
 and the land about 16 ms (40 ms the first time, before the JIT warms up); it is rebuilt when
 the notes or layers change, and every 200 ms during a replay.
+
+**At rest it draws nothing.** Each frame lists what it would be drawn from — the camera, the
+stage's size, the model, what is pointed at, selected, found or traced, the map's fades, the
+chrome — and when the list is the last drawn frame's and nothing moves by itself (the layout, a
+fade, a flight, the pulse, the signal), it draws nothing and uploads nothing; only the tooltip
+is placed, and the minimap catches up. On the bench, 1,600 notes at rest went from redrawing
+every frame (some 4 uploads and every label each time) to none. The loop still runs, at well
+under a tenth of a millisecond a frame. A spinning brain is not at rest; nor is a plugin
+drawing over the graph.
 
 ## Deliberately not built
 
