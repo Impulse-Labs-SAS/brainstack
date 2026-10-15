@@ -119,7 +119,7 @@ function Header({
           <AriaButton
             onPress={onBack}
             aria-label={`Back to ${back}`}
-            className="flex items-center gap-0.5 rounded p-1 text-xs text-fg-muted outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:h-11 touch:min-w-11 touch:justify-center"
+            className="flex items-center gap-0.5 rounded p-1 text-xs text-fg-tertiary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:h-11 touch:min-w-11 touch:justify-center"
           >
             <ChevronLeft size={14} aria-hidden />
             Back

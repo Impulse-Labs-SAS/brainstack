@@ -1547,6 +1547,9 @@ function restingNetwork(model: GraphModel = twoVaults(), opts: HarnessOptions = 
 const lastCam = () => renders().at(-1)!.cam;
 const selectedSince = (h: Harness, from: number) =>
   eventsSince(h, from).filter((e) => e.startsWith('onSelection note'));
+/** Every selection and every clearing of one, since `from`. */
+const choicesSince = (h: Harness, from: number) =>
+  eventsSince(h, from).filter((e) => e.startsWith('onSelection'));
 const pinned = (model: GraphModel) => model.nodes.filter((n) => n.fx != null);
 
 /** A note on screen with no other within `px` of it. */
@@ -1870,6 +1873,76 @@ describe('GraphController on a double click', () => {
     const { a, selected, opened } = doubleClickInFlight(h, model, tap);
     expect(selected).toEqual([`onSelection note ${a.id}`]);
     expect(opened).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked when the second press is held past 500ms', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    h.step(24);
+    // Down at 384ms, within the double click; up, and the browser's double click, at 544ms.
+    h.down(x, y);
+    h.step(10);
+    h.up(x, y);
+    h.doubleClick(x, y);
+    expect(selectedSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked when the system allows a slower double click', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    // 800ms: a click of its own here, picking what is under the point now, but the browser,
+    // set to a slower double click, still makes one of the two.
+    h.step(50);
+    h.click(x, y);
+    h.doubleClick(x, y);
+    // The second click picked again: whatever it found, or nothing, came after the first.
+    expect(choicesSince(h, from).length).toBeGreaterThan(1);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([`onOpen ${a.id}`]);
+  });
+
+  /** A note double-clicked, the second press `dx` px to the right of the first, by `kind`. */
+  function secondPressAway(dx: number, kind: 'mouse' | 'touch', first: 'mouse' | 'touch' = kind) {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const press = (type: 'mouse' | 'touch', px: number) => {
+      if (type === 'mouse') h.click(px, y);
+      else {
+        h.finger.down(1, px, y);
+        h.finger.up(1, px, y);
+      }
+    };
+    const from = h.events.length;
+    press(first, x);
+    h.step(20);
+    press(kind, x + dx);
+    return { a, selected: choicesSince(h, from) };
+  }
+
+  it('takes a mouse press up to 6px from the first for the rest of its double click', () => {
+    const near = secondPressAway(4, 'mouse');
+    expect(near.selected).toEqual([`onSelection note ${near.a.id}`]);
+    const far = secondPressAway(7, 'mouse');
+    expect(far.selected.length).toBeGreaterThan(1);
+  });
+
+  it('takes a finger up to 22px from the first tap for the rest of its double tap', () => {
+    const near = secondPressAway(15, 'touch');
+    expect(near.selected).toEqual([`onSelection note ${near.a.id}`]);
+    const far = secondPressAway(30, 'touch');
+    expect(far.selected.length).toBeGreaterThan(1);
+  });
+
+  it('does not take a mouse press for the rest of a tap, however near', () => {
+    const { selected } = secondPressAway(0, 'mouse', 'touch');
+    expect(selected.length).toBeGreaterThan(1);
   });
 
   it('takes a click for the second of a double click only within 500ms and a few px of the first', () => {

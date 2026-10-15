@@ -312,6 +312,8 @@ export function GraphView({
   const selectionRef = useRef<Selection | null>(null);
   // Focus goes to the sheet's heading once the selection now on its way renders.
   const headingNext = useRef(false);
+  // A pointer pressed in the sheet: if what had focus went with the press, the canvas takes it.
+  const canvasIfLost = useRef(false);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const [hoveredCountry, setHoveredCountry] = useState<CountryHover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -579,17 +581,29 @@ export function GraphView({
     else if (now !== before) headingNext.current = true;
   };
 
-  /** A press in the sheet; focus moves with what it did only when no pointer made it. */
+  /**
+   * A press in the sheet; focus moves with what it did only when no pointer made it. After a
+   * mouse or a finger it stays where it was, unless that was the button pressed and the press
+   * took it away (a row of the note left behind, Back to the first note): then the canvas takes
+   * it, quietly, or no key would reach the graph until it was clicked again.
+   */
   const fromSheet = (e: PressEvent, act: () => void) => {
     const before = selectionRef.current;
     act();
     if (withoutPointer(e.pointerType)) refocus(before);
+    else canvasIfLost.current = true;
   };
 
   useEffect(() => {
-    if (!headingNext.current) return;
-    headingNext.current = false;
-    stageRef.current?.querySelector<HTMLElement>(SHEET_HEADING)?.focus();
+    const lost = canvasIfLost.current;
+    canvasIfLost.current = false;
+    if (headingNext.current) {
+      headingNext.current = false;
+      stageRef.current?.querySelector<HTMLElement>(SHEET_HEADING)?.focus();
+      return;
+    }
+    const active = document.activeElement;
+    if (lost && (!active || active === document.body)) overlayRef.current?.focus(POINTER_FOCUS);
   }, [selection]);
 
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -603,6 +617,8 @@ export function GraphView({
       e.preventDefault();
       return;
     }
+    // Alt+Left is the browser's Back, Ctrl+- its zoom: a key with a modifier is never the graph's.
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const origin = keyOrigin(t, overlayRef.current);
     if (!reachesGraph(e.key, origin)) return;
     const before = selectionRef.current;

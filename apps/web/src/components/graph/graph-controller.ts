@@ -393,6 +393,8 @@ export class GraphController {
    * is the rest of a double click, not a pick of whatever has come under the pointer since.
    */
   private lastClick: Click | null = null;
+  /** The first click of the pair a double click would complete: what the double click opens. */
+  private pairStart: Click | null = null;
   private raf = 0;
   private lastFrame = 0;
   private frameNo = 0;
@@ -704,6 +706,7 @@ export class GraphController {
     this.pathFrom = null;
     this.pathPick = false;
     this.lastClick = null;
+    this.pairStart = null;
     // Closed, the walk is over: Back starts again from the next selection.
     this.trail = [];
     this.edgesDirty = true;
@@ -1011,23 +1014,30 @@ export class GraphController {
     // double click.
     const plain = !drag.shift && !this.pathPick;
     const here = { x: drag.startX, y: drag.startY, at: performance.now(), type: e.pointerType };
+    // The click before this one: if the browser makes a double click of the two, it began it.
+    const before = this.lastClick;
     if (click && drag.repeat) {
       // The rest of a double click: the first click's record stays, for the double click to open.
+      this.pairStart = before;
     } else if (click && drag.ambiguous && this.zoomBetween(drag.startX, drag.startY)) {
       // Zoomed in between two notes: the next tap can tell them apart, and the double tap this
       // one began opens nothing.
       this.lastClick = { node: null, ...here };
+      this.pairStart = before;
     } else if (click && drag.node) {
       this.clickNode(drag.node, drag.shift);
       this.lastClick = plain ? { node: drag.node, ...here } : null;
+      this.pairStart = plain ? before : null;
     } else if (click && !drag.node && !this.pathPick) {
       const { x, y } = this.local(e);
       const country = this.countryAt(x, y);
       this.clearSelection();
       if (country) this.zoomToCountry(country);
       this.lastClick = plain ? { node: null, ...here } : null;
+      this.pairStart = plain ? before : null;
     } else {
       this.lastClick = null;
+      this.pairStart = null;
     }
     this.el.overlay.style.cursor = this.hover || this.hotCountry ? 'pointer' : 'grab';
   }
@@ -1061,11 +1071,15 @@ export class GraphController {
     if (!model || this.staged) return;
     const { x, y } = this.local(e);
     // What its first click picked, before that note flew off from under the pointer; nothing
-    // when it fell on empty space or zoomed in between two notes.
-    const last = this.clickNear(x, y);
+    // when it fell on empty space or zoomed in between two notes. Not timed again: the event
+    // is the browser's word that the two clicks were one double click, by the system's own
+    // speed, however long the second press was held. Without a second click on record (it was
+    // dragged, or never reached the canvas), the last one if it was just now and here.
+    const first = this.pairStart ?? this.clickNear(x, y);
+    this.pairStart = null;
     this.lastClick = null;
-    if (last) {
-      if (last.node) this.events.onOpen(last.node);
+    if (first && this.near(first, x, y)) {
+      if (first.node) this.events.onOpen(first.node);
       return;
     }
     const appear = (n: GraphNode) => this.engine.appear(n, performance.now());
@@ -1265,8 +1279,13 @@ export class GraphController {
   private clickNear(x: number, y: number): Click | null {
     const last = this.lastClick;
     if (!last || performance.now() - last.at >= DOUBLE_TAP_MS) return null;
-    const reach = last.type === 'touch' ? TOUCH_RADIUS : REPEAT_PX;
-    return Math.hypot(x - last.x, y - last.y) <= reach ? last : null;
+    return this.near(last, x, y) ? last : null;
+  }
+
+  /** Whether (x, y) lands where `click` did, as near as a second press of its double would. */
+  private near(click: Click, x: number, y: number): boolean {
+    const reach = click.type === 'touch' ? TOUCH_RADIUS : REPEAT_PX;
+    return Math.hypot(x - click.x, y - click.y) <= reach;
   }
 
   private clickNode(node: GraphNode, shift: boolean): void {
@@ -1832,6 +1851,7 @@ export class GraphController {
     if (this.drag?.kind === 'node' && this.drag.node) this.engine.release(this.drag.node);
     this.drag = null;
     this.lastClick = null;
+    this.pairStart = null;
     if (this.hover) {
       this.hover = null;
       this.events.onHover(null);
