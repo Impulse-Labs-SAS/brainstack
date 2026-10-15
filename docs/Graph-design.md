@@ -196,16 +196,23 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
 
 ## Behaviour in every view
 
-| Gesture                  | Effect                                                                                                                                                             |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Click a note             | The camera flies to it and a preview opens beside the graph: path, dates, topics, connections.                                                                     |
-| Double click, or `Enter` | Opens the note (a shared note opens under `/notes/shared/<owner>/…`).                                                                                              |
-| Shift+click two notes    | The shortest path between them, with a pulse travelling along it. Links first; shared topics only when no link path exists, and the panel says so.                 |
-| Arrow keys               | With a note selected, move to the neighbour in that direction on screen.                                                                                           |
-| `/`                      | Focus search. Matches light up; `Enter` flies to the best one.                                                                                                     |
-| Hover                    | The note fires: its neighbours light up at one and two hops, with pulses along the edges. On the map, a country fires the same way along the routes that leave it. |
-| Zoom out                 | Semantic zoom: note labels give way to project names and clouds; on the map, to country names.                                                                     |
-| Drag the background      | Pans the flat views; turns the brain (Shift+drag pans it).                                                                                                         |
+| Gesture                  | Effect                                                                                                                                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Click a note             | The camera flies to it and a preview opens beside the graph — on a phone, a sheet below it, with the note kept in the band above: path, dates, topics, connections.                                                                        |
+| Double click, or `Enter` | Opens the note (a shared note opens under `/notes/shared/<owner>/…`). A double click opens what its first click picked, though the camera has since flown it from under the pointer.                                                       |
+| Back, or `Backspace`     | Returns to the previous selection, a note or a path, and the camera it was seen from. Closing the preview ends the trail.                                                                                                                  |
+| `Esc`                    | Steps out a level at a time: cancels a path being picked, then closes the preview, then fits the whole graph (the whole map in Territories).                                                                                               |
+| Shift+click two notes    | The shortest path between them, with a pulse travelling along it. Links first; shared topics only when no link path exists, and the panel says so.                                                                                         |
+| Arrow keys               | With a note selected, move to the neighbour in that direction on screen.                                                                                                                                                                   |
+| `/`                      | Focus search. Matches light up; `Enter` flies to the best one.                                                                                                                                                                             |
+| Hover                    | The note fires: its neighbours light up at one and two hops, with pulses along the edges. On the map, a country fires the same way along the routes that leave it. The tooltip keeps clear of the note, its label and the selected note's. |
+| Zoom out                 | Semantic zoom: note labels give way to project names and clouds; on the map, to country names, though a country that fills the screen keeps its notes named.                                                                               |
+| Drag the background      | Pans the flat views; turns the brain (Shift+drag pans it).                                                                                                                                                                                 |
+| Pinch, two fingers       | Zoom and pan on a touch screen. A finger dragged from a note moves the view; a tap reaches 22px round a note, and one between two notes zooms in rather than guess.                                                                        |
+
+Coming back to the graph from a note opened in it — in the same tab, within ten minutes — brings back
+the selection, its trail for Back and the camera, which follows the note while the layout settles
+(`graph-return.ts`, kept in session storage and read once).
 
 The brain spins slowly until the user touches anything; side, top and front presets reorient
 it. With `prefers-reduced-motion`, nothing spins, pulses or fades in.

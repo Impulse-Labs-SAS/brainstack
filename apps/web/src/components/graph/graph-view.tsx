@@ -26,7 +26,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Button, ToggleButton, ToggleButtonGroup } from 'react-aria-components';
+import { Button, ToggleButton, ToggleButtonGroup, type PressEvent } from 'react-aria-components';
 
 import type { AnglePreset } from '@/lib/graph-camera';
 import {
@@ -60,8 +60,10 @@ import {
   type ViewChoice,
 } from './crawl/view-choice';
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
+import { browserShortcut, reachesGraph, withoutPointer, type KeyOrigin } from './graph-keys';
 import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
+import { readReturn, writeReturn } from './graph-return';
 import { FilterChips, GraphSearch } from './graph-search';
 import type { Rect } from './labels/placer';
 
@@ -90,6 +92,27 @@ function chromeRects(stage: HTMLElement): Rect[] {
   }
   return rects;
 }
+
+/** The preview sheet's heading, where focus goes after a pick made from the keyboard. */
+const SHEET_HEADING = '[data-graph-sheet] h3';
+
+/** Where on the stage a key was pressed, for `reachesGraph`. */
+function keyOrigin(target: HTMLElement, canvas: HTMLCanvasElement | null): KeyOrigin {
+  if (target === canvas) return 'canvas';
+  if (!target.closest('[data-graph-sheet]')) return 'elsewhere';
+  return target.matches(SHEET_HEADING) ? 'sheet-heading' : 'sheet';
+}
+
+/**
+ * How a pointer focuses the canvas: for its keys, without the ring. Chrome shows the ring on a
+ * script's focus() unless what had focus before was focused by the mouse — so on the first click
+ * after a reload, or after typing in the search — and `focusVisible: false` says not to. It is
+ * newer than TypeScript's DOM types, hence a constant rather than a literal; a browser that does
+ * not know it ignores it.
+ */
+const POINTER_FOCUS = { preventScroll: true, focusVisible: false };
+/** Between the toolbar and what a phone puts under it, px: the toolbar's own gap between rows. */
+const TOOLBAR_GAP = 8;
 
 interface GraphViewProps {
   nodes: InputNode[];
@@ -229,6 +252,18 @@ function writePref(key: string, value: unknown): void {
   }
 }
 
+/**
+ * This tab's session storage, where the way back from a note is kept (graph-return): per tab, as
+ * Back is. Null where the browser refuses it.
+ */
+function tabStore(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
@@ -259,10 +294,14 @@ export function GraphView({
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const chipRef = useRef<HTMLDivElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const toolsRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const controllerRef = useRef<GraphController | null>(null);
   const cacheRef = useRef(new Map<string, GraphNode>());
   const builtRef = useRef<{ nodes: InputNode[]; edges: InputEdge[] } | null>(null);
+  /** The page opened on the Sentinel: no way back from a note is taken up under it. */
+  const openedOnSentinel = useRef(false);
 
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>('brain');
@@ -272,6 +311,13 @@ export function GraphView({
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_LAYERS);
   const [webgl, setWebgl] = useState(true);
   const [selection, setSelection] = useState<Selection | null>(null);
+  // The selection as the controller last told it: read right after a key or a press in the
+  // sheet, to see what it did, when the state is still a render behind.
+  const selectionRef = useRef<Selection | null>(null);
+  // Focus goes to the sheet's heading once the selection now on its way renders.
+  const headingNext = useRef(false);
+  // A pointer pressed in the sheet: if what had focus went with the press, the canvas takes it.
+  const canvasIfLost = useRef(false);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const [hoveredCountry, setHoveredCountry] = useState<CountryHover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -284,11 +330,19 @@ export function GraphView({
 
   const open = useCallback(
     (node: GraphNode) => {
+      const c = controllerRef.current;
       // A topic is not a note: "opening" it shows the notes that carry it.
-      if (node.kind === 'topic') controllerRef.current?.select(node);
-      else router.push(noteHref(node));
+      if (node.kind === 'topic') {
+        c?.select(node);
+        return;
+      }
+      // Back from the note, the graph comes up as it is now (see the first layout, below).
+      // Not from the Sentinel: its walk is no place to come back to.
+      const back = persist && !sentinel ? c?.returnState(node) : null;
+      if (back) writeReturn(tabStore(), back, Date.now());
+      router.push(noteHref(node));
     },
-    [router],
+    [router, persist, sentinel],
   );
   const openRef = useRef(open);
   useEffect(() => {
@@ -314,7 +368,10 @@ export function GraphView({
     const controller = new GraphController(
       el,
       {
-        onSelection: setSelection,
+        onSelection: (s) => {
+          selectionRef.current = s;
+          setSelection(s);
+        },
         onHover: setHovered,
         onHoverCountry: setHoveredCountry,
         onToast: setToast,
@@ -344,6 +401,7 @@ export function GraphView({
     // Before the first frame: opening on the Sentinel, the brain must not show while its panel's
     // code arrives and its stage starts.
     controller.awaitPlugin(opening.sentinel);
+    openedOnSentinel.current = opening.sentinel;
     controller.initView(opening.view);
     setView(opening.view);
     setSentinel(opening.sentinel);
@@ -389,7 +447,7 @@ export function GraphView({
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['class', 'hidden'],
+      attributeFilter: ['class', 'hidden', 'data-toolbar-bottom'],
     });
     schedule();
     return () => {
@@ -398,6 +456,31 @@ export function GraphView({
       mutations.disconnect();
     };
   }, [ready, sentinel]);
+
+  // On a phone the toolbar wraps onto as many rows as its controls need, one more while a search
+  // is typed, and the zoom controls and the growth chip go under it wherever it ends: at fixed
+  // offsets, a longer toolbar ran under them. Two variables on the stage say where.
+  useEffect(() => {
+    const stage = stageRef.current;
+    const bar = toolbarRef.current;
+    const tools = toolsRef.current;
+    if (!stage || !bar || !tools) return;
+    const place = () => {
+      // Both read before either is written: a write between them would lay the page out twice.
+      const below = bar.offsetTop + bar.offsetHeight + TOOLBAR_GAP;
+      const tall = tools.offsetHeight;
+      stage.style.setProperty('--graph-below-toolbar', `${below}px`);
+      stage.style.setProperty('--graph-below-tools', `${below + tall + TOOLBAR_GAP}px`);
+      // Moved, they are chrome somewhere else: the attribute tells the labels' measuring to look
+      // again, which watches attributes, not styles (the tooltip writes its own every frame).
+      stage.dataset.toolbarBottom = String(below);
+    };
+    const resize = new ResizeObserver(place);
+    resize.observe(bar);
+    resize.observe(tools);
+    place();
+    return () => resize.disconnect();
+  }, []);
 
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
@@ -430,6 +513,13 @@ export function GraphView({
       // First layout: start from where the notes were last time, if it was this view.
       const saved = persist ? storedPositions(readPref<unknown>(LAYOUT_KEY), c.view) : undefined;
       c.setModel(model, 'init', saved);
+      // Back from a note opened here: the graph comes up as it was left, in the view it was left
+      // in. Taken here, not on mount: StrictMode mounts twice, and the first would take it from
+      // the second.
+      if (persist) {
+        const back = readReturn(tabStore(), c.view, Date.now());
+        if (back && !openedOnSentinel.current) c.restore(back);
+      }
     } else {
       c.setModel(model, previous.nodes !== nodes || previous.edges !== edges ? 'data' : 'layers');
     }
@@ -505,6 +595,46 @@ export function GraphView({
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const focusCanvas = () => overlayRef.current?.focus({ preventScroll: true });
+
+  /**
+   * After the keyboard or a screen reader acted from the sheet, focus follows what it did: the
+   * element that had it may be gone — a row of the note left behind, the sheet itself — and with
+   * it every key the graph listens for. With nothing selected any more, to the canvas; with
+   * something else, to its heading once it renders, so its title is read out and Tab goes on
+   * through its connections.
+   */
+  const refocus = (before: Selection | null) => {
+    const now = selectionRef.current;
+    if (!now) focusCanvas();
+    else if (now !== before) headingNext.current = true;
+  };
+
+  /**
+   * A press in the sheet; focus moves with what it did only when no pointer made it. After a
+   * mouse or a finger it stays where it was, unless that was the button pressed and the press
+   * took it away (a row of the note left behind, Back to the first note): then the canvas takes
+   * it, quietly, or no key would reach the graph until it was clicked again.
+   */
+  const fromSheet = (e: PressEvent, act: () => void) => {
+    const before = selectionRef.current;
+    act();
+    if (withoutPointer(e.pointerType)) refocus(before);
+    else canvasIfLost.current = true;
+  };
+
+  useEffect(() => {
+    const lost = canvasIfLost.current;
+    canvasIfLost.current = false;
+    if (headingNext.current) {
+      headingNext.current = false;
+      stageRef.current?.querySelector<HTMLElement>(SHEET_HEADING)?.focus();
+      return;
+    }
+    const active = document.activeElement;
+    if (lost && (!active || active === document.body)) overlayRef.current?.focus(POINTER_FOCUS);
+  }, [selection]);
+
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
     // Popovers render through a portal but their key events still bubble here.
@@ -516,8 +646,13 @@ export function GraphView({
       e.preventDefault();
       return;
     }
-    if (t === overlayRef.current && controllerRef.current?.keyDown(e.nativeEvent))
-      e.preventDefault();
+    if (browserShortcut(e)) return;
+    const origin = keyOrigin(t, overlayRef.current);
+    if (!reachesGraph(e.key, origin)) return;
+    const before = selectionRef.current;
+    if (!controllerRef.current?.keyDown(e.nativeEvent)) return;
+    e.preventDefault();
+    if (origin !== 'canvas') refocus(before);
   };
 
   const c = () => controllerRef.current;
@@ -536,10 +671,12 @@ export function GraphView({
         ref={overlayRef}
         tabIndex={0}
         aria-label={sentinel ? SENTINEL_LABEL : GRAPH_LABEL}
-        className="absolute inset-0 block h-full w-full outline-none"
+        // The ring for keyboard focus is an outline drawn inside: the stage clips anything outside,
+        // and a ring's inset shadow would paint under the canvas's bitmap.
+        className="absolute inset-0 block h-full w-full outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/60"
         style={{ touchAction: 'none', cursor: 'grab' }}
         onPointerDown={(e) => {
-          e.currentTarget.focus({ preventScroll: true });
+          e.currentTarget.focus(POINTER_FOCUS);
           c()?.pointerDown(e.nativeEvent);
         }}
         onPointerMove={(e) => c()?.pointerMove(e.nativeEvent)}
@@ -552,6 +689,7 @@ export function GraphView({
       <WheelBinder target={overlayRef} controller={controllerRef} />
 
       <div
+        ref={toolbarRef}
         data-graph-chrome="children"
         className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-center gap-2"
       >
@@ -661,16 +799,23 @@ export function GraphView({
         <GraphPreview
           selection={selection}
           model={model}
-          onSelect={(n) => c()?.select(n)}
+          onSelect={(n, e) => fromSheet(e, () => c()?.select(n))}
           onOpen={open}
           onPathFrom={(n) => c()?.startPathFrom(n)}
-          onClose={() => c()?.clearSelection()}
+          onBack={(e) => fromSheet(e, () => c()?.back())}
+          onClose={() => {
+            c()?.clearSelection();
+            // Whatever pressed it: the button goes with the sheet, and the keys stay the graph's.
+            focusCanvas();
+          }}
         />
       )}
 
       <div
         ref={tooltipRef}
         // Display comes from a class, not the `hidden` attribute: `grid` would override [hidden].
+        // Not chrome: the controller places it clear of the labels, and labels that dodged it
+        // as well would chase it from frame to frame.
         className={cn(
           GLASS,
           'pointer-events-none absolute z-20 max-w-[280px] gap-px rounded-lg px-2.5 py-2 text-xs',
@@ -699,8 +844,9 @@ export function GraphView({
         aria-live="polite"
         className={cn(
           GLASS,
-          // On a phone the toolbar's 44px rows reach further down: the chip waits under them.
-          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary max-md:touch:top-48',
+          // On a phone the toolbar wraps further down, and the zoom controls sit under it: the
+          // chip waits under both.
+          'absolute left-1/2 top-16 z-10 -translate-x-1/2 whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-sm text-fg-primary max-md:top-[var(--graph-below-tools,12rem)]',
         )}
       />
 
@@ -863,9 +1009,10 @@ export function GraphView({
       </div>
 
       <div
+        ref={toolsRef}
         data-graph-chrome="children"
-        // On a phone, beside the toolbar's last row: one row lower where the rows are 44px.
-        className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[6.5rem] max-md:touch:top-[7.75rem]"
+        // On a phone, under the toolbar, however many rows it has wrapped onto.
+        className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2 max-md:bottom-auto max-md:top-[var(--graph-below-toolbar,6.5rem)]"
       >
         <canvas
           ref={minimapRef}

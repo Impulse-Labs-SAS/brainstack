@@ -11,8 +11,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { brainScaleFor } from '@/lib/graph-brain';
-import { ANGLES, fitBrain, type Camera, type Viewport } from '@/lib/graph-camera';
-import type { MapLand } from '@/lib/graph-map';
+import { ANGLES, fitBrain, pixelsPerUnit, type Camera, type Viewport } from '@/lib/graph-camera';
+import type { MapLand, TerritoryLayout } from '@/lib/graph-map';
 import {
   DEFAULT_LAYERS,
   buildGraphModel,
@@ -29,8 +29,11 @@ import {
   type GraphPlugin,
   type PluginFrame,
   type PluginStage,
+  type Selection,
 } from './graph-controller';
+import type { ReturnEntry } from './graph-return';
 import type { SceneFrame } from './graph-scene';
+import type { Rect } from './labels/placer';
 
 // -- Stand-ins ----------------------------------------------------------------------------------
 
@@ -318,6 +321,13 @@ interface HarnessOptions {
   /** Hash everything into the tape (the golden test); otherwise only the overlay's ops are kept. */
   golden?: boolean;
   reduceMotion?: boolean;
+  /** The stage's size: 800×600 unless said. */
+  size?: Box;
+  /**
+   * A window this wide that answers media queries, a finger's when `touch`. Without one there is
+   * no `matchMedia`, as in Node, and the controller goes by the stage's width.
+   */
+  media?: { width: number; touch: boolean };
 }
 
 /**
@@ -332,13 +342,23 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
   reset();
   const tape = new Tape(!!opts.golden);
   const clock = { now: 1000 };
-  const box: Box = { width: 800, height: 600 };
+  const box: Box = { ...(opts.size ?? { width: 800, height: 600 }) };
+  const media = opts.media ? { ...opts.media } : null;
   let pending: FrameRequestCallback | null = null;
   let rafId = 0;
   const observers: (() => void)[] = [];
   let seed = 7;
 
   vi.stubGlobal('window', globalThis);
+  // Read when asked, so a test can turn the phone between two queries.
+  if (media) {
+    vi.stubGlobal('matchMedia', (query: string) => {
+      const min = /^\(min-width: (\d+)px\)$/.exec(query);
+      return {
+        matches: min ? media.width >= Number(min[1]) : query === '(pointer: coarse)' && media.touch,
+      };
+    });
+  }
   vi.stubGlobal('devicePixelRatio', 1);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     pending = cb;
@@ -449,6 +469,8 @@ function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
     tape,
     el,
     box,
+    /** The window media queries read, when there is one: a test may change its width. */
+    media,
     clock,
     events,
     overlayOps,
@@ -612,13 +634,18 @@ async function goldenView(
   };
 }
 
-/** Territories: a point over land and off every note, found by sweeping the pointer. */
-function countryUnderPointer(h: Harness): { x: number; y: number } | null {
+/**
+ * Territories: a point over land and off every note, found by sweeping the pointer; over the
+ * land of country `id`, when one is named.
+ */
+function countryUnderPointer(h: Harness, id?: string): { x: number; y: number } | null {
   for (let y = 30; y < h.box.height; y += 30) {
     for (let x = 30; x < h.box.width; x += 30) {
       h.move(x, y);
       const last = h.events.at(-1);
-      if (last?.name === 'onHoverCountry' && last.args[0]) return { x, y };
+      const country =
+        last?.name === 'onHoverCountry' ? (last.args[0] as { id: string } | null) : null;
+      if (country && (!id || country.id === id)) return { x, y };
     }
   }
   return null;
@@ -729,7 +756,7 @@ describe('GraphController without a plugin', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 312,
+          "dom": 315,
           "event": 74,
           "key": 5,
           "minimap": 11216,
@@ -738,8 +765,8 @@ describe('GraphController without a plugin', () => {
           "scene": 850,
           "snapshot": 1,
         },
-        "digest": "090588cf2662dc",
-        "lines": 174380,
+        "digest": "021e573ba20f60",
+        "lines": 174383,
       }
     `);
   });
@@ -806,15 +833,15 @@ describe('GraphController without a plugin, one view at a time', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 115,
+          "dom": 218,
           "event": 52,
           "key": 3,
           "overlay": 64815,
           "scene": 422,
           "snapshot": 1,
         },
-        "digest": "12da39ad219da9",
-        "lines": 65422,
+        "digest": "1b043f86b24163",
+        "lines": 65525,
       }
     `);
   });
@@ -873,7 +900,7 @@ describe('GraphController without a plugin, one view at a time', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 115,
+          "dom": 116,
           "event": 45,
           "key": 4,
           "minimap": 11096,
@@ -881,8 +908,8 @@ describe('GraphController without a plugin, one view at a time', () => {
           "scene": 453,
           "snapshot": 1,
         },
-        "digest": "173c0f355d7b81",
-        "lines": 94491,
+        "digest": "15171b7b5a2106",
+        "lines": 94492,
       }
     `);
   });
@@ -931,7 +958,7 @@ describe('GraphController without a plugin, one view at a time', () => {
       {
         "counts": {
           "<canvas>": 14,
-          "dom": 248,
+          "dom": 392,
           "event": 29,
           "key": 2,
           "minimap": 10078,
@@ -940,8 +967,8 @@ describe('GraphController without a plugin, one view at a time', () => {
           "scene": 429,
           "snapshot": 1,
         },
-        "digest": "07a43aa19fdf29",
-        "lines": 79486,
+        "digest": "1eb8f146c5cef7",
+        "lines": 79630,
       }
     `);
   });
@@ -1509,8 +1536,8 @@ describe('GraphController with a plugin', () => {
 // -- Touch ---------------------------------------------------------------------------------------
 
 /** Network with its first layout settled: flat, so a finger zooms and pans under itself. */
-function restingNetwork(model: GraphModel = twoVaults()) {
-  const h = harness(GraphController);
+function restingNetwork(model: GraphModel = twoVaults(), opts: HarnessOptions = {}) {
+  const h = harness(GraphController, opts);
   h.controller.initView('network');
   h.controller.setModel(model, 'init');
   h.step(400);
@@ -1520,6 +1547,9 @@ function restingNetwork(model: GraphModel = twoVaults()) {
 const lastCam = () => renders().at(-1)!.cam;
 const selectedSince = (h: Harness, from: number) =>
   eventsSince(h, from).filter((e) => e.startsWith('onSelection note'));
+/** Every selection and every clearing of one, since `from`. */
+const choicesSince = (h: Harness, from: number) =>
+  eventsSince(h, from).filter((e) => e.startsWith('onSelection'));
 const pinned = (model: GraphModel) => model.nodes.filter((n) => n.fx != null);
 
 /** A note on screen with no other within `px` of it. */
@@ -1771,3 +1801,1071 @@ describe('GraphController on a touch screen', () => {
 
 /** Two notes closer than this on screen are within the ambiguous margin of a tap between them. */
 const AMBIGUOUS_GAP_PX = 16;
+
+// -- Double click --------------------------------------------------------------------------------
+
+/**
+ * A note with no other within 30px, far from where a flight to it ends (left of the stage's
+ * centre, clear of the preview): while it flies, the point it was clicked at comes over something
+ * else.
+ */
+function farFromLanding(h: Harness, model: GraphModel): GraphNode {
+  const landing = { x: h.box.width / 2 - 160, y: h.box.height / 2 };
+  const n = reachable(h, model).find(
+    (a) =>
+      Math.hypot(a.sx - landing.x, a.sy - landing.y) > 150 &&
+      model.nodes.every((b) => b === a || !b.onScreen || Math.hypot(b.sx - a.sx, b.sy - a.sy) > 30),
+  );
+  expect(n).toBeDefined();
+  return n!;
+}
+
+/**
+ * A note pressed, its flight under way, then pressed again where it was and double-clicked there,
+ * as a browser sends a double click. What was selected and opened meanwhile comes back.
+ */
+function doubleClickInFlight(h: Harness, model: GraphModel, press: (x: number, y: number) => void) {
+  const a = farFromLanding(h, model);
+  const { sx: x, sy: y } = a;
+  const from = h.events.length;
+  press(x, y);
+  h.step(20);
+  expect(Math.hypot(a.sx - x, a.sy - y)).toBeGreaterThan(30);
+  press(x, y);
+  h.doubleClick(x, y);
+  const since = eventsSince(h, from);
+  return {
+    a,
+    selected: since.filter((e) => e.startsWith('onSelection')),
+    opened: since.filter((e) => e.startsWith('onOpen')),
+  };
+}
+
+describe('GraphController on a double click', () => {
+  it('opens the note the first click picked, though its flight took it from under the pointer', () => {
+    const { h, model } = restingNetwork();
+    const { a, selected, opened } = doubleClickInFlight(h, model, (x, y) => h.click(x, y));
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked under reduced motion, where the camera cuts', () => {
+    const { h, model } = restingNetwork(twoVaults(), { reduceMotion: true });
+    const { a, selected, opened } = doubleClickInFlight(h, model, (x, y) => h.click(x, y));
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked in the brain, where the second press would orbit', () => {
+    const { h, model } = restingBrain();
+    const { a, selected, opened } = doubleClickInFlight(h, model, (x, y) => h.click(x, y));
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+    expect(pinned(model)).toEqual([]);
+  });
+
+  it('opens the note the first tap picked with a double tap', () => {
+    const { h, model } = restingNetwork();
+    const tap = (x: number, y: number) => {
+      h.finger.down(1, x, y);
+      h.finger.up(1, x, y);
+    };
+    const { a, selected, opened } = doubleClickInFlight(h, model, tap);
+    expect(selected).toEqual([`onSelection note ${a.id}`]);
+    expect(opened).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked when the second press is held past 500ms', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    h.step(24);
+    // Down at 384ms, within the double click; up, and the browser's double click, at 544ms.
+    h.down(x, y);
+    h.step(10);
+    h.up(x, y);
+    h.doubleClick(x, y);
+    expect(selectedSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('opens the note the first click picked when the system allows a slower double click', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    // 800ms: a click of its own here, picking what is under the point now, but the browser,
+    // set to a slower double click, still makes one of the two.
+    h.step(50);
+    h.click(x, y);
+    h.doubleClick(x, y);
+    // The second click picked again: whatever it found, or nothing, came after the first.
+    expect(choicesSince(h, from).length).toBeGreaterThan(1);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([`onOpen ${a.id}`]);
+  });
+
+  /** A note double-clicked, the second press `dx` px to the right of the first, by `kind`. */
+  function secondPressAway(dx: number, kind: 'mouse' | 'touch', first: 'mouse' | 'touch' = kind) {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const press = (type: 'mouse' | 'touch', px: number) => {
+      if (type === 'mouse') h.click(px, y);
+      else {
+        h.finger.down(1, px, y);
+        h.finger.up(1, px, y);
+      }
+    };
+    const from = h.events.length;
+    press(first, x);
+    h.step(20);
+    press(kind, x + dx);
+    return { a, selected: choicesSince(h, from) };
+  }
+
+  it('takes a mouse press up to 6px from the first for the rest of its double click', () => {
+    const near = secondPressAway(4, 'mouse');
+    expect(near.selected).toEqual([`onSelection note ${near.a.id}`]);
+    const far = secondPressAway(7, 'mouse');
+    expect(far.selected.length).toBeGreaterThan(1);
+  });
+
+  it('takes a finger up to 22px from the first tap for the rest of its double tap', () => {
+    const near = secondPressAway(15, 'touch');
+    expect(near.selected).toEqual([`onSelection note ${near.a.id}`]);
+    const far = secondPressAway(30, 'touch');
+    expect(far.selected.length).toBeGreaterThan(1);
+  });
+
+  it('opens nothing when the second press of a double click drags the view', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    h.step(10);
+    // Down where the first click was, then a pan: the browser still pairs its click with the
+    // first, and what is under the pointer at the end of a pan was not aimed at.
+    h.down(x, y);
+    h.move(x + 30, y + 10);
+    h.step(1);
+    h.move(x + 60, y + 20);
+    h.step(1);
+    h.up(x + 60, y + 20);
+    h.doubleClick(x + 60, y + 20);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([]);
+  });
+
+  it('opens the note the first tap picked though the second rolls a little before it lifts', () => {
+    const { h, model } = restingNetwork();
+    const a = farFromLanding(h, model);
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.finger.down(1, x, y);
+    h.finger.up(1, x, y);
+    h.step(10);
+    // Down 18px off, within a finger's reach of the first tap, and lifted 8px further on.
+    h.finger.down(1, x + 18, y);
+    h.finger.move(1, x + 26, y);
+    h.finger.up(1, x + 26, y);
+    h.doubleClick(x + 26, y);
+    expect(choicesSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onOpen'))).toEqual([`onOpen ${a.id}`]);
+  });
+
+  it('does not take a mouse press for the rest of a tap, however near', () => {
+    const { selected } = secondPressAway(0, 'mouse', 'touch');
+    expect(selected.length).toBeGreaterThan(1);
+  });
+
+  it('takes a click for the second of a double click only within 500ms and a few px of the first', () => {
+    const { h, c, model } = restingNetwork();
+    const a = loneNote(h, model);
+    c.select(a);
+    h.step(60);
+    // Landed where a flight leaves it: a click on it now flies nowhere, so it stays under the point.
+    const { sx: x, sy: y } = a;
+    const from = h.events.length;
+    h.click(x, y);
+    h.step(20);
+    expect(Math.hypot(a.sx - x, a.sy - y)).toBeLessThan(1);
+    h.click(x, y);
+    expect(selectedSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    // 512ms after the first: a click of its own.
+    h.step(12);
+    h.click(x, y);
+    expect(selectedSince(h, from)).toEqual([
+      `onSelection note ${a.id}`,
+      `onSelection note ${a.id}`,
+    ]);
+    // At once, but 40px or more away: a click of its own too.
+    const [b] = reachable(h, model)
+      .filter((n) => n !== a && Math.hypot(n.sx - x, n.sy - y) >= 40)
+      .sort((p, q) => Math.hypot(p.sx - x, p.sy - y) - Math.hypot(q.sx - x, q.sy - y));
+    expect(b).toBeDefined();
+    h.click(b!.sx, b!.sy);
+    expect(selectedSince(h, from)).toEqual([
+      `onSelection note ${a.id}`,
+      `onSelection note ${a.id}`,
+      `onSelection note ${b!.id}`,
+    ]);
+  });
+
+  it('clears and zooms to a country once for a double click on land, and opens nothing', () => {
+    const run = (double: boolean) => {
+      const h = harness(GraphController);
+      h.controller.initView('territories');
+      h.controller.setModel(twoVaults(), 'init');
+      h.step(400);
+      const spot = countryUnderPointer(h);
+      expect(spot).not.toBeNull();
+      const { x, y } = spot!;
+      const from = h.events.length;
+      const start = renders().length;
+      h.click(x, y);
+      h.step(10);
+      if (double) {
+        h.click(x, y);
+        h.doubleClick(x, y);
+      }
+      h.step(60);
+      const frames = renders().slice(start);
+      return { events: eventsSince(h, from), cams: frames.map((f) => f.cam) };
+    };
+    const once = run(false);
+    expect(once.events.filter((e) => e.startsWith('onSelection'))).toEqual(['onSelection null']);
+    expect(once.cams.at(-1)!.dist).toBeLessThan(once.cams[0]!.dist);
+    const twice = run(true);
+    expect(twice.events).toEqual(once.events);
+    expect(twice.cams).toEqual(once.cams);
+  });
+
+  it('zooms in once for a double tap between two notes, and selects and opens nothing', () => {
+    const { h, c, model } = restingNetwork(linkedPair());
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    // Zoomed out until the two are about a fingertip apart.
+    for (let i = 0; i < 60 && Math.hypot(a.sx - b.sx, a.sy - b.sy) > 14; i++) {
+      c.zoom(0.85);
+      h.step(1);
+    }
+    expect(Math.hypot(a.sx - b.sx, a.sy - b.sy)).toBeLessThanOrEqual(14);
+    const before = lastCam();
+    const from = h.events.length;
+    const mx = (a.sx + b.sx) / 2;
+    const my = (a.sy + b.sy) / 2;
+    h.finger.down(1, mx, my);
+    h.finger.up(1, mx, my);
+    h.step(5);
+    h.finger.down(1, mx, my);
+    h.finger.up(1, mx, my);
+    h.doubleClick(mx, my);
+    h.step(1);
+    expect(lastCam().dist).toBeCloseTo(before.dist / 2, 6);
+    expect(
+      eventsSince(h, from).filter((e) => e.startsWith('onSelection') || e.startsWith('onOpen')),
+    ).toEqual([]);
+  });
+});
+
+// -- Back and Escape -----------------------------------------------------------------------------
+
+/** What the view was told is selected since `from`, every time it was told. */
+const selections = (h: Harness, from = 0) =>
+  h.events
+    .slice(from)
+    .filter((e) => e.name === 'onSelection')
+    .map((e) => e.args[0] as Selection | null);
+
+/** Notes on screen a click picks for sure: no other within `px`. */
+const loneNotes = (h: Harness, model: GraphModel, px = 20) =>
+  reachable(h, model).filter((a) =>
+    model.nodes.every((b) => b === a || !b.onScreen || Math.hypot(b.sx - a.sx, b.sy - a.sy) > px),
+  );
+
+/** Two notes a click picks for sure, in one project: its links make a path between them. */
+function pathEnds(h: Harness, model: GraphModel): [GraphNode, GraphNode] {
+  const lone = loneNotes(h, model);
+  for (const p of lone) {
+    const q = lone.find((n) => n !== p && n.project?.id === p.project?.id);
+    if (q) return [p, q];
+  }
+  throw new Error('no two lone notes in one project');
+}
+
+describe('GraphController going back', () => {
+  it('goes back to the note before, seen from where it was', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+    const from = h.events.length;
+    c.select(a);
+    h.step(60);
+    const camA = lastCam();
+    // The preview's call, as for a connection in its list.
+    c.select(b);
+    h.step(60);
+    expect(Math.hypot(lastCam().tx - camA.tx, lastCam().ty - camA.ty)).toBeGreaterThan(1);
+    expect(c.back()).toBe(true);
+    h.step(60);
+    expectCam(lastCam(), camA);
+    expect(selectedSince(h, from)).toEqual([
+      `onSelection note ${a.id}`,
+      `onSelection note ${b.id}`,
+      `onSelection note ${a.id}`,
+    ]);
+  });
+
+  it('goes back mid-flight to where the first flight was going, not to where it had got', () => {
+    const land = (back: boolean) => {
+      const { h, c, model } = restingNetwork();
+      const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+      c.select(a);
+      h.step(10);
+      if (back) {
+        c.select(b);
+        h.step(10);
+        expect(c.back()).toBe(true);
+      }
+      h.step(60);
+      return lastCam();
+    };
+    const landed = land(false);
+    expectCam(land(true), landed);
+  });
+
+  it('frames the note afresh when it was left in another view, whose camera fits another layout', () => {
+    const land = (back: boolean) => {
+      const { h, c, model } = restingNetwork();
+      const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+      c.select(a);
+      h.step(60);
+      const camA = lastCam();
+      c.select(b);
+      h.step(60);
+      c.setView('territories');
+      h.step(150);
+      if (back) expect(c.back()).toBe(true);
+      else c.select(a);
+      h.step(60);
+      return { camA, cam: lastCam() };
+    };
+    const selected = land(false);
+    const back = land(true);
+    expectCam(back.cam, selected.cam);
+    expect(Math.hypot(back.cam.tx - back.camA.tx, back.cam.ty - back.camA.ty)).toBeGreaterThan(1);
+  });
+
+  it('goes back from a note to the path it left, and from the path to the note it was traced from', () => {
+    const { h, c, model } = restingNetwork();
+    const [p, q] = pathEnds(h, model);
+    h.click(p.sx, p.sy, { shift: true });
+    h.click(q.sx, q.sy, { shift: true });
+    h.step(60);
+    const camPath = lastCam();
+    const traced = selections(h).at(-1)!;
+    expect(traced).toMatchObject({ kind: 'path', back: p.label });
+    const path = (traced as Extract<Selection, { kind: 'path' }>).path;
+    expect([path.nodes[0], path.nodes.at(-1)]).toEqual([p, q]);
+
+    const b = model.nodes.find((n) => !path.nodes.includes(n))!;
+    c.select(b);
+    expect(selections(h).at(-1)!.back).toBe(`${p.label} → ${q.label}`);
+    h.step(60);
+    expect(c.back()).toBe(true);
+    const restored = selections(h).at(-1)!;
+    expect(restored.kind).toBe('path');
+    expect((restored as Extract<Selection, { kind: 'path' }>).path).toBe(path);
+    expect(restored.back).toBe(p.label);
+    h.step(60);
+    expectCam(lastCam(), camPath);
+
+    expect(c.back()).toBe(true);
+    const first = selections(h).at(-1)!;
+    expect(first.kind).toBe('note');
+    expect((first as Extract<Selection, { kind: 'note' }>).node).toBe(p);
+    expect(first.back).toBeUndefined();
+    expect(c.back()).toBe(false);
+  });
+
+  it('names what Back returns to while there is anything, and keeps no step for the same note again', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    c.select(a);
+    expect(selections(h).at(-1)!.back).toBeUndefined();
+    c.select(b);
+    expect(selections(h).at(-1)!.back).toBe(a.label);
+    c.select(b);
+    expect(selections(h).at(-1)!.back).toBe(a.label);
+    expect(c.back()).toBe(true);
+    expect(selections(h).at(-1)!.back).toBeUndefined();
+    expect(c.back()).toBe(false);
+  });
+
+  it('forgets the way back when the selection closes', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b, d] = model.nodes as [GraphNode, GraphNode, GraphNode];
+    c.select(a);
+    c.select(b);
+    c.clearSelection();
+    expect(c.back()).toBe(false);
+    c.select(d);
+    expect(selections(h).at(-1)!.back).toBeUndefined();
+    expect(c.back()).toBe(false);
+  });
+
+  it('drops what left the model from the way back, and tells the view what Back names now', () => {
+    const run = (again: boolean) => {
+      const cache = new Map<string, GraphNode>();
+      const { h, c, model } = restingNetwork(twoVaults(cache, true));
+      const gone = model.nodes.find((n) => n.id === 'ana/Lumen/m12.md')!;
+      const [a, d] = model.nodes as [GraphNode, GraphNode];
+      c.select(a);
+      c.select(gone);
+      c.select(again ? a : d);
+      expect(selections(h).at(-1)!.back).toBe(gone.label);
+      const from = h.events.length;
+      c.setModel(twoVaults(cache), 'data');
+      return { c, a, d, told: selections(h, from) };
+    };
+
+    const { c, a, d, told } = run(false);
+    expect(told).toEqual([{ kind: 'note', node: d, back: a.label }]);
+    expect(c.back()).toBe(true);
+    expect(c.back()).toBe(false);
+
+    // Back to the note selected now would go nowhere: no way back is left.
+    const same = run(true);
+    expect(same.told).toEqual([{ kind: 'note', node: same.a }]);
+    expect(same.c.back()).toBe(false);
+  });
+
+  it('remembers the last 50 selections', () => {
+    const { h, c, model } = restingNetwork();
+    const notes = model.nodes;
+    for (let i = 0; i < 52; i++) c.select(notes[i % notes.length]!);
+    let backs = 0;
+    for (let i = 0; i < 60 && c.back(); i++) backs++;
+    expect(backs).toBe(50);
+    // 51 steps and the oldest gone: the second note selected is as far back as it goes.
+    expect((selections(h).at(-1) as Extract<Selection, { kind: 'note' }>).node).toBe(notes[1]);
+  });
+
+  it('goes back with Backspace, and leaves the key alone with nowhere to go back to', () => {
+    const { h, c, model } = restingNetwork();
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    expect(h.key('Backspace')).toBe(false);
+    c.select(a);
+    c.select(b);
+    const from = h.events.length;
+    expect(h.key('Backspace')).toBe(true);
+    expect(selectedSince(h, from)).toEqual([`onSelection note ${a.id}`]);
+    expect(h.key('Backspace')).toBe(false);
+  });
+
+  it('has nowhere to go back to over a stage, nor once it goes', () => {
+    const { h, c, model } = restingBrain();
+    const plugin = fakePlugin(h);
+    c.setPlugin(plugin);
+    const [a, b] = model.nodes as [GraphNode, GraphNode];
+    c.select(a);
+    c.select(b);
+    plugin.stage = fakeStage(h);
+    h.step(1);
+    const from = h.events.length;
+    expect(h.key('Backspace')).toBe(false);
+    expect(c.back()).toBe(false);
+    plugin.stage = null;
+    h.step(1);
+    expect(c.back()).toBe(false);
+    expect(selections(h, from)).toEqual([]);
+    c.setPlugin(null);
+  });
+});
+
+describe('GraphController on Escape', () => {
+  it('ends a path pick first, keeping the note it began from, then closes the selection', () => {
+    const { h, c, model } = restingNetwork();
+    const [a] = loneNotes(h, model) as [GraphNode];
+    c.select(a);
+    h.step(60);
+    c.startPathFrom(a);
+    const b = loneNotes(h, model).find((n) => n !== a)!;
+    expect(b).toBeDefined();
+    let from = h.events.length;
+    expect(h.key('Escape')).toBe(true);
+    expect(selections(h, from)).toEqual([]);
+    // Picking no more: a click selects the note rather than tracing a path to it.
+    h.click(b.sx, b.sy);
+    expect(eventsSince(h, from).filter((e) => e.startsWith('onSelection'))).toEqual([
+      `onSelection note ${b.id}`,
+    ]);
+    from = h.events.length;
+    expect(h.key('Escape')).toBe(true);
+    expect(selections(h, from)).toEqual([null]);
+  });
+
+  it('closes the selection, then fits the graph the user moved, then lets the key go', () => {
+    const { h, c, model } = restingNetwork();
+    c.select(model.nodes[0]!);
+    h.step(60);
+    const from = h.events.length;
+    const atNote = lastCam();
+    expect(h.key('Escape')).toBe(true);
+    h.step(60);
+    expectCam(lastCam(), atNote);
+    expect(h.key('Escape')).toBe(true);
+    h.step(60);
+    expect(Math.hypot(lastCam().tx - atNote.tx, lastCam().ty - atNote.ty)).toBeGreaterThan(1);
+    expect(selections(h, from)).toEqual([null]);
+    expect(h.key('Escape')).toBe(false);
+  });
+
+  it('fits the whole brain, network or map, as Fit does, only once the user moved it', () => {
+    for (const view of ['brain', 'network', 'territories'] as const) {
+      const h = harness(GraphController);
+      const c = h.controller;
+      c.initView(view);
+      c.setModel(twoVaults(), 'init');
+      h.step(400);
+      expect(h.key('Escape')).toBe(false);
+      h.wheel(400, 300, -100);
+      h.wheel(400, 300, -100);
+      h.step(1);
+      const zoomed = lastCam();
+      expect(h.key('Escape')).toBe(true);
+      h.step(60);
+      const fitted = lastCam();
+      expect(fitted.dist).toBeGreaterThan(zoomed.dist);
+      c.fit();
+      h.step(60);
+      expectCam(lastCam(), fitted);
+      expect(h.key('Escape')).toBe(false);
+    }
+  });
+});
+
+// -- Phone ---------------------------------------------------------------------------------------
+
+/** A phone held upright: a window under md, so the preview is a sheet along the stage's bottom. */
+const PHONE: HarnessOptions = {
+  size: { width: 390, height: 700 },
+  media: { width: 390, touch: true },
+};
+
+/**
+ * The strip a framed note is centred in on a phone: from `top`, where the chrome ends (the
+ * toolbar's first row, before any was measured), to where the sheet's top is at its tallest.
+ */
+const freeBand = (h: Harness, top = 56) => ({ top, bottom: 0.48 * h.box.height - 8 });
+
+/**
+ * One vault of two countries (invented names): Meridian, too big for a phone to fit at the zoom
+ * every city is named from, and Quill, a small one beside it. Each a tree of links, a few hops
+ * deep, so every note has come in by the time the test looks.
+ */
+function bigCountry(): GraphModel {
+  const nodes: InputNode[] = [];
+  const edges: InputEdge[] = [];
+  for (const [p, count] of [
+    ['Meridian', 120],
+    ['Quill', 8],
+  ] as const) {
+    for (let i = 0; i < count; i++) {
+      nodes.push({
+        id: `me/${p}/n${i}.md`,
+        path: `${p}/${i % 3 ? 'notes/' : ''}n${i}.md`,
+        title: `${p} note ${i}`,
+        ownerId: 'me',
+        project: { id: `me|${p}`, label: p },
+        createdAt: T0 + i * HOUR,
+        updatedAt: T0 + i * HOUR,
+      });
+      if (i)
+        edges.push({
+          source: `me/${p}/n${i}.md`,
+          target: `me/${p}/n${(i - 1) >> 1}.md`,
+          weight: 1,
+        });
+    }
+  }
+  return buildGraphModel({
+    nodes,
+    edges,
+    affinity: null,
+    layers: DEFAULT_LAYERS,
+    viewerId: 'me',
+    vaultNames: new Map(),
+    cache: new Map(),
+  });
+}
+
+/**
+ * The text among `ops`, each piece with the box it covers: as wide as the stand-in measured it
+ * (6px a character), as tall as its font. Inside the room the overlay took for it, so two that
+ * meet mean two labels placed over each other.
+ */
+function textDrawn(ops: readonly Op[]): { text: string; baseline: string; box: Rect }[] {
+  let font = '10px sans-serif';
+  let align = 'start';
+  let baseline = 'alphabetic';
+  const out: { text: string; baseline: string; box: Rect }[] = [];
+  for (const { op, args } of ops) {
+    if (op === 'set:font') font = String(args[0]);
+    else if (op === 'set:textAlign') align = String(args[0]);
+    else if (op === 'set:textBaseline') baseline = String(args[0]);
+    else if (op === 'fillText') {
+      const [text, x, y] = args as [string, number, number];
+      const px = Number(/(\d+(?:\.\d+)?)px/.exec(font)?.[1]);
+      const w = text.length * 6;
+      const left = align === 'center' ? x - w / 2 : x;
+      out.push({
+        text,
+        baseline,
+        box: { x: left, y: baseline === 'top' ? y : y - px / 2, w, h: px },
+      });
+    }
+  }
+  return out;
+}
+
+const meet = (a: Rect, b: Rect) =>
+  a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+describe('GraphController on a phone', () => {
+  it('lands a selected note in the middle of the band above the sheet, flat and in the brain', () => {
+    for (const rest of [() => restingNetwork(twoVaults(), PHONE), () => restingBrain(PHONE)]) {
+      const { h, c, model } = rest();
+      const { top, bottom } = freeBand(h);
+      const [a] = reachable(h, model) as [GraphNode];
+      c.select(a);
+      h.step(60);
+      expect(a.sx).toBeCloseTo(h.box.width / 2, 0);
+      expect(Math.abs(a.sy - (top + bottom) / 2)).toBeLessThan(2);
+    }
+  });
+
+  it('starts the band below the lowest chrome that ends above the middle, as measured last', () => {
+    const { h, c, model } = restingNetwork(twoVaults(), PHONE);
+    const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+    // The toolbar's rows and the buttons beside them; low on the stage, the legend and the sheet.
+    c.setChrome([
+      { x: 12, y: 12, w: 300, h: 44 },
+      { x: 12, y: 64, w: 200, h: 44 },
+      { x: 250, y: 124, w: 128, h: 96 },
+      { x: 12, y: 600, w: 200, h: 88 },
+      { x: 8, y: 328, w: 374, h: 364 },
+    ]);
+    c.select(a);
+    h.step(60);
+    let band = freeBand(h, 220);
+    expect(Math.abs(a.sy - (band.top + band.bottom) / 2)).toBeLessThan(2);
+    // Measured again with the buttons beside the toolbar gone: the next flight has more room.
+    c.setChrome([
+      { x: 12, y: 12, w: 300, h: 44 },
+      { x: 12, y: 64, w: 200, h: 44 },
+    ]);
+    c.select(b);
+    h.step(60);
+    band = freeBand(h, 108);
+    expect(Math.abs(b.sy - (band.top + band.bottom) / 2)).toBeLessThan(2);
+  });
+
+  it('frames a path into the band, every note of it between the toolbar and the sheet', () => {
+    for (const rest of [() => restingNetwork(twoVaults(), PHONE), () => restingBrain(PHONE)]) {
+      const { h, model } = rest();
+      const [p, q] = pathEnds(h, model);
+      h.click(p.sx, p.sy, { shift: true });
+      h.click(q.sx, q.sy, { shift: true });
+      h.step(60);
+      const traced = selections(h).at(-1)!;
+      expect(traced.kind).toBe('path');
+      const { top, bottom } = freeBand(h);
+      for (const n of (traced as Extract<Selection, { kind: 'path' }>).path.nodes) {
+        expect(n.onScreen).toBe(true);
+        expect(n.sy).toBeGreaterThan(top);
+        expect(n.sy).toBeLessThan(bottom);
+        expect(n.sx).toBeGreaterThan(0);
+        expect(n.sx).toBeLessThan(h.box.width);
+      }
+    }
+  });
+
+  it('docks the preview by the window, as the sheet does, asked again for every flight', () => {
+    // A window past md with the rail beside the stage: 740px of graph, and the preview beside it.
+    const { h, c, model } = restingNetwork(twoVaults(), {
+      size: { width: 740, height: 600 },
+      media: { width: 788, touch: false },
+    });
+    const [a, b] = reachable(h, model) as [GraphNode, GraphNode];
+    c.select(a);
+    h.step(60);
+    expect(a.sx).toBeCloseTo(740 / 2 - 160, 0);
+    expect(a.sy).toBeCloseTo(300, 0);
+    // The window narrowed under md: the next flight lands above the sheet.
+    h.media!.width = 700;
+    h.resize(652, 600);
+    c.select(b);
+    h.step(60);
+    const { top, bottom } = freeBand(h);
+    expect(b.sx).toBeCloseTo(652 / 2, 0);
+    expect(Math.abs(b.sy - (top + bottom) / 2)).toBeLessThan(2);
+  });
+
+  it('names the cities of a country a click flew to, though it lands too far out for the rest', () => {
+    const h = harness(GraphController, PHONE);
+    const c = h.controller;
+    const model = bigCountry();
+    c.initView('territories');
+    c.setModel(model, 'init');
+    h.step(150);
+    const spot = countryUnderPointer(h, 'me|Meridian');
+    expect(spot).not.toBeNull();
+    h.click(spot!.x, spot!.y);
+    h.step(60);
+    /** The next frame's text, and its cities': a city's name hangs under it, a place's is centred. */
+    const next = () => {
+      h.overlayOps!.length = 0;
+      h.step(1);
+      const drawn = textDrawn(h.overlayOps!);
+      return { drawn, cities: drawn.filter((d) => d.baseline === 'top') };
+    };
+    const byLabel = new Map(model.nodes.map((n) => [n.label, n]));
+    const countryOf = (text: string) => byLabel.get(text)?.project?.label;
+    const onStage = (n: GraphNode) =>
+      n.onScreen && n.sx > 0 && n.sx < h.box.width && n.sy > 0 && n.sy < h.box.height;
+    const quill = model.nodes.filter((n) => n.project?.label === 'Quill');
+
+    // The flight is over, below the zoom every city is named from.
+    const landed = lastCam();
+    const there = next();
+    expectCam(lastCam(), landed);
+    expect(pixelsPerUnit(landed, h.box)).toBeLessThan(1.9);
+    expect(there.cities.length).toBeGreaterThan(5);
+    for (const d of there.cities) expect(countryOf(d.text), d.text).toBe('Meridian');
+    // The country's name stays, and nothing is drawn over anything else.
+    expect(there.drawn.map((d) => d.text)).toContain('MERIDIAN');
+    const { drawn } = there;
+    for (let i = 0; i < drawn.length; i++) {
+      for (let j = i + 1; j < drawn.length; j++) {
+        expect(meet(drawn[i]!.box, drawn[j]!.box), `${drawn[i]!.text} / ${drawn[j]!.text}`).toBe(
+          false,
+        );
+      }
+    }
+
+    // Moved over to Quill at the same zoom: small on the stage, it keeps its cities unnamed.
+    const qx = quill.reduce((sum, n) => sum + n.sx, 0) / quill.length;
+    const qy = quill.reduce((sum, n) => sum + n.sy, 0) / quill.length;
+    const mid = { x: h.box.width / 2, y: h.box.height / 2 };
+    h.drag(mid.x, mid.y, 2 * mid.x - qx, 2 * mid.y - qy);
+    const beside = next();
+    expect(pixelsPerUnit(lastCam(), h.box)).toBeCloseTo(pixelsPerUnit(landed, h.box), 6);
+    expect(quill.filter(onStage).length).toBeGreaterThan(3);
+    expect(beside.cities.length).toBeGreaterThan(0);
+    for (const d of beside.cities) expect(countryOf(d.text), d.text).toBe('Meridian');
+  });
+});
+
+describe('GraphController on the map', () => {
+  it('names the cities of a country 120px round or more, however small a share of the stage', () => {
+    const h = harness(GraphController);
+    const c = h.controller;
+    const model = bigCountry();
+    c.initView('territories');
+    c.setModel(model, 'init');
+    h.step(150);
+    const spot = countryUnderPointer(h, 'me|Meridian');
+    expect(spot).not.toBeNull();
+    h.click(spot!.x, spot!.y);
+    h.step(60);
+    // Out from where the click flew, below the zoom every city is named from, until the country is
+    // under 160px round: still big enough to name some, though under a third of the stage.
+    const { territory } = (c as unknown as { engine: { territory: TerritoryLayout | null } })
+      .engine;
+    const meridian = territory!.countries.find((t) => t.label === 'Meridian')!;
+    const round = () => meridian.r * pixelsPerUnit(lastCam(), h.box);
+    for (let i = 0; i < 40 && round() >= 160; i++) {
+      c.zoom(0.95);
+      h.step(1);
+    }
+    expect(pixelsPerUnit(lastCam(), h.box)).toBeLessThan(1.9);
+    expect(round()).toBeGreaterThanOrEqual(120);
+    expect(round()).toBeLessThan(0.3 * Math.min(h.box.width, h.box.height));
+    h.overlayOps!.length = 0;
+    h.step(1);
+    const cities = textDrawn(h.overlayOps!).filter((d) => d.baseline === 'top');
+    const byLabel = new Map(model.nodes.map((n) => [n.label, n]));
+    expect(cities.length).toBeGreaterThan(5);
+    for (const d of cities) expect(byLabel.get(d.text)?.project?.label, d.text).toBe('Meridian');
+  });
+});
+
+// -- Back from a note ----------------------------------------------------------------------------
+
+/**
+ * The graph opened on `view`, `walk` selected in turn and the last of it opened: what the graph
+ * kept for the way back, through JSON as session storage keeps it, where that note was on the
+ * screen, and the layout it left for the next visit to start from.
+ */
+function leaveFrom(view: GraphView, walk: (h: Harness, model: GraphModel) => GraphNode[]) {
+  const h = harness(GraphController);
+  const c = h.controller;
+  const model = twoVaults();
+  c.initView(view);
+  c.setModel(model, 'init');
+  h.step(400);
+  const notes = walk(h, model);
+  for (const n of notes) {
+    c.select(n);
+    h.step(60);
+  }
+  const a = notes.at(-1)!;
+  const entry = c.returnState(a);
+  expect(entry).not.toBeNull();
+  return {
+    a: { id: a.id, sx: a.sx, sy: a.sy },
+    entry: JSON.parse(JSON.stringify(entry)) as ReturnEntry,
+    saved: new Map(Object.entries(c.snapshot()).map(([id, [x, y, z]]) => [id, { x, y, z }])),
+  };
+}
+
+/** /graph mounted afresh on `view`, as on the way back, from the layout the last visit left. */
+function comeBack(
+  view: GraphView,
+  saved?: ReadonlyMap<string, { x: number; y: number; z: number }>,
+  cache = new Map<string, GraphNode>(),
+) {
+  const h = harness(GraphController);
+  const model = twoVaults(cache);
+  h.controller.initView(view);
+  h.controller.setModel(model, 'init', saved);
+  return { h, c: h.controller, model, cache };
+}
+
+const byId = (model: GraphModel, id: string) => model.nodes.find((n) => n.id === id)!;
+
+describe('GraphController back from a note', () => {
+  it('comes back with the note selected where it was on the screen, once the notes show', () => {
+    for (const view of ['network', 'brain'] as const) {
+      const left = leaveFrom(view, (h, model) => [loneNote(h, model)]);
+      const { h, c, model } = comeBack(view, left.saved);
+      c.restore(left.entry);
+      // Not yet: the first layout settles out of sight, from where the last visit left it.
+      expect(selections(h)).toEqual([]);
+      h.step(1);
+      const a = byId(model, left.a.id);
+      expect(selections(h)).toEqual([{ kind: 'note', node: a }]);
+      expect(a.sx).toBeCloseTo(left.a.sx, 3);
+      expect(a.sy).toBeCloseTo(left.a.sy, 3);
+      // And there it stays while the layout cools, rather than the camera snapping to the whole.
+      for (let i = 0; i < 20; i++) {
+        h.step(20);
+        expect(Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy)).toBeLessThan(2);
+      }
+    }
+  });
+
+  it('brings the way back along, less whatever the graph no longer holds', () => {
+    const left = leaveFrom('network', (h, model) => loneNotes(h, model).slice(0, 2));
+    const [b] = left.entry.trail;
+    expect(b).toMatchObject({ view: 'network' });
+    const cam = b!.cam;
+    left.entry.trail = [
+      { node: 'me/Orbit/gone.md', cam, view: 'network' },
+      ...left.entry.trail,
+      { path: ['me/Orbit/n0.md', 'me/Orbit/gone.md'], cam, view: 'network' },
+    ];
+    const { h, c, model } = comeBack('network', left.saved);
+    c.restore(left.entry);
+    h.step(1);
+    const n = byId(model, (b as { node: string }).node);
+    expect(selections(h).at(-1)!.back).toBe(n.label);
+    // Seen from where it was relative to the note, from where the note was when the graph came up.
+    const { x, y, z } = n;
+    expect(c.back()).toBe(true);
+    expect(selections(h).at(-1)).toEqual({ kind: 'note', node: n });
+    h.step(60);
+    const { dx, dy, dz, yaw, pitch, dist } = cam;
+    expectCam(lastCam(), { tx: x + dx, ty: y + dy, tz: (z || 0) + dz, yaw, pitch, dist });
+    expect(c.back()).toBe(false);
+  });
+
+  it('brings a path on the way back along, through the same notes', () => {
+    const h = harness(GraphController);
+    const c = h.controller;
+    const model = twoVaults();
+    c.initView('network');
+    c.setModel(model, 'init');
+    h.step(400);
+    const [p, q] = pathEnds(h, model);
+    h.click(p.sx, p.sy, { shift: true });
+    h.click(q.sx, q.sy, { shift: true });
+    h.step(60);
+    const traced = (selections(h).at(-1) as Extract<Selection, { kind: 'path' }>).path;
+    const b = model.nodes.find((n) => !traced.nodes.includes(n))!;
+    c.select(b);
+    h.step(60);
+    const entry = JSON.parse(JSON.stringify(c.returnState(b))) as ReturnEntry;
+    const saved = new Map(Object.entries(c.snapshot()).map(([id, [x, y, z]]) => [id, { x, y, z }]));
+
+    const back = comeBack('network', saved);
+    back.c.restore(entry);
+    back.h.step(1);
+    expect(selections(back.h).at(-1)!.back).toBe(`${p.label} → ${q.label}`);
+    expect(back.c.back()).toBe(true);
+    const restored = selections(back.h).at(-1)!;
+    expect(restored.kind).toBe('path');
+    const path = (restored as Extract<Selection, { kind: 'path' }>).path;
+    expect(path.nodes.map((n) => n.id)).toEqual(traced.nodes.map((n) => n.id));
+    expect(path.edges.map((e) => [e.source.id, e.target.id])).toEqual(
+      traced.edges.map((e) => [e.source.id, e.target.id]),
+    );
+  });
+
+  it('keeps the note where it was on the screen through a refetch that reheats the layout', () => {
+    const run = (restore: boolean) => {
+      const left = leaveFrom('network', (h, model) => [loneNote(h, model)]);
+      const { h, c, model, cache } = comeBack('network', left.saved);
+      const a = byId(model, left.a.id);
+      if (restore) c.restore(left.entry);
+      h.step(1);
+      // Merely selected, it lands where a click frames it: about where it was left.
+      if (!restore) c.select(a);
+      h.step(60);
+      expect(Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy)).toBeLessThan(5);
+      // A note came in meanwhile: the layout reheats, and the camera would ease to the whole.
+      c.setModel(twoVaults(cache, true), 'data');
+      h.step(400);
+      expect(selections(h).at(-1)).toMatchObject({ kind: 'note', node: a });
+      return Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy);
+    };
+    expect(run(true)).toBeLessThan(0.5);
+    expect(run(false)).toBeGreaterThan(40);
+  });
+
+  it('stops following the note once the user takes the camera', () => {
+    const left = leaveFrom('network', (h, model) => [loneNote(h, model)]);
+    const { h, c, model, cache } = comeBack('network', left.saved);
+    c.restore(left.entry);
+    h.step(60);
+    const a = byId(model, left.a.id);
+    const from = h.events.length;
+    // Pressed and let go without a click: nothing selected or cleared, but the camera is theirs.
+    h.down(5, 5);
+    h.up(5, 5, true);
+    c.setModel(twoVaults(cache, true), 'data');
+    h.step(400);
+    expect(selections(h, from)).toEqual([]);
+    expect(Math.hypot(a.sx - left.a.sx, a.sy - left.a.sy)).toBeGreaterThan(40);
+  });
+
+  it('brings nothing back without its note, and comes up as on any visit', () => {
+    const left = leaveFrom('network', (h, model) => [loneNote(h, model)]);
+    const visit = (entry: ReturnEntry | null) => {
+      const { h, c } = comeBack('network', left.saved);
+      if (entry) expect(() => c.restore(entry)).not.toThrow();
+      h.step(60);
+      return { told: selections(h), cam: lastCam() };
+    };
+    const plain = visit(null);
+    const gone = visit({ ...left.entry, node: 'me/Orbit/gone.md' });
+    expect(gone.told).toEqual([]);
+    expectCam(gone.cam, plain.cam);
+    // Nor for another view than the one it was left in.
+    const other = visit({ ...left.entry, view: 'brain' });
+    expect(other.told).toEqual([]);
+    expectCam(other.cam, plain.cam);
+  });
+
+  it('comes back at once in Territories, where there is no layout to wait for', () => {
+    const left = leaveFrom('territories', (h, model) => [reachable(h, model)[0]!]);
+    const { h, c, model } = comeBack('territories');
+    c.restore(left.entry);
+    const a = byId(model, left.a.id);
+    expect(selections(h)).toEqual([{ kind: 'note', node: a }]);
+    h.step(1);
+    expect(a.sx).toBeCloseTo(left.a.sx, 3);
+    expect(a.sy).toBeCloseTo(left.a.sy, 3);
+  });
+
+  it('keeps, for a note other than the one selected, the framing and the way back a click on it leaves', () => {
+    const h = harness(GraphController);
+    const c = h.controller;
+    const model = twoVaults();
+    c.initView('network');
+    c.setModel(model, 'init');
+    h.step(400);
+    const [a, b] = loneNotes(h, model) as [GraphNode, GraphNode];
+    c.select(a);
+    h.step(60);
+    const opened = c.returnState(b)!;
+    c.select(b);
+    h.step(60);
+    const clicked = c.returnState(b)!;
+    expect(opened.trail.map((s) => 'node' in s && s.node)).toEqual([a.id]);
+    expect(clicked.trail.map((s) => 'node' in s && s.node)).toEqual([a.id]);
+    for (const [x, y] of [
+      [opened.cam, clicked.cam],
+      [opened.trail[0]!.cam, clicked.trail[0]!.cam],
+    ] as const) {
+      for (const k of ['dx', 'dy', 'dz', 'yaw', 'pitch', 'dist'] as const)
+        expect(x[k]).toBeCloseTo(y[k], 1);
+    }
+  });
+});
+
+// -- Tooltip -------------------------------------------------------------------------------------
+
+describe('GraphController tooltip', () => {
+  it('goes beside the note pointed at, clear of its label and the selected note’s, through a flight', () => {
+    const { h, c, model } = restingNetwork();
+    const [a] = loneNotes(h, model) as [GraphNode];
+    c.select(a);
+    h.step(60);
+    const tip = h.el.tooltip;
+    /** The next frame: where the tooltip went, at its size until measured, and the text drawn. */
+    const next = () => {
+      h.overlayOps!.length = 0;
+      h.step(1);
+      const box = { x: parseFloat(tip.style.left), y: parseFloat(tip.style.top), w: 280, h: 90 };
+      return { box, shown: tip.style.visibility !== 'hidden', drawn: textDrawn(h.overlayOps!) };
+    };
+    const labelOf = (drawn: ReturnType<typeof textDrawn>, n: GraphNode) => {
+      const d = drawn.find((t) => t.text === n.label);
+      expect(d, n.label).toBeDefined();
+      return d!.box;
+    };
+    const clear = ({ box, shown, drawn }: ReturnType<typeof next>, b: GraphNode) => {
+      expect(shown).toBe(true);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.w).toBeLessThanOrEqual(h.box.width);
+      expect(box.y + box.h).toBeLessThanOrEqual(h.box.height);
+      expect(meet(box, labelOf(drawn, b)), `over ${b.label}`).toBe(false);
+      expect(meet(box, labelOf(drawn, a)), `over ${a.label} from ${b.label}`).toBe(false);
+    };
+
+    // The notes nearest the selected one, each pointed at in turn.
+    const near = shown(model)
+      .filter((n) => n !== a)
+      .sort((p, q) => Math.hypot(p.sx - a.sx, p.sy - a.sy) - Math.hypot(q.sx - a.sx, q.sy - a.sy))
+      .slice(0, 4);
+    for (const b of near) {
+      h.move(b.sx, b.sy);
+      expect(h.events.at(-1)).toMatchObject({ name: 'onHover', args: [b] });
+      clear(next(), b);
+    }
+
+    // Still pointed at while the camera flies out: the tooltip goes along with the note.
+    const b = near[0]!;
+    h.move(b.sx, b.sy);
+    const before = next();
+    c.fit();
+    h.step(8);
+    const during = next();
+    expect(during.box).not.toEqual(before.box);
+    clear(during, b);
+  });
+});

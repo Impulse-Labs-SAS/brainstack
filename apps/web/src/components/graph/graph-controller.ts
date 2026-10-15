@@ -45,11 +45,14 @@ import {
   pickNearest,
   pickNode,
   projectNodes,
+  type KeepClear,
   type LandPaths,
   type MinimapTransform,
 } from './graph-overlay';
+import type { CamOffset, ReturnEntry, ReturnStep } from './graph-return';
 import { GraphScene } from './graph-scene';
 import { LabelMemory, type Rect } from './labels/placer';
+import { tooltipSlot, type TooltipSide } from './labels/tooltip';
 
 /**
  * Something a feature built over the graph draws — the Sentinel view. It sees the frame, never
@@ -112,7 +115,13 @@ export interface PluginFrame {
   settled: boolean;
 }
 
-export type Selection = { kind: 'note'; node: GraphNode } | { kind: 'path'; path: GraphPath };
+/** A note or a path: what is selected, and what Back remembers. */
+type Picked = { kind: 'note'; node: GraphNode } | { kind: 'path'; path: GraphPath };
+
+export type Selection = Picked & {
+  /** What Back returns to, by name: a note's label, a path's two ends. Absent with none. */
+  back?: string;
+};
 
 /** Territories: the country under the pointer, for its tooltip. */
 export interface CountryHover {
@@ -161,9 +170,25 @@ type Drag = {
   slop: number;
   /** A tap between two notes too close to tell apart: it zooms in rather than pick one. */
   ambiguous: boolean;
+  /** The second press of a double click: it picked nothing, and its click does nothing. */
+  repeat: boolean;
 };
 
+/** A plain click or tap: what it picked, where it was pressed, when it ended and with what. */
+type Click = { node: GraphNode | null; x: number; y: number; at: number; type: string };
+
 type Tween = { from: Camera; to: Camera; t0: number; duration: number };
+
+/** A selection Back can return to: the camera it was seen from, and in which view. */
+type TrailStep = { selection: Picked; cam: Camera; view: GraphView };
+
+/** A horizontal strip of the stage, in CSS pixels from its top. */
+type Band = { top: number; bottom: number };
+
+/** The note the camera came back to from that note's page, and where it was relative to it. */
+type Follow = { node: GraphNode; cam: CamOffset };
+
+type Point = { x: number; y: number; z: number };
 
 const CLICK_SLOP = 4;
 /** A finger wobbles more than a mouse: a tap that moved this little is still a tap. */
@@ -174,10 +199,31 @@ const TOUCH_RADIUS = 22;
 const AMBIGUOUS_PX = 8;
 /** How much an ambiguous tap zooms in, so the two notes it fell between come apart. */
 const AMBIGUOUS_ZOOM = 2;
-/** Two taps this close in time are one double tap. */
+/** Two clicks or taps this close in time are one double click. */
 const DOUBLE_TAP_MS = 500;
+/** How near the first click a mouse's second lands, in a double click; a finger's, TOUCH_RADIUS. */
+const REPEAT_PX = 6;
+/** How many selections Back remembers: past that, the oldest goes. */
+const TRAIL_MAX = 50;
+/** How quickly the camera catches up with a note it came back to as the layout carries it, ms. */
+const FOLLOW_MS = 250;
 const MONTH_YEAR = new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' });
+/** How far left of centre a framed note goes, clear of the preview docked beside the graph. */
 const PREVIEW_OFFSET = 160;
+/**
+ * Where the preview docks beside the graph; narrower, it is a sheet along the bottom. The
+ * sheet's own breakpoint, Tailwind's md, which reads the window: wider than the stage by the rail.
+ */
+const PREVIEW_BESIDE = '(min-width: 768px)';
+/** The sheet at its tallest, as a share of the stage, and how far it stands off the stage's bottom. */
+const SHEET_MAX = 0.52;
+const SHEET_INSET = 8;
+/** Where the toolbar's first row ends: the top of the free band before the chrome is measured. */
+const TOOLBAR_BOTTOM = 56;
+/** The least band kept above the sheet when the chrome reaches down to it, a phone on its side. */
+const BAND_MIN = 80;
+/** The tooltip's size until it is measured: as wide as it may grow, three lines tall. */
+const TOOLTIP_SIZE = { w: 280, h: 90 };
 const SPIN_PER_MS = 0.00008;
 /** How far a search match springs out of the brain, as a share of its size. */
 const LIFT_REACH = 0.13;
@@ -201,6 +247,77 @@ function easeOutBack(t: number): number {
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
+const samePick = (a: Picked, b: Picked) =>
+  a.kind === 'note'
+    ? b.kind === 'note' && a.node === b.node
+    : b.kind === 'path' && a.path === b.path;
+
+/** What the Back button names: a note by its label, a path by its two ends. */
+function pickLabel(p: Picked): string {
+  if (p.kind === 'note') return p.node.label;
+  return `${p.path.nodes[0]!.label} → ${p.path.nodes.at(-1)!.label}`;
+}
+
+/**
+ * `steps` without what left the model, without a second step to the same note in a row, and
+ * without a last one to what is selected (`now`): a Back that would go nowhere.
+ */
+function tidyTrail(
+  steps: readonly TrailStep[],
+  present: ReadonlySet<GraphNode>,
+  now: Picked | null,
+): TrailStep[] {
+  const kept: TrailStep[] = [];
+  for (const step of steps) {
+    const s = step.selection;
+    if (!(s.kind === 'note' ? present.has(s.node) : s.path.nodes.every((n) => present.has(n))))
+      continue;
+    // The same note twice running, once what was between them left: the later camera stays.
+    if (kept.length && samePick(kept.at(-1)!.selection, s)) kept.pop();
+    kept.push(step);
+  }
+  if (now && kept.length && samePick(kept.at(-1)!.selection, now)) kept.pop();
+  return kept;
+}
+
+/** The path through `nodes` in that order, or null where two of them are no longer linked. */
+function pathThrough(model: GraphModel, nodes: GraphNode[]): GraphPath | null {
+  const edges: GraphEdge[] = [];
+  for (let i = 1; i < nodes.length; i++) {
+    const links = (model.adjacency.get(nodes[i - 1]!) ?? []).filter((l) => l.node === nodes[i]);
+    // What people wrote before what is only drawn, as `findPath` goes.
+    const link =
+      links.find((l) => l.edge.kind === 'link' || l.edge.kind === 'structure') ?? links[0];
+    if (!link) return null;
+    edges.push(link.edge);
+  }
+  return { nodes, edges, implicit: edges.some((e) => e.kind === 'affinity' || e.kind === 'topic') };
+}
+
+/** Where a note is drawn, a search's spring included: what a flight to it frames. */
+const drawn = (n: GraphNode): Point => ({ x: n.x + n.ox, y: n.y + n.oy, z: (n.z || 0) + n.oz });
+/** Where a note is laid out: what the camera follows, the spring of a search aside. */
+const laidOut = (n: GraphNode): Point => ({ x: n.x, y: n.y, z: n.z || 0 });
+
+/** `cam` relative to a note at `p`; null for a note with no place yet. */
+function offsetFrom(cam: Camera, p: Point): CamOffset | null {
+  if (!(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z))) return null;
+  const { yaw, pitch, dist } = cam;
+  return { dx: cam.tx - p.x, dy: cam.ty - p.y, dz: cam.tz - p.z, yaw, pitch, dist };
+}
+
+/** The camera at `o` from a note at `p`. */
+function placeAt(o: CamOffset, p: Point): Camera {
+  return {
+    tx: p.x + o.dx,
+    ty: p.y + o.dy,
+    tz: p.z + o.dz,
+    yaw: o.yaw,
+    pitch: o.pitch,
+    dist: o.dist,
+  };
+}
+
 export class GraphController {
   readonly webgl: boolean;
   private readonly engine: GraphEngine;
@@ -222,11 +339,21 @@ export class GraphController {
   private spin = false;
 
   private hover: GraphNode | null = null;
+  /** Where the pointer last moved over the graph: the tooltip keeps clear of the cursor. */
+  private pointerAt: { x: number; y: number } | null = null;
+  /** Which side of what it names the tooltip took last frame; null when it was not shown. */
+  private tooltipSide: TooltipSide | null = null;
   private selected: GraphNode | null = null;
   private pathFrom: GraphNode | null = null;
   private path: GraphPath | null = null;
   private pathT0 = 0;
   private pathPick = false;
+  /** What was selected before, oldest first: where Back goes, and the camera it was seen from. */
+  private trail: TrailStep[] = [];
+  /** Back from a note (`restore`): the graph as it was left, held until the first layout shows. */
+  private returning: ReturnEntry | null = null;
+  /** Then the note the camera rides with, until the user takes the camera or picks another. */
+  private following: Follow | null = null;
   private focus: GraphNode | null = null;
   private focusT0 = 0;
   private hops: Map<GraphNode, number> | null = null;
@@ -260,8 +387,18 @@ export class GraphController {
   private pinch: { dist: number; cx: number; cy: number } | null = null;
   /** The last press was a finger: a double tap then opens what a finger could tap. */
   private lastTouch = false;
-  /** When a tap last zoomed in between two notes, rather than pick one: the double tap it began opens nothing. */
-  private tapZoomedAt = -Infinity;
+  /**
+   * The last plain click or tap, and the note it picked: none on empty space, or when it zoomed
+   * in between two notes. A note it picks flies to the side, so a press soon after and close by
+   * is the rest of a double click, not a pick of whatever has come under the pointer since.
+   */
+  private lastClick: Click | null = null;
+  /**
+   * The last two clicks, for a double click that completes them: the first, which it opens, and
+   * whether the second came as its repeat (then nothing else is checked); 'dragged' when the
+   * second press moved the view, so nothing under the pointer was aimed at.
+   */
+  private pair: { first: Click; repeat: boolean } | 'dragged' | null = null;
   private raf = 0;
   private lastFrame = 0;
   private frameNo = 0;
@@ -434,6 +571,7 @@ export class GraphController {
     this.setHotCountry(null);
     if (this.selected && !keep(this.selected)) this.clearSelection();
     if (this.path && !this.path.nodes.every((n) => model.nodes.includes(n))) this.clearSelection();
+    this.pruneTrail(present);
     this.hover = keep(this.hover);
     this.previewed = keep(this.previewed);
     this.focus = null;
@@ -452,6 +590,7 @@ export class GraphController {
   setView(view: GraphView): void {
     if (view === this.engine.view) return;
     if (view === 'brain' && !this.webgl) return;
+    this.stopFollowing();
     const was3D = this.engine.is3D;
     this.stopGrowth();
     this.setHotCountry(null);
@@ -528,6 +667,7 @@ export class GraphController {
     if (this.staged) return;
     const nodes = this.matches?.filter((n) => Number.isFinite(n.x));
     if (!nodes?.length) return;
+    this.stopFollowing();
     if (nodes.length === 1) {
       this.flyTo(nodes[0]!);
       return;
@@ -551,23 +691,103 @@ export class GraphController {
 
   select(node: GraphNode): void {
     if (this.staged) return;
+    this.stopFollowing();
+    this.leave({ kind: 'note', node });
     this.selected = node;
     this.path = null;
     this.pathFrom = null;
     this.pathPick = false;
     this.edgesDirty = true;
-    this.events.onSelection({ kind: 'note', node });
+    this.announce({ kind: 'note', node });
     this.setSpin(false);
     this.flyTo(node);
   }
 
   clearSelection(): void {
+    this.stopFollowing();
     this.selected = null;
     this.path = null;
     this.pathFrom = null;
     this.pathPick = false;
+    this.lastClick = null;
+    this.pair = null;
+    // Closed, the walk is over: Back starts again from the next selection.
+    this.trail = [];
     this.edgesDirty = true;
     this.events.onSelection(null);
+  }
+
+  /**
+   * Back to what was selected before, seen from where it was; framed afresh when that was in
+   * another view, whose camera fits another layout. False with nothing to go back to, or over a
+   * stage.
+   */
+  back(): boolean {
+    if (this.staged) return false;
+    const step = this.trail.pop();
+    if (!step) return false;
+    this.stopFollowing();
+    const s = step.selection;
+    this.selected = s.kind === 'note' ? s.node : null;
+    this.path = s.kind === 'path' ? s.path : null;
+    // A path keeps the note it was traced from, as it did when it was found.
+    this.pathFrom = s.kind === 'path' ? s.path.nodes[0]! : null;
+    this.pathPick = false;
+    this.pathT0 = performance.now();
+    this.edgesDirty = true;
+    this.announce(s);
+    this.setSpin(false);
+    if (step.view !== this.engine.view) {
+      if (s.kind === 'note') this.flyTo(s.node);
+      else this.framePath(s.path);
+    } else {
+      // Seen from another angle than now: the preset the view shows as chosen no longer holds.
+      const going = this.tween?.to ?? this.cam;
+      if (step.cam.yaw !== going.yaw || step.cam.pitch !== going.pitch) this.events.onAngle(null);
+      this.animateTo({ ...step.cam });
+    }
+    this.userMoved = true;
+    return true;
+  }
+
+  /**
+   * The graph as it is, for coming back to it from `node`, about to be opened: the camera relative
+   * to the note, where it is drawn, and the way back. A note other than the one selected (a double
+   * click that picked nothing first) comes back framed as a click on it would frame it, with what
+   * is selected now on the way back, as that click would leave it. Null over a stage, or for a
+   * note the graph does not hold.
+   */
+  returnState(node: GraphNode): ReturnEntry | null {
+    if (this.staged || !this.model?.nodes.includes(node)) return null;
+    const step = node === this.selected ? null : this.stepLeaving({ kind: 'note', node });
+    const cam = offsetFrom(
+      node === this.selected ? (this.tween?.to ?? this.cam) : this.noteTarget(node),
+      drawn(node),
+    );
+    if (!cam) return null;
+    const trail: ReturnStep[] = [];
+    for (const t of step ? [...this.trail, step] : this.trail) {
+      const s = t.selection;
+      const at = offsetFrom(t.cam, drawn(s.kind === 'note' ? s.node : s.path.nodes[0]!));
+      if (!at) continue;
+      if (s.kind === 'note') trail.push({ node: s.node.id, cam: at, view: t.view });
+      else trail.push({ path: s.path.nodes.map((n) => n.id), cam: at, view: t.view });
+    }
+    return { view: this.engine.view, node: node.id, cam, trail };
+  }
+
+  /**
+   * Back from a note's page to the graph as `returnState` left it: the note selected, the camera
+   * where it was relative to the note, the way back as it was, less whatever the graph no longer
+   * holds (without the note itself, nothing comes back). Applied once the first layout shows — at
+   * once where there is none to wait for, as in Territories — after which the camera rides with
+   * the note while the layout cools, or a refetch reheats it, until the user takes the camera or
+   * the selection changes. Ignored over a stage, or for another view than this one.
+   */
+  restore(entry: ReturnEntry): void {
+    if (!this.model || this.staged || entry.view !== this.engine.view) return;
+    this.returning = entry;
+    if (!this.engine.warming) this.applyReturn();
   }
 
   /** Pick the other end of a path with the next click. */
@@ -586,6 +806,7 @@ export class GraphController {
       this.zoomStage(stage, factor);
       return;
     }
+    this.stopFollowing();
     this.zoomAt(this.vp.width / 2, this.vp.height / 2, factor);
   }
 
@@ -599,12 +820,14 @@ export class GraphController {
       this.animateTo({ ...this.cam, tx: o.tx, ty: o.ty, tz: o.tz, dist: o.dist });
       return;
     }
+    this.stopFollowing();
     this.animateTo({ ...this.cam, ...this.fitTarget() });
     this.userMoved = false;
   }
 
   setAngle(angle: AnglePreset): void {
     if (this.staged) return;
+    this.stopFollowing();
     this.setSpin(false);
     this.animateTo({ ...this.cam, ...this.fitTarget(), ...ANGLES[angle] }, 900);
     this.userMoved = true;
@@ -646,6 +869,7 @@ export class GraphController {
   pointerDown(e: PointerEvent): void {
     const model = this.model;
     if (!model) return;
+    this.stopFollowing();
     const { x, y } = this.local(e);
     // A primary pointer is the first of its kind down. Any of its kind still recorded is a ghost
     // whose lifting never reached the page (an app switch, a system gesture): left, it would
@@ -669,10 +893,16 @@ export class GraphController {
     }
     const touch = e.pointerType === 'touch';
     this.lastTouch = touch;
+    // The second press of a double click comes down where the first click's note was, and that
+    // note is flying off: picking again would select another, clear it, or zoom to a country.
+    const last = e.shiftKey ? null : this.clickNear(x, y);
+    const repeat = !!last && last.type === e.pointerType;
     const appear = (n: GraphNode) => this.engine.appear(n, performance.now());
     // A finger gets a target a finger can hit, and the benefit of the doubt between two notes
     // only in the flat views: in the brain, notes that look close may lie far apart in depth.
-    const hit = pickNearest(model, x, y, appear, touch ? TOUCH_RADIUS : 0);
+    const hit = repeat
+      ? { node: null, dist: Infinity, next: Infinity }
+      : pickNearest(model, x, y, appear, touch ? TOUCH_RADIUS : 0);
     const node = hit.node;
     // A finger dragged across notes means to move the view: on a touch screen notes stay put.
     const kind =
@@ -690,6 +920,7 @@ export class GraphController {
       origin: node ? { x: node.x, y: node.y, z: node.z } : null,
       slop: touch ? TAP_SLOP : CLICK_SLOP,
       ambiguous: touch && !!node && !this.engine.is3D && hit.next - hit.dist < AMBIGUOUS_PX,
+      repeat,
     };
   }
 
@@ -720,7 +951,8 @@ export class GraphController {
       const country = node ? null : this.countryAt(x, y);
       this.setHotCountry(country);
       this.el.overlay.style.cursor = node || country ? 'pointer' : 'grab';
-      if (node || country) this.placeTooltip(x, y);
+      // Placed by the next frame, beside the label it draws: not here, under the pointer.
+      this.pointerAt = { x, y };
       return;
     }
     const dx = x - drag.lastX;
@@ -782,15 +1014,36 @@ export class GraphController {
     if (!drag) return;
     const click = drag.travel <= drag.slop && !cancelled;
     if (drag.kind === 'node' && drag.node) this.engine.release(drag.node);
-    if (click && drag.ambiguous && this.zoomBetween(drag.startX, drag.startY)) {
-      // Zoomed in between two notes: the next tap can tell them apart.
+    // Read before clickNode, which starts and ends a path pick: only a plain click begins a
+    // double click.
+    const plain = !drag.shift && !this.pathPick;
+    const here = { x: drag.startX, y: drag.startY, at: performance.now(), type: e.pointerType };
+    // The click before this one: if the browser makes a double click of the two, it began it.
+    const before = this.lastClick;
+    const after = (first: Click | null) => (first ? { first, repeat: false } : null);
+    if (click && drag.repeat) {
+      // The rest of a double click: the first click's record stays, for the double click to open.
+      this.pair = before && { first: before, repeat: true };
+    } else if (click && drag.ambiguous && this.zoomBetween(drag.startX, drag.startY)) {
+      // Zoomed in between two notes: the next tap can tell them apart, and the double tap this
+      // one began opens nothing.
+      this.lastClick = { node: null, ...here };
+      this.pair = after(before);
     } else if (click && drag.node) {
       this.clickNode(drag.node, drag.shift);
+      this.lastClick = plain ? { node: drag.node, ...here } : null;
+      this.pair = plain ? after(before) : null;
     } else if (click && !drag.node && !this.pathPick) {
       const { x, y } = this.local(e);
       const country = this.countryAt(x, y);
       this.clearSelection();
       if (country) this.zoomToCountry(country);
+      this.lastClick = plain ? { node: null, ...here } : null;
+      this.pair = plain ? after(before) : null;
+    } else {
+      this.lastClick = null;
+      // A press that moved the view still ends in a click the browser may pair with the last.
+      this.pair = click ? null : 'dragged';
     }
     this.el.overlay.style.cursor = this.hover || this.hotCountry ? 'pointer' : 'grab';
   }
@@ -813,6 +1066,7 @@ export class GraphController {
       return;
     }
     this.setSpin(false);
+    this.stopFollowing();
     this.plugin?.onUserCamera();
     const { x, y } = this.local(e);
     this.zoomAt(x, y, e.deltaY < 0 ? 1.12 : 1 / 1.12);
@@ -821,16 +1075,34 @@ export class GraphController {
   doubleClick(e: MouseEvent): void {
     const model = this.model;
     if (!model || this.staged) return;
-    // Its first tap zoomed in between two notes: what lies under the second was not aimed at.
-    if (performance.now() - this.tapZoomedAt < DOUBLE_TAP_MS) return;
     const { x, y } = this.local(e);
+    // What its first click picked, before that note flew off from under the pointer; nothing
+    // when it fell on empty space or zoomed in between two notes. Not timed again: the event
+    // is the browser's word that the two clicks were one double click, by the system's own
+    // speed, however long the second press was held. Its second press moved the view: nothing.
+    // Without a second click on record (it never reached the canvas), the last one if it was
+    // just now and here.
+    const pair = this.pair;
+    this.pair = null;
+    const last = this.clickNear(x, y);
+    this.lastClick = null;
+    if (pair === 'dragged') return;
+    // A repeat was judged near when it came down; a finger may roll a little before it lifts.
+    const first = pair ? (pair.repeat || this.near(pair.first, x, y) ? pair.first : null) : last;
+    if (first) {
+      if (first.node) this.events.onOpen(first.node);
+      return;
+    }
     const appear = (n: GraphNode) => this.engine.appear(n, performance.now());
     // A double tap reaches as far as a tap does.
     const node = pickNearest(model, x, y, appear, this.lastTouch ? TOUCH_RADIUS : 0).node;
     if (node) this.events.onOpen(node);
   }
 
-  /** Arrows walk the selected note's links in the direction pressed. Returns whether it handled the key. */
+  /**
+   * Arrows walk the selected note's links in the direction pressed, Backspace goes back along
+   * what was selected, Escape steps out a level at a time. Returns whether it handled the key.
+   */
   keyDown(e: KeyboardEvent): boolean {
     if (this.staged) {
       // Over a stage there is no selection to clear or walk: only the zoom keys.
@@ -839,10 +1111,8 @@ export class GraphController {
       else return false;
       return true;
     }
-    if (e.key === 'Escape') {
-      this.clearSelection();
-      return true;
-    }
+    if (e.key === 'Escape') return this.escape();
+    if (e.key === 'Backspace') return this.back();
     if (e.key === '+' || e.key === '=') {
       this.zoom(1.25);
       return true;
@@ -873,6 +1143,7 @@ export class GraphController {
   minimapPoint(e: PointerEvent): void {
     const t = this.minimapTransform;
     if (!t || this.staged) return;
+    this.stopFollowing();
     const r = this.el.minimap.getBoundingClientRect();
     this.cam = {
       ...this.cam,
@@ -885,6 +1156,149 @@ export class GraphController {
 
   // -- Internals -------------------------------------------------------------------
 
+  /**
+   * Escape, one level at a time: a path's other end being picked, then what is selected, then
+   * the camera the user moved, back over the whole graph (the whole map, in Territories). Past
+   * that the key is the page's: false.
+   */
+  private escape(): boolean {
+    if (this.pathPick) {
+      // The pick ends and the note it began from stays: the next click selects, not traces.
+      this.pathPick = false;
+      this.pathFrom = this.path?.nodes[0] ?? null;
+      return true;
+    }
+    if (this.selected || this.path) {
+      this.clearSelection();
+      return true;
+    }
+    if (!this.userMoved) return false;
+    this.fit();
+    return true;
+  }
+
+  /** What is selected now, as the trail keeps it. */
+  private get picked(): Picked | null {
+    if (this.path) return { kind: 'path', path: this.path };
+    return this.selected ? { kind: 'note', node: this.selected } : null;
+  }
+
+  /**
+   * `next` takes the place of what is selected, which goes on the trail with the camera it was
+   * seen from: where its flight was going, if it had not landed. Selecting it again keeps no step.
+   */
+  private leave(next: Picked): void {
+    const step = this.stepLeaving(next);
+    if (!step) return;
+    this.trail.push(step);
+    if (this.trail.length > TRAIL_MAX) this.trail.shift();
+  }
+
+  /** The step `leave(next)` puts on the trail: none with nothing selected, or `next` itself. */
+  private stepLeaving(next: Picked): TrailStep | null {
+    const now = this.picked;
+    if (!now || samePick(now, next)) return null;
+    return { selection: now, cam: { ...(this.tween?.to ?? this.cam) }, view: this.engine.view };
+  }
+
+  /** The selection to the view, with what Back would return to while there is anything. */
+  private announce(s: Picked): void {
+    const last = this.trail.at(-1);
+    this.events.onSelection(last ? { ...s, back: pickLabel(last.selection) } : s);
+  }
+
+  /**
+   * Notes left the model: every step they were in goes, and so does a second step to the same
+   * note in a row, or one to what is selected — a Back that would go nowhere. When that changes
+   * what Back names, the view hears it.
+   */
+  private pruneTrail(present: ReadonlySet<GraphNode>): void {
+    if (!this.trail.length) return;
+    const top = this.trail.at(-1);
+    const now = this.picked;
+    this.trail = tidyTrail(this.trail, present, now);
+    if (now && this.trail.at(-1) !== top) this.announce(now);
+  }
+
+  /**
+   * `restore`, now that the notes show: the note and the way back found in this model by id, and
+   * the camera cut to where it was left rather than flown there from the whole graph. From here
+   * it follows the note (`followNote`).
+   */
+  private applyReturn(): void {
+    const entry = this.returning;
+    const model = this.model;
+    this.returning = null;
+    if (!entry || !model) return;
+    const byId = new Map(model.nodes.map((n) => [n.id, n]));
+    const node = byId.get(entry.node);
+    if (!node) return;
+    const steps: TrailStep[] = [];
+    for (const step of entry.trail) {
+      const nodes = ('node' in step ? [step.node] : step.path).map((id) => byId.get(id));
+      if (!nodes.every((n): n is GraphNode => n !== undefined)) continue;
+      let selection: Picked = { kind: 'note', node: nodes[0]! };
+      if ('path' in step) {
+        const path = pathThrough(model, nodes);
+        if (!path) continue;
+        selection = { kind: 'path', path };
+      }
+      steps.push({ selection, cam: placeAt(step.cam, laidOut(nodes[0]!)), view: step.view });
+    }
+    const picked: Picked = { kind: 'note', node };
+    this.selected = node;
+    this.path = null;
+    this.pathFrom = null;
+    this.pathPick = false;
+    this.trail = tidyTrail(steps, new Set(model.nodes), picked);
+    this.edgesDirty = true;
+    this.announce(picked);
+    this.setSpin(false);
+    this.tween = null;
+    this.cam = placeAt(entry.cam, laidOut(node));
+    this.userMoved = true;
+    this.following = { node, cam: entry.cam };
+  }
+
+  /**
+   * The camera eased after the note it came back to, at the offset it was left at: as the layout
+   * cools, or a refetch reheats it, the note stays where it was on the screen. Taken over the
+   * ease to the whole graph that a reheat starts.
+   */
+  private followNote(f: Follow, dt: number): void {
+    const to = placeAt(f.cam, laidOut(f.node));
+    const k = this.reduceMotion ? 1 : 1 - Math.exp(-dt / FOLLOW_MS);
+    this.cam = {
+      ...this.cam,
+      tx: this.cam.tx + (to.tx - this.cam.tx) * k,
+      ty: this.cam.ty + (to.ty - this.cam.ty) * k,
+      tz: this.cam.tz + (to.tz - this.cam.tz) * k,
+    };
+  }
+
+  /**
+   * The user took the camera, or the selection changed: a way back not yet applied goes, and the
+   * camera stops following the note it came back to. So does a stage coming up, which clears
+   * the selection, and the note leaving the model, which does too.
+   */
+  private stopFollowing(): void {
+    this.returning = null;
+    this.following = null;
+  }
+
+  /** The last plain click, when (x, y) is near enough to it in time and place to be its double. */
+  private clickNear(x: number, y: number): Click | null {
+    const last = this.lastClick;
+    if (!last || performance.now() - last.at >= DOUBLE_TAP_MS) return null;
+    return this.near(last, x, y) ? last : null;
+  }
+
+  /** Whether (x, y) lands where `click` did, as near as a second press of its double would. */
+  private near(click: Click, x: number, y: number): boolean {
+    const reach = click.type === 'touch' ? TOUCH_RADIUS : REPEAT_PX;
+    return Math.hypot(x - click.x, y - click.y) <= reach;
+  }
+
   private clickNode(node: GraphNode, shift: boolean): void {
     this.setSpin(false);
     if (!(shift || this.pathPick)) {
@@ -892,12 +1306,13 @@ export class GraphController {
       return;
     }
     if (!this.pathFrom || this.path) {
+      this.leave({ kind: 'note', node });
       this.selected = node;
       this.pathFrom = node;
       this.path = null;
       this.pathPick = true;
       this.edgesDirty = true;
-      this.events.onSelection({ kind: 'note', node });
+      this.announce({ kind: 'note', node });
       this.events.onToast('Now Shift+click the note to trace a path to.');
       return;
     }
@@ -908,14 +1323,24 @@ export class GraphController {
       this.events.onToast('No path: those notes are on separate islands.');
       return;
     }
+    this.leave({ kind: 'path', path });
     this.path = path;
     this.pathT0 = performance.now();
     this.selected = null;
     this.edgesDirty = true;
-    this.events.onSelection({ kind: 'path', path });
-    const target = { ...this.cam, ...this.fitTarget(path.nodes, 1.4) };
-    this.animateTo(this.withPreviewOffset(target));
+    this.announce({ kind: 'path', path });
+    this.framePath(path);
     this.userMoved = true;
+  }
+
+  /** The whole of a path in view, clear of the preview: beside it, or between it and the chrome. */
+  private framePath(path: GraphPath): void {
+    const band = this.sheetBand();
+    const target = {
+      ...this.cam,
+      ...this.fitTarget(path.nodes, 1.4, band ? band.bottom - band.top : undefined),
+    };
+    this.animateTo(this.withPreviewOffset(target, band));
   }
 
   /** Territories: the project whose land is under the screen point (x, y). */
@@ -962,9 +1387,11 @@ export class GraphController {
     this.userMoved = true;
   }
 
+  /** `frameHeight`: `nodes` fitted into a band that tall rather than into the whole stage. */
   private fitTarget(
     nodes?: GraphNode[],
     maxScale?: number,
+    frameHeight?: number,
   ): Pick<Camera, 'tx' | 'ty' | 'tz' | 'dist'> {
     if (this.engine.is3D && !nodes) return fitBrain(this.engine.brainScale, this.vp);
     const map = !nodes && !this.engine.growth ? this.engine.mapBounds() : null;
@@ -972,11 +1399,42 @@ export class GraphController {
     const list = (nodes ?? this.model?.nodes ?? []).filter((n) => n.bornAt !== Infinity);
     const b = boundsOf(list);
     if (!b) return { tx: this.cam.tx, ty: this.cam.ty, tz: this.cam.tz, dist: this.cam.dist };
-    return fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D });
+    return fitBounds(b, this.vp, { maxScale, depth: this.engine.is3D, frameHeight });
   }
 
-  private withPreviewOffset(cam: Camera): Camera {
-    if (this.vp.width <= 760) return cam;
+  /**
+   * Where the preview is a sheet along the bottom, the strip of graph left free above it: from
+   * the lowest chrome that ends above the middle (the toolbar's rows, the buttons beside them)
+   * down to the sheet at its tallest. The sheet is not on screen yet when the first flight is
+   * aimed, so where it can reach is all there is to go by. Null where the preview docks beside
+   * the graph. Asked when a flight is aimed, not once: a phone turns.
+   */
+  private sheetBand(): Band | null {
+    // No media queries to ask (Node): the stage's own width stands in for the window's.
+    const beside =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia(PREVIEW_BESIDE).matches
+        : this.vp.width > 760;
+    if (beside) return null;
+    const h = this.vp.height;
+    let top = -Infinity;
+    for (const r of this.chrome) if (r.y + r.h < h / 2) top = Math.max(top, r.y + r.h);
+    if (top === -Infinity) top = TOOLBAR_BOTTOM;
+    const bottom = h - h * SHEET_MAX - SHEET_INSET;
+    return { top: Math.min(top, bottom - BAND_MIN), bottom };
+  }
+
+  /**
+   * `cam` moved so what it centres lands clear of the preview: left of centre beside it, or in
+   * the middle of `band`, above the sheet. Up the screen is the camera's up, so in the brain it
+   * lands exactly at the target's depth.
+   */
+  private withPreviewOffset(cam: Camera, band: Band | null): Camera {
+    if (band) {
+      const s = (this.vp.height / 2 - (band.top + band.bottom) / 2) / pixelsPerUnit(cam, this.vp);
+      const { up } = basis(cam);
+      return { ...cam, tx: cam.tx - up[0] * s, ty: cam.ty - up[1] * s, tz: cam.tz - up[2] * s };
+    }
     const shift = PREVIEW_OFFSET / pixelsPerUnit(cam, this.vp);
     return {
       ...cam,
@@ -986,20 +1444,18 @@ export class GraphController {
   }
 
   private flyTo(node: GraphNode): void {
+    this.animateTo(this.noteTarget(node));
+    this.userMoved = true;
+  }
+
+  /** Where a flight to `node` goes from here: close enough to read it, clear of the preview. */
+  private noteTarget(node: GraphNode): Camera {
     const dist = this.engine.is3D
       ? Math.min(this.cam.dist, this.engine.brainScale * 1.9)
       : Math.min(this.cam.dist, this.vp.height / 2 / (TAN_HALF_FOV * 1.35));
     // Where it is drawn: a search match may have sprung out of its place.
-    this.animateTo(
-      this.withPreviewOffset({
-        ...this.cam,
-        tx: node.x + node.ox,
-        ty: node.y + node.oy,
-        tz: (node.z || 0) + node.oz,
-        dist,
-      }),
-    );
-    this.userMoved = true;
+    const { x, y, z } = drawn(node);
+    return this.withPreviewOffset({ ...this.cam, tx: x, ty: y, tz: z, dist }, this.sheetBand());
   }
 
   private animateTo(to: Camera, duration = 700): void {
@@ -1031,9 +1487,41 @@ export class GraphController {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  private placeTooltip(x: number, y: number): void {
-    this.el.tooltip.style.left = `${Math.min(x + 16, this.vp.width - 290)}px`;
-    this.el.tooltip.style.top = `${Math.min(y + 16, this.vp.height - 90)}px`;
+  /**
+   * The tooltip beside the note or country pointed at, from what the overlay just drew: placed
+   * every frame, so it rides along with a flight, clear of the note's label, the selection's and
+   * the chrome. With no room it is hidden rather than put over them; the label still names the
+   * note.
+   */
+  private placeTooltip(drawn: KeepClear): void {
+    const pointer = this.pointerAt;
+    if (!(this.hover || this.hotCountry) || !pointer) {
+      this.tooltipSide = null;
+      return;
+    }
+    const tip = this.el.tooltip;
+    const slot = tooltipSlot({
+      // As shown; 0 while React has yet to show it, and in the tests' stand-in, with no layout.
+      size: { w: tip.offsetWidth || TOOLTIP_SIZE.w, h: tip.offsetHeight || TOOLTIP_SIZE.h },
+      anchor: this.hover ? drawn.anchor : null,
+      pointer,
+      keep: drawn.keep,
+      chrome: this.chrome,
+      vp: this.vp,
+      previous: this.tooltipSide,
+    });
+    this.tooltipSide = slot?.side ?? null;
+    if (slot) {
+      this.tooltipStyle('left', `${slot.rect.x}px`);
+      this.tooltipStyle('top', `${slot.rect.y}px`);
+    }
+    this.tooltipStyle('visibility', slot ? '' : 'hidden');
+  }
+
+  /** Only what changed: at rest a frame writes nothing, rather than restyle the tooltip. */
+  private tooltipStyle(key: 'left' | 'top' | 'visibility', value: string): void {
+    const style = this.el.tooltip.style;
+    if (style[key] !== value) style[key] = value;
   }
 
   private resize(): void {
@@ -1341,6 +1829,7 @@ export class GraphController {
       origin: null,
       slop: e.pointerType === 'touch' ? TAP_SLOP : CLICK_SLOP,
       ambiguous: false,
+      repeat: false,
     };
   }
 
@@ -1372,6 +1861,8 @@ export class GraphController {
     }
     if (this.drag?.kind === 'node' && this.drag.node) this.engine.release(this.drag.node);
     this.drag = null;
+    this.lastClick = null;
+    this.pair = null;
     if (this.hover) {
       this.hover = null;
       this.events.onHover(null);
@@ -1435,6 +1926,7 @@ export class GraphController {
       origin: null,
       slop: TAP_SLOP,
       ambiguous: false,
+      repeat: false,
     };
   }
 
@@ -1459,9 +1951,7 @@ export class GraphController {
   private zoomBetween(x: number, y: number): boolean {
     const before = this.cam.dist;
     this.zoomAt(x, y, AMBIGUOUS_ZOOM);
-    if (this.cam.dist === before) return false;
-    this.tapZoomedAt = performance.now();
-    return true;
+    return this.cam.dist !== before;
   }
 
   /** Orbit zoom between the stage's limits: it is not a flat map to zoom under the pointer. */
@@ -1512,6 +2002,8 @@ export class GraphController {
 
     const warming = this.engine.warming;
     const moved = this.engine.advance(now);
+    // Back from a note: once the notes show, the graph comes up as it was left, not framed whole.
+    if (this.returning && !this.engine.warming) this.applyReturn();
     if (warming && !this.engine.warming && !this.userMoved) {
       // The notes are shown only now; frame where they settled, as the first frame used to.
       this.cam = { ...this.cam, ...this.fitTarget() };
@@ -1519,6 +2011,8 @@ export class GraphController {
       const p = clamp((now - this.tween.t0) / this.tween.duration, 0, 1);
       this.cam = interpolate(this.tween.from, this.tween.to, p);
       if (p >= 1) this.tween = null;
+    } else if (this.following && !this.drag) {
+      this.followNote(this.following, dt);
     } else if (!this.userMoved && moved) {
       const t = this.fitTarget();
       this.cam = {
@@ -1611,7 +2105,7 @@ export class GraphController {
     this.edgesDirty = false;
     this.reupload = false;
 
-    drawOverlay(this.ctx, {
+    const drawn = drawOverlay(this.ctx, {
       now,
       vp: this.vp,
       dpr: this.dpr,
@@ -1648,6 +2142,7 @@ export class GraphController {
       labels: this.labels,
       labelPx: this.labelPx,
     });
+    this.placeTooltip(drawn);
     this.plugin?.draw(this.ctx, {
       now,
       dt,
