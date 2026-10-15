@@ -663,6 +663,28 @@ export class GraphController {
   }
 
   /** Bring every match into view. */
+  /**
+   * Bring `notes` into view beside the preview, the selection kept: a step up from a note to its
+   * folder, its project or its vault. As close as a click on one note would go, at most.
+   */
+  frameNotes(notes: readonly GraphNode[]): void {
+    if (this.staged) return;
+    const list = notes.filter((n) => Number.isFinite(n.x));
+    if (!list.length) return;
+    this.stopFollowing();
+    this.setSpin(false);
+    const band = this.sheetBand();
+    const maxScale = this.engine.is3D
+      ? this.vp.height / 2 / (TAN_HALF_FOV * this.engine.brainScale * 1.9)
+      : 1.6;
+    const target = {
+      ...this.cam,
+      ...this.fitTarget(list, maxScale, band ? band.bottom - band.top : undefined),
+    };
+    this.animateTo(this.withPreviewOffset(target, band));
+    this.userMoved = true;
+  }
+
   frameMatches(): void {
     if (this.staged) return;
     const nodes = this.matches?.filter((n) => Number.isFinite(n.x));

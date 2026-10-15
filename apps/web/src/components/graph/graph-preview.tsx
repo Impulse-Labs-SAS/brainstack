@@ -1,16 +1,20 @@
 'use client';
 
-// The panel a click opens beside the graph: a note with its connections, a
-// topic with the notes that carry it, or the path between two notes. The
-// graph stays on screen; opening the note is one more click, or Enter.
+// The panel a click opens beside the graph: a note with where it is filed, its first lines and
+// every connection it has, a topic with the notes that carry it, or the path between two notes.
+// The graph stays on screen; opening the note is one more click, or Enter.
 
-import { ChevronLeft, X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Button as AriaButton, type PressEvent } from 'react-aria-components';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
 import { colorOf, type EdgeKind, type GraphModel, type GraphNode } from '@/lib/graph-model';
+import { connectionGroups, crumbsOf, type Crumb } from '@/lib/graph-sheet';
+import { excerpt } from '@/lib/note-excerpt';
+import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
 import type { Selection } from './graph-controller';
@@ -25,8 +29,13 @@ export const GLASS = 'glass border border-border-subtle backdrop-blur-md';
 export const FLOAT_GLASS = 'float-glass border backdrop-blur-xl backdrop-saturate-150';
 
 const KIND_LABEL: Record<EdgeKind, string> = { link: 'link', structure: 'index', affinity: 'shared topic', topic: 'topic' };
-const KIND_RANK: Record<EdgeKind, number> = { link: 0, structure: 1, topic: 2, affinity: 3 };
-const MAX_LISTED = 12;
+/** Past this many connections the sheet offers a filter. */
+const FILTER_FROM = 8;
+/** Rows a group shows before "Show all": a hub's hundreds would bury the groups after it. */
+const GROUP_SHOWN = 20;
+/** A note's first lines are kept this long: walking with the arrows reads nothing twice. */
+const EXCERPT_STALE_MS = 30_000;
+const CRUMB_ACTION: Record<Crumb['kind'], string> = { vault: 'the vault', project: 'the project', folder: 'the folder' };
 /**
  * The sheet's heading: where a pick made from the keyboard leaves focus (graph-view), so the new
  * title is read out and Tab goes on from it. Not in the tab order; the ring shows only then.
@@ -71,10 +80,14 @@ interface GraphPreviewProps {
   onPathFrom(node: GraphNode): void;
   /** Back to what was selected before: offered while `selection.back` names it. */
   onBack(e: PressEvent): void;
+  /** A step up from the note — its folder, project or vault — brought into view. */
+  onFrame(notes: readonly GraphNode[]): void;
   onClose(): void;
+  /** Read each note's first lines from the server: off where the vault is invented (the bench). */
+  excerpts: boolean;
 }
 
-export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, onBack, onClose }: GraphPreviewProps) {
+export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, onBack, onFrame, onClose, excerpts }: GraphPreviewProps) {
   return (
     <aside
       data-graph-chrome
@@ -90,7 +103,18 @@ export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, o
       {selection.kind === 'path' ? (
         <PathBody selection={selection} model={model} onSelect={onSelect} onBack={onBack} onClose={onClose} />
       ) : (
-        <NodeBody node={selection.node} back={selection.back} model={model} onSelect={onSelect} onOpen={onOpen} onPathFrom={onPathFrom} onBack={onBack} onClose={onClose} />
+        <NodeBody
+          node={selection.node}
+          back={selection.back}
+          model={model}
+          excerpts={excerpts}
+          onSelect={onSelect}
+          onOpen={onOpen}
+          onPathFrom={onPathFrom}
+          onBack={onBack}
+          onFrame={onFrame}
+          onClose={onClose}
+        />
       )}
     </aside>
   );
@@ -110,7 +134,7 @@ function Header({
   onBack(e: PressEvent): void;
   onClose(): void;
 }) {
-  const Title = heading ? 'h3' : 'span';
+  const Title = heading ? 'h3' : 'div';
   return (
     <div className="flex items-center justify-between gap-2">
       {back && (
@@ -128,7 +152,7 @@ function Header({
       )}
       <Title
         tabIndex={heading ? -1 : undefined}
-        className={cn('flex min-w-0 flex-1 items-center gap-1.5 truncate text-xs text-fg-secondary', heading && HEADING_FOCUS)}
+        className={cn('flex min-w-0 flex-1 items-center gap-1.5 text-xs text-fg-secondary', heading && cn('truncate', HEADING_FOCUS))}
       >
         {children}
       </Title>
@@ -143,34 +167,30 @@ function NodeBody({
   node,
   back,
   model,
+  excerpts,
   onSelect,
   onOpen,
   onPathFrom,
   onBack,
+  onFrame,
   onClose,
 }: {
   node: GraphNode;
   back?: string;
   model: GraphModel;
+  excerpts: boolean;
   onSelect(node: GraphNode, e: PressEvent): void;
   onOpen(node: GraphNode): void;
   onPathFrom(node: GraphNode): void;
   onBack(e: PressEvent): void;
+  onFrame(notes: readonly GraphNode[]): void;
   onClose(): void;
 }) {
-  const vault = model.vaults.find((v) => v.id === node.vault);
-  const neighbours = [...(model.adjacency.get(node) ?? [])].sort(
-    (a, b) => KIND_RANK[a.edge.kind] - KIND_RANK[b.edge.kind] || b.node.size - a.node.size,
-  );
   const topic = node.kind === 'topic';
   return (
     <>
       <Header back={back} onBack={onBack} onClose={onClose}>
-        <Swatch color={colorOf(model, node).hue} />
-        <span className="truncate">
-          {vault?.label}
-          {topic ? ' · topic' : node.project ? ` · ${node.project.label}` : ''}
-        </span>
+        <Crumbs node={node} model={model} onFrame={onFrame} />
       </Header>
       <h3 tabIndex={-1} className={cn('text-lg font-semibold leading-tight tracking-tight text-fg-primary', HEADING_FOCUS)}>
         {node.label}
@@ -179,7 +199,7 @@ function NodeBody({
         <p className="text-xs text-fg-secondary">Carried by {node.carriers} notes in your vault</p>
       ) : (
         <>
-          <p className="break-all font-mono text-[11px] text-fg-tertiary">{node.path}</p>
+          {excerpts && <NoteExcerpt node={node} />}
           <p className="text-xs text-fg-secondary">
             Created {dateFormat.format(node.createdAt)} · {edited(node.updatedAt)}
           </p>
@@ -194,27 +214,7 @@ function NodeBody({
           )}
         </>
       )}
-      <div className="border-t border-border-subtle pt-2 font-mono text-[11px] uppercase tracking-wider text-fg-tertiary">
-        {topic ? 'Notes' : 'Connections'} <span className="text-fg-secondary">{neighbours.length}</span>
-      </div>
-      <ul className="grid gap-px">
-        {neighbours.slice(0, MAX_LISTED).map(({ node: other, edge }) => (
-          <li key={`${other.id}:${edge.kind}`}>
-            <AriaButton
-              onPress={(e) => onSelect(other, e)}
-              className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
-            >
-              <KindGlyph kind={edge.kind} />
-              <span className="min-w-0 flex-1 truncate text-fg-primary">{other.label}</span>
-              <span className="shrink-0 text-[11px] text-fg-tertiary">
-                {KIND_LABEL[edge.kind]}
-                {other.vault !== node.vault ? ` · ${model.vaults.find((v) => v.id === other.vault)?.label ?? ''}` : ''}
-              </span>
-            </AriaButton>
-          </li>
-        ))}
-      </ul>
-      {neighbours.length > MAX_LISTED && <p className="pl-1.5 text-xs text-fg-tertiary">and {neighbours.length - MAX_LISTED} more</p>}
+      {/* Above the connections, which may run long: what you came to do stays in reach. */}
       <div className="flex flex-wrap gap-1.5">
         {!topic && (
           <Button intent="primary" size="sm" className="touch:h-11" onPress={() => onOpen(node)}>
@@ -225,7 +225,131 @@ function NodeBody({
           Path from here
         </Button>
       </div>
+      {/* Keyed by the note: the filter and what was shown in full belong to the note they were for. */}
+      <Connections key={node.id} node={node} model={model} onSelect={onSelect} />
       <p className="text-[11px] text-fg-tertiary">Arrows walk its links{back ? ' · Backspace goes back' : ''} · Esc closes</p>
+    </>
+  );
+}
+
+/** Where the note is filed, from its vault down: each step brings the notes under it into view. */
+function Crumbs({ node, model, onFrame }: { node: GraphNode; model: GraphModel; onFrame(notes: readonly GraphNode[]): void }) {
+  const crumbs = useMemo(() => crumbsOf(model, node), [model, node]);
+  return (
+    <nav aria-label="Where it is filed" className="min-w-0">
+      <ol className="flex min-w-0 flex-wrap items-center gap-y-0.5">
+        <li className="mr-1 flex">
+          <Swatch color={colorOf(model, node).hue} />
+        </li>
+        {crumbs.map((c, i) => (
+          // The title on the item: react-aria's Button drops one of its own, and a long name is cut.
+          <li key={`${c.kind}:${i}`} title={c.label} className="flex min-w-0 items-center">
+            {i > 0 && <ChevronRight size={11} aria-hidden className="shrink-0 text-fg-muted" />}
+            <AriaButton
+              onPress={() => onFrame(c.notes)}
+              aria-label={`Show ${CRUMB_ACTION[c.kind]} ${c.label} on the graph`}
+              className="max-w-[9rem] truncate rounded px-1 py-0.5 text-left text-xs text-fg-secondary outline-none hover:bg-bg-hover hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
+            >
+              {c.label}
+            </AriaButton>
+          </li>
+        ))}
+        {node.kind === 'topic' && <li className="pl-1 text-xs text-fg-tertiary">· topic</li>}
+      </ol>
+    </nav>
+  );
+}
+
+/** The note's first lines, read when it is picked: through the sharing service, as every read is. */
+function NoteExcerpt({ node }: { node: GraphNode }) {
+  const note = trpc.notes.get.useQuery(
+    { path: node.path, ...(node.foreign && node.ownerId ? { ownerId: node.ownerId } : {}) },
+    { staleTime: EXCERPT_STALE_MS, retry: false },
+  );
+  // A note that cannot be read here says nothing more: its title and dates are still there.
+  if (note.isError) return null;
+  const text = note.data ? excerpt(note.data.body) : '';
+  return (
+    <p className="line-clamp-4 text-[12.5px] leading-[19px] text-fg-secondary">
+      {note.isPending ? (
+        <span className="text-fg-tertiary">Reading the note…</span>
+      ) : (
+        text || <span className="text-fg-tertiary">Empty note.</span>
+      )}
+    </p>
+  );
+}
+
+/** Every connection, grouped by kind, with a filter once there are more than a few. */
+function Connections({ node, model, onSelect }: { node: GraphNode; model: GraphModel; onSelect(node: GraphNode, e: PressEvent): void }) {
+  const [query, setQuery] = useState('');
+  const [full, setFull] = useState<ReadonlySet<string>>(new Set());
+  const total = model.adjacency.get(node)?.length ?? 0;
+  const groups = useMemo(() => connectionGroups(model, node, query), [model, node, query]);
+  const topic = node.kind === 'topic';
+  return (
+    <>
+      <div className="border-t border-border-subtle pt-2 font-mono text-[11px] uppercase tracking-wider text-fg-tertiary">
+        {topic ? 'Notes' : 'Connections'} <span className="text-fg-secondary">{total}</span>
+      </div>
+      {total > FILTER_FROM && (
+        <Input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Escape empties the filter first; with nothing in it, the sheet's own Escape is next.
+            if (e.key === 'Escape' && query) {
+              setQuery('');
+              e.stopPropagation();
+            }
+          }}
+          placeholder={topic ? 'Filter its notes' : 'Filter connections'}
+          aria-label={topic ? 'Filter its notes' : 'Filter connections'}
+          className="h-8 bg-bg-elevated text-xs placeholder:text-fg-tertiary touch:h-11"
+        />
+      )}
+      {groups.map((g) => {
+        const shown = query || full.has(g.key) ? g.items : g.items.slice(0, GROUP_SHOWN);
+        return (
+          <section key={g.key} aria-label={g.label} className="grid gap-px">
+            <h4 className="px-1.5 pt-1 font-mono text-[10.5px] uppercase tracking-wider text-fg-tertiary">
+              {g.label} <span className="text-fg-secondary">{g.items.length}</span>
+            </h4>
+            <ul className="grid gap-px">
+              {shown.map(({ node: other, edge }) => (
+                <li key={`${other.id}:${edge.kind}:${edge.source === node ? 'out' : 'in'}`}>
+                  <AriaButton
+                    onPress={(e) => onSelect(other, e)}
+                    className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left outline-none hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
+                  >
+                    <KindGlyph kind={edge.kind} />
+                    <span className="min-w-0 flex-1 truncate text-fg-primary">{other.label}</span>
+                    <span className="max-w-[40%] shrink-0 truncate text-[11px] text-fg-tertiary">
+                      {edge.kind === 'affinity'
+                        ? edge.shared.slice(0, 2).join(', ')
+                        : other.vault !== node.vault
+                          ? (model.vaults.find((v) => v.id === other.vault)?.label ?? '')
+                          : ''}
+                    </span>
+                  </AriaButton>
+                </li>
+              ))}
+            </ul>
+            {shown.length < g.items.length && (
+              <AriaButton
+                onPress={() => setFull(new Set(full).add(g.key))}
+                className="justify-self-start rounded px-1.5 py-1 text-xs text-fg-tertiary outline-none hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 touch:min-h-11"
+              >
+                Show all {g.items.length}
+              </AriaButton>
+            )}
+          </section>
+        );
+      })}
+      {query && !groups.length && (
+        <p className="px-1.5 text-xs text-fg-tertiary">No connection’s title has “{query.trim()}” in it.</p>
+      )}
     </>
   );
 }

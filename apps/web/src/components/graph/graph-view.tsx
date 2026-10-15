@@ -132,6 +132,11 @@ interface GraphViewProps {
    * graph page's own preferences stay as they were.
    */
   persist?: boolean;
+  /**
+   * Whether the preview reads each note's first lines from the server. On by default; the bench
+   * turns it off: its vault is invented, and a read without a session signs the page out.
+   */
+  excerpts?: boolean;
 }
 
 const LAYERS_KEY = 'brainstack.graph.layers';
@@ -285,6 +290,7 @@ export function GraphView({
   includeShared,
   onIncludeSharedChange,
   persist = true,
+  excerpts = true,
 }: GraphViewProps) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
@@ -803,6 +809,8 @@ export function GraphView({
           onOpen={open}
           onPathFrom={(n) => c()?.startPathFrom(n)}
           onBack={(e) => fromSheet(e, () => c()?.back())}
+          onFrame={(notes) => c()?.frameNotes(notes)}
+          excerpts={excerpts}
           onClose={() => {
             c()?.clearSelection();
             // Whatever pressed it: the button goes with the sheet, and the keys stay the graph's.
