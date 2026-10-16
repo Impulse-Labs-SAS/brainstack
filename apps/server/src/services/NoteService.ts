@@ -39,6 +39,7 @@ import {
 import { applyEdits, type NoteEdit } from '@brainstack/core/sentinel';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 
+import { MAX_FRONTMATTER_CHARS, MAX_NOTE_CHARS } from '../config/limits.js';
 import { AppError } from '../lib/errors.js';
 import { toLogical, toPhysical } from '../lib/vault.js';
 
@@ -69,6 +70,11 @@ const { facets, folders, links, notes, tags } = pgSchema;
  */
 const DECISION_TAGS = ['decisión', 'decision'];
 const DECISION_STATUS = { key: 'status', value: 'decidido' } as const;
+/**
+ * A line an outline is read from: a heading or a code fence, at any indent.
+ * Postgres's newline-sensitive mode (`n`) keeps `^`, `$` and `.` to one line.
+ */
+const OUTLINE_LINE = '^([ \t]*(?:#|```|~~~).*)$';
 
 export interface NoteRowDto {
   path: string;
@@ -79,12 +85,6 @@ export interface NoteRowDto {
   checksum: string;
 }
 
-/**
- * Response shape for create/move. `affectedMocs` lists existing `_<Folder>.md`
- * notes that probably need a follow-up edit. The server does not touch them —
- * MOCs are a convention with per-vault style, not a structure to enforce — it
- * just saves the caller from recomputing the paths.
- */
 /** An edit checked against a note's current version, ready to write. */
 export interface PlannedEdit {
   path: string;
@@ -94,6 +94,12 @@ export interface PlannedEdit {
   baseChecksum: string;
 }
 
+/**
+ * Response shape for create/move. `affectedMocs` lists existing `_<Folder>.md`
+ * notes that probably need a follow-up edit. The server does not touch them —
+ * MOCs are a convention with per-vault style, not a structure to enforce — it
+ * just saves the caller from recomputing the paths.
+ */
 export interface MutationResult {
   path: string;
   affectedMocs: string[];
@@ -645,6 +651,22 @@ export class NoteService {
       );
     }
     const next = applyEdits({ frontmatter: existing.frontmatter, body: existing.body }, edits);
+    // The limits hold for what is stored, not only for each string sent: fifty
+    // appends of a full-sized note are each within bounds and together are not.
+    if (next.body.length > MAX_NOTE_CHARS) {
+      throw new AppError(
+        `${logical} would grow past ${MAX_NOTE_CHARS} characters`,
+        'INVALID_INPUT',
+        400,
+      );
+    }
+    if (JSON.stringify(next.frontmatter).length > MAX_FRONTMATTER_CHARS) {
+      throw new AppError(
+        `${logical}'s frontmatter would grow past ${MAX_FRONTMATTER_CHARS} characters`,
+        'INVALID_INPUT',
+        400,
+      );
+    }
     return {
       path: logical,
       // The frontmatter is written as the edits left it, even empty: `update`
@@ -1394,19 +1416,29 @@ export class NoteService {
   }
 
   /**
-   * Whole bodies of `paths` the viewer may read: for the few notes a crawl had
-   * to cut, whose section headings it lists so an edit can name one.
+   * The lines that make an outline — headings and code fences — of `paths`
+   * the viewer may read: for the few notes a crawl had to cut, whose section
+   * headings it lists so an edit can name one.
+   *
+   * Picked out in Postgres, so a long note's body never crosses the wire just
+   * to find its headings. The fences come too: which `#` lines sit inside code
+   * is decided from them afterwards, the same way an edit decides it.
    */
-  async contextBodies(
+  async contextHeadingLines(
     viewerId: string,
     paths: readonly string[],
     sharedScopes: SharedScope[] = [],
-  ): Promise<Array<{ path: string; body: string }>> {
+  ): Promise<Array<{ path: string; lines: string }>> {
     const inScope = this.inScope(viewerId, sharedScopes);
     const physical = paths.filter(inScope);
     if (physical.length === 0) return [];
     const rows = await this.opts.db
-      .select({ path: notes.path, body: notes.body })
+      .select({
+        path: notes.path,
+        lines: sql<string>`array_to_string(array(
+          select (regexp_matches(${notes.body}, ${OUTLINE_LINE}, 'gn'))[1]
+        ), chr(10))`,
+      })
       .from(notes)
       .where(inArray(notes.path, physical));
     return rows.filter((r) => inScope(r.path));

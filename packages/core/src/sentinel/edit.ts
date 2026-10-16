@@ -13,6 +13,11 @@
 // silently. Headings inside fenced code are not sections: a `# comment` in a
 // shell block is not where anyone meant to append.
 //
+// A note saved from Windows keeps its CRLF line breaks. Edits are matched and
+// applied on LF — what an assistant sends — and the result is written back with
+// the note's own line breaks, so neither a heading nor a passage is missed for
+// a stray `\r`, and no note ends up with two kinds of line break.
+//
 // Pure string logic, no store: what goes in is a note's frontmatter and body,
 // what comes out is the new pair.
 
@@ -49,8 +54,9 @@ export interface Section {
 
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 
-/** The ATX headings of a body, in order, skipping any inside fenced code. */
-export function listSections(body: string): Section[] {
+/** The ATX headings of a body, in order, skipping any inside fenced code. Lines count on LF. */
+export function listSections(source: string): Section[] {
+  const body = toLf(source);
   const mask = buildCodeMask(body);
   const lines = body.split('\n');
   const found: Array<Omit<Section, 'end'>> = [];
@@ -83,27 +89,33 @@ export function applyEdits(
   if (edits.length > MAX_EDITS) {
     throw new NoteEditError(`at most ${MAX_EDITS} edits per call; got ${edits.length}`);
   }
-  let { frontmatter, body } = note;
+  const crlf = note.body.includes('\r\n');
+  let { frontmatter } = note;
+  let body = toLf(note.body);
   edits.forEach((edit, i) => {
     const where = edits.length > 1 ? ` (edit ${i + 1})` : '';
     try {
       if (edit.op === 'set_frontmatter') frontmatter = mergeFrontmatter(frontmatter, edit.values);
-      else if (edit.op === 'replace') body = replaceOnce(body, edit.find, edit.replace);
-      else body = insert(body, edit.text, edit.op, edit.section);
+      else if (edit.op === 'replace') {
+        body = replaceOnce(body, toLf(edit.find), toLf(edit.replace));
+      } else body = insert(body, toLf(edit.text), edit.op, edit.section);
     } catch (err) {
       if (err instanceof NoteEditError) throw new NoteEditError(`${err.message}${where}`);
       throw err;
     }
   });
-  return { frontmatter, body };
+  return { frontmatter, body: crlf ? body.replace(/\n/g, '\r\n') : body };
 }
+
+const toLf = (text: string) => text.replace(/\r\n/g, '\n');
 
 function replaceOnce(body: string, find: string, replacement: string): string {
   if (find === '') throw new NoteEditError('`find` is empty');
   const first = body.indexOf(find);
   if (first === -1) {
     throw new NoteEditError(
-      'the text to replace is not in the note; it must match exactly, spaces and line breaks included',
+      'the text to replace is not in the note body; it must match exactly, spaces and line breaks ' +
+        'included (to change the frontmatter, use set_frontmatter)',
     );
   }
   let count = 1;
@@ -122,8 +134,12 @@ function insert(
   op: 'append' | 'prepend',
   sectionName: string | undefined,
 ): string {
+  if (text.trim() === '') throw new NoteEditError(`\`${op}\` has no text to add`);
   const lines = body.split('\n');
-  const added = text.replace(/\n+$/, '').split('\n');
+  // Trailing line breaks are dropped, except that text ending in an empty line
+  // keeps one: that is how a prepend stays a paragraph of its own instead of
+  // running into the line it lands on.
+  const added = text.replace(/\n+$/, (breaks) => (breaks.length > 1 ? '\n' : '')).split('\n');
   const range = sectionName === undefined ? undefined : findSection(body, sectionName);
 
   let at: number;
@@ -167,10 +183,12 @@ function findSection(body: string, name: string): Section {
 const headingKey = (heading: string) => heading.trim().toLocaleLowerCase();
 
 function mergeFrontmatter(current: Frontmatter, values: Record<string, unknown>): Frontmatter {
-  const next: Frontmatter = { ...current };
+  // Built from entries rather than assigned key by key: `next['__proto__'] = v`
+  // would set the object's prototype instead of a key called `__proto__`.
+  const merged = new Map(Object.entries(current));
   for (const [key, value] of Object.entries(values)) {
-    if (value === null) delete next[key];
-    else next[key] = value;
+    if (value === null) merged.delete(key);
+    else merged.set(key, value);
   }
-  return next;
+  return Object.fromEntries(merged) as Frontmatter;
 }

@@ -68,6 +68,12 @@ const JSON_TEXT = (value: unknown) => ({
 
 /** Notes `get_notes` opens in one call, at most. */
 const MAX_NOTES_READ = 20;
+/**
+ * Body characters `get_notes` answers with, all notes together. Twenty notes
+ * at the size limit would be an answer of forty million characters; past this
+ * the rest are cut, and say so.
+ */
+const MAX_NOTES_READ_CHARS = 400_000;
 
 /** One of Sentinel's edits, as an assistant sends it. */
 const EDIT = z.discriminatedUnion('op', [
@@ -291,7 +297,7 @@ export function buildMcpServer({
     'get_notes',
     {
       title: 'Read several notes',
-      description: `Read up to ${MAX_NOTES_READ} notes in one call — the ones gather_context listed in \`leftOut\` or cut short, for example — instead of one get_note each. Each entry takes a \`path\` and, for a folder shared with the user, its \`ownerId\`. A note that cannot be read comes back with an \`error\` in its place; the others are read regardless.`,
+      description: `Read up to ${MAX_NOTES_READ} notes in one call — the ones gather_context listed in \`leftOut\` or cut short, for example — instead of one get_note each. Each entry takes a \`path\` and, for a folder shared with the user, its \`ownerId\`. A note that cannot be read comes back with an \`error\` in its place; the others are read regardless. Bodies share a budget of ${MAX_NOTES_READ_CHARS} characters: a note cut to fit says \`truncated: true\` — open it alone with get_note.`,
       inputSchema: {
         notes: z
           .array(z.object({ path: field().min(1), ownerId: OWNER_ARG }))
@@ -312,7 +318,19 @@ export function buildMcpServer({
             }
           }),
         );
-        return JSON_TEXT(read);
+        let room = MAX_NOTES_READ_CHARS;
+        return JSON_TEXT(
+          read.map((note) => {
+            if (!('body' in note)) return note;
+            if (note.body.length <= room) {
+              room -= note.body.length;
+              return note;
+            }
+            const body = note.body.slice(0, room);
+            room = 0;
+            return { ...note, body, truncated: true };
+          }),
+        );
       } catch (err) {
         return toMcpError(err);
       }
@@ -408,7 +426,7 @@ export function buildMcpServer({
     {
       title: 'Edit part of a note',
       description:
-        'Change an existing note by saying what changes, without sending it back whole — prefer this to update_note for any change that is not a full rewrite. `edits` apply in order: `replace` swaps one exact passage (it must appear exactly once; an empty `replace` deletes it), `append` adds text at the end of the note or of a `section` (a heading such as "Notas"), `prepend` adds it at the start or right under a section\'s heading, `set_frontmatter` merges keys (null removes one). Text is inserted as whole lines; start it with an empty line to open a new paragraph. If an anchor is missing or ambiguous nothing is written and the error says which. Pass the `checksum` from gather_context or get_note as `expectedChecksum`; without one the edit still lands only on the version it was applied to. You do not need to open the note first when gather_context already showed you the passage or listed the section.',
+        'Change an existing note by saying what changes, without sending it back whole — prefer this to update_note for any change that is not a full rewrite. `edits` apply in order: `replace` swaps one exact passage (it must appear exactly once; an empty `replace` deletes it), `append` adds text at the end of the note or of a `section` (a heading such as "Notas"), `prepend` adds it at the start or right under a section\'s heading, `set_frontmatter` merges keys (null removes one). Text is inserted as whole lines; for a paragraph of its own, start an appended text with an empty line and end a prepended one with one. `replace` works on the body only. If an anchor is missing or ambiguous nothing is written and the error says which. Pass the `checksum` from gather_context or get_note as `expectedChecksum`; without one the edit still lands only on the version it was applied to. You do not need to open the note first when gather_context already showed you the passage or listed the section.',
       inputSchema: {
         path: field().min(1),
         edits: EDITS,

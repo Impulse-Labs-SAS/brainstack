@@ -128,7 +128,7 @@ describe('gather_context prepares the edit', () => {
             isDecision: false,
             checksum: `sum-${path}`,
           })),
-        bodies: async (paths) => paths.map((path) => ({ path, body: long })),
+        headingLines: async (paths) => paths.map((path) => ({ path, lines: long })),
         search: async () => [],
       },
       { text: 'Atlas and Ledger' },
@@ -139,5 +139,52 @@ describe('gather_context prepares the edit', () => {
     expect(atlas.sections).toEqual(['# Atlas', '## Intro', '## Late section']);
     expect(ledger).toMatchObject({ truncated: false, checksum: 'sum-ledger.md' });
     expect(ledger.sections).toBeUndefined();
+  });
+});
+
+describe('edge cases', () => {
+  it('finds sections and passages in a CRLF note, and keeps its line breaks', () => {
+    const crlf = '# T\r\n\r\n## Notes\r\n- a\r\n\r\n## Refs\r\n';
+    expect(outline(crlf)).toEqual(['# T', '## Notes', '## Refs']);
+    expect(body(crlf, { op: 'append', section: 'Notes', text: '- b' })).toBe(
+      '# T\r\n\r\n## Notes\r\n- a\r\n- b\r\n\r\n## Refs\r\n',
+    );
+    expect(body(crlf, { op: 'replace', find: '- a\n\n## Refs', replace: '## Refs' })).toBe(
+      '# T\r\n\r\n## Notes\r\n## Refs\r\n',
+    );
+  });
+
+  it('keeps a prepended paragraph apart when its text ends in an empty line', () => {
+    expect(body('old para\n', { op: 'prepend', text: 'Intro\n\n' })).toBe('Intro\n\nold para\n');
+    expect(body('## S\ntext\n', { op: 'prepend', section: 'S', text: 'First\n\n' })).toBe(
+      '## S\nFirst\n\ntext\n',
+    );
+  });
+
+  it('appends to a section at the very end of a note with no final line break', () => {
+    expect(body('# T\n## Last\nx', { op: 'append', section: 'Last', text: 'y' })).toBe(
+      '# T\n## Last\nx\ny\n',
+    );
+  });
+
+  it('appends to a parent section after its subsections', () => {
+    expect(body('## A\na\n### A1\nb\n## B\n', { op: 'append', section: 'A', text: 'c' })).toBe(
+      '## A\na\n### A1\nb\nc\n## B\n',
+    );
+  });
+
+  it('refuses an append with nothing to add', () => {
+    expect(() => body('a\n', { op: 'append', text: '\n\n' })).toThrow(/no text to add/);
+  });
+
+  it('stores a key called __proto__ as a key', () => {
+    const out = applyEdits({ frontmatter: {}, body: '' }, [
+      {
+        op: 'set_frontmatter',
+        values: JSON.parse('{"__proto__": "x"}') as Record<string, unknown>,
+      },
+    ]);
+    expect(Object.keys(out.frontmatter)).toEqual(['__proto__']);
+    expect(Object.getPrototypeOf(out.frontmatter)).toBe(Object.prototype);
   });
 });

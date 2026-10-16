@@ -100,17 +100,12 @@ export async function saveNotes(
   };
 
   // -- Phase one: check everything, write nothing ---------------------------
-  const twice = repeatedPaths(writes);
+  const clashes = conflicts(writes);
   const checked = await Promise.all(
     writes.map(async (write, i): Promise<{ ok: Checked } | { error: WriteResult['error'] }> => {
       try {
-        if (twice.has(i)) {
-          throw new AppError(
-            `${write.path} is named by more than one write; put every change to it in one edit`,
-            'INVALID_INPUT',
-            400,
-          );
-        }
+        const clash = clashes.get(i);
+        if (clash) throw new AppError(clash, 'INVALID_INPUT', 400);
         return { ok: await check(notes, write) };
       } catch (err) {
         return { error: failure(err) };
@@ -141,22 +136,44 @@ export async function saveNotes(
   return { saved: true, results };
 }
 
-/** Indexes of writes that name a path another write also names, in the same vault. */
-function repeatedPaths(writes: readonly NoteWrite[]): Set<number> {
-  const seen = new Map<string, number[]>();
-  writes.forEach((w, i) => {
-    let key: string;
+/**
+ * Writes that would trip over another write in the same call, by index, with
+ * why: two writes to one path, or a write inside a folder another write
+ * deletes. Checked against the store one by one, each would pass; written in
+ * order, the second would find its note changed or gone, after the first had
+ * already landed.
+ */
+function conflicts(writes: readonly NoteWrite[]): Map<number, string> {
+  const placed = writes.map((w) => {
     try {
-      key = `${w.owner}\u0000${normalizeRelativePath(w.path)}`;
+      return { owner: w.owner, path: normalizeRelativePath(w.path) };
     } catch {
-      return; // an invalid path fails its own check
+      return null; // an invalid path fails its own check
     }
-    seen.set(key, [...(seen.get(key) ?? []), i]);
   });
-  return new Set([...seen.values()].filter((at) => at.length > 1).flat());
+  const out = new Map<number, string>();
+  placed.forEach((a, i) => {
+    if (!a) return;
+    placed.forEach((b, j) => {
+      if (!b || i === j || a.owner !== b.owner) return;
+      if (a.path === b.path) {
+        out.set(
+          i,
+          `${writes[i]!.path} is named by more than one write; put every change to it in one edit`,
+        );
+        return;
+      }
+      const other = writes[j]!;
+      if (other.action === 'delete' && other.recursive && a.path.startsWith(`${b.path}/`)) {
+        out.set(i, `${writes[i]!.path} is inside ${other.path}, which write ${j + 1} deletes`);
+      }
+    });
+  });
+  return out;
 }
 
 async function check(notes: NoteService, write: NoteWrite): Promise<Checked> {
+  normalizeRelativePath(write.path); // an empty or climbing path is refused before any lookup
   switch (write.action) {
     case 'create':
       if (await notes.hasNote(write.owner, write.path)) {
@@ -181,13 +198,14 @@ async function check(notes: NoteService, write: NoteWrite): Promise<Checked> {
       }
       return { write, baseChecksum: current.checksum };
     }
-    case 'delete':
-      // A folder has no row to find; a recursive delete of one is checked by
-      // the delete itself, as the delete tool does.
-      if (!write.recursive && !(await notes.hasNote(write.owner, write.path))) {
-        throw new AppError(`${write.path} does not exist`, 'NOT_FOUND', 404);
-      }
+    case 'delete': {
+      // A recursive delete may name a folder, which `exists` answers for too.
+      const found = write.recursive
+        ? await notes.exists(write.owner, write.path)
+        : await notes.hasNote(write.owner, write.path);
+      if (!found) throw new AppError(`${write.path} does not exist`, 'NOT_FOUND', 404);
       return { write };
+    }
   }
 }
 

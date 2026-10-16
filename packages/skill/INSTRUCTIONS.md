@@ -43,7 +43,7 @@ You interact with BrainStack via these MCP tools:
 
 **Write / structure (require user approval — see below):**
 
-- `create_note(path, content, frontmatter?, ownerId?)` — returns `{ path, affectedMocs }`
+- `create_note(path, content, frontmatter?, ownerId?)` — returns `{ path, affectedMocs, checksum }`
 - `edit_note(path, edits, ownerId?, expectedChecksum?)` — change part of a note without sending it back whole: `replace` (one exact passage), `append` / `prepend` (to the note or to a `section`), `set_frontmatter`. See **Writing only what changes**
 - `save_notes(writes)` — several writes in one call: `create`, `edit`, `replace`, `delete`, each checked before any is written. See **Writing only what changes**
 - `update_note(path, content, ownerId?, expectedChecksum?)` — replaces the whole note; for a rewrite, not for a change to part of it. Pass the `checksum` from the `get_note` or `gather_context` you based it on. If someone changed the note since, the update fails with `CHANGED` instead of overwriting their work: read it again, redo the edit on the new version, and tell the user what changed.
@@ -210,7 +210,7 @@ Each tool call is a turn, and every character of a note you send back is output 
   - `{ op: "append", text, section? }` — after the last line of the note, or of the section under that heading (`"Notas"` or `"## Notas"`).
   - `{ op: "prepend", text, section? }` — before the first line of the note, or right under that heading.
   - `{ op: "set_frontmatter", values }` — merges keys; `null` removes one.
-    Text goes in as whole lines; start it with an empty line to open a new paragraph. If an anchor is missing or appears twice, nothing is written and the error says which — fix that edit and send it again.
+    Text goes in as whole lines. For a paragraph of its own, start an appended text with an empty line, and end a prepended one with an empty line. If an anchor is missing or appears twice, nothing is written and the error says which — fix that edit and send it again.
 - **Send a plan that touches several notes as one `save_notes`**: `writes` is a list of `{ action: "create" | "edit" | "replace" | "delete", path, ... }`, each with an optional `ownerId`. Everything is checked before anything is written — permission, paths, that the notes to change exist, every anchor and checksum — and if any check fails nothing is written and `results` says which write and why. A path may appear in only one write: put every change to one note in a single `edit`.
 - **Don't open a note just to edit it.** `gather_context` already gave you its `checksum` and either its whole body or, when cut, its `sections`. Appending to a section needs neither. Open it (`get_note`, or `get_notes` for several) only when you need text the excerpt did not show.
 - **Pass `expectedChecksum`** whenever you have one. Without it an edit still lands only on the version it was applied to, but with it you also learn that someone changed the note since you read it.

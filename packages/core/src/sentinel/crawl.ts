@@ -107,10 +107,12 @@ export interface ContextSource {
    */
   digests(paths: readonly string[], bodyChars: number): Promise<Digest[]>;
   /**
-   * Whole bodies, for the few notes whose excerpt was cut: what their section
-   * headings are read from. Optional; without it a cut note lists none.
+   * For the few notes whose excerpt was cut, the lines of each that can matter
+   * to an outline: every line starting with `#`, a ``` fence or a ~~~ fence,
+   * in order (the whole body serves too). Their section headings are read from
+   * it. Optional; without it a cut note lists none.
    */
-  bodies?(paths: readonly string[]): Promise<Array<{ path: string; body: string }>>;
+  headingLines?(paths: readonly string[]): Promise<Array<{ path: string; lines: string }>>;
   /**
    * Full-text hits for a query, best first, at most `limit`. A `snippet` —
    * the matching passage — is passed through to a search's results.
@@ -277,9 +279,9 @@ export async function crawlContext(
  */
 async function withSections(source: ContextSource, notes: ContextNote[]): Promise<ContextNote[]> {
   const cut = notes.filter((n) => n.truncated).map((n) => n.path);
-  if (cut.length === 0 || !source.bodies) return notes;
+  if (cut.length === 0 || !source.headingLines) return notes;
   const outlines = new Map(
-    (await source.bodies(cut)).map((b) => [b.path, outline(b.body)] as const),
+    (await source.headingLines(cut)).map((b) => [b.path, outline(b.lines)] as const),
   );
   return notes.map((n) => {
     const sections = outlines.get(n.path);
