@@ -17,6 +17,7 @@ import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import {
   gatherContext,
+  placeNoteInVault,
   searchBrain,
   MAX_DEPTH,
   MAX_MAX_CHARS,
@@ -947,6 +948,43 @@ export function buildMcpServer({
           result,
         });
         return JSON_TEXT(result);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'place_note',
+    {
+      title: 'Find where a new note goes',
+      description:
+        "Before creating a note: where it belongs, whether one like it already exists, and what it should link to — one call instead of list_tree, search_brain and opening indexes by hand. Pass the `title` it would have and its `text` (or a summary). Returns `duplicates` (notes already called that: propose adding to one of them instead), `folder` (the folder the most related notes live in, with `reason` and its `index` note when it has one — link the new note from it in the same save_notes) and up to two `alternatives`, and `links` (the notes the text names, then the most related; a wikilink cannot cross into another owner's vault). A folder or note in a folder shared with the user comes with its `ownerId`. Writes nothing: put the proposal to the user, as for any write. Kept in the user's crawl history like gather_context.",
+      inputSchema: {
+        title: field().min(1),
+        text: z.string().max(MAX_TEXT_CHARS).optional(),
+      },
+    },
+    async ({ title, text }) => {
+      try {
+        const userId = requireUserId();
+        const sharedScopes = (await sharing.listSharedRoots(userId)).map((r) => ({
+          ownerId: r.ownerId,
+          folderPath: r.folderPath,
+        }));
+        const { crawl, ...proposal } = await placeNoteInVault(
+          { notes, search },
+          userId,
+          { title, ...(text ? { text } : {}) },
+          sharedScopes,
+        );
+        await crawls.record(userId, {
+          source: 'assistant',
+          clientRef: principal?.clientRef ?? null,
+          text: `Where does “${title}” go?`,
+          result: crawl,
+        });
+        return JSON_TEXT(proposal);
       } catch (err) {
         return toMcpError(err);
       }

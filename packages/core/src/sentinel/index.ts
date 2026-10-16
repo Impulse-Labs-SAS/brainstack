@@ -32,6 +32,7 @@ export {
   type SearchInput,
 } from './search.js';
 export { type NameEntry } from './names.js';
+export { placeNote, type PlaceInput, type PlaceResult, type PlacedFolder } from './place.js';
 export { NOTE_MAX_CHARS, fitsNoteLimit, noteSize, type NoteSize } from './size.js';
 export {
   MAX_EDITS,

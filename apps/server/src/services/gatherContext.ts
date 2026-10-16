@@ -10,7 +10,9 @@
 
 import {
   crawlContext,
+  placeNote,
   searchNotes,
+  type PlaceInput,
   type ContextNote,
   type ContextSource,
   type GatherContextInput,
@@ -159,7 +161,11 @@ export async function gatherContext(
   input: GatherContextInput,
   sharedScopes: readonly SharedScope[] = [],
 ): Promise<GatherContextResult> {
-  const result = await crawlContext(vaultSource(deps, viewerId, sharedScopes), input);
+  return placeCrawl(await crawlContext(vaultSource(deps, viewerId, sharedScopes), input), viewerId);
+}
+
+/** A crawl's notes, as the engine keyed them, placed: a path, and an owner when not the viewer's. */
+function placeCrawl(result: EngineResult, viewerId: string): GatherContextResult {
   const { place, placeFirst } = keys(viewerId);
   return {
     ...result,
@@ -181,6 +187,63 @@ export async function gatherContext(
       u.candidates ? { ...u, candidates: u.candidates.map(placeFirst) } : u,
     ),
     leftOut: result.leftOut.map(placeFirst),
+  };
+}
+
+/** A folder `place_note` proposes, in the vault it is in. */
+export interface PlacedFolderResult {
+  folder: string;
+  /** Set only for a folder somebody shared with the viewer. */
+  ownerId?: string;
+  index?: string;
+  reason: string;
+}
+
+export interface PlaceNoteResult {
+  duplicates: Array<Placed & { title: string }>;
+  folder: PlacedFolderResult | null;
+  alternatives: PlacedFolderResult[];
+  links: Array<Placed & { title: string; reason: string }>;
+  /** The crawl read for it, kept in the history like any other. */
+  crawl: GatherContextResult;
+}
+
+/**
+ * `place_note`: Sentinel's proposal for where a new note goes, read across
+ * the viewer's own vault and the folders shared with them.
+ */
+export async function placeNoteInVault(
+  deps: GatherContextDeps,
+  viewerId: string,
+  input: PlaceInput,
+  sharedScopes: readonly SharedScope[] = [],
+): Promise<PlaceNoteResult> {
+  const result = await placeNote(vaultSource(deps, viewerId, sharedScopes), input);
+  const { place, placeFirst } = keys(viewerId);
+  // A folder is keyed like a note: a shared one behind the mark, with its
+  // owner's id as the first segment.
+  const placeFolder = (f: NonNullable<typeof result.folder>): PlacedFolderResult => {
+    const at = f.folder.startsWith(FOREIGN)
+      ? (() => {
+          const stored = f.folder.slice(1);
+          const slash = stored.indexOf('/');
+          return slash < 0
+            ? { ownerId: stored, folder: '' }
+            : { ownerId: stored.slice(0, slash), folder: stored.slice(slash + 1) };
+        })()
+      : { folder: f.folder };
+    return {
+      ...at,
+      ...(f.index ? { index: place(f.index).path } : {}),
+      reason: f.reason,
+    };
+  };
+  return {
+    duplicates: result.duplicates.map(placeFirst),
+    folder: result.folder ? placeFolder(result.folder) : null,
+    alternatives: result.alternatives.map(placeFolder),
+    links: result.links.map(placeFirst),
+    crawl: placeCrawl(result.crawl, viewerId),
   };
 }
 

@@ -546,6 +546,84 @@ describe('the crawl history', () => {
   });
 });
 
+describe('place_note', () => {
+  beforeEach(async () => {
+    await notes.create(
+      OWNER.id,
+      'orbit/pricing.md',
+      '# Pricing\n\nTiers for Orbit: starter and team.',
+    );
+    await notes.create(
+      OWNER.id,
+      'orbit/billing.md',
+      '# Billing\n\nInvoices follow the [[orbit/pricing|tiers]].',
+    );
+    await notes.create(OWNER.id, 'ledger/_ledger.md', '# Ledger\n\n## Notas\n');
+    await notes.create(OWNER.id, 'ledger/audit.md', '# Audit\n\nYearly audit of the books.');
+  });
+
+  it('proposes the folder the related notes live in, its index, and what to link to', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value, error } = await call(client, 'place_note', {
+      title: 'Discounts',
+      text: 'Discounts on the Pricing tiers, applied to Billing invoices.',
+    });
+    expect(error).toBeUndefined();
+    expect(value).toMatchObject({
+      duplicates: [],
+      folder: {
+        folder: 'orbit',
+        index: 'orbit/_orbit.md',
+        reason: expect.stringContaining('related'),
+      },
+    });
+    const links = (value as { links: Array<{ path: string }> }).links.map((l) => l.path);
+    expect(links).toEqual(expect.arrayContaining(['orbit/pricing.md', 'orbit/billing.md']));
+    expect(links).not.toContain('orbit/_orbit.md');
+  });
+
+  it('proposes a folder shared with the caller with its owner', async () => {
+    await sharing.grant({
+      ownerId: OWNER.id,
+      sharedWithUserId: FRODO.id,
+      folderPath: 'orbit',
+      grantedBy: OWNER.id,
+      permission: 'write',
+    });
+    const client = await clientFor(FRODO.id);
+    const { value } = await call(client, 'place_note', {
+      title: 'Discounts',
+      text: 'Discounts on the Pricing tiers, applied to Billing invoices.',
+    });
+    expect(value).toMatchObject({
+      folder: { folder: 'orbit', ownerId: OWNER.id, index: 'orbit/_orbit.md' },
+    });
+    expect((value as { links: Array<{ ownerId?: string }> }).links[0]).toMatchObject({
+      ownerId: OWNER.id,
+    });
+  });
+
+  it('names a note already called that, so the assistant adds to it instead', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'place_note', { title: 'pricing' });
+    expect(value).toMatchObject({ duplicates: [{ path: 'orbit/pricing.md', title: 'Pricing' }] });
+  });
+
+  it('writes nothing, and is kept in the history for the save that follows', async () => {
+    const client = await clientFor(OWNER.id);
+    await call(client, 'place_note', {
+      title: 'Yearly close',
+      text: 'Closing the books after the audit.',
+    });
+    await call(client, 'save_notes', {
+      writes: [{ action: 'create', path: 'ledger/close.md', content: '# Yearly close' }],
+    });
+    const history = new CrawlHistoryService({ db: database.db, retentionDays: 30 });
+    const [latest] = await history.list(OWNER.id);
+    expect(latest).toMatchObject({ prompt: 'Where does “Yearly close” go?', writes: 1 });
+  });
+});
+
 describe('get_notes', () => {
   it('reads several notes at once, with an error in place of one that is missing', async () => {
     const client = await clientFor(OWNER.id);
