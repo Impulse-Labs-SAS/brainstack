@@ -477,6 +477,8 @@ export interface Digest {
   title: string;
   body: string;
   isDecision: boolean;
+  /** The note's current version, as a write's `expectedChecksum` takes it. */
+  checksum?: string;
 }
 
 export interface ContextNote {
@@ -490,6 +492,17 @@ export interface ContextNote {
   excerpt: string;
   /** True when `excerpt` is not the whole body. */
   truncated: boolean;
+  /**
+   * The version read, for an edit to pass as `expectedChecksum`: with it, a
+   * note can be changed without opening it first, and never over somebody
+   * else's newer edit.
+   */
+  checksum?: string;
+  /**
+   * Only when `truncated`: every heading of the whole note, as `## Title`, so
+   * an edit can name a section the excerpt did not reach.
+   */
+  sections?: string[];
 }
 
 /** `describeVia`, plus the other terms that found the note and the other notes that link to it. */
@@ -606,6 +619,7 @@ export function packContext(
       score: Math.round(score * 1000) / 1000,
       excerpt: text,
       truncated,
+      ...(d.checksum ? { checksum: d.checksum } : {}),
     });
     chars += text.length;
   }
