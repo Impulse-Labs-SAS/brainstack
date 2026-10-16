@@ -19,6 +19,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
+import { shortCount, sizeLevel } from '@/lib/note-size';
 import type { ViewMode } from '@/lib/use-view-mode';
 
 export const REVEAL_FOLDER_EVENT = 'brainstack:reveal-folder';
@@ -47,6 +48,11 @@ interface NoteHeaderProps {
   /** Whose vault the note is in, when it is somebody else's. Leads the crumbs. */
   owner?: { id: string; name: string; color?: string } | null;
   status: { kind: 'saving' | 'saved' | 'idle' | 'readonly'; text: string };
+  /**
+   * How long the note is against the length an assistant may write one to.
+   * Past it, an assistant can only shrink the note: the meter says to split it.
+   */
+  size?: { chars: number; lines: number; max: number } | null;
   /** The edit/preview switch. Left out where the page has only one view. */
   mode?: ViewMode;
   onMode?(m: ViewMode): void;
@@ -91,6 +97,7 @@ export function NoteHeader({
   crumbs,
   owner,
   status,
+  size,
   mode,
   onMode,
   readOnly,
@@ -226,6 +233,8 @@ export function NoteHeader({
         {fits(640) && <span>{status.text}</span>}
       </span>
 
+      {size && fits(520) && <SizeMeter {...size} />}
+
       {share && fits(420) && (
         <button
           type="button"
@@ -345,5 +354,35 @@ export function NoteHeader({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Characters used of what an assistant may write a note to. Quiet while there
+ * is room; amber near the limit; red past it, where an assistant can no longer
+ * add to the note and the way on is to split it.
+ */
+function SizeMeter({ chars, lines, max }: { chars: number; lines: number; max: number }) {
+  const level = sizeLevel(chars, max);
+  const exact = `${chars.toLocaleString()} of ${max.toLocaleString()} characters · ${lines.toLocaleString()} lines`;
+  const hint =
+    level === 'over'
+      ? 'Too long for an assistant to read whole. Split it into notes of their own, linked from a short one.'
+      : level === 'near'
+        ? 'Close to the length an assistant may write a note to.'
+        : 'An assistant reads a note this long whole.';
+  return (
+    <span
+      title={`${exact}. ${hint}`}
+      aria-label={`${exact}. ${hint}`}
+      className={cn(
+        'shrink-0 whitespace-nowrap px-1 font-mono text-[11px]',
+        level === 'ok' && 'text-fg-muted',
+        level === 'near' && 'text-warning',
+        level === 'over' && 'text-danger',
+      )}
+    >
+      {shortCount(chars)}/{shortCount(max)}
+    </span>
   );
 }
