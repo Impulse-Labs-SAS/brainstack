@@ -182,8 +182,8 @@ describe('what the assistant wrote', () => {
     expect(
       writes.map((s) => (s.kind === 'visit' ? [s.at.id, s.reach[0]!.kind, s.reach[0]!.label] : [])),
     ).toEqual([
-      ['me/e.md', 'written', 'e · created'],
-      ['ana/a.md', 'written', 'a · edited'],
+      ['me/e.md', 'written', 'e · written'],
+      ['ana/a.md', 'written', 'a · written'],
     ]);
     // The finish still closes the walk; the note no graph shows is counted, the deleted one is not.
     expect(plan.steps.at(-1)).toEqual({ kind: 'finish' });
