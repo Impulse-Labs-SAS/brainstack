@@ -144,9 +144,12 @@ describe('CrawlReplay', () => {
       expect(reached).toHaveLength(found.named + found.linked + found.decision);
       expect(new Set(reached).size).toBe(reached.length);
       const byId = new Map(model.nodes.map((n) => [n.id, n]));
-      expect(new Set(reached)).toEqual(new Set([...r.view.found.keys()].map((id) => byId.get(id)!.path)));
+      expect(new Set(reached)).toEqual(
+        new Set([...r.view.found.keys()].map((id) => byId.get(id)!.path)),
+      );
       // Each snapshot only adds to the last: the panel lists what the walk reached so far.
-      for (let i = 1; i < seen.length; i++) expect(seen[i]!.slice(0, seen[i - 1]!.length)).toEqual(seen[i - 1]);
+      for (let i = 1; i < seen.length; i++)
+        expect(seen[i]!.slice(0, seen[i - 1]!.length)).toEqual(seen[i - 1]);
     }
   });
 
@@ -1668,5 +1671,39 @@ describe('crossingTime', () => {
       const duration = crossingTime(length * unit, unit, { speed: 1000, min: 0, max: 0 });
       expect((peakSpeed(length * unit, duration) * 0.064) / unit).toBeLessThan(2.6);
     }
+  });
+});
+
+describe('a crawl the assistant wrote after', () => {
+  it('walks on to what it wrote, finds it as written, and says it is writing', () => {
+    const { model, crawls } = sampleVault();
+    const walk = crawls.walk;
+    // Two notes the walk did not read, both on the graph.
+    const read = new Set(walk.notes.map((n) => n.path));
+    const others = model.nodes.filter((n) => n.kind === 'note' && !read.has(n.path)).slice(0, 2);
+    const result: CrawlResult = {
+      ...walk,
+      writes: [
+        { action: 'create', path: others[0]!.path },
+        { action: 'edit', path: others[1]!.path },
+        { action: 'delete', path: 'gone.md' },
+      ],
+    };
+    const animated = new CrawlReplay(() => {});
+    animated.load(result, model);
+    run(animated, 60);
+    expect(animated.snapshot.found.written).toBe(2);
+    expect(animated.view.found.get(others[0]!.id)).toBe('written');
+    expect(animated.snapshot.log.some((l) => l.text === 'write the notes')).toBe(true);
+    expect(animated.snapshot.log.filter((l) => l.kind === 'written').map((l) => l.verb)).toEqual([
+      'wrote',
+      'wrote',
+    ]);
+
+    // A jump to the end finds the same.
+    const jumped = new CrawlReplay(() => {});
+    jumped.load(result, model);
+    jumped.skipToEnd();
+    expect(jumped.snapshot.found).toEqual(animated.snapshot.found);
   });
 });

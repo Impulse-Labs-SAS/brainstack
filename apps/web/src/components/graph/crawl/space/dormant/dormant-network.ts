@@ -44,6 +44,7 @@ import type GUI from 'three/addons/libs/lil-gui.module.min.js';
 import { FOV_DEG, TAN_HALF_FOV, basis, type Bounds } from '@/lib/graph-camera';
 import { colorOf, hash01, type GraphEdge, type GraphModel } from '@/lib/graph-model';
 
+import { CRAWL_COLORS } from '../../crawl-colors';
 import { walkable } from '../../crawl-plan';
 import { withRendererState } from '../../sentinel/gl-state';
 import { SENTINEL_PALETTE, linear } from '../../sentinel/palette';
@@ -127,8 +128,13 @@ const PULSE_GAIN = 2.5;
 const FILAMENT_MIN_PX = 1.25;
 const TUBE_MIN_PX = 1.4;
 
-/** The colours of why a note was found: Crawl's own (named, linked, decision). */
-const WHY = ['#b8a6ff', '#5eead4', '#4ade80'] as const;
+/** The colours of why a note was found: Crawl's own (named, linked, decision, written). */
+const WHY = [
+  CRAWL_COLORS.named,
+  CRAWL_COLORS.linked,
+  CRAWL_COLORS.decision,
+  CRAWL_COLORS.written,
+] as const;
 /** Dormant glass and its rim. */
 const GLASS = '#14181c';
 const RIM = '#8fa3b0';

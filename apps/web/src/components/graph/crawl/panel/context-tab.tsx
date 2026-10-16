@@ -82,7 +82,7 @@ export function ContextTab({
       </p>
     );
   }
-  const count = { named: 0, linked: 0, decision: 0 };
+  const count = { named: 0, linked: 0, decision: 0, written: 0 };
   for (const r of rows) count[r.kind]++;
   const open = unresolved.filter((u) => !curation.settled.has(u.term)).length;
 
@@ -92,7 +92,12 @@ export function ContextTab({
       <ul className="flex flex-wrap gap-1.5" aria-label="Found">
         <Chip kind="named" n={count.named} label="named" title="named in your question" />
         <Chip kind="linked" n={count.linked} label="linked" title="reached over a link" />
-        <Chip kind="decision" n={count.decision} label={count.decision === 1 ? 'decision' : 'decisions'} title="a note that records a decision" />
+        <Chip
+          kind="decision"
+          n={count.decision}
+          label={count.decision === 1 ? 'decision' : 'decisions'}
+          title="a note that records a decision"
+        />
         {unresolved.length > 0 && (
           <Chip kind="ask" n={open} label="to clarify" title="references to settle with you" />
         )}
@@ -145,7 +150,7 @@ function Chip({
   label,
   title,
 }: {
-  kind: 'named' | 'linked' | 'decision' | 'ask';
+  kind: 'named' | 'linked' | 'decision' | 'written' | 'ask';
   n: number;
   label: string;
   title: string;
@@ -324,12 +329,23 @@ function FolderGroup({
           isSelected={on === rows.length}
           isIndeterminate={on > 0 && on < rows.length}
           isDisabled={own.length === 0}
-          onChange={() => onCuration(setNotes(curation, own.map((r) => r.key), !allOwnOn))}
+          onChange={() =>
+            onCuration(
+              setNotes(
+                curation,
+                own.map((r) => r.key),
+                !allOwnOn,
+              ),
+            )
+          }
           aria-label={`Every note in ${heading}`}
           className="group flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 outline-none hover:bg-bg-hover disabled:cursor-default"
         >
           <Tick on={on === rows.length} half={on > 0 && on < rows.length} />
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-secondary" title={heading}>
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-secondary"
+            title={heading}
+          >
             {heading}
           </span>
           <span className="font-mono text-[10.5px] tabular-nums text-fg-muted">
@@ -402,12 +418,19 @@ function NoteRow({
           <Dot kind={r.kind} dim={!r.on} />
         </span>
         <span className="grid min-w-0" title={r.path}>
-          <span className={cn('break-words text-[13px] leading-[18px]', r.on ? 'text-fg-primary' : 'text-fg-muted')}>
+          <span
+            className={cn(
+              'break-words text-[13px] leading-[18px]',
+              r.on ? 'text-fg-primary' : 'text-fg-muted',
+            )}
+          >
             {r.title}
             {r.isDecision && <Tag color={CRAWL_COLORS.decision}>decision</Tag>}
             {r.from !== 'answer' && <Tag color={CRAWL_COLORS.ask}>you</Tag>}
           </span>
-          <span className="truncate font-mono text-[11px] leading-[15px] text-fg-muted">{r.reason}</span>
+          <span className="truncate font-mono text-[11px] leading-[15px] text-fg-muted">
+            {r.reason}
+          </span>
         </span>
       </Checkbox>
       {/* With the pointer or the focus in the row; always on a touch screen, which has no hover. */}
@@ -472,7 +495,10 @@ function LeftOutList({
           <ChevronRight
             size={12}
             aria-hidden
-            className={cn('shrink-0 self-center text-fg-muted transition-transform', open && 'rotate-90')}
+            className={cn(
+              'shrink-0 self-center text-fg-muted transition-transform',
+              open && 'rotate-90',
+            )}
           />
           <Eyebrow>Didn&apos;t fit · {answer.leftOutCount}</Eyebrow>
           <span className="text-[11.5px] text-fg-muted">left out to keep the answer short</span>
@@ -497,18 +523,26 @@ function LeftOutList({
                   <Dot kind={l.kind} />
                 </span>
                 <span className="grid min-w-0">
-                  <span className="break-words text-[13px] leading-[18px] text-fg-primary">{l.title}</span>
-                  <span className="truncate font-mono text-[11px] leading-[15px] text-fg-muted">{l.reason}</span>
+                  <span className="break-words text-[13px] leading-[18px] text-fg-primary">
+                    {l.title}
+                  </span>
+                  <span className="truncate font-mono text-[11px] leading-[15px] text-fg-muted">
+                    {l.reason}
+                  </span>
                 </span>
                 <Button
                   onPress={() => onCuration(setAdded(curation, l.key, !added))}
                   className={cn(
                     'flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px]',
-                    added ? 'text-fg-muted hover:text-fg-primary' : 'text-accent-hover hover:bg-accent/15',
+                    added
+                      ? 'text-fg-muted hover:text-fg-primary'
+                      : 'text-accent-hover hover:bg-accent/15',
                     FOCUS_RING,
                   )}
                 >
-                  {added ? 'Remove' : (
+                  {added ? (
+                    'Remove'
+                  ) : (
                     <>
                       <Plus size={12} aria-hidden /> Add
                     </>

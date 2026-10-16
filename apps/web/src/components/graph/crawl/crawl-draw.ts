@@ -144,7 +144,16 @@ export const GLASS = 0.92;
  */
 export const FADED = 0.85;
 /** Which cards go first once the fresh ones have: what to clarify, what was named, then the rest. */
-const RANK: Record<ReplayLabel['kind'], number> = { ask: 0, named: 1, decision: 2, linked: 3 };
+const RANK: Record<ReplayLabel['kind'], number> = {
+  ask: 0,
+  named: 1,
+  written: 2,
+  decision: 3,
+  linked: 4,
+};
+
+/** Every rank, in order: a group each, so a kind added to RANK is never left out. */
+const RANKS = [...new Set(Object.values(RANK))].sort((a, b) => a - b);
 
 /** "Title · why" into its two lines; a label with no reason is all title. */
 function splitLabel(text: string): { title: string; why: string } {
@@ -203,7 +212,10 @@ function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing):
   const rest = shown
     .filter((s) => !s.fresh)
     .sort((a, b) => RANK[a.L.kind] - RANK[b.L.kind] || a.L.born - b.L.born);
-  const groups: Shown[][] = [fresh, ...[0, 1, 2, 3].map((r) => rest.filter((s) => RANK[s.L.kind] === r))];
+  const groups: Shown[][] = [
+    fresh,
+    ...RANKS.map((r) => rest.filter((s) => RANK[s.L.kind] === r)),
+  ];
   const memory = d.memory;
   memory?.begin();
   const order = groups.flatMap((g) => (memory ? shownFirst(g, (s) => keyOf(s.L), memory) : g));
@@ -241,7 +253,12 @@ function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing):
       ctx.strokeStyle = hexA(colour, 0.9);
       ctx.lineWidth = 1.25;
       ctx.beginPath();
-      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
+      for (const [sx, sy] of [
+        [-1, -1],
+        [1, -1],
+        [1, 1],
+        [-1, 1],
+      ] as const) {
         ctx.moveTo(x + sx * RETICLE, y + sy * (RETICLE - ARM));
         ctx.lineTo(x + sx * RETICLE, y + sy * RETICLE);
         ctx.lineTo(x + sx * (RETICLE - ARM), y + sy * RETICLE);
@@ -347,7 +364,8 @@ type MarkPlace = { x: number; y: number; toward: number | null };
  * stage's edge in its direction, `toward` it (an angle; null on the note).
  */
 export function markPlace(x: number, y: number, free: Rect): MarkPlace {
-  if (x >= free.x && x <= free.x + free.w && y >= free.y && y <= free.y + free.h) return { x, y, toward: null };
+  if (x >= free.x && x <= free.x + free.w && y >= free.y && y <= free.y + free.h)
+    return { x, y, toward: null };
   const cx = free.x + free.w / 2;
   const cy = free.y + free.h / 2;
   const dx = x - cx;
@@ -372,7 +390,13 @@ export function markSlots(at: MarkPlace, w: number, free: Rect): Rect[] {
     { x: cx, y: at.y + MARK_REACH + 6, w, h: MARK_H },
   ];
   // On the free stage: the arrow's title never goes under the chrome it was kept clear of.
-  return slots.filter((r) => r.x >= free.x && r.x + r.w <= free.x + free.w && r.y >= free.y && r.y + r.h <= free.y + free.h);
+  return slots.filter(
+    (r) =>
+      r.x >= free.x &&
+      r.x + r.w <= free.x + free.w &&
+      r.y >= free.y &&
+      r.y + r.h <= free.y + free.h,
+  );
 }
 
 /**

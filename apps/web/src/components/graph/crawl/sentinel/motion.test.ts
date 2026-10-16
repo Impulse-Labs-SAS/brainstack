@@ -9,7 +9,7 @@ import {
   type InputNode,
 } from '@/lib/graph-model';
 
-import { findWalk, walkable, type CrawlResult } from '../crawl-plan';
+import { findWalk, walkable, type CrawlResult, type ReachKind } from '../crawl-plan';
 import { CrawlReplay, walkProgress, walkRamp } from '../crawl-replay';
 import { bezelSolid } from '../prompt/bezel-solid';
 import {
@@ -108,7 +108,7 @@ function tour(dt: number): { frames: Frame[]; unit: number; field: ThreadField }
 
   const frames: Frame[] = [];
   const lit = new Map<ThreadKey, Lit>();
-  const found = new Map<string, 'named' | 'linked' | 'decision'>();
+  const found = new Map<string, ReachKind>();
   const holds: (Hold | null)[] = GRIP_SLOTS.map(() => null);
   let swings: Swing[] = [];
   let clock = 0;

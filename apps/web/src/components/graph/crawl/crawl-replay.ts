@@ -1259,12 +1259,13 @@ export class CrawlReplay {
     const model = this.model;
     if (!st || !model || (!this.here && !this.perched)) return;
     this.newPhase();
-    const phase: 0 | 1 | 2 = st.kind === 'finish' ? 2 : st.kind === 'visit' ? st.phase : 0;
+    const phase: CrawlSnapshot['phase'] =
+      st.kind === 'finish' ? 2 : st.kind === 'visit' ? st.phase : 0;
     if (phase !== this.snap.phase)
       this.log(
         'done',
         'phase',
-        ['read the prompt', 'follow links', 'hand over the context'][phase]!,
+        ['read the prompt', 'follow links', 'hand over the context', 'write the notes'][phase]!,
       );
     this.snap = { ...this.snap, phase, state: 'walking' };
     this.segments = [];
@@ -1721,7 +1722,13 @@ export class CrawlReplay {
     this.snap = { ...this.snap, found, reached: [...this.snap.reached, nodePlace(f.node)] };
     this.log(
       f.kind,
-      f.kind === 'named' ? 'read' : f.kind === 'linked' ? 'link' : 'decision',
+      f.kind === 'named'
+        ? 'read'
+        : f.kind === 'linked'
+          ? 'link'
+          : f.kind === 'written'
+            ? 'wrote'
+            : 'decision',
       f.node.label,
     );
     this.push({ kind: 'found', clock: touched, nodeId: f.node.id, reachKind: f.kind });

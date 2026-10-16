@@ -162,3 +162,31 @@ describe('findWalk', () => {
     expect(findWalk(m, node(m, 'b.md'), node(m, 'b.md'))?.map((n) => n.path)).toEqual(['b.md']);
   });
 });
+
+describe('what the assistant wrote', () => {
+  it('walks to each note it created or changed, after the reading and before the finish', () => {
+    const m = vault();
+    const plan = planCrawl(
+      {
+        ...result,
+        writes: [
+          { action: 'create', path: 'e.md' },
+          { action: 'delete', path: 'gone.md' },
+          { action: 'edit', path: 'a.md', ownerId: 'ana' },
+          { action: 'replace', path: 'missing.md' },
+        ],
+      },
+      m,
+    );
+    const writes = plan.steps.filter((s) => s.kind === 'visit' && s.phase === 3);
+    expect(
+      writes.map((s) => (s.kind === 'visit' ? [s.at.id, s.reach[0]!.kind, s.reach[0]!.label] : [])),
+    ).toEqual([
+      ['me/e.md', 'written', 'e · created'],
+      ['ana/a.md', 'written', 'a · edited'],
+    ]);
+    // The finish still closes the walk; the note no graph shows is counted, the deleted one is not.
+    expect(plan.steps.at(-1)).toEqual({ kind: 'finish' });
+    expect(plan.offGraph).toBe(planCrawl(result, m).offGraph + 1);
+  });
+});
