@@ -1007,7 +1007,7 @@ describe('GraphController without a plugin, one view at a time', () => {
           "scene": 429,
           "snapshot": 1,
         },
-        "digest": "1eb8f146c5cef7",
+        "digest": "1b829add7ad53d",
         "lines": 79630,
       }
     `);
