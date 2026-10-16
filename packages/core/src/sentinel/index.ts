@@ -1,6 +1,8 @@
-// Sentinel — the context engine behind `gather_context`. Its own entry point,
-// `@brainstack/core/sentinel`, so it can leave this package for its own the
-// day a second system uses it.
+// Sentinel — BrainStack's engine for working with notes: it reads (the
+// context behind `gather_context` and every search) and writes (edits that say
+// what changes instead of resending a note whole). It is part of BrainStack,
+// not a product of its own; the entry point `@brainstack/core/sentinel` only
+// keeps it in one place.
 
 export {
   crawlContext,
@@ -30,3 +32,12 @@ export {
   type SearchInput,
 } from './search.js';
 export { type NameEntry } from './names.js';
+export {
+  MAX_EDITS,
+  NoteEditError,
+  applyEdits,
+  listSections,
+  outline,
+  type NoteEdit,
+  type Section,
+} from './edit.js';

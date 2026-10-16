@@ -1,4 +1,4 @@
-// Sentinel: resolve a piece of free text — a question, a prompt, a brief —
+// Sentinel's reading: resolve a piece of free text — a question, a prompt, a brief —
 // against a body of linked notes, in one call.
 //
 // The text is not a note and is never stored. What comes back is the context
@@ -9,15 +9,19 @@
 // back with both candidates, and a phrase that matched nothing comes back as a
 // question for the person.
 //
-// It knows nothing about who owns what or where notes are stored: it asks a
-// `ContextSource` for titles, links, bodies and search hits. BrainStack's
-// source is the caller's own vault (apps/server, gatherContext.ts); anything
-// that can answer those four questions can use the same engine.
+// Each note comes with its checksum, and a cut one with its section headings,
+// so the edit that usually follows a read (edit.ts) needs no second read.
+//
+// It reads through a `ContextSource` — titles, links, bodies and search hits —
+// rather than the store, which keeps the ranking testable without a database.
+// BrainStack's source is the caller's own vault and the folders shared with
+// them (apps/server, gatherContext.ts).
 //
 // Scoring lives in score.ts.
 
 import { foldForMatch } from '../links/mentions.js';
 
+import { outline } from './edit.js';
 import { WORD_BREAK, resolveNames, withoutNamed, type NameEntry } from './names.js';
 import {
   CandidateSet,
@@ -97,8 +101,16 @@ export interface ContextSource {
   links(
     paths: readonly string[],
   ): Promise<Array<{ source: string; target: string; position?: number }>>;
-  /** Title, the first `bodyChars` of the body and whether it is a decision, for each path that exists. */
+  /**
+   * Title, the first `bodyChars` of the body, whether it is a decision and —
+   * optionally — its checksum, for each path that exists.
+   */
   digests(paths: readonly string[], bodyChars: number): Promise<Digest[]>;
+  /**
+   * Whole bodies, for the few notes whose excerpt was cut: what their section
+   * headings are read from. Optional; without it a cut note lists none.
+   */
+  bodies?(paths: readonly string[]): Promise<Array<{ path: string; body: string }>>;
   /**
    * Full-text hits for a query, best first, at most `limit`. A `snippet` —
    * the matching passage — is passed through to a search's results.
@@ -243,7 +255,7 @@ export async function crawlContext(
   const leftOut = [...packed.leftOut, ...unread].slice(0, LEFT_OUT_LISTED);
 
   return {
-    notes: packed.notes,
+    notes: await withSections(source, packed.notes),
     unresolved,
     coverage: {
       resolved: named.size + termsResolved,
@@ -256,6 +268,23 @@ export async function crawlContext(
     },
     leftOut,
   };
+}
+
+/**
+ * The headings of every note whose excerpt was cut. An edit names the section
+ * it writes into; without the outline, a section past the excerpt could only
+ * be found by opening the note — the round trip this saves.
+ */
+async function withSections(source: ContextSource, notes: ContextNote[]): Promise<ContextNote[]> {
+  const cut = notes.filter((n) => n.truncated).map((n) => n.path);
+  if (cut.length === 0 || !source.bodies) return notes;
+  const outlines = new Map(
+    (await source.bodies(cut)).map((b) => [b.path, outline(b.body)] as const),
+  );
+  return notes.map((n) => {
+    const sections = outlines.get(n.path);
+    return sections && sections.length > 0 ? { ...n, sections } : n;
+  });
 }
 
 /**
