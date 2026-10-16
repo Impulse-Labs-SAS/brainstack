@@ -1,12 +1,12 @@
 // gather_context: BrainStack's side of Sentinel (`@brainstack/core/sentinel`).
 //
 // Sentinel is the engine — it resolves a question or a prompt against a body
-// of linked notes and knows nothing about vaults or owners. This file is the
-// source it reads from: the caller's own vault, plus the folders other people
-// shared with them. Which folders those are is SharingService's answer; the
-// MCP and tRPC layers ask it and pass the list in, as they do for search.
-// Every read below re-checks its rows against that list in memory, so a crawl
-// that follows a link out of a share stops at its edge.
+// of linked notes, reading through a `ContextSource`. This file is the source:
+// the caller's own vault, plus the folders other people shared with them.
+// Which folders those are is SharingService's answer; the MCP and tRPC layers
+// ask it and pass the list in, as they do for search. Every read below
+// re-checks its rows against that list in memory, so a crawl that follows a
+// link out of a share stops at its edge.
 
 import {
   crawlContext,
@@ -129,6 +129,11 @@ export function vaultSource(
       (await deps.notes.contextDigests(viewerId, paths.map(toStored), bodyChars, scopes)).map(
         (d) => ({ ...d, path: fromStored(d.path) }),
       ),
+    bodies: async (paths) =>
+      (await deps.notes.contextBodies(viewerId, paths.map(toStored), scopes)).map((b) => ({
+        ...b,
+        path: fromStored(b.path),
+      })),
     // Search ranks across every vault and filters by scope afterwards, so a
     // query asked for three hits can come back empty on a busy instance while
     // the caller's notes do match. Asking for more and trimming here is what
@@ -207,15 +212,17 @@ export async function searchBrain(
   const hits = await searchNotes(vaultSource(deps, viewerId, scopes), input);
   const { place } = keys(viewerId);
   const placed = hits.map((h) => ({ hit: h, at: place(h.path) }));
-  return placed
-    .filter(({ at }) => input.scope !== 'shared' || at.ownerId !== undefined)
-    // The owner first, before the snippet: see `placeFirst`.
-    .map(({ hit, at }) => ({
-      ownerId: at.ownerId ?? viewerId,
-      path: at.path,
-      title: hit.title,
-      reason: hit.reason,
-      snippet: hit.snippet,
-      score: hit.score,
-    }));
+  return (
+    placed
+      .filter(({ at }) => input.scope !== 'shared' || at.ownerId !== undefined)
+      // The owner first, before the snippet: see `placeFirst`.
+      .map(({ hit, at }) => ({
+        ownerId: at.ownerId ?? viewerId,
+        path: at.path,
+        title: hit.title,
+        reason: hit.reason,
+        snippet: hit.snippet,
+        score: hit.score,
+      }))
+  );
 }

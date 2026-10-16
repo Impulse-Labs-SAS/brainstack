@@ -2,6 +2,7 @@
 // and exposes a helper to connect to a given transport (Streamable HTTP).
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { MAX_EDITS, type NoteEdit } from '@brainstack/core/sentinel';
 import { z } from 'zod';
 
 import type { Logger } from 'pino';
@@ -23,6 +24,7 @@ import {
   MAX_TEXT_CHARS,
 } from '../services/gatherContext.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
+import { MAX_WRITES, saveNotes, type NoteWrite } from '../services/saveNotes.js';
 import type { SearchService } from '../services/SearchService.js';
 import { normalizeFolderPath, type SharingService } from '../services/SharingService.js';
 
@@ -63,6 +65,37 @@ const TEXT = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 const JSON_TEXT = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
 });
+
+/** Notes `get_notes` opens in one call, at most. */
+const MAX_NOTES_READ = 20;
+
+/** One of Sentinel's edits, as an assistant sends it. */
+const EDIT = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('replace'),
+    find: noteContent().min(1).describe('Text in the note to replace. Must appear exactly once.'),
+    replace: noteContent().describe('What replaces it. Empty deletes it.'),
+  }),
+  z.object({
+    op: z.literal('append'),
+    text: noteContent(),
+    section: field()
+      .optional()
+      .describe('A heading, like "Notas" or "## Notas". Omit to append to the end of the note.'),
+  }),
+  z.object({
+    op: z.literal('prepend'),
+    text: noteContent(),
+    section: field()
+      .optional()
+      .describe('A heading: the text goes right under it. Omit to prepend to the whole note.'),
+  }),
+  z.object({
+    op: z.literal('set_frontmatter'),
+    values: frontmatterField().describe('Keys to set; a null value removes the key.'),
+  }),
+]);
+const EDITS = z.array(EDIT).min(1).max(MAX_EDITS);
 
 /**
  * A failed tool call, as the assistant reads it. An AppError says what went
@@ -255,6 +288,38 @@ export function buildMcpServer({
   );
 
   server.registerTool(
+    'get_notes',
+    {
+      title: 'Read several notes',
+      description: `Read up to ${MAX_NOTES_READ} notes in one call — the ones gather_context listed in \`leftOut\` or cut short, for example — instead of one get_note each. Each entry takes a \`path\` and, for a folder shared with the user, its \`ownerId\`. A note that cannot be read comes back with an \`error\` in its place; the others are read regardless.`,
+      inputSchema: {
+        notes: z
+          .array(z.object({ path: field().min(1), ownerId: OWNER_ARG }))
+          .min(1)
+          .max(MAX_NOTES_READ),
+      },
+    },
+    async ({ notes: wanted }) => {
+      try {
+        const read = await Promise.all(
+          wanted.map(async ({ path, ownerId }) => {
+            try {
+              const owner = await readOwner(path, ownerId);
+              return { ...ownership(owner), ...(await notes.get(owner, path)) };
+            } catch (err) {
+              if (!toAppError(err)) logger.error({ err }, 'get_notes read failed');
+              return { path, ...(ownerId ? { ownerId } : {}), error: describeError(err) };
+            }
+          }),
+        );
+        return JSON_TEXT(read);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
     'list_notes',
     {
       title: 'List notes',
@@ -275,7 +340,9 @@ export function buildMcpServer({
         const owner = await readOwner(args.folder, ownerId);
         const facet = facetKey && facetValue ? { key: facetKey, value: facetValue } : undefined;
         const rows = await notes.list(owner, { ...args, ...(facet ? { facet } : {}) });
-        return JSON_TEXT(owner === requireUserId() ? rows : rows.map((r) => ({ ownerId: owner, ...r })));
+        return JSON_TEXT(
+          owner === requireUserId() ? rows : rows.map((r) => ({ ownerId: owner, ...r })),
+        );
       } catch (err) {
         return toMcpError(err);
       }
@@ -311,14 +378,16 @@ export function buildMcpServer({
     {
       title: 'Update a note',
       description:
-        'Replace the contents of an existing note. Fails if the note does not exist. Pass the `checksum` get_note returned as `expectedChecksum` so the write is refused, instead of overwriting, if someone changed the note since you read it.',
+        'Replace the whole contents of an existing note — for a rewrite. To change part of a note, use edit_note, which sends only what changes. Fails if the note does not exist. Pass the `checksum` get_note returned as `expectedChecksum` so the write is refused, instead of overwriting, if someone changed the note since you read it.',
       inputSchema: {
         path: field().min(1),
         content: noteContent(),
         ownerId: OWNER_ARG,
         expectedChecksum: field()
           .optional()
-          .describe('The checksum get_note returned; the update fails with CHANGED if the note moved on.'),
+          .describe(
+            'The checksum get_note returned; the update fails with CHANGED if the note moved on.',
+          ),
       },
     },
     async ({ path, content, ownerId, expectedChecksum }) => {
@@ -328,6 +397,115 @@ export function buildMcpServer({
           ...(expectedChecksum ? { expectedChecksum } : {}),
         });
         return TEXT(`Updated ${final.path} (checksum ${final.checksum})`);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'edit_note',
+    {
+      title: 'Edit part of a note',
+      description:
+        'Change an existing note by saying what changes, without sending it back whole — prefer this to update_note for any change that is not a full rewrite. `edits` apply in order: `replace` swaps one exact passage (it must appear exactly once; an empty `replace` deletes it), `append` adds text at the end of the note or of a `section` (a heading such as "Notas"), `prepend` adds it at the start or right under a section\'s heading, `set_frontmatter` merges keys (null removes one). Text is inserted as whole lines; start it with an empty line to open a new paragraph. If an anchor is missing or ambiguous nothing is written and the error says which. Pass the `checksum` from gather_context or get_note as `expectedChecksum`; without one the edit still lands only on the version it was applied to. You do not need to open the note first when gather_context already showed you the passage or listed the section.',
+      inputSchema: {
+        path: field().min(1),
+        edits: EDITS,
+        ownerId: OWNER_ARG,
+        expectedChecksum: field()
+          .optional()
+          .describe('The checksum you read; the edit fails with CHANGED if the note moved on.'),
+      },
+    },
+    async ({ path, edits, ownerId, expectedChecksum }) => {
+      try {
+        await assertWrite(path, ownerId);
+        const saved = await notes.edit(ownerOf(ownerId), path, edits as NoteEdit[], {
+          ...(expectedChecksum ? { expectedChecksum } : {}),
+        });
+        return JSON_TEXT(saved);
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'save_notes',
+    {
+      title: 'Save several changes at once',
+      description: `Several writes in one call — use it whenever a plan touches more than one note: creating notes and linking them from their index, adjusting the notes that mention them, removing one. Each write has an \`action\`: \`create\` (path, content, frontmatter?), \`edit\` (path, edits — the same edits as edit_note, expectedChecksum?), \`replace\` (path, content, expectedChecksum? — a full rewrite) or \`delete\` (path, recursive?). Each takes an optional \`ownerId\` for a folder shared with the user. Everything is checked before anything is written: paths, permission, that the notes to change exist, every edit's anchor, every checksum. If any check fails nothing is written and \`results\` says which write failed and why. Writes then run in order; if one still fails (someone saved that note a moment ago) the ones before it stay, the rest are \`skipped\`, and \`saved\` is false. A path may appear in only one write. To link a new note from its index, add an \`edit\` that appends the link to the index's section — no need to read the index first. At most ${MAX_WRITES} writes. Needs the user's approval like any other write: put the whole plan to them once.`,
+      inputSchema: {
+        writes: z
+          .array(
+            z.discriminatedUnion('action', [
+              z.object({
+                action: z.literal('create'),
+                path: field().min(1),
+                content: noteContent(),
+                frontmatter: frontmatterField().optional(),
+                ownerId: OWNER_ARG,
+              }),
+              z.object({
+                action: z.literal('edit'),
+                path: field().min(1),
+                edits: EDITS,
+                expectedChecksum: field().optional(),
+                ownerId: OWNER_ARG,
+              }),
+              z.object({
+                action: z.literal('replace'),
+                path: field().min(1),
+                content: noteContent(),
+                expectedChecksum: field().optional(),
+                ownerId: OWNER_ARG,
+              }),
+              z.object({
+                action: z.literal('delete'),
+                path: field().min(1),
+                recursive: z.boolean().optional(),
+                ownerId: OWNER_ARG,
+              }),
+            ]),
+          )
+          .min(1)
+          .max(MAX_WRITES),
+      },
+    },
+    async ({ writes }) => {
+      try {
+        requireWriteAccess();
+        const userId = requireUserId();
+        // Permission for every write before any note is looked at, with the
+        // shared roots fetched once rather than once per write.
+        const roots = await sharing.listSharedRoots(userId);
+        await Promise.all(
+          writes.map(async (w, i) => {
+            try {
+              await sharing.assertCanWrite(userId, ownerOf(w.ownerId), w.path);
+              if (w.ownerId === undefined) {
+                await sharing.assertNotShadowingShare(userId, w.path, roots);
+              }
+            } catch (err) {
+              const known = toAppError(err);
+              if (!known) throw err;
+              throw new AppError(
+                `write ${i + 1} (${w.path}): ${known.message}`,
+                known.code,
+                known.status,
+              );
+            }
+          }),
+        );
+        const planned = writes.map(({ ownerId, ...w }) => ({
+          ...w,
+          owner: ownerOf(ownerId),
+        })) as NoteWrite[];
+        const report = await saveNotes(notes, userId, planned, (err) =>
+          logger.error({ err }, 'save_notes write failed'),
+        );
+        return JSON_TEXT(report);
       } catch (err) {
         return toMcpError(err);
       }
@@ -644,7 +822,7 @@ export function buildMcpServer({
     {
       title: 'List unlinked mentions',
       description:
-        'Where a note is named without a wikilink, both ways: `incoming` lists other notes whose text says this note\'s title or an alias; `outgoing` lists notes whose title this note\'s text says. Each row has the other note\'s path, the text as written, how many times, and a snippet. Read-only: to link them, propose the edit to the user and write it with `update_note` once they approve, replacing the text with `[[path|text as written]]`. Own vault only; does not take `ownerId`.',
+        "Where a note is named without a wikilink, both ways: `incoming` lists other notes whose text says this note's title or an alias; `outgoing` lists notes whose title this note's text says. Each row has the other note's path, the text as written, how many times, and a snippet. Read-only: to link them, propose the edit to the user and write it with `update_note` once they approve, replacing the text with `[[path|text as written]]`. Own vault only; does not take `ownerId`.",
       inputSchema: { path: field().min(1) },
     },
     async ({ path }) => {
@@ -662,7 +840,7 @@ export function buildMcpServer({
     {
       title: 'Gather context for a question or a prompt',
       description:
-        'Start here for any question or task about the user\'s notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user\'s message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision` and its body in `excerpt`, whole when it fits `maxChars`; open a note with get_note only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user\'s own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user\'s own crawl history, which they can replay in the web app.',
+        "Start here for any question or task about the user's notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user's message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision`, its `checksum` and its body in `excerpt`, whole when it fits `maxChars`; a `truncated` one also lists its `sections` (every heading of the whole note). That is enough to change a note with edit_note or save_notes without opening it — pass the `checksum` as `expectedChecksum`. Open a note with get_note (several with get_notes) only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user's own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user's own crawl history, which they can replay in the web app.",
       inputSchema: {
         text: z.string().min(1).max(MAX_TEXT_CHARS),
         terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),
@@ -696,7 +874,7 @@ export function buildMcpServer({
     {
       title: 'List facets',
       description:
-        'Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note\'s facets (with `ownerId` for a note in a shared folder); omit it (optionally with `key`) to browse every (key, value) pair in use in your own vault, with counts. Browsing never takes another owner\'s `ownerId`.',
+        "Structured frontmatter metadata other than tags — e.g. `technologies: [nextjs]` or `status: decidido`. Pass `path` for one note's facets (with `ownerId` for a note in a shared folder); omit it (optionally with `key`) to browse every (key, value) pair in use in your own vault, with counts. Browsing never takes another owner's `ownerId`.",
       inputSchema: {
         path: field().optional(),
         key: field().optional(),
