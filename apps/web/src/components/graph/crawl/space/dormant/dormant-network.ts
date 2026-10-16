@@ -652,7 +652,9 @@ export class DormantNetwork implements CrawlSpace {
       const p = b.layout.positions.get(id);
       const node = b.state.nodeIndex(id);
       if (!p || node < 0) return;
-      const why = Math.round(Math.min(3, Math.max(0, b.state.nodes[node * 4 + 2]!)));
+      const why = Math.round(
+        Math.min(WHY_LINEAR.length - 1, Math.max(0, b.state.nodes[node * 4 + 2]!)),
+      );
       at[i]!.set(p[0], p[1], p[2], EMIT_GAIN * Math.min(1, (clock - t) / 0.3));
       colour[i]!.copy(WHY_LINEAR[why]!);
     });

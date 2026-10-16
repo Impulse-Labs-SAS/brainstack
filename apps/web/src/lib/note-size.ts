@@ -10,8 +10,9 @@ export interface NoteSize {
 }
 
 export function noteSize(body: string): NoteSize {
-  const text = body.replace(/\r\n/g, '\n').trim();
-  return { chars: text.length, lines: text === '' ? 0 : text.split('\n').length };
+  // Code points, only spaces, tabs and line breaks trimmed: as the server counts.
+  const text = body.replace(/\r\n/g, '\n').replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, '');
+  return { chars: [...text].length, lines: text === '' ? 0 : text.split('\n').length };
 }
 
 /** How full a note is: under 80% `ok`, then `near`, and past the limit `over`. */

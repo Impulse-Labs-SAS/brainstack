@@ -43,7 +43,10 @@ export function LabPanel({ shown, asked, snapshot, canGoBack, onNewSearch }: Lab
   }, [shown]);
 
   const found = snapshot
-    ? snapshot.found.named + snapshot.found.linked + snapshot.found.decision
+    ? snapshot.found.named +
+      snapshot.found.linked +
+      snapshot.found.decision +
+      snapshot.found.written
     : 0;
 
   return (

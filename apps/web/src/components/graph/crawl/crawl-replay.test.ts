@@ -1707,3 +1707,26 @@ describe('a crawl the assistant wrote after', () => {
     expect(jumped.snapshot.found).toEqual(animated.snapshot.found);
   });
 });
+
+describe('a note the assistant read and then wrote', () => {
+  it('is found again, as written, and listed once', () => {
+    const { model, crawls } = sampleVault();
+    const walk = crawls.walk;
+    const readFirst = walk.notes[0]!;
+    const result: CrawlResult = { ...walk, writes: [{ action: 'edit', path: readFirst.path }] };
+    const node = model.nodes.find((n) => n.path === readFirst.path && !n.foreign)!;
+
+    const animated = new CrawlReplay(() => {});
+    animated.load(result, model);
+    run(animated, 60);
+    expect(animated.snapshot.found.written).toBe(1);
+    expect(animated.view.found.get(node.id)).toBe('written');
+    expect(animated.snapshot.reached.filter((k) => k === readFirst.path)).toHaveLength(1);
+
+    const jumped = new CrawlReplay(() => {});
+    jumped.load(result, model);
+    jumped.skipToEnd();
+    expect(jumped.snapshot.found).toEqual(animated.snapshot.found);
+    expect(jumped.view.found.get(node.id)).toBe('written');
+  });
+});

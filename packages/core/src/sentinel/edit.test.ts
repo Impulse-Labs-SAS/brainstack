@@ -205,3 +205,10 @@ describe('the note size limit', () => {
     expect(fitsNoteLimit(size(10_001), size(10_000))).toBe(false);
   });
 });
+
+describe('the note size, counted as Postgres counts it', () => {
+  it('counts an emoji once and trims only spaces, tabs and line breaks', () => {
+    expect(noteSize('😀😀')).toEqual({ chars: 2, lines: 1 });
+    expect(noteSize(' x ')).toEqual({ chars: 3, lines: 1 });
+  });
+});
