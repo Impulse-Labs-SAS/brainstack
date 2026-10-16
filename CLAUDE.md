@@ -22,12 +22,12 @@ Read the relevant ones before making non-trivial changes.
 
 - `apps/server` — Node app: HTTP (tRPC + MCP over Streamable HTTP).
 - `apps/web` — Next.js web app, replaces Obsidian for humans.
-- `packages/core` — Markdown parsing, wikilink resolution, Postgres store and search (framework-agnostic). Also **Sentinel** (`@brainstack/core/sentinel`), the engine behind `gather_context` and every search (`search_brain`, the web palette), so all of them rank alike: it reads through a `ContextSource` and knows nothing about vaults, so it can serve another system or move to its own package.
+- `packages/core` — Markdown parsing, wikilink resolution, Postgres store and search (framework-agnostic). Also **Sentinel** (`@brainstack/core/sentinel`), BrainStack's engine for working with notes — part of BrainStack, not a product of its own. It reads: `gather_context` and every search (`search_brain`, the web palette) go through it, so all of them rank alike, and each note comes back with the `checksum` and `sections` an edit needs. It writes: edits that name what changes (`edit.ts`) instead of resending a note, served as `edit_note` and `save_notes` (several writes, all checked before any lands; `apps/server/src/services/saveNotes.ts`). Permission still lives in `SharingService` only — the MCP layer asks before calling in.
 - `packages/skill` — Canonical AI instructions + multi-client adapters.
 
 ## Non-negotiable rules
 
-- **The owner is not the caller.** Every service method takes the id of the vault's *owner*, never of whoever is asking. That is what makes a note somebody adds to a shared folder belong to the folder's owner — and what keeps the share covering it.
+- **The owner is not the caller.** Every service method takes the id of the vault's _owner_, never of whoever is asking. That is what makes a note somebody adds to a shared folder belong to the folder's owner — and what keeps the share covering it.
 - **Authorisation lives in `SharingService` only.** `NoteService` knows nothing about permission; the tRPC and MCP layers ask before calling in.
 - **Any folder tree reads both `notes` and `folders`.** A folder with notes under it is implied by their paths; an empty one is implied by nothing.
 - **Share paths are matched in memory, never with `LIKE`.** A folder name can contain `%` or `_`, and a share that widens — or a revoke that overreaches — by accident is access silently given or cut.

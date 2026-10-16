@@ -87,9 +87,11 @@ mode is gone because zooming out now shows projects (below).
 
 ### Sentinel
 
-**"Sentinel" names two things that are one:** the engine behind `gather_context` and
-`search_brain` (`@brainstack/core/sentinel`), and its figure in this view — a creature that walks
-your notes the way the engine read them. The view was called Crawl; its code keeps that name
+**"Sentinel" names two things that are one:** BrainStack's engine for reading and writing notes
+(`@brainstack/core/sentinel` — behind `gather_context`, `search_brain`, `edit_note` and
+`save_notes`), and its figure in this view — a creature that walks your notes the way the engine
+read them. Only reads are replayed for now; `save_notes` answers with an ordered report of what it
+wrote, kept in that shape so a write can be replayed the same way later. The view was called Crawl; its code keeps that name
 (`components/graph/crawl/`, `CrawlReplay`, `crawl_history`, the `crawls.*` router).
 
 It is not a fourth layout: under it the engine shows the Brain and never hears of the rest.
