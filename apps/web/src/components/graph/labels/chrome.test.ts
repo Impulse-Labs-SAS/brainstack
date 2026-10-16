@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { chromeRects } from './chrome';
+import { chromeRects, freeStage } from './chrome';
 
 /** An element as chromeRects reads one: a box, a mark, children. */
 class FakeElement {
@@ -36,5 +36,27 @@ describe('chromeRects', () => {
       { x: 0, y: 495, w: 80, h: 40 },
       { x: 390, y: 495, w: 90, h: 40 },
     ]);
+  });
+});
+
+describe('freeStage in bands', () => {
+  // A phone's graph chrome, as measured: the views, then a row of search and filters, then line
+  // art's breadcrumb, then the zoom at the right under them; the legend along the bottom.
+  const phone = [
+    { x: 12, y: 12, w: 290, h: 50 },
+    { x: 12, y: 72, w: 87, h: 44 },
+    { x: 107, y: 72, w: 150, h: 44 },
+    { x: 265, y: 72, w: 44, h: 44 },
+    { x: 12, y: 125, w: 187, h: 53 },
+    { x: 228, y: 187, w: 150, h: 53 },
+    { x: 12, y: 742, w: 366, h: 90 },
+  ];
+
+  it('takes rows stacked from the top as the top, each reached by the one above it', () => {
+    expect(freeStage(390, 844, phone, 'bands')).toEqual({ x: 0, y: 240, w: 390, h: 502 });
+  });
+
+  it('by area, takes a row under a row for a side strip: what bands are for', () => {
+    expect(freeStage(390, 844, phone).w).toBeLessThan(250);
   });
 });

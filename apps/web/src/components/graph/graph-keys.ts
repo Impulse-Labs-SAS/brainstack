@@ -1,9 +1,9 @@
 // Which keys the graph takes, and from where. The canvas is the graph: every key pressed on it
 // goes to the controller, which says whether it used it. The preview sheet speaks for the same
-// selection, so from anywhere in it Escape closes and Backspace goes back. The arrows and Enter
-// walk and open only from its heading, where a pick made from the keyboard leaves focus: on one
-// of its buttons Enter is the button's, and an arrow would swap the list out from under the
-// person going through it.
+// selection, so from anywhere in it Escape closes and Backspace goes back. The arrows, the
+// brackets (line art's walk along links) and Enter walk and open only from its heading, where a
+// pick made from the keyboard leaves focus: on one of its buttons Enter is the button's, and an
+// arrow would swap the list out from under the person going through it.
 
 import type { PressEvent } from 'react-aria-components';
 
@@ -11,14 +11,26 @@ import type { PressEvent } from 'react-aria-components';
 export type KeyOrigin = 'canvas' | 'sheet' | 'sheet-heading' | 'elsewhere';
 
 const SHEET_KEYS = new Set(['Escape', 'Backspace']);
-const HEADING_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter']);
+const HEADING_KEYS = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Enter',
+  '[',
+  ']',
+]);
 
-/** Whether a key pressed at `origin` goes to the graph's controller. */
-export function reachesGraph(key: string, origin: KeyOrigin): boolean {
+/**
+ * Whether a key pressed at `origin` goes to the graph's controller. In line art the arrows move a
+ * cursor on the map, not along the note the heading names: from the sheet they stay the sheet's.
+ */
+export function reachesGraph(key: string, origin: KeyOrigin, lineArt = false): boolean {
   switch (origin) {
     case 'canvas':
       return true;
     case 'sheet-heading':
+      if (lineArt && key.startsWith('Arrow')) return false;
       return SHEET_KEYS.has(key) || HEADING_KEYS.has(key);
     case 'sheet':
       return SHEET_KEYS.has(key);
@@ -32,7 +44,14 @@ export function reachesGraph(key: string, origin: KeyOrigin): boolean {
  * the page's zoom, and both were walking or zooming the graph instead. Shift is not one: it
  * makes the + that zooms in.
  */
-export function browserShortcut(e: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey'>): boolean {
+export function browserShortcut(
+  e: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey'> & {
+    getModifierState?: KeyboardEvent['getModifierState'];
+  },
+): boolean {
+  // AltGr types a character on many layouts ([ and ] in Spanish, German, French), and Windows
+  // reports it as Ctrl+Alt: a key typed with it is a key, not a shortcut.
+  if (e.getModifierState?.('AltGraph')) return false;
   return e.altKey || e.ctrlKey || e.metaKey;
 }
 
