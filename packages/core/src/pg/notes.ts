@@ -13,7 +13,7 @@ import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { parseNote, serializeNote } from '../parser/index.js';
 import { normalizeNoteKey, normalizeRelativePath } from '../paths.js';
 import { linkSnippet } from '../links/snippet.js';
-import { resolveLinks } from '../resolver/wikilinks.js';
+import { linkCandidates, resolveLinks } from '../resolver/wikilinks.js';
 import type { Frontmatter, ParsedFacet, ParsedLink, ResolvedLink } from '../types.js';
 
 import { facets, links, notes, tags } from './schema.js';
@@ -152,6 +152,7 @@ export class PgNoteStore {
     const key = normalizeNoteKey(path);
     const parsed = parseNote(rawMarkdown, { path: key });
     const now = Date.now();
+    const index = this.linkIndexFor(key, parsed.links, ownerId);
 
     // One statement: checking first and then upserting let two creates of the
     // same path both pass the check, and the second silently replaced the
@@ -172,7 +173,7 @@ export class PgNoteStore {
       .returning(NOTE_COLUMNS);
     if (!row) throw new NoteAlreadyExistsError(key);
 
-    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId);
+    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId, index);
     await this.resolvePendingLinksTo(key);
     return row as StoredNote;
   }
@@ -192,6 +193,8 @@ export class PgNoteStore {
     const key = normalizeNoteKey(path);
     const parsed = parseNote(rawMarkdown, { path: key });
     const now = Date.now();
+    const changed = parsed.checksum !== expectedChecksum;
+    const index = changed ? this.linkIndexFor(key, parsed.links, ownerId) : undefined;
 
     const [row] = await this.db
       .update(notes)
@@ -210,7 +213,11 @@ export class PgNoteStore {
       if (await this.exists(key)) throw new NoteChangedError(key);
       throw new NoteNotFoundError(key);
     }
-    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId);
+    // Same checksum, same text: the links, tags and facets it implies are the
+    // ones already stored.
+    if (changed) {
+      await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId, index);
+    }
     return row as StoredNote;
   }
 
@@ -224,6 +231,7 @@ export class PgNoteStore {
     const key = normalizeNoteKey(path);
     const parsed = parseNote(rawMarkdown, { path: key });
     const now = Date.now();
+    const index = this.linkIndexFor(key, parsed.links, ownerId);
 
     const [row] = await this.db
       .insert(notes)
@@ -260,7 +268,7 @@ export class PgNoteStore {
        */
       .returning({ ...NOTE_COLUMNS, inserted: sql<boolean>`(xmax = 0)` });
 
-    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId);
+    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId, index);
     if (row?.inserted) await this.resolvePendingLinksTo(key);
 
     const { inserted: _inserted, ...stored } = row!;
@@ -569,23 +577,68 @@ export class PgNoteStore {
   }
 
   /**
-   * Note paths wikilinks may resolve to: one owner's, or — for a legacy row
-   * with no owner — every path. Reading every path in the database on every
-   * write made one large vault slow down everyone else's saves.
+   * The note paths, stored, that these links could resolve to inside one
+   * owner's slice: the exact paths they name and the notes whose file name a
+   * bare link looks for (`linkCandidates`). Reading every path of the vault
+   * instead cost each write a transfer that grew with the vault.
    */
-  private async allNotePaths(prefix = ''): Promise<Set<string>> {
+  private async candidatePaths(
+    prefix: string,
+    parsedLinks: readonly ParsedLink[],
+    sourceLogical: string,
+  ): Promise<Set<string>> {
+    const { paths, names } = linkCandidates(parsedLinks, sourceLogical);
+    const matches = [
+      ...(paths.length > 0
+        ? [
+            inArray(
+              notes.path,
+              paths.map((p) => `${prefix}${p}`),
+            ),
+          ]
+        : []),
+      ...(names.length > 0
+        ? [inArray(sql<string>`regexp_replace(${notes.path}, '^.*/', '')`, names)]
+        : []),
+    ];
+    if (matches.length === 0) return new Set();
     const rows = await this.db
       .select({ path: notes.path })
       .from(notes)
-      .where(prefix ? like(notes.path, `${escapeLike(prefix)}%`) : undefined);
-    return new Set(rows.map((r) => r.path));
+      .where(and(prefix ? like(notes.path, `${escapeLike(prefix)}%`) : undefined, or(...matches)));
+    const found = new Set(rows.map((r) => r.path));
+    // The note itself, which a create is writing while this runs: a link to
+    // itself resolves just as it would once the row is there.
+    const own = sourceLogical.slice(sourceLogical.lastIndexOf('/') + 1);
+    if (paths.includes(sourceLogical) || names.includes(own))
+      found.add(`${prefix}${sourceLogical}`);
+    return found;
   }
 
   /**
-   * Replace the derived rows for one note.
+   * The candidate paths for a note's links, asked for straight away so the
+   * query runs while the note itself is written — one round trip fewer on a
+   * save. Nothing awaits it until `rebuildGraph`, so a write that fails first
+   * must not leave its rejection unhandled; the no-op handler sees to that,
+   * and `rebuildGraph` still gets the error when it awaits.
+   */
+  private linkIndexFor(
+    path: string,
+    parsedLinks: readonly ParsedLink[],
+    ownerId?: string,
+  ): Promise<Set<string>> {
+    const prefix = ownerId && path.startsWith(`${ownerId}/`) ? `${ownerId}/` : '';
+    const index = this.candidatePaths(prefix, parsedLinks, path.slice(prefix.length));
+    index.catch(() => {});
+    return index;
+  }
+
+  /**
+   * Replace the derived rows for one note: its links, tags and facets.
    *
-   * Wikilink resolution needs the set of note paths in the owner's vault, so
-   * this reads them on each write.
+   * The three tables are independent, so they are rewritten side by side — on
+   * the Neon HTTP driver every statement is a round trip, and six of them one
+   * after another were most of what a save waited on.
    */
   private async rebuildGraph(
     path: string,
@@ -593,6 +646,8 @@ export class PgNoteStore {
     noteTags: readonly string[],
     noteFacets: readonly ParsedFacet[],
     ownerId?: string,
+    /** From `linkIndexFor`, when the caller started it early. */
+    index?: Promise<Set<string>>,
   ): Promise<void> {
     // A wikilink is written the way its author sees the path, which in a
     // multi-user database is not the way it is stored: `[[proyectos/b]]` in a
@@ -603,11 +658,9 @@ export class PgNoteStore {
     // Without this, no link in the database would ever resolve, and every
     // backlink panel would sit empty for reasons nothing would report.
     const prefix = ownerId && path.startsWith(`${ownerId}/`) ? `${ownerId}/` : '';
-    const stored = await this.allNotePaths(prefix);
+    const stored = await (index ?? this.linkIndexFor(path, parsedLinks, ownerId));
     const noteIndex = prefix
-      ? new Set(
-          [...stored].filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length)),
-        )
+      ? new Set([...stored].filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length)))
       : stored;
 
     const { resolved } = resolveLinks(parsedLinks, {
@@ -629,34 +682,40 @@ export class PgNoteStore {
         }))
       : resolved;
 
-    await this.db.delete(links).where(eq(links.sourcePath, path));
-    if (scoped.length > 0) {
-      await this.db.insert(links).values(dedupeLinks(scoped)).onConflictDoNothing();
-    }
-
-    await this.db.delete(tags).where(eq(tags.notePath, path));
-    if (noteTags.length > 0) {
-      await this.db
-        .insert(tags)
-        .values(noteTags.map((tag) => ({ notePath: path, tag })))
-        .onConflictDoNothing();
-    }
-
-    await this.db.delete(facets).where(eq(facets.notePath, path));
-    if (noteFacets.length > 0) {
-      await this.db
-        .insert(facets)
-        .values(
-          noteFacets.map((f) => ({
-            notePath: path,
-            key: f.key,
-            value: f.value,
-            data: f.data,
-            position: f.position,
-          })),
-        )
-        .onConflictDoNothing();
-    }
+    await Promise.all([
+      (async () => {
+        await this.db.delete(links).where(eq(links.sourcePath, path));
+        if (scoped.length > 0) {
+          await this.db.insert(links).values(dedupeLinks(scoped)).onConflictDoNothing();
+        }
+      })(),
+      (async () => {
+        await this.db.delete(tags).where(eq(tags.notePath, path));
+        if (noteTags.length > 0) {
+          await this.db
+            .insert(tags)
+            .values(noteTags.map((tag) => ({ notePath: path, tag })))
+            .onConflictDoNothing();
+        }
+      })(),
+      (async () => {
+        await this.db.delete(facets).where(eq(facets.notePath, path));
+        if (noteFacets.length > 0) {
+          await this.db
+            .insert(facets)
+            .values(
+              noteFacets.map((f) => ({
+                notePath: path,
+                key: f.key,
+                value: f.value,
+                data: f.data,
+                position: f.position,
+              })),
+            )
+            .onConflictDoNothing();
+        }
+      })(),
+    ]);
   }
 }
 

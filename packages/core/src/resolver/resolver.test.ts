@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ParsedLink } from '../types.js';
 
-import { resolveLink } from './wikilinks.js';
+import { linkCandidates, resolveLink, resolveLinks } from './wikilinks.js';
 
 function link(partial: Partial<ParsedLink> & { rawTarget: string }): ParsedLink {
   return {
@@ -143,9 +143,46 @@ describe('resolveLink — allowedOwners (cross-border masking)', () => {
       attachmentIndex: hostedAttachmentIndex,
     });
     expect(result.ambiguous).toBe(true);
-    expect(result.candidates.sort()).toEqual([
-      'alice/proyectos/foo.md',
-      'bob/proyectos/foo.md',
-    ]);
+    expect(result.candidates.sort()).toEqual(['alice/proyectos/foo.md', 'bob/proyectos/foo.md']);
+  });
+});
+
+describe('linkCandidates', () => {
+  // Every shape of link the ladder knows, from notes at different depths.
+  const vault = new Set([
+    ...noteIndex,
+    'Erebor/sub/Pricing.md',
+    'Erebor/sub/deep/Notes.md',
+    'Notes.md',
+    'Rivendell/Plan.MD',
+  ]);
+  const shapes: ParsedLink[] = [
+    link({ rawTarget: 'Pricing' }),
+    link({ rawTarget: 'Pricing.md' }),
+    link({ rawTarget: 'Erebor/Pricing' }),
+    link({ rawTarget: 'Notes' }),
+    link({ rawTarget: 'Solo' }),
+    link({ rawTarget: 'Missing' }),
+    link({ rawTarget: 'Rivendell/Plan.MD' }),
+    link({ rawTarget: 'sub/Pricing.md', kind: 'markdown' }),
+    link({ rawTarget: '/Notes.md', kind: 'markdown' }),
+    link({ rawTarget: 'Pricing', isEmbed: true }),
+    link({ rawTarget: 'pricing-comparison.png', isEmbed: true }),
+  ];
+
+  it('resolves exactly as the whole vault does, from only the paths it names', () => {
+    for (const sourcePath of ['Erebor/a.md', 'Erebor/sub/b.md', 'c.md', 'GONDOR/d.md']) {
+      const { paths, names } = linkCandidates(shapes, sourcePath);
+      const narrowed = new Set(
+        [...vault].filter(
+          (p) => paths.includes(p) || names.includes(p.slice(p.lastIndexOf('/') + 1)),
+        ),
+      );
+      const ctx = { sourcePath, attachmentIndex: new Set<string>() };
+      expect(resolveLinks(shapes, { ...ctx, noteIndex: narrowed })).toEqual(
+        resolveLinks(shapes, { ...ctx, noteIndex: vault }),
+      );
+      expect(narrowed.size).toBeLessThan(vault.size);
+    }
   });
 });

@@ -55,7 +55,10 @@ function basename(path: string): string {
  * large vault cost links × notes on the one event loop. Built once per index
  * object and reused; a size check rebuilds it if a caller grew the set.
  */
-const basenameIndexes = new WeakMap<ReadonlySet<string>, { size: number; byName: Map<string, string[]> }>();
+const basenameIndexes = new WeakMap<
+  ReadonlySet<string>,
+  { size: number; byName: Map<string, string[]> }
+>();
 
 function pathsNamed(index: ReadonlySet<string>, name: string): readonly string[] {
   let cached = basenameIndexes.get(index);
@@ -261,6 +264,38 @@ function resolveNote(raw: string, ctx: ResolutionInputs, link: ParsedLink): Reso
     candidates: [],
   };
   void link;
+}
+
+/**
+ * The only note paths `resolveLinks` could pick for these links: every exact
+ * path one names, and every file name a bare `[[Note]]` is looked up by. An
+ * index holding just the paths that match these resolves the links exactly as
+ * the whole vault would, so a write can ask the store for a handful of rows
+ * instead of every path its owner has.
+ *
+ * Kept beside the ladder it mirrors: a rule added to `resolveLink` that looks
+ * a path up some other way must be added here too, or resolution quietly
+ * narrows. The test that compares the two indexes is what catches it.
+ */
+export function linkCandidates(
+  links: readonly ParsedLink[],
+  sourcePath: string,
+): { paths: string[]; names: string[] } {
+  const paths = new Set<string>();
+  const names = new Set<string>();
+  for (const link of links) {
+    const raw = toPosixPath(link.rawTarget);
+    if (link.kind === 'markdown') {
+      const candidate = raw.startsWith('/') ? raw.slice(1) : joinPath(dirOf(sourcePath), raw);
+      paths.add(toPosixPath(candidate));
+      continue;
+    }
+    const ext = extensionOf(raw);
+    if (link.isEmbed && ext && ext !== 'md') continue; // an attachment, never a note
+    if (raw.includes('/')) paths.add(withMdExtension(raw));
+    else names.add(withMdExtension(raw));
+  }
+  return { paths: [...paths], names: [...names] };
 }
 
 /** Resolve every link in a parsed note, producing rows ready for the `links` table. */
