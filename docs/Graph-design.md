@@ -118,8 +118,14 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
   threads it takes become tubes of light and stay lit, and each note it finds ignites in the
   colour of why it was handed over (named, linked, a decision) and lights the notes and
   threads round it. Its label is a reticle: brackets close on the note and a leader runs out
-  to a card with its title over why, so no label covers the note it names. It is laid out from the model, never from the brain's
-  positions, which it leaves untouched — the brain's saved layout included.
+  to a card with its title over why, so no label covers the note it names. The cards are placed
+  as the graph's labels are (`labels/placer.ts`): what was just found first, then what to
+  clarify, what the question named, the decisions and the links; none over another, a note, the
+  panel or the toolbar (`labels/chrome.ts`), at most twelve, and one that was up stays up while it
+  fits; a long title is cut short rather than its card dropped. A find with no room keeps its
+  brackets; the panel names it. Their text is 12px; an older card's text fades to 85% on a glass
+  that does not fade, where every line still reads at 4.5:1, even over a lit thread. It is laid out from the model, never from the brain's positions, which
+  it leaves untouched — the brain's saved layout included.
 - **Decisions.** `notes.graph` marks each note that records a decision (`isDecision`: a
   `decisión`/`decision` tag or `status: decidido`, with the same scope as everything else it
   returns, shared notes included); the cluster shows those, and every note the search itself
@@ -139,7 +145,14 @@ with a **stage** of its own. Removing that folder and the tab leaves the graph e
   as the walk reaches them (`reached` in the snapshot), each ticked in or out of the prompt; a
   reference the text left ambiguous is settled there by picking the note meant, and one left open
   goes into the prompt as a question for the assistant to ask; what the budget left out can be put
-  back (`answer.ts`). Pointing at a note rings it on the stage. **Prompt** shows the text exactly as
+  back (`answer.ts`). Pointing at a note, with the mouse or the keyboard's focus, rings it on the
+  stage, or, off the stage the chrome leaves free (behind the camera too), puts an arrow on its
+  edge pointing the way, with its title, cut short to fit; it is drawn over the cards, which stay
+  where they were. Each row also has **Show**, which brings the note into the middle of that free stage
+  and holds it there (the walk is no longer followed; _Follow the Sentinel_ or a drag ends it, and
+  on a phone the sheet steps down to its peek), and **Open**, which opens the note's page in a new
+  tab, so the search and what was ticked stay. A note the graph does not show cannot be shown.
+  **Prompt** shows the text exactly as
   it is copied. **Activity** holds the walk's counts, its log and the raw answer an assistant
   receives over MCP. The question is edited in place to search again; the recent searches sit
   behind the clock, the Sentinel switch behind the dots. Pause, Replay, Skip to the end and Follow
@@ -263,12 +276,13 @@ of `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` 
 | `components/graph/graph-engine.ts`               | The layout per view: a `d3-force-3d` simulation for Brain and Network, places on the map for Territories. Tested.                                            |
 | `components/graph/graph-scene.ts`                | three.js: notes, edges, nebulae and the brain mesh, additive blending on a flat background; the map's land, translucent, under them.                         |
 | `components/graph/graph-overlay.ts`              | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap.                                        |
+| `components/graph/labels/chrome.ts`              | What floats over the graph, measured: what labels and the Sentinel's cards keep clear of.                                                                    |
 | `components/graph/graph-controller.ts`           | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates.                                                    |
 | `components/graph/graph-view.tsx`                | React chrome: toolbar, layers, preview, legend; preferences.                                                                                                 |
 | `components/graph/crawl/view-choice.ts`          | Pure: which view `/graph` opens on, and what counts as a choice. Tested.                                                                                     |
 | `components/graph/crawl/crawl-plan.ts`           | Pure: a `gather_context` answer turned into replay steps, the walk along threads between two notes, and which notes are decisions. Tested.                   |
 | `components/graph/crawl/crawl-replay.ts`         | Pure: the replay — where the walk is, what it lit and found, what each of the Sentinel's grips holds — over the brain or a space. Tested.                    |
-| `components/graph/crawl/crawl-draw.ts`           | The 2D part: labels over the stage; threads, halos and the point of light of the trail. Tested.                                                              |
+| `components/graph/crawl/crawl-draw.ts`           | The 2D part: cards by importance, the panel's mark or an arrow to it; the trail's threads, halos and light. Tested.                                          |
 | `components/graph/crawl/crawl-plugin.ts`         | The Sentinel view's `GraphPlugin`: the replay, the prompt scene, the stage or the trail, the camera between them. Tested with a fake stage.                  |
 | `components/graph/crawl/crawl-panel.tsx`         | React chrome for the Sentinel: the prompt and its recents; the side panel — a column, or a sheet on a phone — and the replay's controls over the stage.      |
 | `components/graph/crawl/panel/`                  | The panel's parts: its head, the Context, Prompt and Activity tabs, the phone's sheet, the replay bar, copying, and the bodies a full-text prompt reads.     |
