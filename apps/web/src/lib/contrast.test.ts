@@ -1,9 +1,6 @@
 // The design tokens held to WCAG AA, read from globals.css itself: a token changed there
 // without its pairs still reading fails here, not in someone's eyes.
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'vitest';
 
 import { AA_NON_TEXT, AA_TEXT, contrast, over, parseColor, type RGB } from './contrast';
@@ -13,6 +10,7 @@ import {
   OWN_VAULT_COLOR,
   SHARED_VAULT_COLORS,
 } from './graph-palette';
+import { rootTokens } from './root-tokens';
 
 describe('contrast', () => {
   it('measures as WCAG does', () => {
@@ -32,20 +30,6 @@ describe('contrast', () => {
     expect(over({ rgb: [255, 255, 255], alpha: 0.5 }, [0, 0, 0])).toEqual([127.5, 127.5, 127.5]);
   });
 });
-
-/** Every custom property of the :root block in globals.css, as written. */
-function rootTokens(): Map<string, string> {
-  const css = readFileSync(
-    fileURLToPath(new URL('../styles/globals.css', import.meta.url)),
-    'utf8',
-  );
-  const root = /:root\s*\{([\s\S]*?)\n\}/.exec(css)![1]!;
-  const tokens = new Map<string, string>();
-  for (const m of root.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/--([\w-]+):\s*([^;]+);/g)) {
-    tokens.set(m[1]!, m[2]!.trim());
-  }
-  return tokens;
-}
 
 describe('the design tokens', () => {
   const tokens = rootTokens();
