@@ -3286,4 +3286,49 @@ describe('GraphController when a replay ends', () => {
       expect(after[0]!.moved, how).toBe(true);
     }
   });
+
+  it('lights the edges of the notes a stop places, in a vault small enough to pause between two', () => {
+    for (const view of ['brain', 'network', 'territories'] as const) {
+      const h = harness(GraphController);
+      const c = h.controller;
+      c.initView(view);
+      c.setModel(chain(10), 'init');
+      h.step(400);
+      c.startGrowth();
+      // Ten notes over seven seconds, one every 700ms: the first comes in the first frame and has
+      // faded in long before the second is due.
+      h.step(40);
+      expect(c.model!.nodes.filter((n) => Number.isFinite(n.x)).length, view).toBe(1);
+      const from = renders().length;
+      c.stopGrowth();
+      h.step(1);
+      // The other nine come in whole, and so do the edges between them: their brightness is
+      // recomputed in the first frame drawn, or they stay dark until a hover asks for it.
+      const after = renders().slice(from);
+      expect(after.length, view).toBeGreaterThan(0);
+      expect(after[0]!.edgesDirty, view).toBe(true);
+    }
+  });
 });
+
+/** `count` notes in one project, each created an hour after the last and linked to it. */
+function chain(count: number): GraphModel {
+  const ids = Array.from({ length: count }, (_, i) => `me/Orbit/c${i}.md`);
+  return buildGraphModel({
+    nodes: ids.map((id, i) => ({
+      id,
+      path: `Orbit/c${i}.md`,
+      title: `Orbit ${i}`,
+      ownerId: 'me',
+      project: { id: 'me|Orbit', label: 'Orbit' },
+      createdAt: T0 + i * HOUR,
+      updatedAt: T0,
+    })),
+    edges: ids.slice(1).map((id, i) => ({ source: id, target: ids[i]!, weight: 1 })),
+    affinity: null,
+    layers: DEFAULT_LAYERS,
+    viewerId: 'me',
+    vaultNames: new Map(),
+    cache: new Map(),
+  });
+}

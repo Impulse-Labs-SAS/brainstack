@@ -1756,6 +1756,9 @@ export class GraphController {
     // The notes still to come were placed at once. On the map nothing moves after that, so no
     // frame would upload them: drawn where they were last uploaded, at the origin.
     this.reupload = true;
+    // And they come in whole, with no fade to relight their edges by: stopped once the last note
+    // to come had faded in, nothing else would, and the edges to them would stay dark.
+    this.edgesDirty = true;
     this.events.onGrowth(false);
     clearTimeout(this.chipTimer);
     this.chipTimer = window.setTimeout(() => {
