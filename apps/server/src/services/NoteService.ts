@@ -36,6 +36,7 @@ import {
   type MentionTerm,
   type NoteBodySource,
 } from '@brainstack/core';
+import { applyEdits, type NoteEdit } from '@brainstack/core/sentinel';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 
 import { AppError } from '../lib/errors.js';
@@ -84,9 +85,20 @@ export interface NoteRowDto {
  * MOCs are a convention with per-vault style, not a structure to enforce — it
  * just saves the caller from recomputing the paths.
  */
+/** An edit checked against a note's current version, ready to write. */
+export interface PlannedEdit {
+  path: string;
+  /** The whole note as it will be stored. */
+  raw: string;
+  /** The version the edit was planned on; the write lands only over it. */
+  baseChecksum: string;
+}
+
 export interface MutationResult {
   path: string;
   affectedMocs: string[];
+  /** For a create: the new note's version, for a later edit's `expectedChecksum`. */
+  checksum?: string;
 }
 
 /**
@@ -558,7 +570,11 @@ export class NoteService {
     // it lands in are registered here rather than left implied by its path.
     const parent = logical.split('/').slice(0, -1).join('/');
     if (parent) await this.ensureFolders(ownerId, parent);
-    return { path: logical, affectedMocs: await this.mocsFor(ownerId, logical) };
+    return {
+      path: logical,
+      affectedMocs: await this.mocsFor(ownerId, logical),
+      checksum: saved.checksum,
+    };
   }
 
   /**
@@ -601,6 +617,80 @@ export class NoteService {
       }
       throw err;
     }
+  }
+
+  /**
+   * What `edits` would leave a note as, without writing anything: applied to
+   * the version stored now, which the plan remembers by its checksum.
+   *
+   * Split from the write so a batch can check every edit before making the
+   * first one. `writePlanned` then lands only on that same version — a note
+   * someone saved in between fails with `CHANGED` rather than losing their
+   * edit to a plan made from the one before.
+   */
+  async planEdit(
+    ownerId: string,
+    path: string,
+    edits: readonly NoteEdit[],
+    opts: { expectedChecksum?: string } = {},
+  ): Promise<PlannedEdit> {
+    const physical = this.toPhysical(ownerId, path);
+    const existing = await this.asCaller(ownerId, () => this.store.get(physical));
+    const logical = this.toLogical(ownerId, existing.path);
+    if (opts.expectedChecksum && opts.expectedChecksum !== existing.checksum) {
+      throw new AppError(
+        `${logical} was changed by someone else since you read it`,
+        'CHANGED',
+        409,
+      );
+    }
+    const next = applyEdits({ frontmatter: existing.frontmatter, body: existing.body }, edits);
+    return {
+      path: logical,
+      // The frontmatter is written as the edits left it, even empty: `update`
+      // keeps the old block when the content carries none, which would bring
+      // back every key an edit removed.
+      raw: serializeNote(next.frontmatter, next.body),
+      baseChecksum: existing.checksum,
+    };
+  }
+
+  /** Write a plan from `planEdit`, only over the version it was made from. */
+  async writePlanned(
+    ownerId: string,
+    plan: PlannedEdit,
+  ): Promise<{ path: string; checksum: string }> {
+    const physical = this.toPhysical(ownerId, plan.path);
+    try {
+      const saved = await this.asCaller(ownerId, () =>
+        this.store.replaceIfUnchanged(physical, plan.raw, plan.baseChecksum, ownerId),
+      );
+      return { path: this.toLogical(ownerId, saved.path), checksum: saved.checksum };
+    } catch (err) {
+      if (err instanceof PgNoteChangedError) {
+        throw new AppError(
+          `${plan.path} was changed by someone else since you read it`,
+          'CHANGED',
+          409,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /** Change a note by naming what changes: Sentinel's edits, planned and written. */
+  async edit(
+    ownerId: string,
+    path: string,
+    edits: readonly NoteEdit[],
+    opts: { expectedChecksum?: string } = {},
+  ): Promise<{ path: string; checksum: string }> {
+    return this.writePlanned(ownerId, await this.planEdit(ownerId, path, edits, opts));
+  }
+
+  /** Whether a note — not a folder — is stored at `path`. One lookup, by key. */
+  async hasNote(ownerId: string, path: string): Promise<boolean> {
+    return this.store.exists(this.toPhysical(ownerId, path));
   }
 
   /**
@@ -970,7 +1060,6 @@ export class NoteService {
             or(eq(folders.path, from), like(folders.path, `${escapeLike(from)}/%`)),
           ),
         );
-
     }
 
     const destinations = sources.map(destinationOf);
@@ -1247,16 +1336,18 @@ export class NoteService {
   }
 
   /**
-   * Title, the first `bodyChars` of the body, and decision flag for each of
-   * `paths` that exists and is readable — the same test `listDecisions`
-   * applies: a `decisión`/`decision` tag or `status: decidido`.
+   * Title, the first `bodyChars` of the body, checksum and decision flag for
+   * each of `paths` that exists and is readable — the same decision test
+   * `listDecisions` applies: a `decisión`/`decision` tag or `status: decidido`.
    */
   async contextDigests(
     viewerId: string,
     paths: readonly string[],
     bodyChars: number,
     sharedScopes: SharedScope[] = [],
-  ): Promise<Array<{ path: string; title: string; body: string; isDecision: boolean }>> {
+  ): Promise<
+    Array<{ path: string; title: string; body: string; isDecision: boolean; checksum: string }>
+  > {
     const inScope = this.inScope(viewerId, sharedScopes);
     const physical = paths.filter(inScope);
     if (physical.length === 0) return [];
@@ -1267,6 +1358,7 @@ export class NoteService {
           title: notes.title,
           // Only the start: an excerpt never needs more.
           body: sql<string>`substring(${notes.body} from 1 for ${bodyChars})`,
+          checksum: notes.checksum,
         })
         .from(notes)
         .where(inArray(notes.path, physical)),
@@ -1297,7 +1389,27 @@ export class NoteService {
         title: r.title,
         body: r.body,
         isDecision: decisions.has(r.path),
+        checksum: r.checksum,
       }));
+  }
+
+  /**
+   * Whole bodies of `paths` the viewer may read: for the few notes a crawl had
+   * to cut, whose section headings it lists so an edit can name one.
+   */
+  async contextBodies(
+    viewerId: string,
+    paths: readonly string[],
+    sharedScopes: SharedScope[] = [],
+  ): Promise<Array<{ path: string; body: string }>> {
+    const inScope = this.inScope(viewerId, sharedScopes);
+    const physical = paths.filter(inScope);
+    if (physical.length === 0) return [];
+    const rows = await this.opts.db
+      .select({ path: notes.path, body: notes.body })
+      .from(notes)
+      .where(inArray(notes.path, physical));
+    return rows.filter((r) => inScope(r.path));
   }
 
   // -- Graph -----------------------------------------------------------------
