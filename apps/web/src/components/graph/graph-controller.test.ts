@@ -3354,6 +3354,8 @@ class FakeKit implements GraphKit {
   host: KitHost | null = null;
   /** Where it says each note is drawn: none is on the stage unless a test puts it there. */
   readonly screens = new Map<GraphNode, { x: number; y: number }>();
+  /** Whether Escape finds a level to go up to. */
+  above = true;
 
   constructor(
     private readonly views: readonly GraphView[] = ['territories'],
@@ -3393,6 +3395,16 @@ class FakeKit implements GraphKit {
   }
   wheel(_e: WheelEvent, x: number, y: number): void {
     this.calls.push(`wheel ${x},${y}`);
+  }
+  doubleClick(x: number, y: number): void {
+    this.calls.push(`doubleClick ${x},${y}`);
+  }
+  up(): boolean {
+    this.calls.push('up');
+    return this.above;
+  }
+  focusPlace(id: string | null): void {
+    this.calls.push(`focusPlace ${id}`);
   }
   key(e: KeyboardEvent): boolean {
     const used = this.keys.includes(e.key);
@@ -3517,6 +3529,7 @@ describe('GraphController with a kit', () => {
       'wheel 200,220',
       'up 10,10 cancelled',
       'key q',
+      'doubleClick 140,150',
     ]);
     // No hover, no country, no selection and nothing opened: the kit picks what it draws.
     expect(eventsSince(h, events)).toEqual([]);
@@ -3601,11 +3614,13 @@ describe('GraphController with a kit', () => {
     c.setMatches([a!, b!]);
     c.frameMatches();
     expect(kit.calls.slice(-2)).toEqual(['frameNotes 2', 'frameNotes 2']);
-    // Escape closes the preview; past that, with the camera moved, it asks the kit to fit.
+    // Escape closes the preview; past that the kit steps out a level, until there is none.
     expect(h.key('Escape')).toBe(true);
     expect(h.events.at(-1)).toMatchObject({ name: 'onSelection', args: [null] });
     expect(h.key('Escape')).toBe(true);
-    expect(kit.calls.at(-1)).toBe('fit');
+    expect(kit.calls.at(-1)).toBe('up');
+    kit.above = false;
+    expect(h.key('Escape')).toBe(false);
     // The way back from a note records the classic camera, which the kit does not draw from.
     expect(c.returnState(a!)).toBeNull();
   });
@@ -3627,6 +3642,36 @@ describe('GraphController with a kit', () => {
     c.setPlugin(null);
     h.step(1);
     expect(kit.frames.length).toBeGreaterThan(frames);
+  });
+
+  it('lends the kit the selection, the page and the breadcrumb', () => {
+    const { h, c, model, kit } = kitOnTheMap();
+    const places: unknown[] = [];
+    // The breadcrumb's event is the view's to listen to; the harness does not.
+    (h.controller as unknown as { events: { onPlace?: (s: unknown) => void } }).events.onPlace = (
+      steps,
+    ) => places.push(steps);
+    h.step(1);
+    const [a] = shown(model);
+    kit.host!.select(a!);
+    expect(h.events.filter((e) => e.name === 'onSelection').at(-1)!.args[0]).toMatchObject({
+      kind: 'note',
+      node: a,
+    });
+    expect(kit.calls.at(-1)).toBe(`reveal ${a!.id}`);
+    kit.host!.open(a!);
+    expect(h.events.at(-1)).toMatchObject({ name: 'onOpen', args: [a] });
+    kit.host!.clearSelection();
+    expect(h.events.at(-1)).toMatchObject({ name: 'onSelection', args: [null] });
+    const steps = [{ id: 'v:own', kind: 'vault', label: 'Your vault' }] as const;
+    kit.host!.onPlace(steps);
+    expect(places).toEqual([steps]);
+    c.focusPlace('v:own');
+    c.focusPlace(null);
+    expect(kit.calls.slice(-2)).toEqual(['focusPlace v:own', 'focusPlace null']);
+    // Leaving, the breadcrumb goes: the classic map has none.
+    c.setKit(null);
+    expect(places.at(-1)).toEqual([]);
   });
 
   it('tells the kit of a resize, of a context restored and of the fonts, while it draws', () => {

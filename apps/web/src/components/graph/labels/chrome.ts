@@ -40,13 +40,25 @@ const ALONG_EDGE = 16;
  * transport over a phone's sheet). Something across the whole width takes only the top or the
  * bottom, and something down the whole height only a side. What floats clear of every edge takes
  * nothing, and nor does what has slid off the stage.
+ *
+ * The biggest pieces go first (`order: 'area'`), or, for chrome stacked in rows from the top and
+ * the bottom (`'bands'`), the nearest to either: a row under a row is then reached by the top
+ * edge the first one moved, not mistaken for something along a side.
  */
-export function freeStage(width: number, height: number, chrome: readonly Rect[]): Rect {
+export function freeStage(
+  width: number,
+  height: number,
+  chrome: readonly Rect[],
+  order: 'area' | 'bands' = 'area',
+): Rect {
   let x0 = 0;
   let y0 = 0;
   let x1 = width;
   let y1 = height;
-  const pending = chrome.filter((r) => r.w > 0 && r.h > 0).sort((a, b) => b.w * b.h - a.w * a.h);
+  const band = (r: Rect) => Math.min(r.y, height - r.y - r.h);
+  const pending = chrome
+    .filter((r) => r.w > 0 && r.h > 0)
+    .sort((a, b) => (order === 'bands' ? band(a) - band(b) : 0) || b.w * b.h - a.w * a.h);
   for (let taken = true; taken; ) {
     taken = false;
     for (const r of [...pending]) {
