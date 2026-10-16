@@ -33,12 +33,15 @@
 // the last change. A crawl that had finished then shows its end, and one still
 // walking starts over from its first note.
 
-import { projector, type Camera, type Viewport } from '@/lib/graph-camera';
+import { basis, pixelsPerUnit, projector, type Camera, type Viewport } from '@/lib/graph-camera';
 import type { GraphModel, GraphNode } from '@/lib/graph-model';
 
 import type { GraphPlugin, PluginFrame, PluginStage } from '../graph-controller';
 
-import { drawCrawl, drawMark, drawSignal, type Project } from './crawl-draw';
+import { chromeRects } from '../labels/chrome';
+import { LabelMemory, type Rect } from '../labels/placer';
+
+import { behindCamera, drawCrawl, drawSignal, freeStage, type CrawlDrawing, type Project } from './crawl-draw';
 import { decisionIds, notesByPlace, type CrawlResult } from './crawl-plan';
 import { CrawlReplay } from './crawl-replay';
 import type { CrawlSnapshot } from './crawl-snapshot';
@@ -139,6 +142,12 @@ export class CrawlPlugin implements GraphPlugin {
   private byPlace: Map<string, GraphNode> | null = null;
   /** The note the panel points at, as `place` keys it: ringed over the walk. */
   private marked: string | null = null;
+  /** The walk's cards shown last frame: one up stays up while it fits. Afresh for each crawl. */
+  private cards = new LabelMemory();
+  /** A note the panel asked to see (`show`), by id: followed in place of the walk until the walk is again. */
+  private looking: { id: string; dist: number } | null = null;
+  /** The last frame drawn over: its camera, its size and the chrome on it, for `follow` to aim by. */
+  private seen: { cam: Camera; vp: Viewport; chrome: Rect[] } | null = null;
   /** The crawl on screen, or last shown: what a rebuild or a fallback plays again. */
   private crawl: { result: CrawlResult; asked: string } | null = null;
 
@@ -251,6 +260,11 @@ export class CrawlPlugin implements GraphPlugin {
   }
 
   follow(): { x: number; y: number; z: number; dist: number } | null {
+    // A note the panel showed holds the camera until the walk is followed again: by the
+    // button, a replay or another search, all of which follow it from the start.
+    const looking = this.looking && !this.player.snapshot.following ? this.lookAt(this.looking) : null;
+    if (looking) return looking;
+    this.looking = null;
     const f = this.player.follow();
     if (!f) return null;
     if (this.status === 'trail') return f;
@@ -261,6 +275,7 @@ export class CrawlPlugin implements GraphPlugin {
   }
 
   onUserCamera(): void {
+    this.looking = null;
     this.scene.takeCamera();
     this.chase = null;
     this.player.onUserCamera();
@@ -274,6 +289,10 @@ export class CrawlPlugin implements GraphPlugin {
   play(result: CrawlResult, asked: string): boolean {
     const model = this.model;
     if (this.disposed || !model) return false;
+    // Another crawl's cards: what was up for the last one has no say in this one's; and a note
+    // shown in it is let go, as the walk is followed from its start.
+    this.cards = new LabelMemory();
+    this.looking = null;
     if (this.status === 'ready') {
       const b = this.build;
       if (!this.scene.available || !b) return false;
@@ -331,6 +350,7 @@ export class CrawlPlugin implements GraphPlugin {
   /** The crawl from its first note again; nothing at the prompt, where there is no crawl to replay. */
   replay(): void {
     if (!this.inCrawl()) return;
+    this.looking = null;
     this.player.replay();
     this.gl?.snap(this.player.view);
     if (this.still) this.settleAtEnd();
@@ -346,11 +366,55 @@ export class CrawlPlugin implements GraphPlugin {
     this.marked = key;
   }
 
+  /**
+   * Brings a note into view — one the panel lists, by `place` key — and keeps it there: the
+   * camera eases to it as it follows the walk, and stops following the walk, as when the person
+   * takes the camera. "Follow the Sentinel" or a drag ends it. Nothing for a note the walk's
+   * field does not place, or at the prompt.
+   */
+  show(key: string): boolean {
+    const node = this.noteAt(key);
+    const at: Vec3 = [0, 0, 0];
+    if (!node || !this.inCrawl() || !this.player.view.field.node(node.id, at)) return false;
+    const b = this.build;
+    // As close as the walk is followed from: over the cluster, the space's; on the brain, the walk's.
+    const dist = this.status === 'ready' && b ? b.unit * b.camera.follow : this.player.unit * 12;
+    this.onUserCamera();
+    this.looking = { id: node.id, dist };
+    return true;
+  }
+
+  /**
+   * Where to hold the camera for the note being shown: on it, as the walk's field has it now
+   * (the brain's layout may still be settling), shifted so it lands in the middle of the stage
+   * the chrome leaves free rather than beside the panel. Null once the field has no place for it.
+   */
+  private lookAt(l: { id: string; dist: number }): { x: number; y: number; z: number; dist: number } | null {
+    const at: Vec3 = [0, 0, 0];
+    if (!this.player.view.field.node(l.id, at)) return null;
+    const seen = this.seen;
+    if (!seen) return { x: at[0], y: at[1], z: at[2], dist: l.dist };
+    const { vp, chrome } = seen;
+    const free = freeStage(vp.width, vp.height, chrome);
+    const ppu = pixelsPerUnit({ ...seen.cam, dist: l.dist }, vp);
+    // Screen pixels from the stage's middle to the free stage's, in world units at that distance.
+    const sx = (free.x + free.w / 2 - vp.width / 2) / ppu;
+    const sy = (free.y + free.h / 2 - vp.height / 2) / ppu;
+    const { right, up } = basis(seen.cam);
+    return {
+      x: at[0] - right[0] * sx + up[0] * sy,
+      y: at[1] - right[1] * sx + up[1] * sy,
+      z: at[2] - right[2] * sx + up[2] * sy,
+      dist: l.dist,
+    };
+  }
+
   setPlaying(on: boolean): void {
     this.playing = on;
   }
 
   followAgain(): void {
+    this.looking = null;
     this.player.followAgain();
   }
 
@@ -883,6 +947,8 @@ export class CrawlPlugin implements GraphPlugin {
     if (!(alpha > 0)) return;
     ctx.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
     const P = this.project(f);
+    const chrome = this.chrome();
+    this.seen = { cam: f.cam, vp: f.vp, chrome };
     drawCrawl(ctx, P, {
       view: this.player.view,
       labels: this.player.labels,
@@ -890,32 +956,56 @@ export class CrawlPlugin implements GraphPlugin {
       time: f.now / 1000,
       still: this.still,
       width: f.vp.width,
+      height: f.vp.height,
       font: this.fontOf(),
       threads: false,
       halos: false,
       alpha,
+      memory: this.cards,
+      keep: chrome,
+      mark: this.markAt(f, P, chrome),
     });
-    this.drawMarked(ctx, f, P, alpha);
   }
 
-  /** The note the panel points at, ringed, if the walk's field places it. */
-  private drawMarked(ctx: CanvasRenderingContext2D, f: PluginFrame, P: Project, alpha: number): void {
+  /**
+   * What floats over the stage this frame — the panel, its transport, the sheet, the toolbar —
+   * measured as the view measures it for the graph's labels: no card goes under it. Measured
+   * each frame the cards are drawn, since the panel slides in by a level written each frame.
+   */
+  private chrome(): Rect[] {
+    const stage = this.dom?.chrome.parentElement;
+    return stage ? chromeRects(stage) : [];
+  }
+
+  /** The note `key` names, by `place`. */
+  private noteAt(key: string): GraphNode | null {
     const model = this.model;
-    if (!this.marked || !model) return;
+    if (!model) return null;
     this.byPlace ??= notesByPlace(model);
-    const node = this.byPlace.get(this.marked);
+    return this.byPlace.get(key) ?? null;
+  }
+
+  /**
+   * The note the panel points at, where it is on the screen, and the stage left free by the
+   * chrome, where its ring goes, or an arrow toward it. A note behind the camera is given a point
+   * far off the side it lies on, so the arrow still points the way. None if the walk's field does
+   * not place it.
+   */
+  private markAt(f: PluginFrame, P: Project, chrome: readonly Rect[]): CrawlDrawing['mark'] {
+    const node = this.marked ? this.noteAt(this.marked) : null;
     const at: Vec3 = [0, 0, 0];
-    if (!node || !this.player.view.field.node(node.id, at)) return;
-    const p = P(at);
-    if (!p) return;
-    drawMark(ctx, p.x, p.y, {
+    if (!node || !this.player.view.field.node(node.id, at)) return undefined;
+    const p = P(at) ?? behindCamera(f.cam, f.vp, at);
+    if (!p) return undefined;
+    return {
+      x: p.x,
+      y: p.y,
       title: node.label,
       font: this.fontOf(),
-      width: f.vp.width,
+      free: freeStage(f.vp.width, f.vp.height, chrome),
       time: f.now / 1000,
       still: this.still,
-      alpha,
-    });
+    };
   }
 
   /**
@@ -932,6 +1022,8 @@ export class CrawlPlugin implements GraphPlugin {
     ctx.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
     const P = this.project(f);
     const time = f.now / 1000;
+    const chrome = this.chrome();
+    this.seen = { cam: f.cam, vp: f.vp, chrome };
     drawCrawl(ctx, P, {
       view,
       labels: this.player.labels,
@@ -942,12 +1034,15 @@ export class CrawlPlugin implements GraphPlugin {
       time,
       still: this.still,
       width: f.vp.width,
+      height: f.vp.height,
       font: this.fontOf(),
       threads: true,
       halos: true,
       alpha: 1,
+      memory: this.cards,
+      keep: chrome,
+      mark: this.markAt(f, P, chrome),
     });
-    this.drawMarked(ctx, f, P, 1);
     if (view.mode !== 'walk' && view.mode !== 'dwell') return;
     const c = this.player.cursor;
     const p = c ? P(c) : null;

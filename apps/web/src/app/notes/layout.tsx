@@ -67,7 +67,12 @@ export default function NotesLayout({ children }: { children: ReactNode }) {
               </ResizablePanel>
             </div>
           )}
-          {children}
+          {/*
+            The page alone in an element of its own. After a navigation within the app, Next hands
+            it over as a reference that React resolves to an element with no key; left beside the
+            tree, in a list, React 19 warned in development that it needed one.
+          */}
+          <>{children}</>
         </div>
       </AppShell>
     </NotesChromeContext.Provider>

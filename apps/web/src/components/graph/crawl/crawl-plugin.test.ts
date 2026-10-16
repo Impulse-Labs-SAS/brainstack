@@ -5,19 +5,22 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { boundsOf, type Camera, type Viewport } from '@/lib/graph-camera';
+import { basis, boundsOf, projector, type Camera, type Viewport } from '@/lib/graph-camera';
 import type { GraphModel } from '@/lib/graph-model';
 
 import type { PluginFrame, PluginStage } from '../graph-controller';
+import type { Rect } from '../labels/placer';
 
 import { CrawlPlugin, type CrawlPluginOptions, type SentinelUi } from './crawl-plugin';
 import type { CrawlSnapshot } from './crawl-snapshot';
+import type { ReplayView } from './replay-view';
 import { sampleVault } from './sample-vault';
 import { polylineThreadField } from './space/polyline-field';
 import type { SpaceBuild } from './space/space';
 import { volumeLayout } from './space/volume/layout';
 import type { StageFactory, StageFrame, StageHandle } from './stage/stage-handle';
 import { typicalLink } from './threads';
+import type { Vec3 } from './vec';
 
 const VP: Viewport = { width: 800, height: 600 };
 
@@ -97,16 +100,21 @@ class FakeStage implements StageHandle {
 }
 
 /** A 2D context that does nothing and remembers what was called. */
-function fakeCtx(): CanvasRenderingContext2D & { calls: string[]; texts: string[] } {
+type FakeCtx = CanvasRenderingContext2D & { calls: string[]; texts: string[]; boxes: number[][] };
+
+function fakeCtx(): FakeCtx {
   const calls: string[] = [];
   const texts: string[] = [];
-  const props: Record<string | symbol, unknown> = { calls, texts };
+  /** Every rounded box traced: the cards, the mark's title. */
+  const boxes: number[][] = [];
+  const props: Record<string | symbol, unknown> = { calls, texts, boxes };
   return new Proxy(props, {
     get(t, key) {
       if (key in t) return t[key];
       return (...args: unknown[]) => {
         calls.push(String(key));
         if (key === 'fillText') texts.push(String(args[0]));
+        if (key === 'roundRect') boxes.push(args as number[]);
         if (key === 'measureText') return { width: String(args[0]).length * 6 };
         if (key === 'createRadialGradient') return { addColorStop() {} };
         return undefined;
@@ -116,13 +124,25 @@ function fakeCtx(): CanvasRenderingContext2D & { calls: string[]; texts: string[
       t[key] = value;
       return true;
     },
-  }) as unknown as CanvasRenderingContext2D & { calls: string[]; texts: string[] };
+  }) as unknown as FakeCtx;
 }
 
-/** The page's prompt: a box in the middle of the stage, and the chrome the levels are written on. */
-function page() {
+/**
+ * The page's prompt: a box in the middle of the stage, and the chrome the levels are written on,
+ * in a stage holding `over`: what floats over it, as `data-graph-chrome` marks it.
+ */
+function page(over: readonly Rect[] = []) {
   const vars = new Map<string, string>();
+  const stage = {
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: VP.width, height: VP.height }),
+    querySelectorAll: () =>
+      over.map((r) => ({
+        dataset: { graphChrome: '' },
+        getBoundingClientRect: () => ({ left: r.x, top: r.y, width: r.w, height: r.h }),
+      })),
+  };
   const chrome = {
+    parentElement: stage,
     style: {
       setProperty: (name: string, value: string) => vars.set(name, value),
       removeProperty: (name: string) => vars.delete(name),
@@ -208,7 +228,7 @@ class Host {
 /** Every microtask and timer due now: an import or a compile that has settled is heard. */
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function setup(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage } = {}) {
+function setup(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage; chrome?: Rect[] } = {}) {
   const vault = sampleVault();
   const stage = opts.stage ?? new FakeStage();
   const uis: SentinelUi[] = [];
@@ -222,7 +242,7 @@ function setup(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage } = {}) {
     loadStage: () => Promise.resolve(factory),
     ...opts,
   });
-  const dom = page();
+  const dom = page(opts.chrome);
   plugin.attach(dom);
   const host = new Host(plugin, vault.model);
   const ui = () => uis.at(-1)!;
@@ -234,7 +254,7 @@ function setup(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage } = {}) {
  * Set up, the stage loaded, built and compiled, and the creature come out of
  * the dark to the frame: at the prompt, taking text.
  */
-async function ready(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage } = {}) {
+async function ready(opts: Partial<CrawlPluginOptions> & { stage?: FakeStage; chrome?: Rect[] } = {}) {
   const s = setup(opts);
   await flush();
   s.host.frame();
@@ -586,6 +606,181 @@ describe('CrawlPlugin in the Sentinel view', () => {
     // A key the graph does not show rings nothing, and breaks nothing.
     s.plugin.mark('no/such/note.md');
     expect(() => s.host.frame()).not.toThrow();
+  });
+
+  it('brings a note the panel shows into view, and keeps it there until the walk is followed again', async () => {
+    const s = await ready();
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => arrived(s.stage));
+    s.host.until(() => s.snap().reached.length > 1);
+    const key = s.snap().reached[0]!;
+    const node = s.vault.model.nodes.find((n) => n.path === key)!;
+    const at: Vec3 = [0, 0, 0];
+    const player = (s.plugin as unknown as { player: { view: ReplayView } }).player;
+    expect(player.view.field.node(node.id, at)).toBe(true);
+
+    s.plugin.show(key);
+    // The walk is no longer followed, as when the person takes the camera; the note is.
+    expect(s.snap().following).toBe(false);
+    const target = s.plugin.follow()!;
+    expect([target.x, target.y, target.z]).toEqual(at);
+    s.host.frames(200);
+    const cam = s.host.cam;
+    expect(Math.hypot(cam.tx - at[0], cam.ty - at[1], cam.tz - at[2])).toBeLessThan(1e-3 * target.dist);
+    // It holds as the walk goes on.
+    s.host.frames(60);
+    expect(s.plugin.follow()).toEqual(target);
+
+    // "Follow the Sentinel" ends it, and so does a drag, and so does a replay: the walk is
+    // followed again, or nothing is.
+    const looking = () => {
+      s.plugin.follow();
+      return (s.plugin as unknown as { looking: unknown }).looking;
+    };
+    s.plugin.followAgain();
+    expect(s.snap().following).toBe(true);
+    expect(looking()).toBeNull();
+    s.plugin.show(key);
+    s.plugin.onUserCamera();
+    expect(s.plugin.follow()).toBeNull();
+    s.plugin.show(key);
+    s.plugin.replay();
+    expect(s.snap().following).toBe(true);
+    expect(looking()).toBeNull();
+    // A key the graph does not show brings nothing into view.
+    s.plugin.show('no/such/note.md');
+    expect(s.snap().following).toBe(true);
+    expect(looking()).toBeNull();
+  });
+
+  it('points the way to a marked note off the stage: an arrow on its edge, with its title', async () => {
+    const s = setup({ loadStage: () => Promise.reject(new Error('offline')) });
+    await flush();
+    s.host.frame();
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => s.snap().reached.length > 0);
+    const key = s.snap().reached[0]!;
+    const title = s.vault.model.nodes.find((n) => n.path === key)!.label;
+    s.plugin.mark(key);
+    s.host.ctx.calls.length = 0;
+    s.host.frame();
+    expect(s.host.ctx.calls).not.toContain('closePath');
+    // The camera turned far from it: the note is off the stage.
+    s.host.cam = { ...s.host.cam, tx: s.host.cam.tx + 1e6 };
+    s.host.ctx.calls.length = 0;
+    s.host.ctx.texts.length = 0;
+    s.host.frame();
+    expect(s.host.ctx.calls).toContain('closePath');
+    expect(s.host.ctx.texts).toContain(title);
+  });
+
+  it('keeps cards and the mark off the panel, and shows a note in the middle of the stage it leaves', async () => {
+    // The panel down the left of an 800-wide stage: what is left runs from 300 to 800.
+    const s = await ready({ chrome: [{ x: 0, y: 0, w: 300, h: 600 }] });
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => arrived(s.stage));
+    s.host.until(() => s.snap().reached.length > 1);
+    s.host.frames(30);
+    s.host.ctx.boxes.length = 0;
+    s.host.frame();
+    expect(s.host.ctx.boxes.length).toBeGreaterThan(0);
+    for (const [x] of s.host.ctx.boxes) expect(x!).toBeGreaterThanOrEqual(300);
+
+    const key = s.snap().reached[0]!;
+    const node = s.vault.model.nodes.find((n) => n.path === key)!;
+    const at: Vec3 = [0, 0, 0];
+    (s.plugin as unknown as { player: { view: ReplayView } }).player.view.field.node(node.id, at);
+    expect(s.plugin.show(key)).toBe(true);
+    s.host.frames(240);
+    const p = projector(s.host.cam, VP)(at[0], at[1], at[2])!;
+    expect(Math.abs(p.x - 550)).toBeLessThan(2);
+    expect(Math.abs(p.y - 300)).toBeLessThan(2);
+
+    // Turned away from it, the mark points the way from the free stage, its title on it.
+    s.plugin.mark(key);
+    s.plugin.onUserCamera();
+    s.host.cam = { ...s.host.cam, tx: s.host.cam.tx + 1e4 };
+    s.host.ctx.calls.length = 0;
+    s.host.ctx.texts.length = 0;
+    s.host.ctx.boxes.length = 0;
+    s.host.frame();
+    expect(s.host.ctx.calls).toContain('closePath');
+    expect(s.host.ctx.texts).toContain(node.label);
+    for (const [x] of s.host.ctx.boxes) expect(x!).toBeGreaterThanOrEqual(300);
+  });
+
+  it('keeps every card off the chrome it measures, however much of the stage that takes', async () => {
+    const s = await ready({ chrome: [{ x: 0, y: 0, w: 700, h: 600 }] });
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => arrived(s.stage));
+    s.host.until(() => s.snap().reached.length > 1);
+    s.host.frames(30);
+    s.host.ctx.boxes.length = 0;
+    s.host.frame();
+    for (const [x] of s.host.ctx.boxes) expect(x!).toBeGreaterThanOrEqual(700);
+  });
+
+  it('shows a note in the middle of the stage a bar across the top leaves, and points the way once it is behind', async () => {
+    const s = await ready({ chrome: [{ x: 0, y: 0, w: 800, h: 200 }] });
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => arrived(s.stage));
+    s.host.until(() => s.snap().reached.length > 1);
+    const key = s.snap().reached[0]!;
+    const node = s.vault.model.nodes.find((n) => n.path === key)!;
+    const at: Vec3 = [0, 0, 0];
+    (s.plugin as unknown as { player: { view: ReplayView } }).player.view.field.node(node.id, at);
+    expect(s.plugin.show(key)).toBe(true);
+    s.host.frames(240);
+    const p = projector(s.host.cam, VP)(at[0], at[1], at[2])!;
+    expect(Math.abs(p.x - 400)).toBeLessThan(2);
+    expect(Math.abs(p.y - 400)).toBeLessThan(2);
+
+    // The camera carried past it and a little to its right: the note is behind, off to the left,
+    // and the mark still points the way.
+    s.plugin.mark(key);
+    s.plugin.onUserCamera();
+    const { forward, right } = basis(s.host.cam);
+    const d = s.host.cam.dist + 50;
+    const shift = (i: 0 | 1 | 2) => at[i] + forward[i] * d + right[i] * 30;
+    s.host.cam = { ...s.host.cam, tx: shift(0), ty: shift(1), tz: shift(2) };
+    expect(projector(s.host.cam, VP)(at[0], at[1], at[2])).toBeNull();
+    s.host.ctx.calls.length = 0;
+    s.host.ctx.texts.length = 0;
+    s.host.frame();
+    expect(s.host.ctx.calls).toContain('closePath');
+    expect(s.host.ctx.texts).toContain(node.label);
+  });
+
+  it('shows a note in the middle of the free stage over the trail too', async () => {
+    const s = setup({ loadStage: () => Promise.reject(new Error('offline')), chrome: [{ x: 0, y: 0, w: 300, h: 600 }] });
+    await flush();
+    s.host.frame();
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => s.snap().reached.length > 0);
+    const key = s.snap().reached[0]!;
+    const node = s.vault.model.nodes.find((n) => n.path === key)!;
+    expect(s.plugin.show(key)).toBe(true);
+    s.host.frames(300);
+    const at: Vec3 = [0, 0, 0];
+    (s.plugin as unknown as { player: { view: ReplayView } }).player.view.field.node(node.id, at);
+    const p = projector(s.host.cam, VP)(at[0], at[1], at[2])!;
+    expect(Math.abs(p.x - 550)).toBeLessThan(2);
+    expect(Math.abs(p.y - 300)).toBeLessThan(2);
+  });
+
+  it('holds the camera on the note as it is now, while the brain under the trail still settles', async () => {
+    const s = setup({ loadStage: () => Promise.reject(new Error('offline')) });
+    await flush();
+    s.host.frame();
+    s.plugin.play(s.vault.crawls.walk, 'a question');
+    s.host.until(() => s.snap().reached.length > 0);
+    const key = s.snap().reached[0]!;
+    const node = s.vault.model.nodes.find((n) => n.path === key)!;
+    expect(s.plugin.show('no/such/note.md')).toBe(false);
+    expect(s.plugin.show(key)).toBe(true);
+    const before = s.plugin.follow()!;
+    node.x += 50;
+    expect(s.plugin.follow()!.x - before.x).toBeCloseTo(50, 6);
   });
 
   it('changes nothing when reduced motion is set to what it already is', async () => {

@@ -65,33 +65,7 @@ import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
 import { readReturn, writeReturn } from './graph-return';
 import { FilterChips, GraphSearch } from './graph-search';
-import type { Rect } from './labels/placer';
-
-/**
- * What floats over the graph, in CSS pixels from the stage's corner: every element marked
- * `data-graph-chrome`, or each child of one marked `data-graph-chrome="children"` (a row of
- * controls, whose gaps are graph). A child marked itself is measured as it says, not whole.
- * Hidden elements measure nothing.
- */
-function chromeRects(stage: HTMLElement): Rect[] {
-  const base = stage.getBoundingClientRect();
-  const rects: Rect[] = [];
-  for (const el of stage.querySelectorAll<HTMLElement>('[data-graph-chrome]')) {
-    const parts =
-      el.dataset.graphChrome === 'children'
-        ? [...el.children].filter(
-            (c) => !(c instanceof HTMLElement && c.dataset.graphChrome !== undefined),
-          )
-        : [el];
-    for (const part of parts) {
-      const r = part.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) {
-        rects.push({ x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height });
-      }
-    }
-  }
-  return rects;
-}
+import { chromeRects } from './labels/chrome';
 
 /** The preview sheet's heading, where focus goes after a pick made from the keyboard. */
 const SHEET_HEADING = '[data-graph-sheet] h3';
@@ -429,7 +403,8 @@ export function GraphView({
   // The chrome's rectangles for the labels to keep clear of, measured again whenever something
   // in the stage appears, goes, changes class or changes its text (a panel, the search's
   // results, the legend hiding, the growth chip counting up) or the stage resizes — at most
-  // once a frame. Not under the Sentinel: its stage draws no graph labels.
+  // once a frame. Not under the Sentinel: its stage draws no graph labels, and its cards measure
+  // the chrome themselves, as the panel slides in.
   useEffect(() => {
     const stage = stageRef.current;
     if (!ready || !stage) return;

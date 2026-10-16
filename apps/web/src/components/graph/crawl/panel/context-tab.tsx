@@ -4,12 +4,15 @@
 // references left to settle, then the notes by folder, each one ticked in or
 // out of the prompt, then what the budget left out, to put back. While the
 // Sentinel walks, the notes come in as it reaches them; pointing at one
-// rings it on the stage.
+// rings it on the stage, Show brings it into view there, Open opens it in a
+// new tab, so the search and what was ticked stay here.
 
-import { ChevronRight, Plus } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { ArrowUpRight, ChevronRight, Eye, Plus } from 'lucide-react';
+import Link from 'next/link';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Button, Checkbox } from 'react-aria-components';
 
+import { noteHref } from '@/lib/graph-model';
 import { cn } from '@/lib/utils';
 
 import {
@@ -25,7 +28,7 @@ import {
 import { byFolder } from '../brief';
 import { CRAWL_COLORS } from '../crawl-colors';
 
-import { Dot, Eyebrow, FOCUS_RING, Tick } from './panel-ui';
+import { Dot, Eyebrow, FOCUS_RING, IconButton, Tick } from './panel-ui';
 
 export function ContextTab({
   answer,
@@ -35,6 +38,8 @@ export function ContextTab({
   walking,
   onCuration,
   onMark,
+  onShow,
+  onGraph,
 }: {
   answer: Answer;
   /** The notes to list: as far as the walk has reached, or all of them. */
@@ -45,7 +50,29 @@ export function ContextTab({
   walking: boolean;
   onCuration(next: Curation): void;
   onMark(key: string | null): void;
+  /** Bring a note into view on the stage, by its row's key. */
+  onShow(key: string): void;
+  /** Whether the graph shows the note: one a layer hides, or that is gone, cannot be shown. */
+  onGraph(key: string): boolean;
 }) {
+  // The note the pointer is over and the one the keyboard's focus is in, apart: the stage rings
+  // the first, else the second. A row that goes takes its part with it, so it does not come back
+  // marked with no pointer or focus on it.
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [focused, setFocused] = useState<string | null>(null);
+  const listed = (key: string | null) => (key && rows.some((r) => r.key === key) ? key : null);
+  const gone = (key: string | null) => key !== null && !listed(key);
+  if (gone(hovered)) setHovered(null);
+  if (gone(focused)) setFocused(null);
+  const marked = listed(hovered) ?? listed(focused);
+  useEffect(() => {
+    onMark(marked);
+  }, [marked, onMark]);
+  useEffect(() => {
+    return () => onMark(null);
+  }, [onMark]);
+  const point: Pointing = { hovered: setHovered, focused: setFocused };
+
   if (rows.length === 0 && unresolved.length === 0) {
     return (
       <p className="text-[12.5px] leading-5 text-fg-muted">
@@ -97,7 +124,9 @@ export function ContextTab({
               rows={g.notes}
               curation={curation}
               onCuration={onCuration}
-              onMark={onMark}
+              point={point}
+              onShow={onShow}
+              onGraph={onGraph}
             />
           ))}
         </section>
@@ -262,18 +291,28 @@ function ChoiceButton({
   );
 }
 
+/** What a row says of where the pointer and the focus are: its key, or null as they leave it. */
+type Pointing = {
+  hovered(update: (key: string | null) => string | null): void;
+  focused(update: (key: string | null) => string | null): void;
+};
+
 function FolderGroup({
   heading,
   rows,
   curation,
   onCuration,
-  onMark,
+  point,
+  onShow,
+  onGraph,
 }: {
   heading: string | null;
   rows: Row[];
   curation: Curation;
   onCuration(next: Curation): void;
-  onMark(key: string | null): void;
+  point: Pointing;
+  onShow(key: string): void;
+  onGraph(key: string): boolean;
 }) {
   const own = rows.filter((r) => r.from === 'answer');
   const on = rows.filter((r) => r.on).length;
@@ -299,7 +338,15 @@ function FolderGroup({
         </Checkbox>
       )}
       {rows.map((r) => (
-        <NoteRow key={r.key} row={r} curation={curation} onCuration={onCuration} onMark={onMark} />
+        <NoteRow
+          key={r.key}
+          row={r}
+          curation={curation}
+          onCuration={onCuration}
+          point={point}
+          onShow={onShow}
+          onGraph={onGraph}
+        />
       ))}
     </div>
   );
@@ -309,12 +356,16 @@ function NoteRow({
   row: r,
   curation,
   onCuration,
-  onMark,
+  point,
+  onShow,
+  onGraph,
 }: {
   row: Row;
   curation: Curation;
   onCuration(next: Curation): void;
-  onMark(key: string | null): void;
+  point: Pointing;
+  onShow(key: string): void;
+  onGraph(key: string): boolean;
 }) {
   const change = (on: boolean) => {
     if (r.from === 'answer') onCuration(setNotes(curation, [r.key], on));
@@ -325,28 +376,66 @@ function NoteRow({
       onCuration(settle(curation, r.term, rest.length > 0 ? rest : null));
     } else onCuration(setAdded(curation, r.key, false));
   };
+  // A note somebody shared opens under their name, as it does from the graph.
+  const href = noteHref({ path: r.path, foreign: !!r.ownerId, ownerId: r.ownerId ?? null });
+  const away = (key: string | null) => (key === r.key ? null : key);
   return (
-    <Checkbox
-      isSelected={r.on}
-      onChange={change}
-      onHoverStart={() => onMark(r.key)}
-      onHoverEnd={() => onMark(null)}
-      onFocusChange={(focused) => onMark(focused ? r.key : null)}
-      className="group grid min-w-0 cursor-pointer grid-cols-[16px_7px_minmax(0,1fr)] items-start gap-2.5 rounded-md px-1.5 py-1.5 outline-none hover:bg-bg-hover"
+    // The whole row rings its note on the stage while a mouse is over it or the focus is in it:
+    // the tick, Show and Open alike. A finger's tap is not a hover.
+    <div
+      className="group/row grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start rounded-md hover:bg-bg-hover"
+      onPointerEnter={(e) => e.pointerType !== 'touch' && point.hovered(() => r.key)}
+      onPointerLeave={(e) => e.pointerType !== 'touch' && point.hovered(away)}
+      // The keyboard's focus only: a click focuses too, and the ring would stay after the pointer left.
+      onFocus={(e) => e.target.matches(':focus-visible') && point.focused(() => r.key)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) point.focused(away);
+      }}
     >
-      <Tick on={r.on} />
-      <span className="mt-[6px]">
-        <Dot kind={r.kind} dim={!r.on} />
-      </span>
-      <span className="grid min-w-0" title={r.path}>
-        <span className={cn('break-words text-[13px] leading-[18px]', r.on ? 'text-fg-primary' : 'text-fg-muted')}>
-          {r.title}
-          {r.isDecision && <Tag color={CRAWL_COLORS.decision}>decision</Tag>}
-          {r.from !== 'answer' && <Tag color={CRAWL_COLORS.ask}>you</Tag>}
+      <Checkbox
+        isSelected={r.on}
+        onChange={change}
+        className="group grid min-w-0 cursor-pointer grid-cols-[16px_7px_minmax(0,1fr)] items-start gap-2.5 rounded-md px-1.5 py-1.5 outline-none"
+      >
+        <Tick on={r.on} />
+        <span className="mt-[6px]">
+          <Dot kind={r.kind} dim={!r.on} />
         </span>
-        <span className="truncate font-mono text-[11px] leading-[15px] text-fg-muted">{r.reason}</span>
-      </span>
-    </Checkbox>
+        <span className="grid min-w-0" title={r.path}>
+          <span className={cn('break-words text-[13px] leading-[18px]', r.on ? 'text-fg-primary' : 'text-fg-muted')}>
+            {r.title}
+            {r.isDecision && <Tag color={CRAWL_COLORS.decision}>decision</Tag>}
+            {r.from !== 'answer' && <Tag color={CRAWL_COLORS.ask}>you</Tag>}
+          </span>
+          <span className="truncate font-mono text-[11px] leading-[15px] text-fg-muted">{r.reason}</span>
+        </span>
+      </Checkbox>
+      {/* With the pointer or the focus in the row; always on a touch screen, which has no hover. */}
+      <div className="flex items-center self-center pr-1 opacity-0 group-focus-within/row:opacity-100 group-hover/row:opacity-100 touch:opacity-100">
+        <IconButton
+          label={onGraph(r.key) ? `Show ${r.title} on the stage` : `${r.title} is not on the graph`}
+          isDisabled={!onGraph(r.key)}
+          onPress={() => onShow(r.key)}
+          className="touch:h-11 touch:w-11"
+        >
+          <Eye size={14} aria-hidden />
+        </IconButton>
+        <Link
+          href={href}
+          target="_blank"
+          rel="noopener"
+          // A page opened in another tab: nothing to gain fetching it ahead for every row.
+          prefetch={false}
+          aria-label={`Open ${r.title} in a new tab`}
+          className={cn(
+            'flex h-7 w-7 items-center justify-center rounded-md text-fg-secondary hover:bg-bg-hover hover:text-fg-primary touch:h-11 touch:w-11',
+            FOCUS_RING,
+          )}
+        >
+          <ArrowUpRight size={14} aria-hidden />
+        </Link>
+      </div>
+    </div>
   );
 }
 
