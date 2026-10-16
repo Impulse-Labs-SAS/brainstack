@@ -261,6 +261,31 @@ most of its length and then drop everything at once.
   `Wiki-links-y-ecosistema-design.md` §8).
 - Labels drop a trailing `— Project` from titles, since the node's region already says it.
 
+## Labels and contrast
+
+Every label on the graph, and every one of the Sentinel's cards, finds its room through one
+placer (`labels/placer.ts`). A label may not cover another label, a note that matters, or the
+chrome floating over the graph: whatever is marked `data-graph-chrome`, measured by
+`labels/chrome.ts`. What is placed first wins, so labels go in by importance:
+
+1. The selected note and the one pointed at, which are never dropped.
+2. The path, then what those notes link to, then what a search found.
+3. The names of places: vault chips, countries, projects.
+4. Any other note there is room for, the most connected first. Those named last frame go before
+   the rest, so labels do not swap places from one frame to the next.
+
+A label with no room is dropped, never drawn over something else or faded out of reach. Text
+is 12px or larger (13px on a touch screen), and reads at 4.5:1 or better on the dark. The
+tooltip goes beside what it names, never over it or over the selected note
+(`labels/tooltip.ts`).
+
+The chrome's text meets WCAG AA too:
+
+- `--fg-tertiary` is the faintest ink for text. `--fg-muted` marks icons and glyphs only.
+- White text sits on `--accent-solid`, and the accent as text is `--accent-text`.
+- `lib/contrast.ts` measures contrast as WCAG does. Its tests hold every text ink on every
+  background, and the canvas's label inks, to it.
+
 ## How it is built
 
 All of it is client-side. The server adds `createdAt`, `updatedAt` and `isDecision` to each node
@@ -273,12 +298,19 @@ of `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` 
 | `lib/graph-camera.ts`                            | Pure: orbit camera, projection, fitting, zoom and pan. The overlay projects with the same maths three.js renders with. Tested.                               |
 | `lib/graph-map.ts`                               | Pure: Territories — where each note belongs on the map, and the land, coasts, borders and folder lines under the notes. Tested.                              |
 | `lib/graph-sheet.ts`                             | Pure: what the preview lists of a note — the steps up to its vault, and its connections grouped by kind, filtered by title. Tested.                          |
+| `lib/note-excerpt.ts`                            | Pure: a note's first lines as plain text, for the preview and the link peek. Tested.                                                                         |
+| `lib/contrast.ts`                                | Pure: WCAG contrast between colours as CSS writes them, which the tests hold the tokens and the canvas's inks to. Tested.                                    |
 | `components/graph/graph-engine.ts`               | The layout per view: a `d3-force-3d` simulation for Brain and Network, places on the map for Territories. Tested.                                            |
 | `components/graph/graph-scene.ts`                | three.js: notes, edges, nebulae and the brain mesh, additive blending on a flat background; the map's land, translucent, under them.                         |
 | `components/graph/graph-overlay.ts`              | 2D canvas on top: labels, the focus signal, paths, rings, project, vault and country names, the map's lines, minimap.                                        |
+| `components/graph/labels/placer.ts`              | Pure: where a label may go, by importance, never over another label, the chrome or a note that matters. Shared by every view. Tested.                        |
+| `components/graph/labels/tooltip.ts`             | Pure: where the tooltip goes, beside what it names and never over it. Tested.                                                                                |
 | `components/graph/labels/chrome.ts`              | What floats over the graph, measured: what labels and the Sentinel's cards keep clear of.                                                                    |
 | `components/graph/graph-controller.ts`           | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates.                                                    |
 | `components/graph/graph-view.tsx`                | React chrome: toolbar, layers, preview, legend; preferences.                                                                                                 |
+| `components/graph/graph-keys.ts`                 | Pure: which keys reach the graph, from the canvas and from the preview. Tested.                                                                              |
+| `components/graph/graph-return.ts`               | Pure: the way back from a note to where the graph was, kept in session storage. Tested.                                                                      |
+| `components/graph/bench/`                        | The bench: the graph's own view over an invented vault of any size, with a frame probe. Its settings and the probe are tested.                               |
 | `components/graph/crawl/view-choice.ts`          | Pure: which view `/graph` opens on, and what counts as a choice. Tested.                                                                                     |
 | `components/graph/crawl/crawl-plan.ts`           | Pure: a `gather_context` answer turned into replay steps, the walk along threads between two notes, and which notes are decisions. Tested.                   |
 | `components/graph/crawl/crawl-replay.ts`         | Pure: the replay — where the walk is, what it lit and found, what each of the Sentinel's grips holds — over the brain or a space. Tested.                    |
@@ -322,12 +354,26 @@ normally rather than additively; the coasts, borders and folder lines are drawn 
 overlay, because WebGL lines are one pixel wide and a coast needs a glow. Countries and
 continents are packed with `d3-hierarchy`'s `packSiblings`.
 
+**What keeps the views as they are.** `graph-controller.test.ts` runs the controller in Node,
+over stand-ins for the DOM, the 2D canvas and WebGL. It hashes every scene call and overlay
+operation of scripted sessions: one through the three views in turn, and one for each view from
+a fresh start. A change meant for one view moves that view's digest alone, and a digest that
+moves where nothing should have changed says which view it reached. A digest is re-recorded on
+purpose, in a commit of its own.
+
 **Why WebGL plus a 2D overlay.** Additive points and lines scale to thousands of notes cheaply,
 but WebGL lines are one pixel wide and text is awkward. The overlay draws only what needs crisp
 text or thicker strokes. Without WebGL the overlay draws the flat views on its own and Brain is
 disabled, with the reason in the legend.
 
 ## Performance
+
+**The bench** is the graph page's own view over an invented vault of any size:
+`/dev/graph-bench?notes=5000&seed=11&view=territories`, a `page.dev.tsx` that exists under
+`next dev` only. A seed and a size always build the same notes (`largeVault`), so a run can be
+repeated after a change. A frame probe times the gaps between frames, the median and the 95th
+percentile, and the long tasks where the browser reports them. Its numbers sit at the foot of
+the page and on `window.__graphBench` for a script.
 
 Measured on the prototype with 1,600 notes and 5,100 edges: drawing costs about 2 ms a frame;
 the 3D layout costs about 24 ms per tick while it settles, then stops. About three quarters of
