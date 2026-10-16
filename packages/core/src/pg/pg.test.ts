@@ -22,7 +22,7 @@ import {
   NoteNotFoundError,
   toMarkdown,
 } from './notes.js';
-import { facets as facetsTable } from './schema.js';
+import { facets as facetsTable, users } from './schema.js';
 import { normalizeNoteKey } from '../paths.js';
 import { PgSearchService, tokenize, toTsQuery } from './search.js';
 
@@ -243,7 +243,9 @@ describe('concurrent writes', () => {
     expect((lost[0] as PromiseRejectedResult).reason).toBeInstanceOf(NoteAlreadyExistsError);
     // The stored note is the winner's, not a mix and not the loser's.
     const stored = await notes.get('Carrera/misma.md');
-    expect(stored.checksum).toBe((won[0] as PromiseFulfilledResult<{ checksum: string }>).value.checksum);
+    expect(stored.checksum).toBe(
+      (won[0] as PromiseFulfilledResult<{ checksum: string }>).value.checksum,
+    );
   });
 
   it('replaces a note only over the version the caller read', async () => {
@@ -278,6 +280,36 @@ describe('links and tags', () => {
     const backlinks = await notes.listBacklinks('Grafo/destino.md');
     expect(backlinks.map((b) => b.sourcePath)).toContain('Grafo/origen.md');
     expect(backlinks[0]?.linkKind).toBe('wikilink');
+  });
+
+  const owners = async (...ids: string[]) => {
+    for (const id of ids) {
+      await db
+        .insert(users)
+        .values({ id, email: `${id}@x.com`, createdAt: 0, updatedAt: 0 })
+        .onConflictDoNothing();
+    }
+  };
+
+  it('resolves a link to the note itself on the write that creates it', async () => {
+    await owners('owner');
+    await notes.create('owner/Grafo/solo.md', '# Solo\n\nSee [[solo]] above.', 'owner');
+    const out = await notes.listOutboundLinks('owner/Grafo/solo.md');
+    expect(out.map((l) => [l.targetPath, l.targetType])).toEqual([['owner/Grafo/solo.md', 'note']]);
+  });
+
+  it('resolves by name and by path from only the candidates, in one owner', async () => {
+    await owners('owner', 'someone');
+    await notes.create('owner/a/Plan.md', '# Plan', 'owner');
+    await notes.create('owner/b/Other.md', '# Other', 'owner');
+    await notes.create('someone/a/Plan.md', '# Theirs', 'someone');
+    await notes.create('owner/c/src.md', '# Src\n[[Plan]] and [[b/Other]] and [[Nope]]', 'owner');
+    const out = await notes.listOutboundLinks('owner/c/src.md');
+    expect(out.map((l) => [l.targetPath, l.targetType]).sort()).toEqual([
+      ['Nope.md', 'unresolved'],
+      ['owner/a/Plan.md', 'note'],
+      ['owner/b/Other.md', 'note'],
+    ]);
   });
 
   it('says where each backlink sits in its source note', async () => {
