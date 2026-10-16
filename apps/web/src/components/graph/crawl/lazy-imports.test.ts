@@ -83,17 +83,23 @@ function reach(entry: string): Reached {
   return { files, three };
 }
 
-/** Loaded only when the view opens: the stage, and the dormant network it builds. */
+/**
+ * Loaded only when asked for: the Sentinel's stage and the dormant network it builds, when its
+ * view opens; line art, when the page is asked for it.
+ */
 const LATER = [
   'components/graph/crawl/stage/sentinel-stage.ts',
   'components/graph/crawl/space/dormant/',
+  'components/graph/iso/',
 ];
 
-/** What `reached` loads that should wait for the view: the stage's modules, and anything in crawl/ that draws with three. */
+/** What `reached` loads that should wait: those modules, and anything in crawl/ or iso/ that draws with three. */
 function laterIn(reached: Reached): string[] {
   return [
     ...[...reached.files].filter((f) => LATER.some((l) => f.startsWith(l))),
-    ...[...reached.three].filter((f) => f.startsWith('components/graph/crawl/')),
+    ...[...reached.three].filter(
+      (f) => f.startsWith('components/graph/crawl/') || f.startsWith('components/graph/iso/'),
+    ),
   ].sort();
 }
 
@@ -131,5 +137,13 @@ describe('what the graph page loads up front', () => {
     }
     // And the stage does draw with three: were it not found, the check above would prove nothing.
     expect(laterIn(reach(join(HERE, 'stage/sentinel-stage.ts'))).length).toBeGreaterThan(3);
+  });
+
+  it('takes none of line art into the graph view: the kit comes through import(), when asked for', () => {
+    const view = reach(join(SRC, 'components/graph/graph-view.tsx'));
+    expect([...view.files].filter((f) => f.includes('/iso/'))).toEqual([]);
+    // The kit does draw with three, from iso/: were it not found, the check would prove nothing.
+    const kit = reach(join(SRC, 'components/graph/iso/kit.ts'));
+    expect([...kit.three].some((f) => f.startsWith('components/graph/iso/'))).toBe(true);
   });
 });
