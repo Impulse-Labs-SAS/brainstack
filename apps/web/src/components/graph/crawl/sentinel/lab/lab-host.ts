@@ -2149,7 +2149,7 @@ export class LabHost {
       }
     }
     const snap = this.replay.snapshot;
-    const found = snap.found.named + snap.found.linked + snap.found.decision;
+    const found = snap.found.named + snap.found.linked + snap.found.decision + snap.found.written;
     const prompt = this.promptNote();
     drawNotes(
       ctx,

@@ -13,7 +13,11 @@
 // moving sections out into notes of their own — the only way such a note grows.
 //
 // Measured on the body, line breaks folded to LF: the frontmatter is metadata,
-// and a CRLF note is not longer than the same note saved elsewhere.
+// and a CRLF note is not longer than the same note saved elsewhere. Counted in
+// code points with only spaces, tabs and line breaks trimmed — exactly what
+// Postgres's `length(btrim(...))` gives, so the `tooLong` a read reports from
+// SQL (NoteService.contextDigests) and the refusal a write gets never disagree.
+// JavaScript's own `.length` counts an emoji twice, and `.trim()` strips more.
 
 /**
  * Characters a note's body may hold when an assistant writes it — about a
@@ -28,8 +32,8 @@ export interface NoteSize {
 }
 
 export function noteSize(body: string): NoteSize {
-  const text = body.replace(/\r\n/g, '\n').trim();
-  return { chars: text.length, lines: text === '' ? 0 : text.split('\n').length };
+  const text = body.replace(/\r\n/g, '\n').replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, '');
+  return { chars: [...text].length, lines: text === '' ? 0 : text.split('\n').length };
 }
 
 /**

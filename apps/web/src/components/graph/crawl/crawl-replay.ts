@@ -1687,7 +1687,11 @@ export class CrawlReplay {
   private reach(r: Reaching): void {
     r.applied = true;
     const f = r.found;
-    if (!f || this.found.has(f.node.id)) return;
+    if (!f) return;
+    // A note is found once — except that writing a note the walk had read is
+    // news of its own: it is found again, as written.
+    const before = this.found.get(f.node.id);
+    if (before && (f.kind !== 'written' || before === 'written')) return;
     // When it touched, on the dwell's own clock: the frame that noticed may be later.
     const touched = this.phaseStart + r.at + REACH_TOUCH;
     this.found.set(f.node.id, f.kind);
@@ -1719,7 +1723,8 @@ export class CrawlReplay {
     });
     const found = { ...this.snap.found };
     found[f.kind]++;
-    this.snap = { ...this.snap, found, reached: [...this.snap.reached, nodePlace(f.node)] };
+    const reached = before ? this.snap.reached : [...this.snap.reached, nodePlace(f.node)];
+    this.snap = { ...this.snap, found, reached };
     this.log(
       f.kind,
       f.kind === 'named'
