@@ -25,6 +25,7 @@ import { readFlag, writeFlag } from '@/lib/local-flag';
 import { extractOutline } from '@/lib/outline';
 import { groupSharedOwners } from '@/lib/shared-owners';
 import { resolveSharedPath } from '@/lib/shared-path';
+import { noteSize, stripFrontmatter } from '@/lib/note-size';
 import { encodePath } from '@/lib/wikilinks-client';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
@@ -241,6 +242,7 @@ export default function SharedNotePage() {
         : savedAt
           ? ({ kind: 'saved', text: `Saved ${new Date(savedAt).toLocaleTimeString()}` } as const)
           : ({ kind: 'idle', text: 'Shared · can edit' } as const);
+  const size = draft !== null ? noteSize(stripFrontmatter(draft)) : null;
   const outgoing = new Set((linksQ.data ?? []).map((l) => l.targetPath)).size;
   const menu: NoteMenuItem[] = [
     {
@@ -257,6 +259,7 @@ export default function SharedNotePage() {
         crumbs={crumbs}
         owner={owner && { id: owner.ownerId, name: owner.name, color: owner.color }}
         status={status}
+        size={size && { ...size, max: note.data.maxChars }}
         readOnly={!canWrite}
         connections={{
           open: connOpen,

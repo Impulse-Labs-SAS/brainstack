@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { extractOutline, type OutlineHeading } from '@/lib/outline';
 import { readFlag, writeFlag } from '@/lib/local-flag';
+import { noteSize, stripFrontmatter } from '@/lib/note-size';
 import { forgetRecent, pushRecent } from '@/lib/recent-notes';
 import { usePersistedViewMode } from '@/lib/use-view-mode';
 import {
@@ -556,6 +557,7 @@ export default function NotePage() {
       : justSaved
         ? { kind: 'saved', text: 'Saved' }
         : { kind: 'idle', text: `Edited ${relativeTime(savedAt ?? note.data.mtime)}` };
+  const size = draft !== null ? noteSize(stripFrontmatter(draft)) : null;
   const mentionCount =
     (mentions.data?.incoming.length ?? 0) + (mentions.data?.outgoing.length ?? 0);
   const backlinkSources = new Set((backlinks.data ?? []).map((b) => b.sourcePath)).size;
@@ -568,6 +570,7 @@ export default function NotePage() {
           title={note.data.title}
           crumbs={crumbs}
           status={status}
+          size={size && { ...size, max: note.data.maxChars }}
           mode={viewMode}
           onMode={setViewMode}
           share={shared ? { ...shared, onOpen: () => setShareFolder(shared.folder) } : null}
@@ -739,14 +742,6 @@ function frontmatterLineCount(content: string): number {
   if (!content.startsWith('---\n')) return 0;
   const close = content.split('\n').indexOf('---', 1);
   return close === -1 ? 0 : close + 1;
-}
-
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith('---')) return content;
-  const end = content.indexOf('\n---', 3);
-  if (end === -1) return content;
-  const after = content.slice(end + 4);
-  return after.startsWith('\n') ? after.slice(1) : after;
 }
 
 interface NoteData {
