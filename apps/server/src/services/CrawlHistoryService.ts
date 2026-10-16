@@ -17,7 +17,7 @@
 // included: a note in a shared folder is kept by its path and owner, exactly as
 // the crawl that read it.
 
-import { pgSchema, type PgDb } from '@brainstack/core/pg';
+import { pgSchema, runStatements, type PgDb } from '@brainstack/core/pg';
 import { and, desc, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
@@ -153,9 +153,8 @@ export class CrawlHistoryService {
   ): Promise<string | null> {
     if (!this.enabled) return null;
     try {
-      await this.prune(userId);
       const id = nanoid();
-      await this.opts.db.insert(crawlHistory).values({
+      await this.pruneAndInsert(userId, {
         id,
         userId,
         source: crawl.source,
@@ -192,7 +191,7 @@ export class CrawlHistoryService {
         ...(ownerId ? { ownerId } : {}),
       }));
       const added = JSON.stringify(rows);
-      const [crawl] = await this.opts.db
+      const latest = this.opts.db
         .select({ id: crawlHistory.id })
         .from(crawlHistory)
         .where(
@@ -205,29 +204,27 @@ export class CrawlHistoryService {
         )
         .orderBy(desc(crawlHistory.createdAt), desc(crawlHistory.id))
         .limit(1);
-      if (crawl) {
-        // The newest writes are the ones kept when a crawl reaches the cap.
-        const appended = await this.opts.db
-          .update(crawlHistory)
-          .set({
-            result: sql`jsonb_set(${crawlHistory.result}, '{writes}', (
-              select coalesce(jsonb_agg(w order by n), '[]'::jsonb)
-              from (
-                select w, n from jsonb_array_elements(
-                  coalesce(${crawlHistory.result} -> 'writes', '[]'::jsonb) || ${added}::jsonb
-                ) with ordinality as e(w, n)
-                order by n desc
-                limit ${MAX_WRITES_PER_CRAWL}
-              ) kept
-            ))`,
-          })
-          .where(eq(crawlHistory.id, crawl.id))
-          .returning({ id: crawlHistory.id });
-        // Gone since it was found — pruned, or aged out: the writes are kept
-        // on a record of their own instead of nowhere.
-        if (appended.length > 0) return;
-      }
-      await this.prune(userId);
+      // Found and appended to in one statement: on the Neon HTTP driver a
+      // lookup and then an update were two round trips on every save. The
+      // newest writes are the ones kept when a crawl reaches the cap.
+      const appended = await this.opts.db
+        .update(crawlHistory)
+        .set({
+          result: sql`jsonb_set(${crawlHistory.result}, '{writes}', (
+            select coalesce(jsonb_agg(w order by n), '[]'::jsonb)
+            from (
+              select w, n from jsonb_array_elements(
+                coalesce(${crawlHistory.result} -> 'writes', '[]'::jsonb) || ${added}::jsonb
+              ) with ordinality as e(w, n)
+              order by n desc
+              limit ${MAX_WRITES_PER_CRAWL}
+            ) kept
+          ))`,
+        })
+        .where(inArray(crawlHistory.id, latest))
+        .returning({ id: crawlHistory.id });
+      // No recent crawl from this client: the writes are a record of their own.
+      if (appended.length > 0) return;
       const replay: CrawlReplay = {
         notes: [],
         unresolved: [],
@@ -235,7 +232,7 @@ export class CrawlHistoryService {
         notesLeftOut: 0,
         writes: rows,
       };
-      await this.opts.db.insert(crawlHistory).values({
+      await this.pruneAndInsert(userId, {
         id: nanoid(),
         userId,
         source: 'assistant',
@@ -328,22 +325,32 @@ export class CrawlHistoryService {
 
   /**
    * Age out every user's old crawls, and this user's beyond the newest
-   * `MAX_CRAWLS_PER_USER`. Done on write so no scheduler is needed — a
-   * serverless deploy has none — and kept to two indexed deletes. The cap is
-   * best-effort: two crawls written at once may leave one row over it until
-   * the next.
+   * `MAX_CRAWLS_PER_USER`, then keep `row`. Done on write so no scheduler is
+   * needed — a serverless deploy has none — and kept to two indexed deletes.
+   * The cap is best-effort: two crawls written at once may leave one row over
+   * it until the next.
    */
-  private async prune(userId: string): Promise<void> {
-    await this.applyRetention();
+  private async pruneAndInsert(
+    userId: string,
+    row: typeof crawlHistory.$inferInsert,
+  ): Promise<void> {
     const keep = this.opts.db
       .select({ id: crawlHistory.id })
       .from(crawlHistory)
       .where(eq(crawlHistory.userId, userId))
       .orderBy(desc(crawlHistory.createdAt), desc(crawlHistory.id))
       .limit(MAX_CRAWLS_PER_USER - 1);
-    await this.opts.db
-      .delete(crawlHistory)
-      .where(and(eq(crawlHistory.userId, userId), notInArray(crawlHistory.id, keep)));
+    // In order, and in one request on the Neon HTTP driver: three round trips
+    // on every crawl were most of what recording one cost.
+    await runStatements(this.opts.db, [
+      [
+        this.opts.db.delete(crawlHistory).where(lt(crawlHistory.createdAt, this.cutoff())),
+        this.opts.db
+          .delete(crawlHistory)
+          .where(and(eq(crawlHistory.userId, userId), notInArray(crawlHistory.id, keep))),
+        this.opts.db.insert(crawlHistory).values(row),
+      ],
+    ]);
   }
 
   /**

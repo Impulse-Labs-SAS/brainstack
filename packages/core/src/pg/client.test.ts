@@ -7,7 +7,38 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { pgDriverFor } from './client.js';
+import { pgDriverFor, runStatements, type PgDb, type PgStatement } from './client.js';
+
+describe('runStatements', () => {
+  // Stand-ins for built statements: each records when it is run.
+  const ran: string[] = [];
+  const statement = (name: string) =>
+    ({
+      then: (resolve: (v: unknown) => void) => {
+        ran.push(name);
+        resolve(undefined);
+      },
+    }) as unknown as PgStatement;
+
+  it('sends every statement in one batch, in order, where the driver has one (Neon HTTP)', async () => {
+    const batches: unknown[][] = [];
+    const db = { batch: async (items: unknown[]) => void batches.push(items) } as unknown as PgDb;
+    const a = statement('a');
+    const b = statement('b');
+    const c = statement('c');
+    await runStatements(db, [[a, b], [c]]);
+    expect(batches).toEqual([[a, b, c]]);
+  });
+
+  it('runs each group in order elsewhere, and sends nothing for no statements', async () => {
+    ran.length = 0;
+    const db = {} as PgDb;
+    await runStatements(db, [[statement('delete links'), statement('insert links')], []]);
+    expect(ran).toEqual(['delete links', 'insert links']);
+    await runStatements(db, [[], []]);
+    expect(ran).toHaveLength(2);
+  });
+});
 
 describe('pgDriverFor', () => {
   it('sends Neon over HTTP', () => {

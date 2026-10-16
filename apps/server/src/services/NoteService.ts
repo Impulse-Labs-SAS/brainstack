@@ -11,6 +11,7 @@
 
 import {
   escapeLike,
+  normalizeNoteKey,
   PgNoteAlreadyExistsError,
   PgNoteChangedError,
   PgNoteNotFoundError,
@@ -571,18 +572,20 @@ export class NoteService {
   ): Promise<MutationResult> {
     const physical = this.toPhysical(ownerId, path);
     const raw = frontmatter ? serializeNote(frontmatter, content) : content;
-    const saved = await this.asCaller(ownerId, () => this.store.create(physical, raw, ownerId));
-    const logical = this.toLogical(ownerId, saved.path);
+    const logical = this.toLogical(ownerId, normalizeNoteKey(physical));
 
     // A note can be created straight into a folder nobody made, so the folders
     // it lands in are registered here rather than left implied by its path.
+    // Neither that nor finding the indexes above it depends on the note, so all
+    // three run side by side: on the Neon HTTP driver each is a round trip. If
+    // the create fails because the note exists, its folders exist already.
     const parent = logical.split('/').slice(0, -1).join('/');
-    if (parent) await this.ensureFolders(ownerId, parent);
-    return {
-      path: logical,
-      affectedMocs: await this.mocsFor(ownerId, logical),
-      checksum: saved.checksum,
-    };
+    const [saved, , affectedMocs] = await Promise.all([
+      this.asCaller(ownerId, () => this.store.create(physical, raw, ownerId)),
+      parent ? this.ensureFolders(ownerId, parent) : Promise.resolve(),
+      this.mocsFor(ownerId, logical),
+    ]);
+    return { path: this.toLogical(ownerId, saved.path), affectedMocs, checksum: saved.checksum };
   }
 
   /**
