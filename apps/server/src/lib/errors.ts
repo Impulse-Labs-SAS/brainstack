@@ -18,6 +18,8 @@ export class AppError extends Error {
       /** Someone else changed the note since the caller read it. */
       | 'CHANGED'
       | 'INVALID_INPUT'
+      /** A write that would leave a note longer than an assistant may make it. */
+      | 'TOO_LONG'
       | 'UNAUTHORIZED'
       | 'FORBIDDEN'
       | 'RATE_LIMITED'

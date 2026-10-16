@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { crawlContext } from './crawl.js';
 import { applyEdits, listSections, NoteEditError, outline, type NoteEdit } from './edit.js';
+import { fitsNoteLimit, NOTE_MAX_CHARS, noteSize } from './size.js';
 
 const MOC = [
   '# Orbit',
@@ -186,5 +187,21 @@ describe('edge cases', () => {
     ]);
     expect(Object.keys(out.frontmatter)).toEqual(['__proto__']);
     expect(Object.getPrototypeOf(out.frontmatter)).toBe(Object.prototype);
+  });
+});
+
+describe('the note size limit', () => {
+  it('measures the body on LF, trimmed', () => {
+    expect(noteSize('a\r\nb\r\n\r\n')).toEqual({ chars: 3, lines: 2 });
+    expect(noteSize('  \n')).toEqual({ chars: 0, lines: 0 });
+  });
+
+  it('lets a note grow up to the limit, and one past it only shrink', () => {
+    const size = (chars: number) => ({ chars, lines: 1 });
+    expect(fitsNoteLimit(size(NOTE_MAX_CHARS))).toBe(true);
+    expect(fitsNoteLimit(size(NOTE_MAX_CHARS + 1))).toBe(false);
+    expect(fitsNoteLimit(size(9_000), size(10_000))).toBe(true);
+    expect(fitsNoteLimit(size(10_000), size(10_000))).toBe(true);
+    expect(fitsNoteLimit(size(10_001), size(10_000))).toBe(false);
   });
 });

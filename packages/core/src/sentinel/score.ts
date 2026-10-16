@@ -35,6 +35,8 @@
 //  - The budget is in characters, not notes. The caller is an assistant with a
 //    context window; ten long notes and forty short ones are not the same cost.
 
+import { NOTE_MAX_CHARS } from './size.js';
+
 /** Why a note is in the result. Exactly one per note: the strongest. */
 export type ContextVia =
   | { kind: 'named'; text: string; count: number }
@@ -121,8 +123,10 @@ export const MAX_MAX_CHARS = 50_000;
 export const MAX_NOTES = 40;
 /** A seed gets a longer excerpt than a note reached by a link. */
 // Generous on purpose: the point is that the assistant answers from this one
-// call, without opening each note. `truncated` says when a note was cut.
-export const SEED_EXCERPT_CHARS = 6_000;
+// call, without opening each note. `truncated` says when a note was cut. It is
+// the size an assistant may write a note to (size.ts), so a note within that
+// limit always comes back whole.
+export const SEED_EXCERPT_CHARS = NOTE_MAX_CHARS;
 export const LINKED_EXCERPT_CHARS = 1_500;
 /**
  * Characters of each body read from the store: more than any excerpt uses, so
@@ -479,6 +483,8 @@ export interface Digest {
   isDecision: boolean;
   /** The note's current version, as a write's `expectedChecksum` takes it. */
   checksum?: string;
+  /** The whole body's length, measured as `noteSize` measures it — `body` may be only its start. */
+  chars?: number;
 }
 
 export interface ContextNote {
@@ -503,6 +509,11 @@ export interface ContextNote {
    * an edit can name a section the excerpt did not reach.
    */
   sections?: string[];
+  /**
+   * The note is longer than an assistant may write one (`NOTE_MAX_CHARS`): an
+   * edit may shrink it but not grow it, so adding to it means splitting it.
+   */
+  tooLong?: true;
 }
 
 /** `describeVia`, plus the other terms that found the note and the other notes that link to it. */
@@ -620,6 +631,7 @@ export function packContext(
       excerpt: text,
       truncated,
       ...(d.checksum ? { checksum: d.checksum } : {}),
+      ...(d.chars !== undefined && d.chars > NOTE_MAX_CHARS ? { tooLong: true as const } : {}),
     });
     chars += text.length;
   }

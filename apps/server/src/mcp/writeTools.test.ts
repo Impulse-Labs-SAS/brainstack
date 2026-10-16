@@ -14,6 +14,8 @@ import { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import { CapturingEmailSender } from '../services/EmailSender.js';
 import { NoteService } from '../services/NoteService.js';
 import { SearchService } from '../services/SearchService.js';
+import { NOTE_MAX_CHARS } from '@brainstack/core/sentinel';
+
 import { saveNotes } from '../services/saveNotes.js';
 import { SharingService } from '../services/SharingService.js';
 import { createTestDatabase, type TestDatabase } from '../services/testDb.js';
@@ -393,7 +395,7 @@ describe('the checks the review asked for', () => {
         },
         { action: 'create', owner: OWNER.id, path: 'orbit/b.md', content: 'B' },
       ],
-      () => {},
+      { onUnexpected: () => {} },
     );
     expect(report).toMatchObject({
       saved: false,
@@ -458,6 +460,66 @@ describe('the checks the review asked for', () => {
     expect(one!.truncated).toBeUndefined();
     expect(two!.truncated).toBe(true);
     expect(one!.body.length + two!.body.length).toBe(400_000);
+  });
+});
+
+describe('the note size limit', () => {
+  const long = (chars: number) => `# Long\n\n${'x'.repeat(chars - 8)}\n`;
+
+  it('refuses a note an assistant creates past the limit, and says to split it', async () => {
+    const client = await clientFor(OWNER.id);
+    const { error } = await call(client, 'create_note', {
+      path: 'orbit/long.md',
+      content: long(NOTE_MAX_CHARS + 100),
+    });
+    expect(error).toMatch(/^\[TOO_LONG\] orbit\/long\.md would be \d+ characters .*Split it/);
+    expect(await notes.hasNote(OWNER.id, 'orbit/long.md')).toBe(false);
+    const ok = await call(client, 'create_note', {
+      path: 'orbit/long.md',
+      content: long(NOTE_MAX_CHARS),
+    });
+    expect(ok.error).toBeUndefined();
+  });
+
+  it('writes nothing in a batch where one note would be too long', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'save_notes', {
+      writes: [
+        { action: 'create', path: 'orbit/ok.md', content: 'Fine.' },
+        { action: 'replace', path: 'orbit/plan.md', content: long(NOTE_MAX_CHARS + 1) },
+      ],
+    });
+    expect(value).toMatchObject({
+      saved: false,
+      results: [{ status: 'skipped' }, { status: 'failed', error: { code: 'TOO_LONG' } }],
+    });
+    expect(await notes.hasNote(OWNER.id, 'orbit/ok.md')).toBe(false);
+  });
+
+  it('lets a note already past the limit shrink, never grow, and says so when read', async () => {
+    // Written by a person, who is not held to the limit.
+    await notes.create(OWNER.id, 'orbit/legacy.md', `${long(NOTE_MAX_CHARS + 500)}## Tail\nend\n`);
+    const client = await clientFor(OWNER.id);
+
+    const read = await call(client, 'get_note', { path: 'orbit/legacy.md' });
+    expect(read.value).toMatchObject({
+      tooLong: { maxChars: NOTE_MAX_CHARS, mayOnlyShrink: true },
+    });
+    const crawl = await call(client, 'gather_context', { text: 'Long' });
+    expect((crawl.value as { notes: Array<{ path: string; tooLong?: boolean }> }).notes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'orbit/legacy.md', tooLong: true })]),
+    );
+
+    const grow = await call(client, 'edit_note', {
+      path: 'orbit/legacy.md',
+      edits: [{ op: 'append', section: 'Tail', text: 'more' }],
+    });
+    expect(grow.error).toMatch(/^\[TOO_LONG\].*already \d+ characters, past the limit/);
+    const shrink = await call(client, 'edit_note', {
+      path: 'orbit/legacy.md',
+      edits: [{ op: 'replace', find: '## Tail\nend\n', replace: '' }],
+    });
+    expect(shrink.error).toBeUndefined();
   });
 });
 
