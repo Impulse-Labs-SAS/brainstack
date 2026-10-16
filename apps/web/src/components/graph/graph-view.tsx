@@ -17,6 +17,7 @@ import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import {
   Component,
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -60,6 +61,7 @@ import {
   type ViewChoice,
 } from './crawl/view-choice';
 import { GraphController, type CountryHover, type Selection } from './graph-controller';
+import type { KitPlace } from './graph-kit';
 import { browserShortcut, reachesGraph, withoutPointer, type KeyOrigin } from './graph-keys';
 import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
@@ -152,6 +154,8 @@ const SENTINEL_HINT =
   'Ask your brain something and watch the Sentinel look for it: it walks the links to every note your question refers to, and lights each thread it takes. Drag to look around while it walks.';
 const GRAPH_LABEL =
   'Graph of your notes. With a note selected, arrow keys move along its links and Enter opens it.';
+const LINEART_LABEL =
+  'Territories in line art. Arrow keys move between notes, Space shows the one you are on and Enter opens it, and ] and [ walk the selected note’s links. Q and E turn the map, P looks straight down, Escape steps out a level.';
 const SENTINEL_LABEL =
   'The Sentinel walking your notes. Drag to turn the view, Shift+drag to move it; the wheel zooms.';
 
@@ -297,6 +301,16 @@ export function GraphView({
   const [webgl, setWebgl] = useState(true);
   /** Line art came and draws the views it has (graph-style). */
   const [lineart, setLineart] = useState(false);
+  /** Where line art's map is, for its breadcrumb. */
+  const [place, setPlace] = useState<readonly KitPlace[]>([]);
+  /** The note line art's keyboard cursor is on, said to a screen reader. */
+  const [cursorNote, setCursorNote] = useState<GraphNode | null>(null);
+  const placeRef = useRef<HTMLElement | null>(null);
+  // A breadcrumb wider than the stage shows its end, where the map is.
+  useEffect(() => {
+    const nav = placeRef.current;
+    if (nav) nav.scrollLeft = nav.scrollWidth;
+  }, [place]);
   const [selection, setSelection] = useState<Selection | null>(null);
   // The selection as the controller last told it: read right after a key or a press in the
   // sheet, to see what it did, when the state is still a render behind.
@@ -367,6 +381,8 @@ export function GraphView({
         onAngle: setAngle,
         onOpen: (node) => openRef.current(node),
         onSettled: saveLayout,
+        onPlace: setPlace,
+        onCursor: setCursorNote,
       },
       window.matchMedia('(prefers-reduced-motion: reduce)').matches,
     );
@@ -637,6 +653,9 @@ export function GraphView({
     if (lost && (!active || active === document.body)) overlayRef.current?.focus(POINTER_FOCUS);
   }, [selection]);
 
+  // Line art draws this view: its legend is its own, and it has no growth replay yet.
+  const kitView = lineart && !sentinel && LINEART_VIEWS.includes(view);
+
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
     // Popovers render through a portal but their key events still bubble here. A field keeps its
@@ -655,7 +674,7 @@ export function GraphView({
     }
     if (browserShortcut(e)) return;
     const origin = keyOrigin(t, overlayRef.current);
-    if (!reachesGraph(e.key, origin)) return;
+    if (!reachesGraph(e.key, origin, kitView)) return;
     const before = selectionRef.current;
     if (!controllerRef.current?.keyDown(e.nativeEvent)) return;
     e.preventDefault();
@@ -665,8 +684,6 @@ export function GraphView({
   const c = () => controllerRef.current;
   const is3D = view === 'brain';
   const visibleVaults = model?.vaults.filter((v) => !v.hidden) ?? [];
-  // Line art draws this view: its legend is its own, and it has no growth replay yet.
-  const kitView = lineart && !sentinel && LINEART_VIEWS.includes(view);
   const hint = sentinel
     ? SENTINEL_HINT
     : kitView
@@ -683,7 +700,7 @@ export function GraphView({
       <canvas
         ref={overlayRef}
         tabIndex={0}
-        aria-label={sentinel ? SENTINEL_LABEL : GRAPH_LABEL}
+        aria-label={sentinel ? SENTINEL_LABEL : kitView ? LINEART_LABEL : GRAPH_LABEL}
         // The ring for keyboard focus is an outline drawn inside: the stage clips anything outside,
         // and a ring's inset shadow would paint under the canvas's bitmap.
         className="absolute inset-0 block h-full w-full outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/60"
@@ -700,6 +717,12 @@ export function GraphView({
         onContextMenu={(e) => e.preventDefault()}
       />
       <WheelBinder target={overlayRef} controller={controllerRef} />
+      {kitView && (
+        // Where line art's keyboard cursor is, said: on the canvas it is only brackets.
+        <p className="sr-only" aria-live="polite">
+          {cursorNote?.title ?? ''}
+        </p>
+      )}
 
       <div
         ref={toolbarRef}
@@ -796,6 +819,37 @@ export function GraphView({
         {model && !sentinel && (
           <FilterChips model={model} filters={filters} onChange={setFilters} />
         )}
+
+        {kitView && (
+          // A row of its own under the tools, measured at its own size: the rest of the row is map.
+          <div data-graph-chrome="children" className="pointer-events-none flex basis-full">
+            <nav
+              ref={placeRef}
+              aria-label="Where the map is"
+              className={cn(
+                GLASS,
+                'pointer-events-auto flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg px-1.5 py-1',
+              )}
+            >
+              {[{ id: null, label: 'Territories' }, ...place].map((step, i, all) => (
+                <Fragment key={step.id ?? 'map'}>
+                  {i > 0 && (
+                    <span aria-hidden className="font-mono text-xs text-fg-tertiary">
+                      ›
+                    </span>
+                  )}
+                  <Button
+                    onPress={() => c()?.focusPlace(step.id)}
+                    aria-current={i === all.length - 1 ? 'location' : undefined}
+                    className="h-7 whitespace-nowrap rounded-md px-1.5 font-mono text-xs text-fg-secondary outline-none hover:bg-bg-hover hover:text-fg-primary focus-visible:ring-2 focus-visible:ring-accent/40 aria-[current]:text-fg-primary touch:h-11"
+                  >
+                    {step.label}
+                  </Button>
+                </Fragment>
+              ))}
+            </nav>
+          </div>
+        )}
       </div>
 
       {sentinel && model && controllerRef.current && (
@@ -818,6 +872,7 @@ export function GraphView({
           onPathFrom={kitView ? undefined : (n) => c()?.startPathFrom(n)}
           onBack={(e) => fromSheet(e, () => c()?.back())}
           onFrame={(notes) => c()?.frameNotes(notes)}
+          walk={kitView ? 'brackets' : 'arrows'}
           excerpts={excerpts}
           onClose={() => {
             c()?.clearSelection();

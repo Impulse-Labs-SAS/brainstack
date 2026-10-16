@@ -41,7 +41,7 @@ import {
 } from '@/lib/graph-model';
 
 import { GraphEngine, type RebuildReason } from './graph-engine';
-import type { GraphKit } from './graph-kit';
+import type { GraphKit, KitPlace } from './graph-kit';
 import {
   drawMinimap,
   drawOverlay,
@@ -151,6 +151,10 @@ export interface ControllerEvents {
   onOpen(node: GraphNode): void;
   /** The layout came to rest: a good moment to remember it. */
   onSettled(): void;
+  /** Where a kit's map is, for the breadcrumb over it; empty when no kit draws. */
+  onPlace?(steps: readonly KitPlace[]): void;
+  /** The note a kit's keyboard cursor moved to, for a screen reader; null when it goes. */
+  onCursor?(node: GraphNode | null): void;
 }
 
 interface Elements {
@@ -1241,8 +1245,14 @@ export class GraphController {
 
   doubleClick(e: MouseEvent): void {
     const model = this.model;
-    // A kit picks what it draws itself.
-    if (!model || this.staged || this.kitOn) return;
+    const kit = this.drawingKit;
+    if (kit) {
+      // A kit picks what it draws itself.
+      const { x, y } = this.local(e);
+      kit.doubleClick(x, y);
+      return;
+    }
+    if (!model || this.staged) return;
     const { x, y } = this.local(e);
     // What its first click picked, before that note flew off from under the pointer; nothing
     // when it fell on empty space or zoomed in between two notes. Not timed again: the event
@@ -1282,7 +1292,8 @@ export class GraphController {
     const kit = this.drawingKit;
     if (kit) {
       // Its own keys first; then what stays the controller's: the camera's keys as its buttons
-      // are, the selection, Back, and the arrows, walked from where the kit draws each note.
+      // are, the selection and Back, and the arrows for a kit that leaves them (line art moves
+      // its own cursor with them), walked from where the kit draws each note.
       if (kit.key(e)) return true;
       if (e.key === 'f' || e.key === 'F') {
         this.fit();
@@ -1352,9 +1363,20 @@ export class GraphController {
       this.clearSelection();
       return true;
     }
+    // A kit's map steps out a level at a time: a folder, its project, its vault, the whole map.
+    const kit = this.drawingKit;
+    if (kit) return kit.up();
     if (!this.userMoved) return false;
     this.fit();
     return true;
+  }
+
+  /** A step of the breadcrumb over a kit's map: that plate brought into view; null, the whole map. */
+  focusPlace(id: string | null): void {
+    const kit = this.drawingKit;
+    if (!kit) return;
+    kit.focusPlace(id);
+    this.userMoved = true;
   }
 
   /** What is selected now, as the trail keeps it. */
@@ -1926,6 +1948,11 @@ export class GraphController {
           this.userMoved = true;
         },
         setCursor: (cursor) => this.setCursor(cursor),
+        select: (node) => this.select(node),
+        clearSelection: () => this.clearSelection(),
+        open: (node) => this.events.onOpen(node),
+        onPlace: (steps) => this.events.onPlace?.(steps),
+        onCursor: (node) => this.events.onCursor?.(node),
       },
       model,
       this.vp,
@@ -1940,6 +1967,8 @@ export class GraphController {
     this.pinch = null;
     this.pointers.clear();
     this.el.minimap.style.visibility = '';
+    this.events.onPlace?.([]);
+    this.events.onCursor?.(null);
     // The kit drew with the renderer and over the overlay: the classic graph draws all of it again.
     this.reupload = true;
     this.edgesDirty = true;

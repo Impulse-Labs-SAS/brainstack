@@ -6,6 +6,12 @@
 //
 // It draws only when something changed: a camera moving, a block lifting, a new selection, the
 // stage resized. A map at rest costs nothing, as the classic graph's does.
+//
+// It picks what it draws: a block or a plate under the pointer, or a label, which picks what it
+// names. A click selects a note or flies to a plate; the keyboard moves a cursor between blocks
+// (the arrows), selects the one it is on (Space) or opens it (Enter), walks the selected note's
+// links (] and [) and steps out a level at a time (Escape, through the controller). Where the map is — the plate
+// last flown to, or the one the middle of the stage stands on — is the breadcrumb's.
 
 import * as THREE from 'three';
 
@@ -13,10 +19,11 @@ import type { Viewport } from '@/lib/graph-camera';
 import type { GraphModel, GraphNode, GraphView } from '@/lib/graph-model';
 import { lineArtTheme, type LineArtTheme } from '@/lib/graph-theme';
 
-import type { GraphKit, KitFrame, KitHost } from '../graph-kit';
+import type { GraphKit, KitFrame, KitHost, KitPlace } from '../graph-kit';
 import { LINEART_VIEWS } from '../graph-style';
 import { freeStage } from '../labels/chrome';
-import type { Rect } from '../labels/placer';
+import { LabelMemory, type Rect } from '../labels/placer';
+import { LABEL_COLORS, drawLabels, type LabelHit, type PlateMeta } from './labels';
 import { layoutInput } from './layout/input';
 import { LayoutClient } from './layout/client';
 import type { IsoLayout, IsoPlate } from './layout/territories';
@@ -37,10 +44,9 @@ import { BoxLayer, FLAG, KIND, STATE } from './render/boxes';
 import { GroundGrid } from './render/grid';
 import { LiftMarks, type LiftMark } from './render/marks';
 import { applyIsoCamera } from './render/ortho';
+import { BLOCK, BLOCK_H } from './block';
+import { PickIndex } from './pick/ray';
 
-/** A note's block: its footprint across, and its height. */
-const BLOCK = 0.62;
-const BLOCK_H = 0.5;
 /** How far a block rises: the selected one, and the one a result in the list points at. */
 const LIFT_SELECTED = 0.55;
 const LIFT_PREVIEWED = 0.36;
@@ -58,6 +64,15 @@ const TURN_MS = 420;
 const REAIM_MS = 360;
 /** Narrower than this, the map opens on the viewer's own vault: the whole of it is too small. */
 const NARROW = 700;
+/** A finger picks a block only once its cell is this wide, CSS pixels; before, the plate under it. */
+const TOUCH_CELL = 44;
+/** A plate is where the map is once it spans this share of the free stage's width. */
+const FOCUS_SHARE = 0.3;
+/** Frames drawn in a row only for the labels to settle into their places. */
+const SETTLE_FRAMES = 3;
+/** A second press this soon and this near the first is the rest of a double click: it picks nothing. */
+const DOUBLE_MS = 500;
+const REPEAT_PX = 6;
 
 interface Tween {
   from: IsoCam;
@@ -94,6 +109,39 @@ export class LineArtKit implements GraphKit {
   /** A note's box, by note id: plates come first in the boxes, notes after them. */
   private boxOf = new Map<string, number>();
   private plateById = new Map<string, IsoPlate>();
+  /** By note index (the layout's order): the note, its title, how linked it is, an index or not. */
+  private noteAt: GraphNode[] = [];
+  private titles: string[] = [];
+  private degree: number[] = [];
+  private isIndex: boolean[] = [];
+  /** By plate index: what its label says. */
+  private plateMeta: PlateMeta[] = [];
+  private pick: PickIndex | null = null;
+  private readonly memory = new LabelMemory();
+  private labelHits: LabelHit[] = [];
+  private settling = 0;
+  private describedFor: GraphModel | null = null;
+
+  // What the pointer and the keyboard are on, by note and plate index.
+  private hovered: number | null = null;
+  private hoverPlate: number | null = null;
+  private cursor: number | null = null;
+  /** The note whose links ] and [ walk, where they have got to, and the note they last selected. */
+  private walkFrom: GraphNode | null = null;
+  private walked = -1;
+  private walkTo: GraphNode | null = null;
+  /** The keyboard has moved the cursor since the pointer last did anything: it is shown. */
+  private keyboard = false;
+  /** The last tap, and what it picked: a double click opens that, wherever the camera has gone since. */
+  private lastTap: { note: number | null; x: number; y: number; t: number; type: string } | null =
+    null;
+  /** The next draw is only for the labels to settle, not for anything that changed. */
+  private settleDraw = false;
+  /** The plate the map is at, by id; null for the whole map. */
+  private focus: string | null = null;
+  /** The camera was moved by hand: where the map is is worked out again once it rests. */
+  private focusStale = false;
+  private placed = '';
 
   private three: {
     scene: THREE.Scene;
@@ -128,12 +176,13 @@ export class LineArtKit implements GraphKit {
     y0: number;
     moved: boolean;
     slop: number;
+    /** The second press of a double click: lifted, it picks nothing again. */
+    repeat?: boolean;
   } | null = null;
   private pinch: { d0: number; ppu0: number; grab: { x: number; y: number } } | null = null;
 
   /** Draw the next frame whatever else holds: something changed outside what a frame compares. */
   private dirty = true;
-  private overlayClear = true;
   private drawnCam: IsoCam | null = null;
   private lastNow = 0;
 
@@ -152,7 +201,6 @@ export class LineArtKit implements GraphKit {
     // At once, so the first frame has the map; later changes come from the worker (setModel).
     if (!this.layout || this.laidOut !== model)
       this.adopt(this.client.layoutNow(...inputs(model)), model);
-    this.overlayClear = true;
     this.dirty = true;
   }
 
@@ -161,6 +209,9 @@ export class LineArtKit implements GraphKit {
     this.pointers.clear();
     this.drag = null;
     this.pinch = null;
+    this.hovered = null;
+    this.hoverPlate = null;
+    this.placed = '';
     this.stopTween();
   }
 
@@ -197,6 +248,7 @@ export class LineArtKit implements GraphKit {
       const opening = this.opening();
       this.cam = this.fitCam(opening);
       this.fitted = opening.map((p) => p.id);
+      this.focus = opening.length === 1 ? opening[0]!.id : null;
     }
     let moving = false;
     if (this.tween) {
@@ -210,18 +262,46 @@ export class LineArtKit implements GraphKit {
       f.previewed !== this.previewed ||
       f.matches !== this.matches
     ) {
-      if (f.selected !== this.selected && this.aim !== f.selected) this.aim = null;
+      if (f.selected !== this.selected) {
+        if (this.aim !== f.selected) this.aim = null;
+        // The keyboard carries on from what was selected, however it was.
+        const k = f.selected ? this.indexOf(f.selected) : null;
+        if (k !== null) {
+          this.cursor = k;
+          // Where the map is: where the selected note is filed, as its preview says.
+          const layout = this.layout;
+          this.focus = layout.plates[layout.plateOf[k]!]!.id;
+          this.focusStale = false;
+        }
+        // A selection the walk did not make starts a new walk.
+        if (f.selected !== this.walkTo) {
+          this.walkFrom = null;
+          this.walked = -1;
+          this.walkTo = null;
+        }
+      }
       this.selected = f.selected;
       this.previewed = f.previewed;
       this.matches = f.matches;
       this.light(f.model);
     }
     if (this.stepLifts(dt)) moving = true;
+    if (this.focusStale && !moving && !this.drag && !this.pinch && !this.tween) this.findFocus();
+    this.reportPlace();
     const camMoved = !this.drawnCam || !sameCam(this.drawnCam, this.cam);
     const uploaded = three.boxes.flush();
     if (!this.dirty && !camMoved && !uploaded && !moving) return;
+    // A draw for something that changed starts the labels' settling afresh.
+    if (!this.settleDraw || camMoved || uploaded || moving) this.settling = 0;
     this.dirty = false;
+    this.settleDraw = false;
     this.draw();
+    // Labels that moved find their places again over the next few frames, then the map rests.
+    if (!this.memory.settled && this.settling < SETTLE_FRAMES) {
+      this.settling++;
+      this.dirty = true;
+      this.settleDraw = true;
+    }
   }
 
   // -- Pointer and keys ------------------------------------------------------------------
@@ -236,7 +316,19 @@ export class LineArtKit implements GraphKit {
       this.drag = null;
     }
     this.pointers.set(e.pointerId, { x, y, type: e.pointerType });
-    this.stopTween();
+    if (this.keyboard) {
+      this.keyboard = false;
+      if (this.model) this.light(this.model);
+      this.dirty = true;
+    }
+    const last = this.lastTap;
+    const repeat =
+      !!last &&
+      last.type === e.pointerType &&
+      performance.now() - last.t < DOUBLE_MS &&
+      Math.hypot(x - last.x, y - last.y) <= REPEAT_PX;
+    // The second press of a double click leaves the flight the first one started alone.
+    if (!repeat) this.stopTween();
     if (this.pointers.size === 2) {
       this.startPinch();
       return;
@@ -249,12 +341,16 @@ export class LineArtKit implements GraphKit {
       y0: y,
       moved: false,
       slop: e.pointerType === 'mouse' ? SLOP.mouse : SLOP.touch,
+      repeat,
     };
   }
 
   pointerMove(e: PointerEvent, x: number, y: number): void {
     const down = this.pointers.get(e.pointerId);
-    if (!down) return;
+    if (!down) {
+      if (e.pointerType === 'mouse' && !this.pointers.size) this.hoverAt(x, y);
+      return;
+    }
     down.x = x;
     down.y = y;
     if (this.pinch && this.pointers.size >= 2) {
@@ -282,7 +378,15 @@ export class LineArtKit implements GraphKit {
     this.userCamera();
   }
 
-  pointerUp(e: PointerEvent): void {
+  pointerUp(e: PointerEvent, x: number, y: number, cancelled: boolean): void {
+    const drag = this.drag;
+    const tap =
+      !cancelled &&
+      !this.pinch &&
+      drag?.id === e.pointerId &&
+      !drag.moved &&
+      !drag.repeat &&
+      this.pointers.size === 1;
     this.pointers.delete(e.pointerId);
     if (this.pinch) {
       // Of three fingers one lifted: the pinch goes on between the two left. Of two, the finger
@@ -309,10 +413,29 @@ export class LineArtKit implements GraphKit {
       this.drag = null;
       this.host?.setCursor('grab');
     }
+    if (tap) this.tap(x, y, e.pointerType !== 'mouse');
   }
 
   pointerLeave(): void {
-    // Nothing is pointed at yet: picking comes with the labels.
+    if (this.hovered === null && this.hoverPlate === null) return;
+    this.hovered = null;
+    this.hoverPlate = null;
+    if (this.model) this.light(this.model);
+    this.dirty = true;
+  }
+
+  doubleClick(x: number, y: number): void {
+    // What the first click picked, before its flight moved it from under the pointer.
+    const last = this.lastTap;
+    this.lastTap = null;
+    if (last && Math.hypot(x - last.x, y - last.y) <= REPEAT_PX * 2) {
+      const note = last.note !== null ? this.noteAt[last.note] : null;
+      if (note) this.host?.open(note);
+      return;
+    }
+    const hit = this.hitAt(x, y, false);
+    const note = hit?.note !== undefined ? this.noteAt[hit.note] : null;
+    if (note) this.host?.open(note);
   }
 
   wheel(e: WheelEvent, x: number, y: number): void {
@@ -324,9 +447,42 @@ export class LineArtKit implements GraphKit {
     this.userCamera();
   }
 
-  /** Its own keys: the turns and the plan. Zoom, Fit, Escape and the arrows are the controller's. */
+  /**
+   * Its own keys: the turns and the plan, the cursor (the arrows, Space, Enter on another note)
+   * and the walk along the selected note's links (] and [). Zoom, Fit, Escape and Back are the
+   * controller's.
+   */
   key(e: KeyboardEvent): boolean {
+    const arrows: Record<string, [number, number]> = {
+      ArrowRight: [1, 0],
+      ArrowLeft: [-1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    };
+    const dir = arrows[e.key];
+    if (dir) {
+      this.moveCursor(dir[0], dir[1]);
+      return true;
+    }
     switch (e.key) {
+      case ' ': {
+        const note = this.cursor !== null ? this.noteAt[this.cursor] : null;
+        if (!note) return false;
+        this.keyboard = true;
+        this.host?.select(note);
+        return true;
+      }
+      case 'Enter': {
+        // The note the keyboard moved the cursor to, when it is not the one selected; the
+        // selected one is the controller's to open.
+        const note = this.keyboard && this.cursor !== null ? this.noteAt[this.cursor] : null;
+        if (!note || note === this.selected) return false;
+        this.host?.open(note);
+        return true;
+      }
+      case ']':
+      case '[':
+        return this.walk(e.key === ']' ? 1 : -1);
       case 'q':
       case 'Q':
         this.turn(-1);
@@ -349,8 +505,39 @@ export class LineArtKit implements GraphKit {
     const all = this.vaultPlates();
     if (!all.length) return;
     this.aim = null;
+    this.focus = null;
+    this.focusStale = false;
     this.fitted = all.map((p) => p.id);
     this.fly(this.fitCam(all));
+  }
+
+  up(): boolean {
+    const at = this.focus ? this.plateById.get(this.focus) : null;
+    const plates = this.layout?.plates ?? [];
+    // Up to the first plate that shows more than the stage does now: a parent fitted closer in
+    // than this is no step out.
+    const now = this.target().ppu;
+    let parent = at && at.parent >= 0 ? plates[at.parent]! : null;
+    while (parent && this.fitCam([parent]).ppu > now * 1.01)
+      parent = parent.parent >= 0 ? plates[parent.parent]! : null;
+    if (parent) {
+      this.flyToPlate(parent);
+      return true;
+    }
+    // A vault, or somewhere the person took the camera: the whole map. Already there, or
+    // farther out than it: nothing.
+    const vaults = this.vaultPlates();
+    const whole = vaults.map((p) => p.id);
+    if (!vaults.length || this.fitCam(vaults).ppu > now * 1.01) return false;
+    if (!at && this.fitted && sameIds(this.fitted, whole)) return false;
+    this.fit();
+    return true;
+  }
+
+  focusPlace(id: string | null): void {
+    const plate = id ? this.plateById.get(id) : null;
+    if (plate) this.flyToPlate(plate);
+    else this.fit();
   }
 
   zoom(factor: number): void {
@@ -358,6 +545,7 @@ export class LineArtKit implements GraphKit {
     const to = this.target();
     this.aim = null;
     this.fitted = null;
+    this.focusStale = true;
     this.fly(
       isoZoomAt(to, this.vp, free.x + free.w / 2, free.y + free.h / 2, factor, GRAB_Z, PPU_RANGE),
       260,
@@ -372,6 +560,8 @@ export class LineArtKit implements GraphKit {
     const plates = this.platesAround(notes);
     if (!plates.length) return;
     this.aim = null;
+    this.focus = plates.length === 1 ? plates[0]!.id : null;
+    this.focusStale = false;
     this.fitted = plates.map((p) => p.id);
     this.fly(this.fitCam(plates));
   }
@@ -387,7 +577,6 @@ export class LineArtKit implements GraphKit {
 
   invalidate(): void {
     this.dirty = true;
-    this.overlayClear = true;
   }
 
   dispose(): void {
@@ -434,6 +623,7 @@ export class LineArtKit implements GraphKit {
       }
     }
     this.layout = layout;
+    this.pick = new PickIndex(layout);
     const { plates, ids, cells } = layout;
     const count = plates.length + ids.length;
     const bounds = new Float32Array(count * 6);
@@ -475,15 +665,54 @@ export class LineArtKit implements GraphKit {
       if (i === undefined) continue;
       this.lifts.set(i, { ...l });
       three.boxes.setLift(i, l.now);
+      if (id === this.selected?.id) this.pick.setLift(i - plates.length, l.now);
     }
+    // What the pointer and the cursor were on may have gone, or moved to another index, and so
+    // may what the labels say and pick: described again from the model this layout was made for.
+    this.hovered = null;
+    this.hoverPlate = null;
+    this.labelHits = [];
+    this.lastTap = null;
+    this.describedFor = null;
+    this.cursor = this.selected ? this.indexOf(this.selected) : null;
     this.light(model);
     this.dirty = true;
+  }
+
+  /** What labels say and the keys walk, by note and plate index, from the model they show. */
+  private describe(model: GraphModel): void {
+    const layout = this.layout!;
+    const byId = new Map(model.nodes.map((n) => [n.id, n]));
+    this.noteAt = layout.ids.map((id) => byId.get(id)!);
+    this.titles = this.noteAt.map((n) => n?.label ?? n?.title ?? '');
+    this.degree = this.noteAt.map((n) => model.adjacency.get(n)?.length ?? 0);
+    this.isIndex = this.noteAt.map((n) => !!n?.isIndex);
+    const vaults = new Map(model.vaults.map((v) => [v.id, v]));
+    this.plateMeta = layout.plates.map((p) => {
+      if (p.kind !== 'vault') return { label: p.label };
+      const v = vaults.get(p.vault);
+      const count = p.count.toLocaleString('en-US');
+      return {
+        label: p.label,
+        chip: {
+          text: v?.owner ? `@${v.owner} · ${count}` : `${v?.label ?? p.label} · ${count}`,
+          swatch: v?.color.hue ?? this.theme.route,
+          shared: p.shared,
+        },
+      };
+    });
   }
 
   /** Each block lit as what the controller shows: selected, linked to it, found, or neither. */
   private light(model: GraphModel): void {
     const three = this.three;
     if (!three || !this.layout) return;
+    // Indexed as the layout is: from the model it was made for, which a newer one may not be yet.
+    const described = this.laidOut ?? model;
+    if (this.describedFor !== described) {
+      this.describe(described);
+      this.describedFor = described;
+    }
     const linked = new Set<GraphNode>();
     if (this.selected)
       for (const { node } of model.adjacency.get(this.selected) ?? []) linked.add(node);
@@ -498,6 +727,11 @@ export class LineArtKit implements GraphKit {
     for (const n of this.matches ?? []) set(n, STATE.found);
     for (const n of linked) set(n, STATE.linked);
     if (this.previewed) set(this.previewed, STATE.hover);
+    const pointed = [this.hovered, this.keyboard ? this.cursor : null]
+      .filter((k): k is number => k !== null)
+      .map((k) => this.noteAt[k])
+      .filter((n): n is GraphNode => !!n && n !== this.selected);
+    for (const n of pointed) set(n, STATE.hover);
     if (this.selected) set(this.selected, STATE.selected);
     const want = new Map<number, number>();
     const lift = (n: GraphNode | null, to: number) => {
@@ -505,6 +739,7 @@ export class LineArtKit implements GraphKit {
       if (i !== undefined) want.set(i, Math.max(want.get(i) ?? 0, to));
     };
     lift(this.previewed, LIFT_PREVIEWED);
+    for (const n of pointed) lift(n, LIFT_PREVIEWED);
     lift(this.selected, LIFT_SELECTED);
     for (const [i, l] of this.lifts) if (!want.has(i)) l.to = 0;
     for (const [i, to] of want) {
@@ -525,6 +760,10 @@ export class LineArtKit implements GraphKit {
       l.now += (l.to - l.now) * k;
       if (Math.abs(l.now - l.to) < 0.004) l.now = l.to;
       three.boxes.setLift(i, l.now);
+      // Picked at rest, as the plan has it: a block lifted under the pointer would slide from
+      // under it. The selected one only is picked where it is drawn.
+      const note = i - (this.layout?.plates.length ?? 0);
+      this.pick?.setLift(note, this.noteAt[note] === this.selected ? l.now : 0);
       if (l.now !== l.to) moving = true;
     }
     for (const [i, l] of this.lifts) if (l.now === 0 && l.to === 0) this.lifts.delete(i);
@@ -542,13 +781,11 @@ export class LineArtKit implements GraphKit {
     grid.setScale(this.cam.ppu, this.dpr);
     marks.set(this.liftMarks(), this.cam.ppu);
     host.renderer.render(three.scene, camera);
-    if (this.overlayClear) {
-      // What the classic graph drew over the map: line art draws nothing on the overlay yet.
-      const ctx = host.overlay;
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-      this.overlayClear = false;
-    }
+    const ctx = host.overlay;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    this.drawCursor(ctx);
+    this.labelHits = this.drawLabelsNow(ctx);
     this.drawnCam = { ...this.cam };
   }
 
@@ -590,6 +827,7 @@ export class LineArtKit implements GraphKit {
   private userCamera(): void {
     this.fitted = null;
     this.aim = null;
+    this.focusStale = true;
     this.host?.onUserCamera();
   }
 
@@ -631,6 +869,8 @@ export class LineArtKit implements GraphKit {
     const cam = { ...to, ppu: Math.max(to.ppu, NOTE_PPU) };
     this.aim = node;
     this.fitted = null;
+    // Where the map is once it gets there: the plates round the note, as the breadcrumb says.
+    this.focusStale = true;
     this.fly(
       {
         ...cam,
@@ -673,6 +913,314 @@ export class LineArtKit implements GraphKit {
     this.fly({ ...turned, ...targetFor(turned, this.vp, at, middle) }, ms);
   }
 
+  // -- Picking, the cursor and where the map is ----------------------------------------------
+
+  private indexOf(node: GraphNode): number | null {
+    const i = this.boxOf.get(node.id);
+    return i === undefined || !this.layout ? null : i - this.layout.plates.length;
+  }
+
+  /**
+   * What is at (x, y): a label first, which picks what it names, then the block or plate nearest
+   * the camera. A finger gets blocks only once a cell is wide enough to aim at, and then the block
+   * of the cell it lands in.
+   */
+  private hitAt(x: number, y: number, touch: boolean): { note?: number; plate?: number } | null {
+    const fingerBlocks = !touch || this.cam.ppu >= TOUCH_CELL;
+    for (let i = this.labelHits.length - 1; i >= 0; i--) {
+      const h = this.labelHits[i]!;
+      const r = h.rect;
+      if (x < r.x || y < r.y || x > r.x + r.w || y > r.y + r.h) continue;
+      // A label is a target a finger can hit at any zoom, unlike the block it names.
+      if (h.note !== undefined) return { note: h.note };
+      if (h.plate !== undefined) return { plate: h.plate };
+    }
+    const hit = this.pick?.pick(this.cam, this.vp, x, y, {
+      blocks: fingerBlocks,
+      cellSnap: touch && fingerBlocks,
+    });
+    if (!hit) return null;
+    return hit.kind === 'note' ? { note: hit.note } : { plate: hit.plate };
+  }
+
+  private hoverAt(x: number, y: number): void {
+    const hit = this.hitAt(x, y, false);
+    const note = hit?.note ?? null;
+    const plate = note === null ? (hit?.plate ?? null) : null;
+    this.host?.setCursor(hit ? 'pointer' : 'grab');
+    if (note === this.hovered && plate === this.hoverPlate) return;
+    this.hovered = note;
+    this.hoverPlate = plate;
+    if (this.model) this.light(this.model);
+    this.dirty = true;
+  }
+
+  /** A click or a tap: a note is selected; a plate flown to; bare ground clears the selection. */
+  private tap(x: number, y: number, touch: boolean): void {
+    const hit = this.hitAt(x, y, touch);
+    this.lastTap = {
+      note: hit?.note ?? null,
+      x,
+      y,
+      t: performance.now(),
+      type: touch ? 'touch' : 'mouse',
+    };
+    if (!hit) {
+      if (this.selected) this.host?.clearSelection();
+      return;
+    }
+    if (hit.note !== undefined) {
+      const note = this.noteAt[hit.note];
+      if (!note) return;
+      this.cursor = hit.note;
+      this.host?.select(note);
+      return;
+    }
+    const plate = this.layout!.plates[hit.plate!]!;
+    // A finger on a plate already in view, its blocks still too small to aim at: closer, there.
+    if (touch && this.focus === plate.id && this.cam.ppu < TOUCH_CELL) {
+      this.fitted = null;
+      this.fly(isoZoomAt(this.target(), this.vp, x, y, 1.8, GRAB_Z, PPU_RANGE), 300);
+      this.focusStale = true;
+      return;
+    }
+    this.flyToPlate(plate);
+  }
+
+  private flyToPlate(plate: IsoPlate): void {
+    this.aim = null;
+    this.focus = plate.id;
+    this.focusStale = false;
+    this.fitted = [plate.id];
+    this.fly(this.fitCam([plate]));
+  }
+
+  /** The cursor to the drawn block nearest in that direction on the screen; the first press puts it in the middle. */
+  private moveCursor(dx: number, dy: number): void {
+    const layout = this.layout;
+    if (!layout || !layout.ids.length) return;
+    const project = isoProject(this.cam, this.vp);
+    const at = (k: number) => {
+      const p = project(
+        layout.cells[k * 3]!,
+        layout.cells[k * 3 + 1]!,
+        layout.cells[k * 3 + 2]! + BLOCK_H + (this.lifts.get(layout.plates.length + k)?.now ?? 0),
+      );
+      return p.x >= 0 && p.y >= 0 && p.x <= this.vp.width && p.y <= this.vp.height ? p : null;
+    };
+    const free = this.free();
+    const from = this.cursor !== null ? at(this.cursor) : null;
+    const origin = from ?? { x: free.x + free.w / 2, y: free.y + free.h / 2 };
+    let best: number | null = null;
+    let score = Infinity;
+    for (let k = 0; k < layout.ids.length; k++) {
+      if (k === this.cursor) continue;
+      const p = at(k);
+      if (!p) continue;
+      const ex = p.x - origin.x;
+      const ey = p.y - origin.y;
+      const d = Math.hypot(ex, ey);
+      // From no cursor, the block nearest the middle; from one, the nearest that way.
+      if (from) {
+        const along = (ex * dx + ey * dy) / (d || 1);
+        if (along < 0.5) continue;
+        const s = d * (2 - along);
+        if (s < score) {
+          score = s;
+          best = k;
+        }
+      } else if (d < score) {
+        score = d;
+        best = k;
+      }
+    }
+    if (best === null) return;
+    this.cursor = best;
+    this.keyboard = true;
+    if (this.model) this.light(this.model);
+    this.dirty = true;
+    this.host?.onCursor(this.noteAt[best] ?? null);
+    // Off the free stage, or near its edge: brought back into it.
+    const p = at(best);
+    const m = 40;
+    if (
+      !p ||
+      p.x < free.x + m ||
+      p.y < free.y + m ||
+      p.x > free.x + free.w - m ||
+      p.y > free.y + free.h - m
+    ) {
+      const note = this.noteAt[best];
+      const cell = note && this.cellOf(note);
+      if (!cell) return;
+      const to = this.target();
+      this.fitted = null;
+      this.aim = null;
+      this.focusStale = true;
+      this.fly(
+        {
+          ...to,
+          ...targetFor(to, this.vp, cell, { x: free.x + free.w / 2, y: free.y + free.h / 2 }),
+        },
+        260,
+      );
+    }
+  }
+
+  /** The next (or previous) of the selected note's links, selected: ] and [. */
+  private walk(by: number): boolean {
+    const selected = this.selected;
+    const model = this.model;
+    if (!selected || !model) return false;
+    // Along the links of the note the walk began from, as the preview lists them: the note it
+    // selects is a step along them, not a new place to walk from.
+    const from = this.walkFrom ?? selected;
+    const links = this.linkedOf(from, model);
+    if (!links.length) return true;
+    const n = links.length;
+    this.walked = this.walked < 0 ? (by > 0 ? 0 : n - 1) : (((this.walked + by) % n) + n) % n;
+    const next = links[this.walked]!;
+    this.walkFrom = from;
+    this.walkTo = next;
+    this.keyboard = true;
+    this.host?.select(next);
+    return true;
+  }
+
+  /** The selected note's links, as its labels are tried and the brackets walk them: by title. */
+  private linkedOf(node: GraphNode, model: GraphModel): GraphNode[] {
+    return [...new Set((model.adjacency.get(node) ?? []).map((x) => x.node))].sort((a, b) =>
+      a.title.localeCompare(b.title),
+    );
+  }
+
+  /** Where the map is, once the person has moved it: the deepest plate the free stage's middle stands on, wide enough to be in view. */
+  private findFocus(): void {
+    this.focusStale = false;
+    const layout = this.layout;
+    if (!layout) return;
+    const free = this.free();
+    const sx = free.x + free.w / 2;
+    const sy = free.y + free.h / 2;
+    const project = isoProject(this.cam, this.vp);
+    let focus: string | null = null;
+    for (const p of layout.plates) {
+      // The middle of the stage where it meets this plate's top, not some other height.
+      const middle = isoUnproject(this.cam, this.vp, sx, sy, p.z1);
+      if (middle.x < p.x || middle.y < p.y || middle.x > p.x + p.w || middle.y > p.y + p.h)
+        continue;
+      const xs = [p.x, p.x + p.w].flatMap((x) =>
+        [p.y, p.y + p.h].map((y) => project(x, y, p.z1).x),
+      );
+      if (Math.max(...xs) - Math.min(...xs) < free.w * FOCUS_SHARE) continue;
+      // Parents come before their children: the last that holds is the deepest.
+      focus = p.id;
+    }
+    this.focus = focus;
+  }
+
+  /** The breadcrumb told where the map is, when that changed. */
+  private reportPlace(): void {
+    const steps: KitPlace[] = [];
+    for (let p = this.focus ? this.plateById.get(this.focus) : undefined; p; ) {
+      steps.unshift({
+        id: p.id,
+        kind: p.kind,
+        label: this.plateMeta[this.layout!.plates.indexOf(p)]?.label ?? p.label,
+      });
+      p = p.parent >= 0 ? this.layout!.plates[p.parent] : undefined;
+    }
+    const key = steps.map((s) => s.id).join('\n');
+    if (key === this.placed) return;
+    this.placed = key;
+    this.host?.onPlace(steps);
+  }
+
+  private drawLabelsNow(ctx: CanvasRenderingContext2D): LabelHit[] {
+    const host = this.host;
+    const layout = this.layout;
+    const model = this.model;
+    if (!host || !layout || !model) return [];
+    const k = (n: GraphNode | null) => (n ? this.indexOf(n) : null);
+    const indices = (list: Iterable<GraphNode>) =>
+      [...list].map((n) => this.indexOf(n)).filter((i): i is number => i !== null);
+    return drawLabels({
+      ctx,
+      vp: this.vp,
+      dpr: this.dpr,
+      cam: this.cam,
+      layout,
+      titles: this.titles,
+      degree: this.degree,
+      index: this.isIndex,
+      plates: this.plateMeta,
+      lift: (note) => this.lifts.get(layout.plates.length + note)?.now ?? 0,
+      state: {
+        selected: k(this.selected),
+        hovered: this.hovered ?? k(this.previewed),
+        cursor: this.keyboard ? this.cursor : null,
+        linked: this.selected ? indices(this.linkedOf(this.selected, model)) : [],
+        found: indices(this.matches ?? []),
+        hoverPlate: this.hoverPlate,
+        focus: this.focusPlateIndex(),
+      },
+      chrome: this.chrome,
+      px: host.labelPx,
+      fonts: host.fonts,
+      memory: this.memory,
+      colors: { ...LABEL_COLORS, accent: this.theme.accent },
+    });
+  }
+
+  /** The plate flown to, a project or a folder, by index: its notes are named whatever the zoom. */
+  private focusPlateIndex(): number | null {
+    const plate = this.focus ? this.plateById.get(this.focus) : null;
+    if (!plate || plate.kind === 'vault' || !this.layout) return null;
+    const i = this.layout.plates.indexOf(plate);
+    return i >= 0 ? i : null;
+  }
+
+  /** The keyboard's cursor: brackets round its block in the accent, the style's focus ring. */
+  private drawCursor(ctx: CanvasRenderingContext2D): void {
+    const layout = this.layout;
+    const k = this.cursor;
+    if (!layout || k === null || !this.keyboard || !this.host) return;
+    const x = layout.cells[k * 3]!;
+    const y = layout.cells[k * 3 + 1]!;
+    const z = layout.cells[k * 3 + 2]! + (this.lifts.get(layout.plates.length + k)?.now ?? 0);
+    const project = isoProject(this.cam, this.vp);
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const dx of [-BLOCK / 2, BLOCK / 2])
+      for (const dy of [-BLOCK / 2, BLOCK / 2])
+        for (const dz of [0, BLOCK_H]) {
+          const p = project(x + dx, y + dy, z + dz);
+          x0 = Math.min(x0, p.x);
+          y0 = Math.min(y0, p.y);
+          x1 = Math.max(x1, p.x);
+          y1 = Math.max(y1, p.y);
+        }
+    const pad = 4;
+    const l = 6;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.beginPath();
+    for (const [cx, cy, sx, sy] of [
+      [x0 - pad, y0 - pad, 1, 1],
+      [x1 + pad, y0 - pad, -1, 1],
+      [x1 + pad, y1 + pad, -1, -1],
+      [x0 - pad, y1 + pad, 1, -1],
+    ] as const) {
+      ctx.moveTo(cx, cy + sy * l);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx + sx * l, cy);
+    }
+    ctx.strokeStyle = this.theme.accent;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
   private startPinch(): void {
     const [a, b] = this.firstTwo();
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -691,7 +1239,8 @@ export class LineArtKit implements GraphKit {
 
   /** The stage less the chrome along its edges, and a little room. */
   private free(): Rect {
-    const r = freeStage(this.vp.width, this.vp.height, this.chrome);
+    // The toolbar's rows stack from the top, the breadcrumb under them: taken as bands.
+    const r = freeStage(this.vp.width, this.vp.height, this.chrome, 'bands');
     const m = 12;
     return { x: r.x + m, y: r.y + m, w: Math.max(1, r.w - 2 * m), h: Math.max(1, r.h - 2 * m) };
   }
@@ -755,6 +1304,10 @@ export class LineArtKit implements GraphKit {
     if (at !== undefined) return [layout.plates[at]!];
     return [...vaults].map((p) => layout.plates[p]!);
   }
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
 function inputs(model: GraphModel) {

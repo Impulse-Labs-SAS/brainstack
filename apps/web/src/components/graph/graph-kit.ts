@@ -12,6 +12,13 @@ import type { GraphModel, GraphNode, GraphView } from '@/lib/graph-model';
 
 import type { Rect } from './labels/placer';
 
+/** A step of where the map is: a vault, a project or a folder, by its plate. */
+export interface KitPlace {
+  id: string;
+  kind: 'vault' | 'project' | 'folder';
+  label: string;
+}
+
 /** What the controller lends a kit while it draws. */
 export interface KitHost {
   /** The graph's renderer: one WebGL context on the page. The controller keeps it sized. */
@@ -24,8 +31,18 @@ export interface KitHost {
   readonly reduceMotion: boolean;
   /** The person moved the camera themselves. */
   onUserCamera(): void;
-  /** The pointer's look over the stage: 'grab', 'grabbing'. */
+  /** The pointer's look over the stage: 'grab', 'grabbing', 'pointer'. */
   setCursor(cursor: string): void;
+  /** A note picked on the map: selected as a click on it selects it, the preview opened. */
+  select(node: GraphNode): void;
+  /** Bare ground clicked: nothing selected any more. */
+  clearSelection(): void;
+  /** Open a note's page. */
+  open(node: GraphNode): void;
+  /** Where the map is now, vault first: for the breadcrumb over it. Empty for the whole map. */
+  onPlace(steps: readonly KitPlace[]): void;
+  /** The keyboard moved the cursor to a note: for a screen reader to say which. */
+  onCursor(node: GraphNode | null): void;
 }
 
 /** What the kit is handed each frame it draws. */
@@ -61,6 +78,7 @@ export interface GraphKit {
   pointerUp(e: PointerEvent, x: number, y: number, cancelled: boolean): void;
   pointerLeave(): void;
   wheel(e: WheelEvent, x: number, y: number): void;
+  doubleClick(x: number, y: number): void;
   /** A key the graph was given; true when the kit used it. */
   key(e: KeyboardEvent): boolean;
   fit(): void;
@@ -69,6 +87,10 @@ export interface GraphKit {
   reveal(node: GraphNode): void;
   /** Bring these notes into view beside the preview: a step up from a note. */
   frameNotes(notes: readonly GraphNode[]): void;
+  /** Escape with nothing selected: up a level. False at the top, the whole map in view. */
+  up(): boolean;
+  /** A step of the breadcrumb, by its plate's id; null for the whole map. */
+  focusPlace(id: string | null): void;
   /** Where a note is drawn, CSS pixels from the stage's corner; null when it is off the stage. */
   screenOf(node: GraphNode): { x: number; y: number } | null;
   /** What it drew is gone (a context restored, the fonts in): draw again. */
