@@ -31,6 +31,7 @@ import {
   type PluginStage,
   type Selection,
 } from './graph-controller';
+import type { GraphKit, KitFrame, KitHost } from './graph-kit';
 import type { ReturnEntry } from './graph-return';
 import type { SceneFrame } from './graph-scene';
 import type { Rect } from './labels/placer';
@@ -44,6 +45,9 @@ const scene = vi.hoisted(() => ({
   /** What the scene says of itself: it drew notes that pulse, its brain is still fading. */
   pulses: false,
   easing: false,
+  /** The renderer a kit is lent, and whether the browser has WebGL at all. */
+  renderer: { kind: 'renderer' },
+  fail: false,
 }));
 
 vi.mock('./graph-scene', () => {
@@ -54,7 +58,11 @@ vi.mock('./graph-scene', () => {
   return {
     GraphScene: class {
       constructor() {
+        if (scene.fail) throw new Error('no WebGL');
         note('new', []);
+      }
+      get sharedRenderer() {
+        return scene.renderer;
       }
       resize(vp: Viewport, dpr: number) {
         note('resize', [{ ...vp }, dpr]);
@@ -343,6 +351,8 @@ interface HarnessOptions {
    * no `matchMedia`, as in Node, and the controller goes by the stage's width.
    */
   media?: { width: number; touch: boolean };
+  /** False for a browser that gives no WebGL context: the scene cannot be made. */
+  webgl?: boolean;
 }
 
 /**
@@ -355,6 +365,7 @@ interface HarnessOptions {
  */
 function harness(Graph: typeof GraphController, opts: HarnessOptions = {}) {
   reset();
+  scene.fail = opts.webgl === false;
   const tape = new Tape(!!opts.golden);
   const clock = { now: 1000 };
   const box: Box = { ...(opts.size ?? { width: 800, height: 600 }) };
@@ -577,6 +588,7 @@ function reset(): void {
   scene.listener = null;
   scene.pulses = false;
   scene.easing = false;
+  scene.fail = false;
 }
 
 afterEach(reset);
@@ -3332,3 +3344,337 @@ function chain(count: number): GraphModel {
     cache: new Map(),
   });
 }
+
+// -- Kit mode ------------------------------------------------------------------------------------
+
+/** A kit that draws nothing and records what it is asked; it handles `views` and uses `keys`. */
+class FakeKit implements GraphKit {
+  readonly calls: string[] = [];
+  readonly frames: KitFrame[] = [];
+  host: KitHost | null = null;
+  /** Where it says each note is drawn: none is on the stage unless a test puts it there. */
+  readonly screens = new Map<GraphNode, { x: number; y: number }>();
+
+  constructor(
+    private readonly views: readonly GraphView[] = ['territories'],
+    private readonly keys: readonly string[] = ['q'],
+  ) {}
+
+  handles(view: GraphView): boolean {
+    return this.views.includes(view);
+  }
+  enter(host: KitHost, model: GraphModel, vp: Viewport, dpr: number): void {
+    this.host = host;
+    this.calls.push(`enter ${model.nodes.length} ${vp.width}x${vp.height} ${dpr}`);
+  }
+  leave(): void {
+    this.calls.push('leave');
+  }
+  setModel(model: GraphModel): void {
+    this.calls.push(`setModel ${model.nodes.length}`);
+  }
+  resize(vp: Viewport, dpr: number): void {
+    this.calls.push(`resize ${vp.width}x${vp.height} ${dpr}`);
+  }
+  frame(f: KitFrame): void {
+    this.frames.push(f);
+  }
+  pointerDown(_e: PointerEvent, x: number, y: number): void {
+    this.calls.push(`down ${x},${y}`);
+  }
+  pointerMove(_e: PointerEvent, x: number, y: number): void {
+    this.calls.push(`move ${x},${y}`);
+  }
+  pointerUp(_e: PointerEvent, x: number, y: number, cancelled: boolean): void {
+    this.calls.push(`up ${x},${y}${cancelled ? ' cancelled' : ''}`);
+  }
+  pointerLeave(): void {
+    this.calls.push('leave pointer');
+  }
+  wheel(_e: WheelEvent, x: number, y: number): void {
+    this.calls.push(`wheel ${x},${y}`);
+  }
+  key(e: KeyboardEvent): boolean {
+    const used = this.keys.includes(e.key);
+    this.calls.push(`key ${e.key}${used ? '' : ' passed'}`);
+    return used;
+  }
+  fit(): void {
+    this.calls.push('fit');
+  }
+  zoom(factor: number): void {
+    this.calls.push(`zoom ${factor}`);
+  }
+  reveal(node: GraphNode): void {
+    this.calls.push(`reveal ${node.id}`);
+  }
+  frameNotes(notes: readonly GraphNode[]): void {
+    this.calls.push(`frameNotes ${notes.length}`);
+  }
+  screenOf(node: GraphNode): { x: number; y: number } | null {
+    return this.screens.get(node) ?? null;
+  }
+  invalidate(): void {
+    this.calls.push('invalidate');
+  }
+  dispose(): void {
+    this.calls.push('dispose');
+  }
+}
+
+/** The map, settled, with a kit that handles it attached: the next frame enters kit mode. */
+function kitOnTheMap(opts: HarnessOptions = {}) {
+  const h = harness(GraphController, opts);
+  const model = twoVaults();
+  h.controller.initView('territories');
+  h.controller.setModel(model, 'init');
+  h.step(120);
+  const kit = new FakeKit();
+  h.controller.setKit(kit);
+  return { h, c: h.controller, model, kit };
+}
+
+const since = <T>(list: readonly T[], from: number) => list.slice(from);
+
+describe('GraphController with a kit', () => {
+  it('lets a kit draw the view it handles, and draws the others itself as before', () => {
+    const h = harness(GraphController);
+    const model = twoVaults();
+    h.controller.initView('network');
+    h.controller.setModel(model, 'init');
+    h.step(60);
+    const kit = new FakeKit();
+    h.controller.setKit(kit);
+    h.step(3);
+    // Network is not the kit's: nothing is asked of it but the notes it may come to lay out.
+    expect(kit.calls).toEqual([]);
+    expect(kit.frames).toEqual([]);
+
+    h.controller.setView('territories');
+    h.step(1);
+    expect(kit.calls).toEqual([`enter ${model.nodes.length} 800x600 1`]);
+    expect(kit.host!.renderer).toBe(scene.renderer);
+    expect(kit.host!.labelPx).toBe(12);
+    const scenes = scene.calls.length;
+    const ops = h.overlayOps!.length;
+    h.step(30);
+    // The kit draws each frame it holds; the classic graph draws nothing, not even its minimap.
+    expect(kit.frames.length).toBe(31);
+    expect(since(scene.calls, scenes)).toEqual([]);
+    expect(since(h.overlayOps!, ops)).toEqual([]);
+    expect(h.el.minimap.style.visibility).toBe('hidden');
+
+    h.controller.setView('network');
+    h.step(1);
+    expect(kit.calls.at(-1)).toBe('leave');
+    expect(h.el.minimap.style.visibility).toBe('');
+    // The classic graph uploads everything again: the kit drew with the same renderer.
+    const back = renders().at(-1)!;
+    expect(back.view).toBe('network');
+    expect(back.moved).toBe(true);
+    expect(back.edgesDirty).toBe(true);
+  });
+
+  it('hands the kit each frame what it needs: the stage, the chrome, the selection and the search', () => {
+    const { h, c, model, kit } = kitOnTheMap();
+    const [a, b] = shown(model);
+    const chrome: Rect[] = [{ x: 0, y: 0, w: 800, h: 48 }];
+    c.setChrome(chrome);
+    c.select(a!);
+    c.preview(b!);
+    c.setMatches([a!, b!]);
+    h.step(1);
+    const f = kit.frames.at(-1)!;
+    expect(f.vp).toEqual({ width: 800, height: 600 });
+    expect(f.dpr).toBe(1);
+    expect(f.model).toBe(model);
+    expect(f.chrome).toBe(chrome);
+    expect(f.selected).toBe(a);
+    expect(f.previewed).toBe(b);
+    expect([...f.matches!]).toEqual([a, b]);
+  });
+
+  it('gives the kit the pointer, the wheel and its own keys', () => {
+    const { h, c, kit } = kitOnTheMap();
+    h.step(1);
+    const events = h.events.length;
+    kit.calls.length = 0;
+    h.down(100, 120);
+    h.move(140, 150);
+    h.up(140, 150);
+    h.move(300, 310);
+    h.leave();
+    h.wheel(200, 220, -100);
+    h.up(10, 10, true);
+    expect(h.key('q')).toBe(true);
+    h.doubleClick(140, 150);
+    expect(kit.calls).toEqual([
+      'down 100,120',
+      'move 140,150',
+      'up 140,150',
+      'move 300,310',
+      'leave pointer',
+      'wheel 200,220',
+      'up 10,10 cancelled',
+      'key q',
+    ]);
+    // No hover, no country, no selection and nothing opened: the kit picks what it draws.
+    expect(eventsSince(h, events)).toEqual([]);
+    // Zoom and Fit, from the toolbar or the keys, go through the controller to the kit.
+    kit.calls.length = 0;
+    c.zoom(1.25);
+    c.fit();
+    expect(h.key('-')).toBe(true);
+    expect(h.key('F')).toBe(true);
+    expect(kit.calls).toEqual([
+      'zoom 1.25',
+      'fit',
+      'key - passed',
+      'zoom 0.8',
+      'key F passed',
+      'fit',
+    ]);
+    // A growth replay does not start: line art has none yet.
+    c.startGrowth();
+    expect(h.events.some((e) => e.name === 'onGrowth')).toBe(false);
+  });
+
+  it("walks the selected note's links with the arrows, from where the kit draws each note", () => {
+    const { h, c, model, kit } = kitOnTheMap();
+    const a = model.nodes.find((n) => (model.adjacency.get(n)?.length ?? 0) >= 2)!;
+    const [left, right] = model.adjacency.get(a)!.map((x) => x.node);
+    kit.screens.set(a, { x: 400, y: 300 });
+    kit.screens.set(left!, { x: 250, y: 310 });
+    kit.screens.set(right!, { x: 560, y: 280 });
+    h.step(1);
+    c.select(a);
+    kit.calls.length = 0;
+    expect(h.key('ArrowRight')).toBe(true);
+    expect(kit.calls.at(-1)).toBe(`reveal ${right!.id}`);
+    kit.screens.set(right!, { x: 400, y: 300 });
+    kit.screens.set(a, { x: 250, y: 300 });
+    expect(h.key('ArrowLeft')).toBe(true);
+    // From the note it moved to, whose own links the kit places: a is the one to its left.
+    expect(kit.calls.at(-1)).toBe(`reveal ${a.id}`);
+  });
+
+  it("lets go of a note a drag held when the kit takes the view, and shows the kit's cursor", () => {
+    const h = harness(GraphController);
+    const model = twoVaults();
+    h.controller.initView('network');
+    h.controller.setModel(model, 'init');
+    h.step(200);
+    const kit = new FakeKit();
+    h.controller.setKit(kit);
+    const n = reachable(h, model)[0]!;
+    h.down(n.sx, n.sy);
+    h.move(n.sx + 30, n.sy + 20);
+    h.step(1);
+    expect(n.fx).not.toBeNull();
+    h.controller.setView('territories');
+    h.step(1);
+    h.up(n.sx + 30, n.sy + 20);
+    expect(n.fx).toBeNull();
+    expect(h.el.overlay.style.cursor).toBe('grab');
+    kit.host!.setCursor('grabbing');
+    expect(h.el.overlay.style.cursor).toBe('grabbing');
+  });
+
+  it('keeps the selection, Back, Escape and Enter, and asks the kit to fly where they go', () => {
+    const { h, c, model, kit } = kitOnTheMap();
+    const [a, b] = shown(model);
+    h.step(1);
+    kit.calls.length = 0;
+    c.select(a!);
+    c.select(b!);
+    expect(kit.calls).toEqual([`reveal ${a!.id}`, `reveal ${b!.id}`]);
+    expect(h.key('Backspace')).toBe(true);
+    expect(kit.calls.at(-1)).toBe(`reveal ${a!.id}`);
+    expect(h.events.filter((e) => e.name === 'onSelection').at(-1)!.args[0]).toMatchObject({
+      kind: 'note',
+      node: a,
+    });
+    expect(h.key('Enter')).toBe(true);
+    expect(h.events.at(-1)).toMatchObject({ name: 'onOpen', args: [a] });
+    // A step up from the note, from the preview, and every match of a search.
+    c.frameNotes([a!, b!]);
+    c.setMatches([a!, b!]);
+    c.frameMatches();
+    expect(kit.calls.slice(-2)).toEqual(['frameNotes 2', 'frameNotes 2']);
+    // Escape closes the preview; past that, with the camera moved, it asks the kit to fit.
+    expect(h.key('Escape')).toBe(true);
+    expect(h.events.at(-1)).toMatchObject({ name: 'onSelection', args: [null] });
+    expect(h.key('Escape')).toBe(true);
+    expect(kit.calls.at(-1)).toBe('fit');
+    // The way back from a note records the classic camera, which the kit does not draw from.
+    expect(c.returnState(a!)).toBeNull();
+  });
+
+  it("steps aside for a plugin's stage, and takes the view back when it goes", () => {
+    const { h, c, kit } = kitOnTheMap();
+    h.step(1);
+    expect(kit.calls.filter((s) => s.startsWith('enter'))).toHaveLength(1);
+    const { plugin, stage } = staged(h);
+    h.step(1);
+    expect(kit.calls.at(-1)).toBe('leave');
+    expect(stage.calls).toContain('render');
+    const frames = kit.frames.length;
+    h.step(5);
+    expect(kit.frames.length).toBe(frames);
+    plugin.stage = null;
+    h.step(1);
+    expect(kit.calls.filter((s) => s.startsWith('enter'))).toHaveLength(2);
+    c.setPlugin(null);
+    h.step(1);
+    expect(kit.frames.length).toBeGreaterThan(frames);
+  });
+
+  it('tells the kit of a resize, of a context restored and of the fonts, while it draws', () => {
+    const { h, kit } = kitOnTheMap();
+    h.step(1);
+    kit.calls.length = 0;
+    h.resize(640, 480);
+    h.el.gl.listeners.get('webglcontextrestored')!();
+    expect(kit.calls).toEqual(['resize 640x480 1', 'invalidate']);
+  });
+
+  it('owns the kit it is given: disposed when replaced, when taken back, and with the controller', () => {
+    const { h, c, model, kit } = kitOnTheMap();
+    h.step(1);
+    const next = new FakeKit();
+    c.setKit(next);
+    expect(kit.calls.slice(-2)).toEqual(['leave', 'dispose']);
+    c.setModel(model, 'data');
+    expect(next.calls).toEqual([`setModel ${model.nodes.length}`]);
+    h.step(1);
+    c.setKit(null);
+    expect(next.calls.slice(-2)).toEqual(['leave', 'dispose']);
+    // Back to the classic map, which draws again in full.
+    h.step(1);
+    expect(renders().at(-1)!.view).toBe('territories');
+    const last = new FakeKit();
+    c.setKit(last);
+    c.dispose();
+    expect(last.calls).toEqual(['dispose']);
+    // Handed one after it is gone, the controller disposes it at once.
+    const late = new FakeKit();
+    c.setKit(late);
+    expect(late.calls).toEqual(['dispose']);
+  });
+
+  it('never hands the view to a kit without WebGL', () => {
+    const h = harness(GraphController, { webgl: false });
+    const model = twoVaults();
+    h.controller.initView('territories');
+    h.controller.setModel(model, 'init');
+    const kit = new FakeKit();
+    h.controller.setKit(kit);
+    const ops = h.overlayOps!.length;
+    h.step(5);
+    expect(h.controller.webgl).toBe(false);
+    expect(kit.calls).toEqual([]);
+    expect(kit.frames).toEqual([]);
+    // The overlay draws the map on its own, as it always has without WebGL.
+    expect(h.overlayOps!.length).toBeGreaterThan(ops);
+  });
+});

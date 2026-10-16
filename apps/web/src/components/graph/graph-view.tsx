@@ -65,6 +65,7 @@ import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
 import { readReturn, writeReturn } from './graph-return';
 import { FilterChips, GraphSearch } from './graph-search';
+import { LINEART_VIEWS, STYLE_KEY, graphStyle } from './graph-style';
 import { chromeRects } from './labels/chrome';
 
 /** The preview sheet's heading, where focus goes after a pick made from the keyboard. */
@@ -143,6 +144,10 @@ const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }
 // walks — that the graph steps aside for, and gives back as it was on leaving.
 // The engine never hears of it. The folder is loaded only when the view opens
 // (SentinelPanel below), so the other three never download it.
+/** Territories in line art, while it is in beta: what the plates are, and how to move them. */
+const LINEART_HINT =
+  'Line art, in beta. Each vault is a plate, each project a plate on it and each folder a plate on that; every note is a block. Drag to move the map and scroll to zoom; Q and E turn it, and P looks straight down.';
+
 const SENTINEL_HINT =
   'Ask your brain something and watch the Sentinel look for it: it walks the links to every note your question refers to, and lights each thread it takes. Drag to look around while it walks.';
 const GRAPH_LABEL =
@@ -290,6 +295,8 @@ export function GraphView({
   const [sentinelWalk, setSentinelWalk] = useState(false);
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_LAYERS);
   const [webgl, setWebgl] = useState(true);
+  /** Line art came and draws the views it has (graph-style). */
+  const [lineart, setLineart] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   // The selection as the controller last told it: read right after a key or a press in the
   // sheet, to see what it did, when the state is still a render behind.
@@ -365,6 +372,20 @@ export function GraphView({
     );
     controllerRef.current = controller;
     setWebgl(controller.webgl);
+    // Line art draws the views it has so far, the classic graph the rest, and all of them without
+    // WebGL. Its code comes only when asked for (`?style=lineart`), and the graph shows meanwhile.
+    if (graphStyle(window.location.search, persist ? readPref(STYLE_KEY) : null) === 'lineart') {
+      if (controller.webgl)
+        void import('./iso/kit')
+          .then((m) => {
+            if (controllerRef.current !== controller) return;
+            controller.setKit(m.createKit());
+            setLineart(true);
+          })
+          .catch((error) =>
+            console.warn('Line art failed to load; the classic graph shows.', error),
+          );
+    }
 
     const opening = openingView(
       window.location.hash,
@@ -644,7 +665,13 @@ export function GraphView({
   const c = () => controllerRef.current;
   const is3D = view === 'brain';
   const visibleVaults = model?.vaults.filter((v) => !v.hidden) ?? [];
-  const hint = sentinel ? SENTINEL_HINT : VIEWS.find((v) => v.id === view)!.hint;
+  // Line art draws this view: its legend is its own, and it has no growth replay yet.
+  const kitView = lineart && !sentinel && LINEART_VIEWS.includes(view);
+  const hint = sentinel
+    ? SENTINEL_HINT
+    : kitView
+      ? LINEART_HINT
+      : VIEWS.find((v) => v.id === view)!.hint;
 
   return (
     <div
@@ -751,7 +778,7 @@ export function GraphView({
 
         <span className="flex-1" />
 
-        {!sentinel && (
+        {!sentinel && !kitView && (
           <Button
             onPress={() => (growing ? c()?.stopGrowth() : c()?.startGrowth())}
             isDisabled={!model?.nodes.length}
@@ -787,7 +814,8 @@ export function GraphView({
           model={model}
           onSelect={(n, e) => fromSheet(e, () => c()?.select(n))}
           onOpen={open}
-          onPathFrom={(n) => c()?.startPathFrom(n)}
+          // Line art traces no paths yet.
+          onPathFrom={kitView ? undefined : (n) => c()?.startPathFrom(n)}
           onBack={(e) => fromSheet(e, () => c()?.back())}
           onFrame={(notes) => c()?.frameNotes(notes)}
           excerpts={excerpts}
@@ -853,7 +881,8 @@ export function GraphView({
           {hint}
           {!webgl && ' This browser has no WebGL, so the 3D brain is unavailable.'}
         </p>
-        <ul className="flex flex-wrap gap-x-3.5 gap-y-1">
+        {/* Line art's marks are not these: its legend comes with its labels. */}
+        <ul className={cn('flex flex-wrap gap-x-3.5 gap-y-1', kitView && 'hidden')}>
           {visibleVaults.map((v) => (
             <LegendItem
               key={v.id}

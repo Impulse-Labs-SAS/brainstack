@@ -77,7 +77,8 @@ interface GraphPreviewProps {
   /** A connection or a step of the path, with the press that picked it: focus follows a keyboard's. */
   onSelect(node: GraphNode, e: PressEvent): void;
   onOpen(node: GraphNode): void;
-  onPathFrom(node: GraphNode): void;
+  /** Trace a path from the note; without it (line art, for now) the button is not offered. */
+  onPathFrom?(node: GraphNode): void;
   /** Back to what was selected before: offered while `selection.back` names it. */
   onBack(e: PressEvent): void;
   /** A step up from the note — its folder, project or vault — brought into view. */
@@ -190,7 +191,7 @@ function NodeBody({
   excerpts: boolean;
   onSelect(node: GraphNode, e: PressEvent): void;
   onOpen(node: GraphNode): void;
-  onPathFrom(node: GraphNode): void;
+  onPathFrom?(node: GraphNode): void;
   onBack(e: PressEvent): void;
   onFrame(notes: readonly GraphNode[]): void;
   onClose(): void;
@@ -230,9 +231,11 @@ function NodeBody({
             Open note <Kbd className="h-4 border-white/25 bg-white/15 text-white">↵</Kbd>
           </Button>
         )}
-        <Button size="sm" className="touch:h-11" onPress={() => onPathFrom(node)}>
-          Path from here
-        </Button>
+        {onPathFrom && (
+          <Button size="sm" className="touch:h-11" onPress={() => onPathFrom(node)}>
+            Path from here
+          </Button>
+        )}
       </div>
       {/* Keyed by the note: the filter and what was shown in full belong to the note they were for. */}
       <Connections key={node.id} node={node} model={model} onSelect={onSelect} />
