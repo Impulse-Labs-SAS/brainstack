@@ -8,10 +8,12 @@ export {
   openPgDatabase,
   pgDriverFor,
   runPgMigrations,
+  runStatements,
   ensurePgSchema,
   type BrainStackPgDatabase,
   type PgDb,
   type PgDriver,
+  type PgStatement,
 } from './client.js';
 export { pgMigrations, type PgMigration } from './migrations.js';
 

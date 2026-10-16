@@ -17,7 +17,7 @@ import { linkCandidates, resolveLinks } from '../resolver/wikilinks.js';
 import type { Frontmatter, ParsedFacet, ParsedLink, ResolvedLink } from '../types.js';
 
 import { facets, links, notes, tags } from './schema.js';
-import type { PgDb } from './client.js';
+import { runStatements, type PgDb } from './client.js';
 
 export class NoteNotFoundError extends Error {
   override readonly name = 'NoteNotFoundError';
@@ -173,8 +173,12 @@ export class PgNoteStore {
       .returning(NOTE_COLUMNS);
     if (!row) throw new NoteAlreadyExistsError(key);
 
-    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId, index);
-    await this.resolvePendingLinksTo(key);
+    // Side by side: one rewrites this note's own links, the other the links of
+    // other notes that were waiting for it.
+    await Promise.all([
+      this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId, index),
+      this.resolvePendingLinksTo(key, row.ownerId),
+    ]);
     return row as StoredNote;
   }
 
@@ -268,8 +272,10 @@ export class PgNoteStore {
        */
       .returning({ ...NOTE_COLUMNS, inserted: sql<boolean>`(xmax = 0)` });
 
-    await this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId, index);
-    if (row?.inserted) await this.resolvePendingLinksTo(key);
+    await Promise.all([
+      this.rebuildGraph(key, parsed.links, parsed.tags, parsed.facets, ownerId, index),
+      ...(row?.inserted ? [this.resolvePendingLinksTo(key, row.ownerId)] : []),
+    ]);
 
     const { inserted: _inserted, ...stored } = row!;
     return stored as StoredNote;
@@ -343,14 +349,10 @@ export class PgNoteStore {
    * is left alone: rewriting a link that currently works is worse than leaving
    * it pointing where its author last saw it go.
    */
-  private async resolvePendingLinksTo(path: string): Promise<void> {
-    const [target] = await this.db
-      .select({ ownerId: notes.ownerId })
-      .from(notes)
-      .where(eq(notes.path, path))
-      .limit(1);
-    if (!target) return;
-
+  private async resolvePendingLinksTo(path: string, ownerId: string | null): Promise<void> {
+    // The owner comes from the row the write just returned: looking it up
+    // again was a round trip for something already known.
+    const target = { ownerId };
     const prefix = target.ownerId ? `${target.ownerId}/` : '';
     const logical = prefix && path.startsWith(prefix) ? path.slice(prefix.length) : path;
     const filename = logical.slice(logical.lastIndexOf('/') + 1);
@@ -636,9 +638,9 @@ export class PgNoteStore {
   /**
    * Replace the derived rows for one note: its links, tags and facets.
    *
-   * The three tables are independent, so they are rewritten side by side — on
-   * the Neon HTTP driver every statement is a round trip, and six of them one
-   * after another were most of what a save waited on.
+   * The three tables are independent: on the Neon HTTP driver, where every
+   * statement is a round trip, the six statements go in one request
+   * (`runStatements`); elsewhere they run side by side.
    */
   private async rebuildGraph(
     path: string,
@@ -682,39 +684,43 @@ export class PgNoteStore {
         }))
       : resolved;
 
-    await Promise.all([
-      (async () => {
-        await this.db.delete(links).where(eq(links.sourcePath, path));
-        if (scoped.length > 0) {
-          await this.db.insert(links).values(dedupeLinks(scoped)).onConflictDoNothing();
-        }
-      })(),
-      (async () => {
-        await this.db.delete(tags).where(eq(tags.notePath, path));
-        if (noteTags.length > 0) {
-          await this.db
-            .insert(tags)
-            .values(noteTags.map((tag) => ({ notePath: path, tag })))
-            .onConflictDoNothing();
-        }
-      })(),
-      (async () => {
-        await this.db.delete(facets).where(eq(facets.notePath, path));
-        if (noteFacets.length > 0) {
-          await this.db
-            .insert(facets)
-            .values(
-              noteFacets.map((f) => ({
-                notePath: path,
-                key: f.key,
-                value: f.value,
-                data: f.data,
-                position: f.position,
-              })),
-            )
-            .onConflictDoNothing();
-        }
-      })(),
+    await runStatements(this.db, [
+      [
+        this.db.delete(links).where(eq(links.sourcePath, path)),
+        ...(scoped.length > 0
+          ? [this.db.insert(links).values(dedupeLinks(scoped)).onConflictDoNothing()]
+          : []),
+      ],
+      [
+        this.db.delete(tags).where(eq(tags.notePath, path)),
+        ...(noteTags.length > 0
+          ? [
+              this.db
+                .insert(tags)
+                .values(noteTags.map((tag) => ({ notePath: path, tag })))
+                .onConflictDoNothing(),
+            ]
+          : []),
+      ],
+      [
+        this.db.delete(facets).where(eq(facets.notePath, path)),
+        ...(noteFacets.length > 0
+          ? [
+              this.db
+                .insert(facets)
+                .values(
+                  noteFacets.map((f) => ({
+                    notePath: path,
+                    key: f.key,
+                    value: f.value,
+                    data: f.data,
+                    position: f.position,
+                  })),
+                )
+                .onConflictDoNothing(),
+            ]
+          : []),
+      ],
     ]);
   }
 }

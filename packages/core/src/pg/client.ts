@@ -15,6 +15,7 @@
 
 import { neon } from '@neondatabase/serverless';
 import { sql } from 'drizzle-orm';
+import type { BatchItem } from 'drizzle-orm/batch';
 import { drizzle as drizzleNeonHttp, type NeonHttpDatabase } from 'drizzle-orm/neon-http';
 import { drizzle as drizzleNodePg } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
@@ -58,6 +59,38 @@ export function pgDriverFor(connectionString: string): PgDriver {
     return 'node-postgres';
   }
   return hostname.endsWith('.neon.tech') ? 'neon-http' : 'node-postgres';
+}
+
+/** A statement built but not yet run: what `runStatements` takes. */
+export type PgStatement = BatchItem<'pg'>;
+
+/**
+ * Run groups of statements: each group in order, the groups independent of
+ * one another. Nothing here reads a result — they are writes.
+ *
+ * On Neon's HTTP driver every statement is its own round trip, and a save
+ * that rewrote a note's links, tags and facets waited on each one. There they
+ * all go in one request (`batch`, which Neon runs as a single transaction), in
+ * the order given. Elsewhere — node-postgres, PGlite — a round trip costs next
+ * to nothing and there is no batch, so the groups run side by side, each in
+ * order.
+ */
+export async function runStatements(
+  db: PgDb,
+  groups: ReadonlyArray<ReadonlyArray<PgStatement>>,
+): Promise<void> {
+  const all = groups.flat();
+  if (all.length === 0) return;
+  const batch = (db as { batch?: unknown }).batch;
+  if (typeof batch === 'function') {
+    await db.batch(all as [PgStatement, ...PgStatement[]]);
+    return;
+  }
+  await Promise.all(
+    groups.map(async (group) => {
+      for (const statement of group) await statement;
+    }),
+  );
 }
 
 /** Open a Drizzle client over whichever driver the connection string calls for. */
