@@ -625,7 +625,10 @@ export class GraphController {
     this.pruneTrail(present);
     this.hover = keep(this.hover);
     this.previewed = keep(this.previewed);
+    // Both, or a focus that left the model leaves its neighbourhood lit and everything else dimmed:
+    // the next frame finds no focus, the same as this one, and so recomputes nothing.
     this.focus = null;
+    this.hops = null;
     this.userMoved = false;
     // Notes came or went: the brain comes back eased to its new size, not where it was left
     // (a first layout was framed for it above).
