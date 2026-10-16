@@ -59,7 +59,11 @@ beforeEach(async () => {
 describe('CrawlHistoryService', () => {
   it('lists a user’s crawls newest first, and replays one without the excerpts', async () => {
     const crawls = history();
-    await crawls.record(ME, { source: 'web', text: 'What about the Roadmap Q4?', result: await crawl('Roadmap Q4') });
+    await crawls.record(ME, {
+      source: 'web',
+      text: 'What about the Roadmap Q4?',
+      result: await crawl('Roadmap Q4'),
+    });
     clock += 1_000;
     await crawls.record(ME, {
       source: 'assistant',
@@ -76,8 +80,18 @@ describe('CrawlHistoryService', () => {
 
     const one = await crawls.get(ME, list[1]!.id);
     expect(one.replay.notes).toEqual([
-      { path: 'roadmap.md', title: 'Roadmap Q4', isDecision: false, via: expect.objectContaining({ kind: 'named' }) },
-      { path: 'ledger.md', title: 'Ledger service', isDecision: false, via: expect.objectContaining({ kind: 'linked' }) },
+      {
+        path: 'roadmap.md',
+        title: 'Roadmap Q4',
+        isDecision: false,
+        via: expect.objectContaining({ kind: 'named' }),
+      },
+      {
+        path: 'ledger.md',
+        title: 'Ledger service',
+        isDecision: false,
+        via: expect.objectContaining({ kind: 'linked' }),
+      },
     ]);
     expect(JSON.stringify(one.replay)).not.toContain('Invoices');
   });
@@ -88,12 +102,22 @@ describe('CrawlHistoryService', () => {
       ...result,
       leftOut: [
         { path: 'plans/atlas.md', title: 'Atlas', reason: 'matches "plans"' },
-        { path: 'shared/orbit.md', ownerId: SOMEONE_ELSE, title: 'Orbit', reason: 'linked from Atlas' },
+        {
+          path: 'shared/orbit.md',
+          ownerId: SOMEONE_ELSE,
+          title: 'Orbit',
+          reason: 'linked from Atlas',
+        },
       ],
     });
     expect(replay.leftOut).toEqual([
       { path: 'plans/atlas.md', title: 'Atlas', reason: 'matches "plans"' },
-      { path: 'shared/orbit.md', ownerId: SOMEONE_ELSE, title: 'Orbit', reason: 'linked from Atlas' },
+      {
+        path: 'shared/orbit.md',
+        ownerId: SOMEONE_ELSE,
+        title: 'Orbit',
+        reason: 'linked from Atlas',
+      },
     ]);
     const crawls = history();
     await crawls.record(ME, { source: 'web', text: 'Roadmap Q4', result });
@@ -104,7 +128,11 @@ describe('CrawlHistoryService', () => {
 
   it('never lists or hands over another user’s crawls', async () => {
     const crawls = history();
-    await crawls.record(ME, { source: 'web', text: 'Roadmap Q4', result: await crawl('Roadmap Q4') });
+    await crawls.record(ME, {
+      source: 'web',
+      text: 'Roadmap Q4',
+      result: await crawl('Roadmap Q4'),
+    });
     const [mine] = await crawls.list(ME);
 
     expect(await crawls.list(SOMEONE_ELSE)).toEqual([]);
@@ -117,7 +145,11 @@ describe('CrawlHistoryService', () => {
     clock += 8 * DAY;
     expect(await crawls.list(ME)).toEqual([]);
 
-    await crawls.record(SOMEONE_ELSE, { source: 'web', text: 'new', result: await crawl('nothing') });
+    await crawls.record(SOMEONE_ELSE, {
+      source: 'web',
+      text: 'new',
+      result: await crawl('nothing'),
+    });
     const rows = await database.db.select().from(crawlHistory);
     expect(rows.map((r) => r.prompt)).toEqual(['new']);
   });
@@ -159,7 +191,12 @@ describe('CrawlHistoryService', () => {
     const result = await crawl('Roadmap Q4');
     await crawls.record(ME, { source: 'assistant', clientRef: key.id, text: 'a', result });
     clock += 1;
-    await crawls.record(ME, { source: 'assistant', clientRef: `oauth:${client.id}`, text: 'b', result });
+    await crawls.record(ME, {
+      source: 'assistant',
+      clientRef: `oauth:${client.id}`,
+      text: 'b',
+      result,
+    });
     clock += 1;
     await crawls.record(ME, { source: 'assistant', clientRef: 'gone', text: 'c', result });
 
@@ -185,5 +222,53 @@ describe('CrawlHistoryService', () => {
     const [listed] = await crawls.list(ME);
     expect(listed!.prompt).toHaveLength(200);
     expect((await crawls.get(ME, listed!.id)).prompt).toHaveLength(2_000);
+  });
+});
+
+describe('what an assistant wrote', () => {
+  it('follows the latest crawl from the same client, and keeps the order written', async () => {
+    const h = history();
+    const id = await h.record(ME, {
+      source: 'assistant',
+      clientRef: 'k1',
+      text: 'Roadmap',
+      result: await crawl('Roadmap'),
+    });
+    clock += 60_000;
+    await h.recordWrites(ME, 'k1', [{ action: 'create', path: 'plan.md' }]);
+    await h.recordWrites(ME, 'k1', [
+      { action: 'edit', path: 'roadmap.md' },
+      { action: 'delete', path: 'old.md', ownerId: SOMEONE_ELSE },
+    ]);
+
+    const kept = await h.get(ME, id!);
+    expect(kept.writes).toBe(3);
+    expect(kept.replay.writes).toEqual([
+      { action: 'create', path: 'plan.md' },
+      { action: 'edit', path: 'roadmap.md' },
+      { action: 'delete', path: 'old.md', ownerId: SOMEONE_ELSE },
+    ]);
+    expect((await h.list(ME)).map((c) => c.writes)).toEqual([3]);
+  });
+
+  it('keeps writes as a record of their own past the window, or from another client', async () => {
+    const h = history();
+    await h.record(ME, {
+      source: 'assistant',
+      clientRef: 'k1',
+      text: 'Roadmap',
+      result: await crawl('Roadmap'),
+    });
+    clock += 60_000;
+    await h.recordWrites(ME, 'k2', [{ action: 'create', path: 'a.md' }]);
+    clock += 31 * 60_000;
+    await h.recordWrites(ME, 'k1', [{ action: 'create', path: 'b.md' }]);
+
+    const listed = await h.list(ME);
+    expect(listed.map((c) => [c.prompt, c.notes, c.writes])).toEqual([
+      ['', 0, 1],
+      ['', 0, 1],
+      ['Roadmap', expect.any(Number), 0],
+    ]);
   });
 });

@@ -523,6 +523,29 @@ describe('the note size limit', () => {
   });
 });
 
+describe('the crawl history', () => {
+  it('keeps what an assistant wrote with the crawl it read, for the Sentinel to replay', async () => {
+    const client = await clientFor(OWNER.id);
+    await call(client, 'gather_context', { text: 'Plan' });
+    await call(client, 'save_notes', {
+      writes: [
+        { action: 'create', path: 'orbit/lore.md', content: '# Lore' },
+        { action: 'edit', path: 'orbit/plan.md', edits: [{ op: 'append', text: 'x' }] },
+      ],
+    });
+    // A refused write is not kept: nothing happened.
+    await call(client, 'create_note', { path: 'orbit/lore.md', content: 'again' });
+
+    const history = new CrawlHistoryService({ db: database.db, retentionDays: 30 });
+    const [latest] = await history.list(OWNER.id);
+    expect(latest).toMatchObject({ prompt: 'Plan', writes: 2 });
+    expect((await history.get(OWNER.id, latest!.id)).replay.writes).toEqual([
+      { action: 'create', path: 'orbit/lore.md' },
+      { action: 'edit', path: 'orbit/plan.md' },
+    ]);
+  });
+});
+
 describe('get_notes', () => {
   it('reads several notes at once, with an error in place of one that is missing', async () => {
     const client = await clientFor(OWNER.id);

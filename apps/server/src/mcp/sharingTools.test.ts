@@ -498,12 +498,20 @@ describe('the listing tools answer with their rows, not with a pending promise',
       coverage: { resolved: 1, total: 2 },
     });
 
-    // And leaves it for the Sentinel view: Frodo's history, nobody else's.
+    // And leaves it for the Sentinel view: Frodo's history, nobody else's. The
+    // notes each of them created before any crawl are kept as writes of their
+    // own, in their own history.
     const crawls = new CrawlHistoryService({ db: database.db, retentionDays: 30 });
-    expect(await crawls.list(FRODO.id)).toMatchObject([
-      { source: 'assistant', prompt: 'Compare Atlas with Erebor.', notes: 2 },
+    const frodos = await crawls.list(FRODO.id);
+    expect(frodos.find((c) => c.notes > 0)).toMatchObject({
+      source: 'assistant',
+      prompt: 'Compare Atlas with Erebor.',
+      notes: 2,
+    });
+    expect(frodos.filter((c) => c.notes === 0).map((c) => c.writes)).toEqual([2]);
+    expect((await crawls.list(OWNER.id)).map((c) => [c.prompt, c.notes, c.writes])).toEqual([
+      ['', 0, 1],
     ]);
-    expect(await crawls.list(OWNER.id)).toEqual([]);
   });
 
   it('gather_context reads the folders shared with the caller, and stops at their edge', async () => {

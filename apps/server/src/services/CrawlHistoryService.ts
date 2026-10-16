@@ -7,9 +7,15 @@
 // was handed are not stored; they are the notes themselves, and a second copy
 // would outlive an edit or a delete.
 //
-// Rows belong to the user who crawled, who is always the vault's owner here —
-// `gather_context` reads the caller's own vault only. Nobody else lists them,
-// a folder share included.
+// What an assistant then wrote is kept with what it read: `save_notes` (and
+// every single-note write, which goes through it) adds each note it created,
+// changed or deleted to the assistant's latest crawl, so the replay can go
+// "read this, then wrote this" as one walk. Only where — a path, an owner, what
+// was done — never what was written.
+//
+// Rows belong to the user who crawled. Nobody else lists them, a folder share
+// included: a note in a shared folder is kept by its path and owner, exactly as
+// the crawl that read it.
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 import { and, desc, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
@@ -23,6 +29,14 @@ import type { GatherContextResult } from './gatherContext.js';
 const { crawlHistory, apiKeys, oauthClients } = pgSchema;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long after a crawl an assistant's writes still count as following from
+ * it. Past this, or with no crawl at all, the writes are kept as a record of
+ * their own.
+ */
+export const WRITES_FOLLOW_CRAWL_MS = 30 * 60 * 1000;
+/** Writes kept per crawl: a replay walks to each one. */
+export const MAX_WRITES_PER_CRAWL = 100;
 
 /** Crawls kept per user, newest first, whatever their age. */
 export const MAX_CRAWLS_PER_USER = 50;
@@ -46,7 +60,19 @@ export interface CrawlReplay {
    * why they were candidates, never a body — so the web app can offer them
    * back. Absent from crawls kept before it was.
    */
-  leftOut?: Array<Pick<GatherContextResult['leftOut'][number], 'path' | 'ownerId' | 'title' | 'reason'>>;
+  leftOut?: Array<
+    Pick<GatherContextResult['leftOut'][number], 'path' | 'ownerId' | 'title' | 'reason'>
+  >;
+  /** What the assistant wrote after reading, in order. Absent when it wrote nothing. */
+  writes?: CrawlWrite[];
+}
+
+/** One note an assistant wrote: where, and what was done to it. */
+export interface CrawlWrite {
+  action: 'create' | 'edit' | 'replace' | 'delete';
+  path: string;
+  /** Set for a note in a folder somebody shared: `path` is then relative to their root. */
+  ownerId?: string;
 }
 
 export interface CrawlSummary {
@@ -59,6 +85,8 @@ export interface CrawlSummary {
   prompt: string;
   notes: number;
   coverage: { resolved: number; total: number };
+  /** Notes the assistant wrote after this crawl. */
+  writes: number;
 }
 
 export interface CrawlRecord extends CrawlSummary {
@@ -116,7 +144,12 @@ export class CrawlHistoryService {
    */
   async record(
     userId: string,
-    crawl: { source: CrawlSource; clientRef?: string | null; text: string; result: GatherContextResult },
+    crawl: {
+      source: CrawlSource;
+      clientRef?: string | null;
+      text: string;
+      result: GatherContextResult;
+    },
   ): Promise<string | null> {
     if (!this.enabled) return null;
     try {
@@ -138,6 +171,81 @@ export class CrawlHistoryService {
     }
   }
 
+  /**
+   * Keep what an assistant wrote: on its latest crawl, when that came from the
+   * same client within `WRITES_FOLLOW_CRAWL_MS`, else as a record of its own
+   * with no prompt. Appended in one statement, so two saves at once both land.
+   *
+   * Never throws, like `record`: the writes have already happened, and failing
+   * to note them down must not turn a save into an error.
+   */
+  async recordWrites(
+    userId: string,
+    clientRef: string | null | undefined,
+    writes: readonly CrawlWrite[],
+  ): Promise<void> {
+    if (!this.enabled || writes.length === 0) return;
+    try {
+      const rows = writes.slice(0, MAX_WRITES_PER_CRAWL).map(({ action, path, ownerId }) => ({
+        action,
+        path,
+        ...(ownerId ? { ownerId } : {}),
+      }));
+      const added = JSON.stringify(rows);
+      const [crawl] = await this.opts.db
+        .select({ id: crawlHistory.id })
+        .from(crawlHistory)
+        .where(
+          and(
+            eq(crawlHistory.userId, userId),
+            eq(crawlHistory.source, 'assistant'),
+            sql`${crawlHistory.clientRef} IS NOT DISTINCT FROM ${clientRef ?? null}`,
+            sql`${crawlHistory.createdAt} >= ${this.now() - WRITES_FOLLOW_CRAWL_MS}`,
+          ),
+        )
+        .orderBy(desc(crawlHistory.createdAt), desc(crawlHistory.id))
+        .limit(1);
+      if (crawl) {
+        // The newest writes are the ones kept when a crawl reaches the cap.
+        await this.opts.db
+          .update(crawlHistory)
+          .set({
+            result: sql`jsonb_set(${crawlHistory.result}, '{writes}', (
+              select coalesce(jsonb_agg(w order by n), '[]'::jsonb)
+              from (
+                select w, n from jsonb_array_elements(
+                  coalesce(${crawlHistory.result} -> 'writes', '[]'::jsonb) || ${added}::jsonb
+                ) with ordinality as e(w, n)
+                order by n desc
+                limit ${MAX_WRITES_PER_CRAWL}
+              ) kept
+            ))`,
+          })
+          .where(eq(crawlHistory.id, crawl.id));
+        return;
+      }
+      await this.prune(userId);
+      const replay: CrawlReplay = {
+        notes: [],
+        unresolved: [],
+        coverage: { resolved: 0, total: 0 },
+        notesLeftOut: 0,
+        writes: rows,
+      };
+      await this.opts.db.insert(crawlHistory).values({
+        id: nanoid(),
+        userId,
+        source: 'assistant',
+        clientRef: clientRef ?? null,
+        prompt: '',
+        result: replay,
+        createdAt: this.now(),
+      });
+    } catch (err) {
+      this.opts.logger?.error({ err }, 'could not record writes in the history');
+    }
+  }
+
   /** The user's recent crawls, newest first. */
   async list(userId: string, limit = 20): Promise<CrawlSummary[]> {
     if (!this.enabled) return [];
@@ -150,9 +258,12 @@ export class CrawlHistoryService {
         prompt: sql<string>`substring(${crawlHistory.prompt} from 1 for ${LISTED_PROMPT_CHARS})`,
         notes: sql<number>`jsonb_array_length(${crawlHistory.result} -> 'notes')`,
         coverage: sql<CrawlSummary['coverage']>`${crawlHistory.result} -> 'coverage'`,
+        writes: sql<number>`jsonb_array_length(coalesce(${crawlHistory.result} -> 'writes', '[]'::jsonb))`,
       })
       .from(crawlHistory)
-      .where(and(eq(crawlHistory.userId, userId), sql`${crawlHistory.createdAt} >= ${this.cutoff()}`))
+      .where(
+        and(eq(crawlHistory.userId, userId), sql`${crawlHistory.createdAt} >= ${this.cutoff()}`),
+      )
       .orderBy(desc(crawlHistory.createdAt), desc(crawlHistory.id))
       .limit(Math.min(Math.max(limit, 1), MAX_CRAWLS_PER_USER));
     const names = await this.clientNames(
@@ -162,6 +273,7 @@ export class CrawlHistoryService {
     return rows.map(({ clientRef, ...r }) => ({
       ...r,
       notes: Number(r.notes),
+      writes: Number(r.writes),
       client: clientRef ? (names.get(clientRef) ?? null) : null,
     }));
   }
@@ -191,6 +303,7 @@ export class CrawlHistoryService {
       prompt: row.prompt,
       notes: replay.notes.length,
       coverage: replay.coverage,
+      writes: replay.writes?.length ?? 0,
       replay,
     };
   }

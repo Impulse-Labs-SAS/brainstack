@@ -226,8 +226,24 @@ export function buildMcpServer({
     onUnexpected: (err) => logger.error({ err }, 'MCP write failed'),
     maxChars: NOTE_MAX_CHARS,
   };
+  /**
+   * Run writes through the batch, then note in the crawl history what landed —
+   * after the crawl the assistant read from, for the Sentinel view to replay.
+   */
+  const save = async (writes: NoteWrite[]) => {
+    const userId = requireUserId();
+    const report = await saveNotes(notes, userId, writes, SAVE);
+    await crawls.recordWrites(
+      userId,
+      principal?.clientRef ?? null,
+      report.results
+        .filter((r) => r.status === 'done')
+        .map(({ action, path, ownerId }) => ({ action, path, ...(ownerId ? { ownerId } : {}) })),
+    );
+    return report;
+  };
   const writeOne = async (write: NoteWrite) => {
-    const [result] = (await saveNotes(notes, requireUserId(), [write], SAVE)).results;
+    const [result] = (await save([write])).results;
     if (result!.status === 'done') return { done: result! };
     const { code, message } = result!.error!;
     return {
@@ -572,7 +588,7 @@ export function buildMcpServer({
           ...w,
           owner: ownerOf(ownerId),
         })) as NoteWrite[];
-        const report = await saveNotes(notes, userId, planned, SAVE);
+        const report = await save(planned);
         return JSON_TEXT(report);
       } catch (err) {
         return toMcpError(err);
