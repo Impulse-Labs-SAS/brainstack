@@ -5,7 +5,12 @@ import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ApiKeyService } from './ApiKeyService.js';
-import { CrawlHistoryService, MAX_CRAWLS_PER_USER, toReplay } from './CrawlHistoryService.js';
+import {
+  CrawlHistoryService,
+  MAX_CRAWLS_PER_USER,
+  MAX_WRITES_PER_CRAWL,
+  toReplay,
+} from './CrawlHistoryService.js';
 import { NoteService } from './NoteService.js';
 import { OAuthProviderService } from './OAuthProviderService.js';
 import { SearchService } from './SearchService.js';
@@ -270,5 +275,27 @@ describe('what an assistant wrote', () => {
       ['', 0, 1],
       ['Roadmap', expect.any(Number), 0],
     ]);
+  });
+});
+
+describe('the writes a crawl keeps', () => {
+  it('keeps the newest, in the order written, past the cap', async () => {
+    const h = history();
+    const id = await h.record(ME, {
+      source: 'assistant',
+      clientRef: null,
+      text: 'Roadmap',
+      result: await crawl('Roadmap'),
+    });
+    const writes = Array.from({ length: MAX_WRITES_PER_CRAWL + 5 }, (_, i) => ({
+      action: 'create' as const,
+      path: `n${i}.md`,
+    }));
+    await h.recordWrites(ME, null, writes.slice(0, 50));
+    await h.recordWrites(ME, null, writes.slice(50));
+    const kept = (await h.get(ME, id!)).replay.writes!;
+    expect(kept).toHaveLength(MAX_WRITES_PER_CRAWL);
+    expect(kept[0]!.path).toBe('n5.md');
+    expect(kept.at(-1)!.path).toBe(`n${MAX_WRITES_PER_CRAWL + 4}.md`);
   });
 });

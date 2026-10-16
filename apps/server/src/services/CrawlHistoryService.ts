@@ -207,7 +207,7 @@ export class CrawlHistoryService {
         .limit(1);
       if (crawl) {
         // The newest writes are the ones kept when a crawl reaches the cap.
-        await this.opts.db
+        const appended = await this.opts.db
           .update(crawlHistory)
           .set({
             result: sql`jsonb_set(${crawlHistory.result}, '{writes}', (
@@ -221,8 +221,11 @@ export class CrawlHistoryService {
               ) kept
             ))`,
           })
-          .where(eq(crawlHistory.id, crawl.id));
-        return;
+          .where(eq(crawlHistory.id, crawl.id))
+          .returning({ id: crawlHistory.id });
+        // Gone since it was found — pruned, or aged out: the writes are kept
+        // on a record of their own instead of nowhere.
+        if (appended.length > 0) return;
       }
       await this.prune(userId);
       const replay: CrawlReplay = {

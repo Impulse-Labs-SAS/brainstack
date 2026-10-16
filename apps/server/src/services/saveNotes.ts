@@ -195,7 +195,9 @@ async function check(
   };
   switch (write.action) {
     case 'create':
-      limit(noteSize(extractFrontmatter(write.content).body));
+      // With a frontmatter argument the content is stored whole as the body,
+      // a block of its own included; without one, its block is split off.
+      limit(noteSize(write.frontmatter ? write.content : extractFrontmatter(write.content).body));
       if (await notes.hasNote(write.owner, write.path)) {
         throw new AppError(`${write.path} already exists`, 'ALREADY_EXISTS', 409);
       }
@@ -209,7 +211,8 @@ async function check(
     }
     case 'replace': {
       const current = await notes.get(write.owner, write.path);
-      limit(noteSize(extractFrontmatter(write.content).body), noteSize(current.body));
+      // A stale read first: the size is judged against the version the caller
+      // read, and a caller working from an old one needs to hear that.
       if (write.expectedChecksum && write.expectedChecksum !== current.checksum) {
         throw new AppError(
           `${write.path} was changed by someone else since you read it`,
@@ -217,6 +220,7 @@ async function check(
           409,
         );
       }
+      limit(noteSize(extractFrontmatter(write.content).body), noteSize(current.body));
       return { write, baseChecksum: current.checksum };
     }
     case 'delete': {
@@ -263,6 +267,11 @@ async function write(notes: NoteService, { write: w, plan, baseChecksum }: Check
     case 'replace':
       return notes.update(w.owner, w.path, w.content, { expectedChecksum: baseChecksum! });
     case 'delete':
-      return notes.remove(w.owner, w.path, { recursive: w.recursive ?? false });
+      // The path as the store names it, like every other write's: a `./` or a
+      // trailing slash the caller typed is not what was deleted.
+      return {
+        path: normalizeRelativePath(w.path),
+        ...(await notes.remove(w.owner, w.path, { recursive: w.recursive ?? false })),
+      };
   }
 }

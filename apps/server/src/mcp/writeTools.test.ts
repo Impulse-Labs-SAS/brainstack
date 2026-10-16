@@ -241,6 +241,25 @@ describe('save_notes', () => {
     expect(await body(OWNER.id, 'orbit/_orbit.md')).toBe(MOC);
   });
 
+  it('reports and records a delete by the path the store knows', async () => {
+    const client = await clientFor(OWNER.id);
+    await notes.create(OWNER.id, 'orbit/old.md', 'Old.');
+    const { value } = await call(client, 'save_notes', {
+      writes: [{ action: 'delete', path: './orbit/old.md' }],
+    });
+    expect(value).toMatchObject({ saved: true, results: [{ path: 'orbit/old.md' }] });
+  });
+
+  it('reports CHANGED before TOO_LONG for a rewrite from a stale read', async () => {
+    const client = await clientFor(OWNER.id);
+    const { error } = await call(client, 'update_note', {
+      path: 'orbit/plan.md',
+      expectedChecksum: 'stale',
+      content: 'x'.repeat(NOTE_MAX_CHARS + 1),
+    });
+    expect(error).toMatch(/^\[CHANGED\]/);
+  });
+
   it('refuses two writes to one path', async () => {
     const client = await clientFor(OWNER.id);
     const { value } = await call(client, 'save_notes', {
@@ -596,7 +615,7 @@ describe('place_note', () => {
       text: 'Discounts on the Pricing tiers, applied to Billing invoices.',
     });
     expect(value).toMatchObject({
-      folder: { folder: 'orbit', ownerId: OWNER.id, index: 'orbit/_orbit.md' },
+      folder: { folder: 'orbit', ownerId: OWNER.id, index: 'orbit/_orbit.md', writable: true },
     });
     expect((value as { links: Array<{ ownerId?: string }> }).links[0]).toMatchObject({
       ownerId: OWNER.id,

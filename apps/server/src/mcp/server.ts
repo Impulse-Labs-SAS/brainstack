@@ -959,7 +959,7 @@ export function buildMcpServer({
     {
       title: 'Find where a new note goes',
       description:
-        "Before creating a note: where it belongs, whether one like it already exists, and what it should link to — one call instead of list_tree, search_brain and opening indexes by hand. Pass the `title` it would have and its `text` (or a summary). Returns `duplicates` (notes already called that: propose adding to one of them instead), `folder` (the folder the most related notes live in, with `reason` and its `index` note when it has one — link the new note from it in the same save_notes) and up to two `alternatives`, and `links` (the notes the text names, then the most related; a wikilink cannot cross into another owner's vault). A folder or note in a folder shared with the user comes with its `ownerId`. Writes nothing: put the proposal to the user, as for any write. Kept in the user's crawl history like gather_context.",
+        "Before creating a note: where it belongs, whether one like it already exists, and what it should link to — one call instead of list_tree, search_brain and opening indexes by hand. Pass the `title` it would have and its `text` (or a summary). Returns `duplicates` (notes already called that: propose adding to one of them instead), `folder` (the folder the most related notes live in, with `reason` and its `index` note when it has one — link the new note from it in the same save_notes) and up to two `alternatives`, and `links` (the notes the text names, then the most related; a wikilink cannot cross into another owner's vault). A folder or note in a folder shared with the user comes with its `ownerId`, and a shared folder says whether the user may write there (`writable`). Writes nothing: put the proposal to the user, as for any write. Kept in the user's crawl history like gather_context.",
       inputSchema: {
         title: field().min(1),
         text: z.string().max(MAX_TEXT_CHARS).optional(),
@@ -984,7 +984,15 @@ export function buildMcpServer({
           text: `Where does “${title}” go?`,
           result: crawl,
         });
-        return JSON_TEXT(proposal);
+        // A folder shared for reading only is still where related notes are,
+        // but not somewhere the user can save: say so before they are asked.
+        const writable = async <T extends { folder: string; ownerId?: string }>(f: T) =>
+          f.ownerId ? { ...f, writable: await sharing.canWrite(userId, f.ownerId, f.folder) } : f;
+        return JSON_TEXT({
+          ...proposal,
+          folder: proposal.folder ? await writable(proposal.folder) : null,
+          alternatives: await Promise.all(proposal.alternatives.map(writable)),
+        });
       } catch (err) {
         return toMcpError(err);
       }
