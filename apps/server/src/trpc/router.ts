@@ -3,16 +3,12 @@
 // same underlying services, so behaviour stays consistent.
 
 import { serializeNote, type Frontmatter } from '@brainstack/core';
+import { NOTE_MAX_CHARS } from '@brainstack/core/sentinel';
 import { TRPCError, initTRPC } from '@trpc/server';
 import superjson from 'superjson';
 import { z } from 'zod';
 
-import {
-  emailField,
-  field,
-  frontmatterField,
-  noteContent,
-} from '../config/limits.js';
+import { emailField, field, frontmatterField, noteContent } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { approveShareRequest } from '../services/shareRequests.js';
 import { AppError, INTERNAL_MESSAGE, toAppError } from '../lib/errors.js';
@@ -54,6 +50,7 @@ const TRPC_CODES = {
   UNAUTHORIZED: 'UNAUTHORIZED',
   FORBIDDEN: 'FORBIDDEN',
   INVALID_INPUT: 'BAD_REQUEST',
+  TOO_LONG: 'PAYLOAD_TOO_LARGE',
   RATE_LIMITED: 'TOO_MANY_REQUESTS',
   SIGNUP_CLOSED: 'FORBIDDEN',
   UNAVAILABLE: 'PRECONDITION_FAILED',
@@ -208,7 +205,11 @@ export const appRouter = t.router({
         wrap(async () => {
           const owner = ownerOf(ctx, input.ownerId);
           await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
-          return withMarkdown(await ctx.notes.get(owner, input.path));
+          // The editor's size meter: the length an assistant may write a note to.
+          return {
+            ...withMarkdown(await ctx.notes.get(owner, input.path)),
+            maxChars: NOTE_MAX_CHARS,
+          };
         }),
       ),
     list: protectedProcedure
@@ -487,9 +488,10 @@ export const appRouter = t.router({
     getForOwner: protectedProcedure
       .input(z.object({ ownerId: field().min(1), path: field().min(1) }))
       .query(async ({ ctx, input }) =>
-        wrap(async () =>
-          withMarkdown(await ctx.crossOwner.getNote(ctx.user.id, input.ownerId, input.path)),
-        ),
+        wrap(async () => ({
+          ...withMarkdown(await ctx.crossOwner.getNote(ctx.user.id, input.ownerId, input.path)),
+          maxChars: NOTE_MAX_CHARS,
+        })),
       ),
     treeForOwner: protectedProcedure
       .input(
@@ -540,9 +542,7 @@ export const appRouter = t.router({
     listSharedWithMe: protectedProcedure.query(({ ctx }) =>
       ctx.sharing.listSharedRoots(ctx.user.id),
     ),
-    listMyShares: protectedProcedure.query(({ ctx }) =>
-      ctx.sharing.listMyShares(ctx.user.id),
-    ),
+    listMyShares: protectedProcedure.query(({ ctx }) => ctx.sharing.listMyShares(ctx.user.id)),
     shareWithUser: sessionProcedure
       .input(
         z.object({
@@ -556,7 +556,11 @@ export const appRouter = t.router({
           const target = await ctx.auth.findUserByEmail(input.email);
           if (!target) {
             // Somebody without an account is reached through an invitation instead.
-            throw new AppError('no user with that email; send an invitation instead', 'NOT_FOUND', 404);
+            throw new AppError(
+              'no user with that email; send an invitation instead',
+              'NOT_FOUND',
+              404,
+            );
           }
           const id = await ctx.sharing.grant({
             ownerId: ctx.user.id,

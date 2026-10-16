@@ -36,7 +36,7 @@ import {
   type MentionTerm,
   type NoteBodySource,
 } from '@brainstack/core';
-import { applyEdits, type NoteEdit } from '@brainstack/core/sentinel';
+import { applyEdits, noteSize, type NoteEdit, type NoteSize } from '@brainstack/core/sentinel';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 
 import { MAX_FRONTMATTER_CHARS, MAX_NOTE_CHARS } from '../config/limits.js';
@@ -92,6 +92,8 @@ export interface PlannedEdit {
   raw: string;
   /** The version the edit was planned on; the write lands only over it. */
   baseChecksum: string;
+  /** The body's size before and after, for the limit an assistant's writes keep to. */
+  size: { before: NoteSize; after: NoteSize };
 }
 
 /**
@@ -674,6 +676,7 @@ export class NoteService {
       // back every key an edit removed.
       raw: serializeNote(next.frontmatter, next.body),
       baseChecksum: existing.checksum,
+      size: { before: noteSize(existing.body), after: noteSize(next.body) },
     };
   }
 
@@ -1368,7 +1371,14 @@ export class NoteService {
     bodyChars: number,
     sharedScopes: SharedScope[] = [],
   ): Promise<
-    Array<{ path: string; title: string; body: string; isDecision: boolean; checksum: string }>
+    Array<{
+      path: string;
+      title: string;
+      body: string;
+      isDecision: boolean;
+      checksum: string;
+      chars: number;
+    }>
   > {
     const inScope = this.inScope(viewerId, sharedScopes);
     const physical = paths.filter(inScope);
@@ -1381,6 +1391,12 @@ export class NoteService {
           // Only the start: an excerpt never needs more.
           body: sql<string>`substring(${notes.body} from 1 for ${bodyChars})`,
           checksum: notes.checksum,
+          // The whole body's length as `noteSize` measures it: line breaks
+          // folded to LF, surrounding whitespace left out.
+          chars: sql<number>`length(btrim(
+            replace(${notes.body}, chr(13) || chr(10), chr(10)),
+            ' ' || chr(9) || chr(10) || chr(13)
+          ))::int`,
         })
         .from(notes)
         .where(inArray(notes.path, physical)),
@@ -1412,6 +1428,7 @@ export class NoteService {
         body: r.body,
         isDecision: decisions.has(r.path),
         checksum: r.checksum,
+        chars: Number(r.chars),
       }));
   }
 
