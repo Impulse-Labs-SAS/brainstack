@@ -7,9 +7,10 @@ import type { ReachKind } from './crawl-plan';
 /** What the panel shows, sent only when it changes. */
 export interface CrawlSnapshot {
   state: 'idle' | 'walking' | 'reading' | 'done';
-  phase: 0 | 1 | 2;
+  /** 0 reads the prompt, 1 follows links, 3 writes what the assistant wrote, 2 is done. */
+  phase: 0 | 1 | 2 | 3;
   log: Array<{ t: number; kind: ReachKind | 'ask' | 'walk' | 'done'; verb: string; text: string }>;
-  found: { named: number; linked: number; decision: number };
+  found: { named: number; linked: number; decision: number; written: number };
   /** Every note found so far, in the order found, as `place` keys it: the panel lists them as the walk reaches them. */
   reached: readonly string[];
   asks: Array<{ term: string; why: string }>;
@@ -36,7 +37,7 @@ export function emptySnapshot(): CrawlSnapshot {
     state: 'idle',
     phase: 0,
     log: [],
-    found: { named: 0, linked: 0, decision: 0 },
+    found: { named: 0, linked: 0, decision: 0, written: 0 },
     reached: [],
     asks: [],
     threads: 0,

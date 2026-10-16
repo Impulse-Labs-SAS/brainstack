@@ -35,15 +35,7 @@
 // panel: inside an inert one it would not speak.
 
 import { Check, ChevronRight, Copy } from 'lucide-react';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-  type Ref,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { Button, Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 
 import { trpc } from '@/lib/trpc';
@@ -100,7 +92,12 @@ const NOT_NOW = 'The Sentinel could not take that search just now. Try again.';
 const NO_COPY =
   'This browser did not let the page copy. The prompt is selected: copy it with Ctrl+C (⌘C on a Mac).';
 
-const PHASE = ['reading the question', 'following links', 'context ready'] as const;
+const PHASE = [
+  'reading the question',
+  'following links',
+  'context ready',
+  'writing notes',
+] as const;
 
 type PanelTab = 'context' | 'prompt' | 'activity';
 
@@ -210,7 +207,9 @@ export function CrawlPanel({
       pluginRef.current?.mark(null);
       return;
     }
-    (wide ? (heading.current ?? strip.current) : peekStatus.current)?.focus({ preventScroll: true });
+    (wide ? (heading.current ?? strip.current) : peekStatus.current)?.focus({
+      preventScroll: true,
+    });
     // Only on the way in: a turned phone must not pull focus from where the person put it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inCrawl]);
@@ -440,7 +439,8 @@ export function CrawlPanel({
         <span className="text-[12.5px] tabular-nums text-fg-primary">
           {done ? (
             <>
-              <b className="font-medium">{brief.notes}</b> {brief.notes === 1 ? 'note' : 'notes'} ready
+              <b className="font-medium">{brief.notes}</b> {brief.notes === 1 ? 'note' : 'notes'}{' '}
+              ready
               {open > 0 && <span style={{ color: CRAWL_COLORS.ask }}> · {open} to clarify</span>}
             </>
           ) : (
@@ -459,8 +459,13 @@ export function CrawlPanel({
       </div>
       <div className="h-0.5 overflow-hidden rounded-full bg-border">
         <div
-          className={cn('h-full transition-[width] duration-300', done ? 'bg-success' : 'bg-accent')}
-          style={{ width: `${done ? 100 : onGraph > 0 ? Math.round(((reached?.size ?? 0) / onGraph) * 100) : 0}%` }}
+          className={cn(
+            'h-full transition-[width] duration-300',
+            done ? 'bg-success' : 'bg-accent',
+          )}
+          style={{
+            width: `${done ? 100 : onGraph > 0 ? Math.round(((reached?.size ?? 0) / onGraph) * 100) : 0}%`,
+          }}
         />
       </div>
       {/* The Layers button is not on this view, so the walk says what the layers kept from it. */}
@@ -554,7 +559,12 @@ export function CrawlPanel({
                 onGraph={showable}
               />
             ) : id === 'prompt' ? (
-              <PromptTab format={format} onFormat={chooseFormat} brief={brief} textRef={briefText} />
+              <PromptTab
+                format={format}
+                onFormat={chooseFormat}
+                brief={brief}
+                textRef={briefText}
+              />
             ) : (
               <ActivityTab snap={snap} answer={answer} raw={raw} />
             )}
@@ -633,7 +643,10 @@ export function CrawlPanel({
                       </span>
                       <Button
                         onPress={() => setTab('prompt')}
-                        className={cn('flex items-center gap-0.5 hover:text-fg-primary', FOCUS_RING)}
+                        className={cn(
+                          'flex items-center gap-0.5 hover:text-fg-primary',
+                          FOCUS_RING,
+                        )}
                       >
                         {format === 'refs' ? 'References' : 'Full text'}
                         <ChevronRight size={11} aria-hidden />

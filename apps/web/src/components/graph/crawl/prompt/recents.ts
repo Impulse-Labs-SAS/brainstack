@@ -6,7 +6,7 @@
 // on every visit to the view — its default — the latest few would all read new
 // again, and the mark would stop meaning anything.
 
-import { ago, madeBy, type RecentCrawl } from '../crawl-history';
+import { ago, crawlCounts, crawlLabel, madeBy, type RecentCrawl } from '../crawl-history';
 
 export interface PromptRecent {
   id: string;
@@ -32,8 +32,8 @@ export function promptRecents(
     .slice(0, Math.max(0, most))
     .map((c) => ({
       id: c.id,
-      prompt: c.prompt,
-      meta: `${madeBy(c)} · ${ago(c.createdAt, now)} · ${c.notes} ${c.notes === 1 ? 'note' : 'notes'}`,
+      prompt: crawlLabel(c),
+      meta: `${madeBy(c)} · ${ago(c.createdAt, now)} · ${crawlCounts(c)}`,
       fresh: c.source === 'assistant' && !seen.has(c.id),
     }));
 }

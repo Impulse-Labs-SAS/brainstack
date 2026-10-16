@@ -7,6 +7,8 @@ export const CRAWL_COLORS = {
   named: '#b8a6ff',
   linked: '#5eead4',
   decision: '#4ade80',
+  /** A note the assistant created or changed after it read. */
+  written: '#60a5fa',
   ask: '#fbbf24',
 } as const;
 

@@ -53,7 +53,7 @@ const COMMON = /* glsl */ `
   uniform float uStill;
   uniform float uUnit;
   uniform vec3 uAccent;
-  uniform vec3 uWhy[4];
+  uniform vec3 uWhy[5];
 
   // Seconds since a stamp, 0 before it; and whether it has happened. A stamp
   // of "never" lies in the future, so it has not.
@@ -452,7 +452,7 @@ export const CRYSTAL_FS = /* glsl */ `
     vec3 light;
     float level;
     if (lit > 0.0) {
-      vec3 why = uWhy[int(clamp(vWhy, 0.0, 3.0) + 0.5)];
+      vec3 why = uWhy[int(clamp(vWhy, 0.0, 4.0) + 0.5)];
       // The flash runs towards warm white, and only partway: the core keeps its colour and its facets.
       light = mix(why, vec3(1.0, 0.945, 0.878), 0.3 * vLight.w);
       level = lit * uCoreLit;
@@ -680,7 +680,7 @@ export const TUBE_FS = /* glsl */ `
     float pulse = moving * exp(-p * p);
     float floor_ = why == 0 ? uTubeFloor : min(1.0, uTubeFloor * 1.8);
     float level = floor_ * (1.0 + uPulseGain * pulse) + 1.2 * heat;
-    vec3 colour = why == 0 ? uAccent : uWhy[clamp(why, 0, 3)];
+    vec3 colour = why == 0 ? uAccent : uWhy[clamp(why, 0, 4)];
     colour = mix(colour, vec3(1.0), 0.5 * min(heat, 1.0));
     // A glass rod with a hot wire down its middle.
     float i = level * (0.35 + 0.65 * ndv * ndv) + 0.8 * level * pow(ndv, 8.0);
@@ -724,7 +724,7 @@ export const HALO_VS = /* glsl */ `
     mv.xy += position.xy * px * (depth * k) / uPx;
     gl_Position = projectionMatrix * mv;
     vUv = position.xy;
-    vColour = uWhy[int(clamp(st.z, 0.0, 3.0) + 0.5)] * uHaloGain * grow * breath * depthOf(depth) * near;
+    vColour = uWhy[int(clamp(st.z, 0.0, 4.0) + 0.5)] * uHaloGain * grow * breath * depthOf(depth) * near;
   }
 `;
 
@@ -771,7 +771,7 @@ export const RING_VS = /* glsl */ `
     gl_Position = projectionMatrix * mv;
     vUv = position.xy * extent;
     vRing = vec2(radius, width);
-    vColour = uWhy[int(clamp(st.z, 0.0, 3.0) + 0.5)] * uRingGain * (1.0 - t) * (1.0 - t) * near * depthOf(depth);
+    vColour = uWhy[int(clamp(st.z, 0.0, 4.0) + 0.5)] * uRingGain * (1.0 - t) * (1.0 - t) * near * depthOf(depth);
   }
 `;
 

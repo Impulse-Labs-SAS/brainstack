@@ -47,7 +47,12 @@ export const STATE_WIDTH = 256;
 /** The time a thing that has not happened is stamped with: always "not yet". Exact in a float. */
 export const NEVER = 1e9;
 /** What a found note's `why` holds, by the kind of reason. */
-export const FOUND_CODE: Readonly<Record<ReachKind, number>> = { named: 1, linked: 2, decision: 3 };
+export const FOUND_CODE: Readonly<Record<ReachKind, number>> = {
+  named: 1,
+  linked: 2,
+  decision: 3,
+  written: 4,
+};
 /**
  * Spans in one frame past which a texture goes up whole: a jump to the end
  * writes most of it anyway, and one upload beats a hundred small ones.

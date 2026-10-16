@@ -6,7 +6,9 @@
 // the text named it, a search found it, or it was reached from another note.
 // That is enough to walk it again in order: first every note the text names,
 // then the references nothing could settle, then out along the links from
-// each note to what it led to.
+// each note to what it led to — and last, when the assistant went on to write,
+// to each note it created or changed. A note it deleted is gone from the graph
+// and has nowhere to be walked to.
 //
 // The walk itself only ever follows threads the graph draws — written links
 // and the structure edges to an index. Two notes no thread joins are crossed
@@ -41,9 +43,22 @@ export interface CrawlResult {
     candidates?: Array<{ path: string; ownerId?: string; title: string }>;
   }>;
   coverage: { resolved: number; total: number };
+  /** What the assistant wrote after reading, in order. Absent when it wrote nothing. */
+  writes?: Array<{
+    action: 'create' | 'edit' | 'replace' | 'delete';
+    path: string;
+    ownerId?: string;
+  }>;
 }
 
-export type ReachKind = 'named' | 'linked' | 'decision';
+export type ReachKind = 'named' | 'linked' | 'decision' | 'written';
+
+/** How a write reads beside the note it touched. */
+const WROTE: Record<'create' | 'edit' | 'replace', string> = {
+  create: 'created',
+  edit: 'edited',
+  replace: 'rewritten',
+};
 
 export interface Reach {
   node: GraphNode;
@@ -53,8 +68,11 @@ export interface Reach {
 }
 
 export type CrawlStep =
-  /** Walk to `at`, then reach out to each of `reach`. */
-  | { kind: 'visit'; phase: 0 | 1; at: GraphNode; reach: Reach[] }
+  /**
+   * Walk to `at`, then reach out to each of `reach`. Phase 0 reads the prompt,
+   * 1 follows links, 3 writes (2 is handing the context over, the finish).
+   */
+  | { kind: 'visit'; phase: 0 | 1 | 3; at: GraphNode; reach: Reach[] }
   /** Stay put and reach into the void, or to the candidates the reference could mean. */
   | { kind: 'ask'; term: string; why: string; candidates: GraphNode[] }
   | { kind: 'finish' };
@@ -160,6 +178,22 @@ export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
   }
   // Anything reached from a note the graph does not show still counts.
   for (const rest of byFrom.values()) offGraph += rest.length;
+
+  // Then what was written, one note at a time, in the order written.
+  for (const w of result.writes ?? []) {
+    if (w.action === 'delete') continue;
+    const node = byPlace.get(place(w.path, w.ownerId));
+    if (!node) {
+      offGraph++;
+      continue;
+    }
+    steps.push({
+      kind: 'visit',
+      phase: 3,
+      at: node,
+      reach: [{ node, kind: 'written', label: `${node.label} · ${WROTE[w.action]}` }],
+    });
+  }
 
   steps.push({ kind: 'finish' });
   return { steps, offGraph, coverage: result.coverage };

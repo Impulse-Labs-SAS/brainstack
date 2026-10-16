@@ -13,6 +13,8 @@ export interface RecentCrawl {
   client: string | null;
   prompt: string;
   notes: number;
+  /** Notes the assistant wrote after it read. Absent from older servers. */
+  writes?: number;
 }
 
 const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto', style: 'short' });
@@ -26,6 +28,24 @@ export function ago(at: number, now: number): string {
   const h = Math.round(m / 60);
   if (h > -24) return relative.format(h, 'hour');
   return relative.format(Math.round(h / 24), 'day');
+}
+
+/**
+ * What the crawl is called in a list: its prompt, or — for writes an assistant
+ * made with no crawl before them — what it saved.
+ */
+export function crawlLabel(c: Pick<RecentCrawl, 'prompt' | 'writes'>): string {
+  if (c.prompt.trim()) return c.prompt;
+  const n = c.writes ?? 0;
+  return `Saved ${n} ${n === 1 ? 'note' : 'notes'}`;
+}
+
+/** "4 notes", or "4 notes · wrote 2" when the assistant also wrote. */
+export function crawlCounts(c: Pick<RecentCrawl, 'notes' | 'writes'>): string {
+  const read = `${c.notes} ${c.notes === 1 ? 'note' : 'notes'}`;
+  const wrote = c.writes ? `wrote ${c.writes}` : '';
+  if (c.notes === 0 && wrote) return wrote;
+  return wrote ? `${read} · ${wrote}` : read;
 }
 
 /** Who made it, as one word or a client's name. */

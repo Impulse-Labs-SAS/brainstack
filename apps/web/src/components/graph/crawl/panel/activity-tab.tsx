@@ -20,6 +20,7 @@ const VERB_COLOR: Record<CrawlSnapshot['log'][number]['kind'], string> = {
   named: CRAWL_COLORS.named,
   linked: CRAWL_COLORS.linked,
   decision: CRAWL_COLORS.decision,
+  written: CRAWL_COLORS.written,
   ask: CRAWL_COLORS.ask,
   walk: 'var(--fg-muted)',
   done: 'var(--fg-primary)',
@@ -78,9 +79,16 @@ export function ActivityTab({
         <Button
           onPress={() => setShowRaw(!showRaw)}
           aria-expanded={showRaw}
-          className={cn('flex items-center gap-1.5 text-left text-[12px] text-fg-secondary hover:text-fg-primary', FOCUS_RING)}
+          className={cn(
+            'flex items-center gap-1.5 text-left text-[12px] text-fg-secondary hover:text-fg-primary',
+            FOCUS_RING,
+          )}
         >
-          <ChevronRight size={12} aria-hidden className={cn('transition-transform', showRaw && 'rotate-90')} />
+          <ChevronRight
+            size={12}
+            aria-hidden
+            className={cn('transition-transform', showRaw && 'rotate-90')}
+          />
           Raw response (JSON)
         </Button>
         {showRaw && (

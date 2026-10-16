@@ -20,7 +20,7 @@ import {
 import { cn } from '@/lib/utils';
 
 import { GLASS } from '../../graph-preview';
-import { ago, madeBy, type RecentCrawl } from '../crawl-history';
+import { ago, crawlCounts, crawlLabel, madeBy, type RecentCrawl } from '../crawl-history';
 
 import { Eyebrow, FOCUS_RING, IconButton } from './panel-ui';
 
@@ -38,7 +38,10 @@ export interface HistoryProps {
 /** Recent searches the panel lists; the prompt shows fewer. */
 const RECENT_SHOWN = 8;
 
-const POPOVER = cn(GLASS, 'w-[300px] max-w-[calc(100vw-1.5rem)] rounded-lg p-1.5 text-sm shadow-2xl outline-none');
+const POPOVER = cn(
+  GLASS,
+  'w-[300px] max-w-[calc(100vw-1.5rem)] rounded-lg p-1.5 text-sm shadow-2xl outline-none',
+);
 
 export function PanelHead({
   question,
@@ -81,7 +84,9 @@ export function PanelHead({
   status?: ReactNode;
   error: string | null;
 }) {
-  const fresh = (history.items ?? []).some((c) => c.source === 'assistant' && !history.seen.has(c.id));
+  const fresh = (history.items ?? []).some(
+    (c) => c.source === 'assistant' && !history.seen.has(c.id),
+  );
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -101,10 +106,19 @@ export function PanelHead({
         </h2>
         <div className="flex gap-0.5">
           <DialogTrigger>
-            <Button aria-label="Recent searches" className={cn('relative flex h-7 w-7 items-center justify-center rounded-md text-fg-secondary hover:bg-bg-hover hover:text-fg-primary pressed:bg-bg-hover', FOCUS_RING)}>
+            <Button
+              aria-label="Recent searches"
+              className={cn(
+                'relative flex h-7 w-7 items-center justify-center rounded-md text-fg-secondary hover:bg-bg-hover hover:text-fg-primary pressed:bg-bg-hover',
+                FOCUS_RING,
+              )}
+            >
               <Clock size={15} aria-hidden />
               {fresh && (
-                <span aria-label="(new)" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />
+                <span
+                  aria-label="(new)"
+                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent"
+                />
               )}
             </Button>
             <Popover placement="bottom end" offset={6} className={POPOVER}>
@@ -122,7 +136,13 @@ export function PanelHead({
             </Popover>
           </DialogTrigger>
           <DialogTrigger>
-            <Button aria-label="Sentinel options" className={cn('flex h-7 w-7 items-center justify-center rounded-md text-fg-secondary hover:bg-bg-hover hover:text-fg-primary pressed:bg-bg-hover', FOCUS_RING)}>
+            <Button
+              aria-label="Sentinel options"
+              className={cn(
+                'flex h-7 w-7 items-center justify-center rounded-md text-fg-secondary hover:bg-bg-hover hover:text-fg-primary pressed:bg-bg-hover',
+                FOCUS_RING,
+              )}
+            >
               <MoreHorizontal size={15} aria-hidden />
             </Button>
             <Popover placement="bottom end" offset={6} className={POPOVER}>
@@ -160,7 +180,13 @@ export function PanelHead({
 
       {editing ? (
         <>
-          <TextField value={draft} onChange={onDraft} aria-label="Your question" autoFocus className="grid">
+          <TextField
+            value={draft}
+            onChange={onDraft}
+            aria-label="Your question"
+            autoFocus
+            className="grid"
+          >
             <TextArea
               rows={3}
               onKeyDown={onKeyDown}
@@ -171,12 +197,18 @@ export function PanelHead({
             <Button
               onPress={onRun}
               isDisabled={!draft.trim() || busy}
-              className={cn('flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12.5px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40', FOCUS_RING)}
+              className={cn(
+                'flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12.5px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40',
+                FOCUS_RING,
+              )}
             >
               <Search size={13} aria-hidden />
               {busy ? 'Searching…' : 'Search again'}
             </Button>
-            <Button onPress={onCancelEdit} className={cn('text-[12px] text-fg-secondary hover:text-fg-primary', FOCUS_RING)}>
+            <Button
+              onPress={onCancelEdit}
+              className={cn('text-[12px] text-fg-secondary hover:text-fg-primary', FOCUS_RING)}
+            >
               Cancel
             </Button>
             <span className="ml-auto font-mono text-[10.5px] text-fg-muted">Ctrl+Enter</span>
@@ -184,13 +216,22 @@ export function PanelHead({
         </>
       ) : (
         <>
-          <p className="line-clamp-3 break-words text-[13.5px] leading-5 text-fg-primary" title={question}>
+          <p
+            className="line-clamp-3 break-words text-[13.5px] leading-5 text-fg-primary"
+            title={question}
+          >
             {question || '—'}
           </p>
           {/* New search outranks editing — a way out to a fresh question — but stays an
               outline: Copy prompt is the panel's one filled action. */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <Button onPress={onEdit} className={cn('flex items-center gap-1.5 text-[12px] text-fg-secondary hover:text-fg-primary', FOCUS_RING)}>
+            <Button
+              onPress={onEdit}
+              className={cn(
+                'flex items-center gap-1.5 text-[12px] text-fg-secondary hover:text-fg-primary',
+                FOCUS_RING,
+              )}
+            >
               <Pencil size={12} aria-hidden />
               Edit question
             </Button>
@@ -239,14 +280,16 @@ function RecentList({ history, onOpen }: { history: HistoryProps; onOpen(id: str
                 )}
               >
                 <span className="flex items-center gap-1.5 font-mono text-[10.5px] text-fg-muted">
-                  {c.source === 'assistant' ? <Bot size={12} aria-hidden /> : <User size={12} aria-hidden />}
+                  {c.source === 'assistant' ? (
+                    <Bot size={12} aria-hidden />
+                  ) : (
+                    <User size={12} aria-hidden />
+                  )}
                   <span className="truncate">{madeBy(c)}</span>
                   <span aria-hidden>·</span>
                   <span className="shrink-0">{ago(c.createdAt, history.now)}</span>
                   <span aria-hidden>·</span>
-                  <span className="shrink-0 tabular-nums">
-                    {c.notes} {c.notes === 1 ? 'note' : 'notes'}
-                  </span>
+                  <span className="shrink-0 tabular-nums">{crawlCounts(c)}</span>
                   {isNew && (
                     <span className="ml-auto shrink-0 rounded bg-accent/15 px-1 text-[9.5px] uppercase tracking-wider text-accent-hover">
                       new
@@ -254,7 +297,7 @@ function RecentList({ history, onOpen }: { history: HistoryProps; onOpen(id: str
                   )}
                 </span>
                 <span className="line-clamp-2 break-words text-[12.5px] leading-[17px] text-fg-primary">
-                  {c.prompt}
+                  {crawlLabel(c)}
                 </span>
               </Button>
             </li>
