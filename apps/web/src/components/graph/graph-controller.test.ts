@@ -587,7 +587,11 @@ const T0 = 1_750_000_000_000;
 const HOUR = 3_600_000;
 
 /** Forty notes in two vaults (invented names): chains inside each project, a few links across. */
-function twoVaults(cache = new Map<string, GraphNode>(), extra = false): GraphModel {
+function twoVaults(
+  cache = new Map<string, GraphNode>(),
+  extra = false,
+  layers = DEFAULT_LAYERS,
+): GraphModel {
   const nodes: InputNode[] = [];
   const projects = ['Orbit', 'Ledger', 'Atlas'];
   for (let i = 0; i < 28; i++) {
@@ -628,7 +632,7 @@ function twoVaults(cache = new Map<string, GraphNode>(), extra = false): GraphMo
     nodes,
     edges,
     affinity: null,
-    layers: DEFAULT_LAYERS,
+    layers,
     viewerId: 'me',
     vaultNames: new Map([['ana', { label: 'Erebor', owner: 'Ana' }]]),
     cache,
@@ -1003,7 +1007,7 @@ describe('GraphController without a plugin, one view at a time', () => {
           "scene": 429,
           "snapshot": 1,
         },
-        "digest": "1eb8f146c5cef7",
+        "digest": "1b829add7ad53d",
         "lines": 79630,
       }
     `);
@@ -3226,5 +3230,60 @@ describe('GraphController at rest', () => {
     c.restore(left.entry);
     untilRest(h, 4000);
     expect(drawnOver(h, 600).scenes).toBe(0);
+  });
+});
+
+// -- When a note goes, or a replay ends ------------------------------------------------------------
+
+describe('GraphController after a rebuild', () => {
+  it('stops dimming round a hovered or selected note once a rebuild takes it out', () => {
+    const point: [string, (h: Harness, n: GraphNode) => void][] = [
+      ['selected', (h, n) => h.controller.select(n)],
+      ['hovered', (h, n) => h.move(n.sx, n.sy)],
+    ];
+    for (const [how, pick] of point) {
+      const cache = new Map<string, GraphNode>();
+      const { h, c, model } = restingNetwork(twoVaults(cache));
+      const a = loneNotes(h, model).find((n) => n.vault === 'ana');
+      expect(a, how).toBeDefined();
+      pick(h, a!);
+      h.step(1);
+      // Everything more than two links from it is dimmed.
+      expect(renders().at(-1)!.hops?.get(a!), how).toBe(0);
+      // Its vault hidden from the Layers menu: the note goes, and with it what it lit.
+      c.setModel(twoVaults(cache, false, { ...DEFAULT_LAYERS, hiddenVaults: ['ana'] }), 'layers');
+      expect(c.model!.nodes, how).not.toContain(a);
+      h.step(30);
+      expect(renders().at(-1)!.hops, how).toBeNull();
+    }
+  });
+});
+
+describe('GraphController when a replay ends', () => {
+  it('uploads where the notes are on the map, whether the replay is stopped or ends unseen', () => {
+    const ends: [string, (h: Harness) => void][] = [
+      ['stopped', (h) => h.controller.stopGrowth()],
+      // A frame long after the replay's end, as in a tab brought back: the rest come in at once.
+      ['ended unseen', (h) => h.step(1, 10_000)],
+    ];
+    for (const [how, end] of ends) {
+      const h = harness(GraphController);
+      const c = h.controller;
+      c.initView('territories');
+      c.setModel(twoVaults(), 'init');
+      untilRest(h);
+      c.startGrowth();
+      h.step(60);
+      expect(c.model!.nodes.some((n) => !Number.isFinite(n.x)), how).toBe(true);
+      const from = renders().length;
+      end(h);
+      h.step(30);
+      // Every note is in its place at once, and nothing moves after: the first frame drawn
+      // must upload them, or they stay drawn where they were last uploaded, at the origin.
+      expect(c.model!.nodes.every((n) => Number.isFinite(n.x)), how).toBe(true);
+      const after = renders().slice(from);
+      expect(after.length, how).toBeGreaterThan(0);
+      expect(after[0]!.moved, how).toBe(true);
+    }
   });
 });

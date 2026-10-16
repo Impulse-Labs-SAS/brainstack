@@ -625,7 +625,10 @@ export class GraphController {
     this.pruneTrail(present);
     this.hover = keep(this.hover);
     this.previewed = keep(this.previewed);
+    // Both, or a focus that left the model leaves its neighbourhood lit and everything else dimmed:
+    // the next frame finds no focus, the same as this one, and so recomputes nothing.
     this.focus = null;
+    this.hops = null;
     this.userMoved = false;
     // Notes came or went: the brain comes back eased to its new size, not where it was left
     // (a first layout was framed for it above).
@@ -1750,6 +1753,9 @@ export class GraphController {
 
   private finishGrowth(): void {
     this.growing = false;
+    // The notes still to come were placed at once. On the map nothing moves after that, so no
+    // frame would upload them: drawn where they were last uploaded, at the origin.
+    this.reupload = true;
     this.events.onGrowth(false);
     clearTimeout(this.chipTimer);
     this.chipTimer = window.setTimeout(() => {
