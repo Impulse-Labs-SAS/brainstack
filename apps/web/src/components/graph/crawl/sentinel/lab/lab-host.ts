@@ -2134,6 +2134,7 @@ export class LabHost {
         time: now / 1000,
         still: this.still,
         width: this.vp.width,
+        height: this.vp.height,
         font: this.font,
         threads: !space,
         halos: !space || this.controls.spaceHalos,

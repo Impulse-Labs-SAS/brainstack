@@ -63,6 +63,7 @@ import {
 import type { BriefFormat } from './brief';
 import { readBriefFormat, writeBriefFormat } from './brief-pref';
 import { CRAWL_COLORS } from './crawl-colors';
+import { notesByPlace } from './crawl-plan';
 import { CrawlPlugin, type SentinelUi } from './crawl-plugin';
 import { walkOver, type CrawlSnapshot } from './crawl-snapshot';
 import { ActivityTab } from './panel/activity-tab';
@@ -390,6 +391,20 @@ export function CrawlPanel({
   };
 
   const mark = useCallback((key: string | null) => pluginRef.current?.mark(key), []);
+  // On a phone the sheet steps down to its peek, or it would cover the note brought into view, and
+  // the focus goes with it: the button pressed is no longer on screen.
+  const showNote = useCallback(
+    (key: string) => {
+      if (!pluginRef.current?.show(key) || wide) return;
+      setSheet('peek');
+      peekStatus.current?.focus();
+    },
+    [wide],
+  );
+  // The notes the graph shows, by `place`: a row's note a layer hides cannot be shown.
+  const model = controller.model;
+  const shown = useMemo(() => (model ? notesByPlace(model) : null), [model]);
+  const showable = useCallback((key: string) => !!shown?.has(key), [shown]);
 
   const items = recent.data?.items;
   const now = recent.data?.now;
@@ -535,6 +550,8 @@ export function CrawlPanel({
                 walking={!done}
                 onCuration={setCuration}
                 onMark={mark}
+                onShow={showNote}
+                onGraph={showable}
               />
             ) : id === 'prompt' ? (
               <PromptTab format={format} onFormat={chooseFormat} brief={brief} textRef={briefText} />
@@ -587,6 +604,7 @@ export function CrawlPanel({
             aria-label="Sentinel"
             inert={!inCrawl}
             aria-hidden={!inCrawl}
+            data-graph-chrome
             className={cn(
               GLASS,
               'pointer-events-auto absolute left-3 top-16 z-10 flex flex-col rounded-lg text-sm shadow-2xl',
@@ -628,6 +646,7 @@ export function CrawlPanel({
           </aside>
           {transport && (
             <div
+              data-graph-chrome
               className="pointer-events-none absolute bottom-3 z-10 transition-[left] duration-300 motion-reduce:transition-none"
               style={{
                 left: folded ? '5rem' : '24rem',

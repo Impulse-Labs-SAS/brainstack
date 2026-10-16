@@ -76,6 +76,7 @@ export function PhoneSheet({
       aria-label="Sentinel"
       inert={!open}
       aria-hidden={!open}
+      data-graph-chrome
       className={cn(
         'pointer-events-auto absolute inset-x-0 bottom-0 z-10',
         dragged === null && 'transition-[height] duration-300 ease-default motion-reduce:transition-none',
@@ -86,7 +87,9 @@ export function PhoneSheet({
       }}
     >
       {above && size !== 'full' && dragged === null && (
-        <div className="absolute bottom-full left-1/2 mb-3 -translate-x-1/2">{above}</div>
+        <div data-graph-chrome className="absolute bottom-full left-1/2 mb-3 -translate-x-1/2">
+          {above}
+        </div>
       )}
       <div className={cn(GLASS, 'flex h-full min-h-0 flex-col overflow-hidden rounded-t-2xl border-b-0 shadow-2xl')}>
         <button
