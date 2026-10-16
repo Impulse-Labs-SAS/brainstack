@@ -1753,6 +1753,9 @@ export class GraphController {
 
   private finishGrowth(): void {
     this.growing = false;
+    // The notes still to come were placed at once. On the map nothing moves after that, so no
+    // frame would upload them: drawn where they were last uploaded, at the origin.
+    this.reupload = true;
     this.events.onGrowth(false);
     clearTimeout(this.chipTimer);
     this.chipTimer = window.setTimeout(() => {

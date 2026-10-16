@@ -3258,3 +3258,32 @@ describe('GraphController after a rebuild', () => {
     }
   });
 });
+
+describe('GraphController when a replay ends', () => {
+  it('uploads where the notes are on the map, whether the replay is stopped or ends unseen', () => {
+    const ends: [string, (h: Harness) => void][] = [
+      ['stopped', (h) => h.controller.stopGrowth()],
+      // A frame long after the replay's end, as in a tab brought back: the rest come in at once.
+      ['ended unseen', (h) => h.step(1, 10_000)],
+    ];
+    for (const [how, end] of ends) {
+      const h = harness(GraphController);
+      const c = h.controller;
+      c.initView('territories');
+      c.setModel(twoVaults(), 'init');
+      untilRest(h);
+      c.startGrowth();
+      h.step(60);
+      expect(c.model!.nodes.some((n) => !Number.isFinite(n.x)), how).toBe(true);
+      const from = renders().length;
+      end(h);
+      h.step(30);
+      // Every note is in its place at once, and nothing moves after: the first frame drawn
+      // must upload them, or they stay drawn where they were last uploaded, at the origin.
+      expect(c.model!.nodes.every((n) => Number.isFinite(n.x)), how).toBe(true);
+      const after = renders().slice(from);
+      expect(after.length, how).toBeGreaterThan(0);
+      expect(after[0]!.moved, how).toBe(true);
+    }
+  });
+});
