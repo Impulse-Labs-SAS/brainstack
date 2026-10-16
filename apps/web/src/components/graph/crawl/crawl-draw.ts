@@ -209,10 +209,7 @@ function drawLabels(ctx: CanvasRenderingContext2D, P: Project, d: CrawlDrawing):
   const rest = shown
     .filter((s) => !s.fresh)
     .sort((a, b) => RANK[a.L.kind] - RANK[b.L.kind] || a.L.born - b.L.born);
-  const groups: Shown[][] = [
-    fresh,
-    ...RANKS.map((r) => rest.filter((s) => RANK[s.L.kind] === r)),
-  ];
+  const groups: Shown[][] = [fresh, ...RANKS.map((r) => rest.filter((s) => RANK[s.L.kind] === r))];
   const memory = d.memory;
   memory?.begin();
   const order = groups.flatMap((g) => (memory ? shownFirst(g, (s) => keyOf(s.L), memory) : g));

@@ -139,7 +139,6 @@ describe('the sharing tools exist at all', () => {
       expect.arrayContaining(['share_folder', 'unshare', 'list_shares', 'list_shared_with_me']),
     );
   });
-
 });
 
 describe('the assistant instructions', () => {
@@ -304,7 +303,11 @@ describe('unshare', () => {
   it('also takes away grants on folders nested inside', async () => {
     const owner = await clientFor(OWNER.id);
     await shareApproved(owner, OWNER.id, { path: 'proj', email: FRODO.email });
-    await shareApproved(owner, OWNER.id, { path: 'proj/sub', email: FRODO.email, permission: 'write' });
+    await shareApproved(owner, OWNER.id, {
+      path: 'proj/sub',
+      email: FRODO.email,
+      permission: 'write',
+    });
     await call(owner, 'unshare', { path: 'proj', email: FRODO.email });
     expect(await sharing.canRead(FRODO.id, OWNER.id, 'proj/sub/x.md')).toBe(false);
   });
@@ -575,7 +578,11 @@ describe('the listing tools answer with their rows, not with a pending promise',
       content: 'A',
       frontmatter: { client: 'Acme', status: 'open' },
     });
-    await call(owner, 'create_note', { path: 'Shared/s.md', content: 'S', frontmatter: { client: 'Globex' } });
+    await call(owner, 'create_note', {
+      path: 'Shared/s.md',
+      content: 'S',
+      frontmatter: { client: 'Globex' },
+    });
     await sharing.grant({
       ownerId: OWNER.id,
       folderPath: 'Shared',
@@ -601,7 +608,10 @@ describe('the listing tools answer with their rows, not with a pending promise',
     const owner = await clientFor(OWNER.id);
     const frodo = await clientFor(FRODO.id);
 
-    await call(owner, 'create_note', { path: 'Proyectos/erebor.md', content: 'destino compartido' });
+    await call(owner, 'create_note', {
+      path: 'Proyectos/erebor.md',
+      content: 'destino compartido',
+    });
     // Privado/ is never shared, but it links into the folder that is.
     await call(owner, 'create_note', {
       path: 'Privado/diario.md',
