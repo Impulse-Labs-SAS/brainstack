@@ -129,8 +129,8 @@ export function vaultSource(
       (await deps.notes.contextDigests(viewerId, paths.map(toStored), bodyChars, scopes)).map(
         (d) => ({ ...d, path: fromStored(d.path) }),
       ),
-    bodies: async (paths) =>
-      (await deps.notes.contextBodies(viewerId, paths.map(toStored), scopes)).map((b) => ({
+    headingLines: async (paths) =>
+      (await deps.notes.contextHeadingLines(viewerId, paths.map(toStored), scopes)).map((b) => ({
         ...b,
         path: fromStored(b.path),
       })),
