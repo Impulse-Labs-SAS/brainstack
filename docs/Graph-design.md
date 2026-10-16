@@ -92,9 +92,10 @@ mode is gone because zooming out now shows projects (below).
 `save_notes`), and its figure in this view — a creature that walks your notes the way the engine
 read them. What an assistant then wrote is replayed too: every assistant write is added to its
 latest crawl (from the same client, within 30 minutes; otherwise a record of its own, listed as
-"Saved N notes"), and after the reading the walk goes on to each note it created or changed —
-phase "write the notes", in its own colour. A note it deleted is gone from the graph and is not
-walked to. The view was called Crawl; its code keeps that name
+"Saved N notes"), and after the context is handed over the walk goes on to each note it created
+or changed — phase "write the notes", in its own colour, each labelled just "written". Only the
+replay says so: no note keeps a created or edited status. A note it deleted is gone from the graph
+and is not walked to. The view was called Crawl; its code keeps that name
 (`components/graph/crawl/`, `CrawlReplay`, `crawl_history`, the `crawls.*` router).
 
 It is not a fourth layout: under it the engine shows the Brain and never hears of the rest.

@@ -41,8 +41,15 @@ import type { GraphPlugin, PluginFrame, PluginStage } from '../graph-controller'
 import { chromeRects } from '../labels/chrome';
 import { LabelMemory, type Rect } from '../labels/placer';
 
-import { behindCamera, drawCrawl, drawSignal, freeStage, type CrawlDrawing, type Project } from './crawl-draw';
-import { decisionIds, notesByPlace, type CrawlResult } from './crawl-plan';
+import {
+  behindCamera,
+  drawCrawl,
+  drawSignal,
+  freeStage,
+  type CrawlDrawing,
+  type Project,
+} from './crawl-draw';
+import { decisionIds, notesByPlace, place, type CrawlResult } from './crawl-plan';
 import { CrawlReplay } from './crawl-replay';
 import type { CrawlSnapshot } from './crawl-snapshot';
 import type { PerchShot } from './prompt/perch-geometry';
@@ -262,7 +269,8 @@ export class CrawlPlugin implements GraphPlugin {
   follow(): { x: number; y: number; z: number; dist: number } | null {
     // A note the panel showed holds the camera until the walk is followed again: by the
     // button, a replay or another search, all of which follow it from the start.
-    const looking = this.looking && !this.player.snapshot.following ? this.lookAt(this.looking) : null;
+    const looking =
+      this.looking && !this.player.snapshot.following ? this.lookAt(this.looking) : null;
     if (looking) return looking;
     this.looking = null;
     const f = this.player.follow();
@@ -279,6 +287,16 @@ export class CrawlPlugin implements GraphPlugin {
     this.scene.takeCamera();
     this.chase = null;
     this.player.onUserCamera();
+  }
+
+  /**
+   * Whether any of these notes is missing from the graph the view stands on:
+   * notes an assistant wrote after the graph was fetched are, until it is
+   * fetched again. True with no model yet.
+   */
+  lacks(notes: ReadonlyArray<{ path: string; ownerId?: string }>): boolean {
+    if (!this.model) return true;
+    return notes.some((n) => !this.noteAt(place(n.path, n.ownerId)));
   }
 
   /**
@@ -389,7 +407,10 @@ export class CrawlPlugin implements GraphPlugin {
    * (the brain's layout may still be settling), shifted so it lands in the middle of the stage
    * the chrome leaves free rather than beside the panel. Null once the field has no place for it.
    */
-  private lookAt(l: { id: string; dist: number }): { x: number; y: number; z: number; dist: number } | null {
+  private lookAt(l: {
+    id: string;
+    dist: number;
+  }): { x: number; y: number; z: number; dist: number } | null {
     const at: Vec3 = [0, 0, 0];
     if (!this.player.view.field.node(l.id, at)) return null;
     const seen = this.seen;

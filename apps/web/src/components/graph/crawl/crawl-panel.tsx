@@ -76,6 +76,20 @@ import { readSentinelPref, writeSentinelPref } from './sentinel-pref';
 const POLL_MS = 4_000;
 /** How long Copy prompt says it copied. */
 const COPIED_MS = 1_800;
+/** Longest a replay of what an assistant wrote waits for the graph to show those notes. */
+const GRAPH_WAIT_MS = 3_000;
+
+/** Resolves once `ready()` holds, checked every frame, or after `ms` whatever it says. */
+function until(ready: () => boolean, ms: number): Promise<void> {
+  const end = performance.now() + ms;
+  return new Promise((resolve) => {
+    const check = () => {
+      if (ready() || performance.now() >= end) resolve();
+      else requestAnimationFrame(check);
+    };
+    check();
+  });
+}
 
 /** Until the plugin's first word: the prompt, inert, the stage on its way. */
 const STARTING: SentinelUi = {
@@ -336,6 +350,17 @@ export function CrawlPanel({
       } catch {
         failed(from, GONE);
         return;
+      }
+      // An assistant that writes changes the vault under the open view, and
+      // the graph is not fetched again on its own: a replay of what it wrote
+      // found the notes it had just made missing, and walked to none of them.
+      // So the graph is fetched again first, and the walk waits — briefly —
+      // for the view to stand on it. A note deleted since stays missing, and
+      // the walk goes on without it.
+      const wrote = (kept.replay.writes ?? []).filter((w) => w.action !== 'delete');
+      if (wrote.length > 0 && plugin.lacks(wrote)) {
+        await utils.notes.graph.invalidate();
+        await until(() => !plugin.lacks(wrote), GRAPH_WAIT_MS);
       }
       if (!show(plugin, kept.replay, kept.prompt, { json: kept.replay, whole: false })) {
         failed(from, NOT_NOW);

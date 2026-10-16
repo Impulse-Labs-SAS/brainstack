@@ -53,13 +53,6 @@ export interface CrawlResult {
 
 export type ReachKind = 'named' | 'linked' | 'decision' | 'written';
 
-/** How a write reads beside the note it touched. */
-const WROTE: Record<'create' | 'edit' | 'replace', string> = {
-  create: 'created',
-  edit: 'edited',
-  replace: 'rewritten',
-};
-
 export interface Reach {
   node: GraphNode;
   kind: ReachKind;
@@ -191,7 +184,9 @@ export function planCrawl(result: CrawlResult, model: GraphModel): CrawlPlan {
       kind: 'visit',
       phase: 3,
       at: node,
-      reach: [{ node, kind: 'written', label: `${node.label} · ${WROTE[w.action]}` }],
+      // One word for every write: the replay shows where the assistant wrote,
+      // not a status the note keeps — no note is marked created or edited.
+      reach: [{ node, kind: 'written', label: `${node.label} · written` }],
     });
   }
 

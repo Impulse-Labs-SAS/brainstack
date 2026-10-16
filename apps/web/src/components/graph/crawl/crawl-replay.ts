@@ -428,6 +428,8 @@ export class CrawlReplay {
   private leaves: number[] = [];
   /** Legs and pauses begun so far: a frame runs on until one stops ending. */
   private phases = 0;
+  /** Whether the log has said the context was handed over: once, before any writing. */
+  private handedOver = false;
   private readonly holds: (Hold | null)[] = GRIP_SLOTS.map(() => null);
   private readonly swings: Swing[] = [];
   /** Swings on the current leg or dwell's clock, in order; `next` is the first still to happen. */
@@ -966,6 +968,7 @@ export class CrawlReplay {
   }
 
   private reset(): void {
+    this.handedOver = false;
     this.lit.clear();
     this.crossed = [];
     this.labelList = [];
@@ -1261,12 +1264,20 @@ export class CrawlReplay {
     this.newPhase();
     const phase: CrawlSnapshot['phase'] =
       st.kind === 'finish' ? 2 : st.kind === 'visit' ? st.phase : 0;
-    if (phase !== this.snap.phase)
-      this.log(
-        'done',
-        'phase',
-        ['read the prompt', 'follow links', 'hand over the context', 'write the notes'][phase]!,
-      );
+    if (phase !== this.snap.phase) {
+      // The assistant wrote after it was handed the context, so the log says
+      // so in that order: the hand-over comes before the writing, not after
+      // it, and is not said twice when the walk then finishes.
+      if (phase === 3 && !this.handedOver) this.log('done', 'phase', 'hand over the context');
+      if (phase === 3 || phase === 2) this.handedOver = true;
+      if (!(phase === 2 && this.snap.phase === 3)) {
+        this.log(
+          'done',
+          'phase',
+          ['read the prompt', 'follow links', 'hand over the context', 'write the notes'][phase]!,
+        );
+      }
+    }
     this.snap = { ...this.snap, phase, state: 'walking' };
     this.segments = [];
     this.target = null;
@@ -1585,11 +1596,14 @@ export class CrawlReplay {
       this.dwell = 0.2;
       this.mode = 'done';
       this.snap = { ...this.snap, state: 'done', phase: 2 };
-      const n = this.found.size;
+      // The notes read, as the panel counts them; what was written is said
+      // apart, so a note created after the reading does not swell the count.
+      const { named, linked, decision, written } = this.snap.found;
+      const n = named + linked + decision;
       this.log(
         'done',
         'done',
-        `${n} ${n === 1 ? 'note' : 'notes'} · ${this.snap.asks.length} to ask`,
+        `${n} ${n === 1 ? 'note' : 'notes'}${written > 0 ? ` · ${written} written` : ''} · ${this.snap.asks.length} to ask`,
       );
       this.push({ kind: 'done', clock: end });
     }

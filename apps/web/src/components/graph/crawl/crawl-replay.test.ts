@@ -1694,7 +1694,18 @@ describe('a crawl the assistant wrote after', () => {
     run(animated, 60);
     expect(animated.snapshot.found.written).toBe(2);
     expect(animated.view.found.get(others[0]!.id)).toBe('written');
-    expect(animated.snapshot.log.some((l) => l.text === 'write the notes')).toBe(true);
+    // Phases in the order they happened, oldest first: the context is handed
+    // over once, before the writing.
+    const phases = [...animated.snapshot.log]
+      .reverse()
+      .filter((l) => l.verb === 'phase')
+      .map((l) => l.text);
+    expect(phases.slice(-2)).toEqual(['hand over the context', 'write the notes']);
+    expect(phases.filter((p) => p === 'hand over the context')).toHaveLength(1);
+    // The closing count is of the notes read; what was written is said apart.
+    const { named, linked, decision } = animated.snapshot.found;
+    const done = animated.snapshot.log.find((l) => l.kind === 'done' && l.verb === 'done')!;
+    expect(done.text).toBe(`${named + linked + decision} notes · 2 written · 0 to ask`);
     expect(animated.snapshot.log.filter((l) => l.kind === 'written').map((l) => l.verb)).toEqual([
       'wrote',
       'wrote',
