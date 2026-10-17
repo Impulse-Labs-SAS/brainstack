@@ -150,12 +150,17 @@ const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }
 const LINEART_HINT =
   'Line art, in beta. Each vault is a plate, each project a plate on it and each folder a plate on that; every note is a block. Drag to move the map and scroll to zoom; Q and E turn it, and P looks straight down. Shift+click two notes for the path between them.';
 
+const NETWORK_LINEART_HINT =
+  'Line art, in beta. Every note is a column on one board, where its links pull it; a link between two projects arcs over it. Select a note and it rises with what it links to, wired between the two levels. Drag to move the board and scroll to zoom; Q and E turn it, and P looks straight down. Shift+click two notes for the path between them.';
+
 const SENTINEL_HINT =
   'Ask your brain something and watch the Sentinel look for it: it walks the links to every note your question refers to, and lights each thread it takes. Drag to look around while it walks.';
 const GRAPH_LABEL =
   'Graph of your notes. With a note selected, arrow keys move along its links and Enter opens it.';
 const LINEART_LABEL =
   'Territories in line art. Arrow keys move between notes, Space shows the one you are on and Enter opens it, Shift+Enter traces a path to it, and ] and [ walk the selected note’s links. Q and E turn the map, P looks straight down, Escape steps out a level.';
+const NETWORK_LINEART_LABEL =
+  'Network in line art. With a note selected, arrow keys move along its links and Enter opens it. Q and E turn the board, P looks straight down.';
 const SENTINEL_LABEL =
   'The Sentinel walking your notes. Drag to turn the view, Shift+drag to move it; the wheel zooms.';
 
@@ -527,9 +532,13 @@ export function GraphView({
 
   // A topic belongs to no project, so it has no place on the map: Territories
   // leaves topic nodes out whatever the layer says, and the others bring them back.
+  // Topics have no place on the map, nor on line art's board, which draws notes only.
   const modelLayers = useMemo(
-    () => (view === 'territories' && layers.topics ? { ...layers, topics: false } : layers),
-    [view, layers],
+    () =>
+      (view === 'territories' || (lineart && view === 'network')) && layers.topics
+        ? { ...layers, topics: false }
+        : layers,
+    [view, layers, lineart],
   );
   const model = useMemo(
     () =>
@@ -678,8 +687,10 @@ export function GraphView({
     if (lost && (!active || active === document.body)) overlayRef.current?.focus(POINTER_FOCUS);
   }, [selection]);
 
-  // Line art draws this view: its legend is its own.
+  // Line art draws this view: its legend is its own. Territories' map has places and a cursor
+  // of its own; Network's board has neither, and its keys are the classic graph's.
   const kitView = lineart && !sentinel && LINEART_VIEWS.includes(view);
+  const mapKit = kitView && view === 'territories';
 
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
@@ -699,7 +710,7 @@ export function GraphView({
     }
     if (browserShortcut(e)) return;
     const origin = keyOrigin(t, overlayRef.current);
-    if (!reachesGraph(e.key, origin, kitView)) return;
+    if (!reachesGraph(e.key, origin, mapKit)) return;
     const before = selectionRef.current;
     if (!controllerRef.current?.keyDown(e.nativeEvent)) return;
     e.preventDefault();
@@ -711,9 +722,11 @@ export function GraphView({
   const visibleVaults = model?.vaults.filter((v) => !v.hidden) ?? [];
   const hint = sentinel
     ? SENTINEL_HINT
-    : kitView
+    : mapKit
       ? LINEART_HINT
-      : VIEWS.find((v) => v.id === view)!.hint;
+      : kitView
+        ? NETWORK_LINEART_HINT
+        : VIEWS.find((v) => v.id === view)!.hint;
 
   return (
     <div
@@ -725,7 +738,15 @@ export function GraphView({
       <canvas
         ref={overlayRef}
         tabIndex={0}
-        aria-label={sentinel ? SENTINEL_LABEL : kitView ? LINEART_LABEL : GRAPH_LABEL}
+        aria-label={
+          sentinel
+            ? SENTINEL_LABEL
+            : mapKit
+              ? LINEART_LABEL
+              : kitView
+                ? NETWORK_LINEART_LABEL
+                : GRAPH_LABEL
+        }
         // The ring for keyboard focus is an outline drawn inside: the stage clips anything outside,
         // and a ring's inset shadow would paint under the canvas's bitmap.
         className="absolute inset-0 block h-full w-full outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/60"
@@ -742,7 +763,7 @@ export function GraphView({
         onContextMenu={(e) => e.preventDefault()}
       />
       <WheelBinder target={overlayRef} controller={controllerRef} />
-      {kitView && (
+      {mapKit && (
         // Where line art's keyboard cursor is, said: on the canvas it is only brackets.
         <p className="sr-only" aria-live="polite">
           {cursorNote?.title ?? ''}
@@ -863,7 +884,7 @@ export function GraphView({
           <FilterChips model={model} filters={filters} onChange={setFilters} />
         )}
 
-        {kitView && (
+        {mapKit && (
           // A row of its own under the tools, measured at its own size: the rest of the row is map.
           <div data-graph-chrome="children" className="pointer-events-none flex basis-full">
             <nav
@@ -915,7 +936,7 @@ export function GraphView({
           onPathFrom={(n) => c()?.startPathFrom(n)}
           onBack={(e) => fromSheet(e, () => c()?.back())}
           onFrame={(notes) => c()?.frameNotes(notes)}
-          walk={kitView ? 'brackets' : 'arrows'}
+          walk={mapKit ? 'brackets' : 'arrows'}
           excerpts={excerpts}
           onClose={() => {
             c()?.clearSelection();
@@ -1121,7 +1142,20 @@ export function GraphView({
             </>
           )}
         </ul>
-        {kitView && (
+        {kitView && !mapKit && (
+          <ul className="flex flex-wrap gap-x-3.5 gap-y-1" aria-label="What the marks mean">
+            <LegendItem glyph={<LineArtGlyph kind="note" />}>note</LegendItem>
+            <LegendItem glyph={<LineArtGlyph kind="flat" />}>link</LegendItem>
+            <LegendItem glyph={<LineArtGlyph kind="arc" />}>link between projects</LegendItem>
+            <LegendItem glyph={<LineArtGlyph kind="link" />}>link of the selected note</LegendItem>
+            <LegendItem glyph={<LineArtGlyph kind="hidden" />}>behind something</LegendItem>
+            <LegendItem glyph={<LineArtGlyph kind="found" />}>search match</LegendItem>
+            {selection?.kind === 'path' && (
+              <LegendItem glyph={<LineArtGlyph kind="path" />}>a path, step by step</LegendItem>
+            )}
+          </ul>
+        )}
+        {mapKit && (
           <ul className="flex flex-wrap gap-x-3.5 gap-y-1" aria-label="What the marks mean">
             <LegendItem glyph={<LineArtGlyph kind="note" />}>note</LegendItem>
             {layers.indexes && (
@@ -1289,7 +1323,17 @@ function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultL
 function LineArtGlyph({
   kind,
 }: {
-  kind: 'note' | 'index' | 'shared' | 'link' | 'hidden' | 'found' | 'route' | 'path';
+  kind:
+    | 'note'
+    | 'index'
+    | 'shared'
+    | 'link'
+    | 'hidden'
+    | 'found'
+    | 'route'
+    | 'path'
+    | 'flat'
+    | 'arc';
 }) {
   const edge = 'var(--graph-la-block-edge)';
   const block = (
@@ -1338,6 +1382,12 @@ function LineArtGlyph({
       )}
       {kind === 'route' && (
         <path d="M3 12h9V6h13" fill="none" stroke="var(--graph-la-route)" strokeWidth="2" />
+      )}
+      {kind === 'flat' && (
+        <path d="M3 12 25 6" fill="none" stroke="var(--graph-la-route)" strokeWidth="1" />
+      )}
+      {kind === 'arc' && (
+        <path d="M3 14Q14 -2 25 14" fill="none" stroke="var(--graph-la-route)" strokeWidth="1.25" />
       )}
       {kind === 'path' && (
         <>
