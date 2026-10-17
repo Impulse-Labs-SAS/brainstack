@@ -64,9 +64,11 @@ Territories count; its Brain, which nearly every browser holds, says nothing
 - Topics are not nodes here: a topic belongs to no project, so it has no place on the map.
 - Dragging a note moves the map, not the note: its place is where it is filed.
 
-**Line art, in beta.** With `?style=lineart` on the URL, Territories is drawn as an isometric
-map of plates instead. Its code (`components/graph/iso/`) loads only when asked for, and the
-classic style stays the default until line art is accepted.
+**Line art, in beta.** Chosen under Layers → Style (**Line art (beta)**), or with
+`?style=lineart` on the URL, Territories is drawn as an isometric map of plates instead. The
+choice is remembered in the browser and switches live, without reloading the graph. Its code
+(`components/graph/iso/`) loads only when chosen, and the classic style stays the default until
+line art is accepted. Without WebGL the choice is not offered.
 
 - **Plates:** one per vault, one per project on it, and one per folder and sub-folder on that.
   Each note is a block in a grid on its plate, and the project's index stands at its front
@@ -100,8 +102,23 @@ classic style stays the default until line art is accepted.
 - **Keys:** the arrows move a cursor between the blocks on screen, which a screen reader is
   told; Space selects the one it is on and Enter opens it. `]` and `[` walk the selected note's
   links, AltGr or not. One Tab stop, the canvas, holds all of it.
+- **Cables, only for what is active:** the selected note's links run along the streets between
+  plates as orthogonal cables in the accent, growing in from it (at once with reduced motion).
+  A stretch that a plate or a block hides is drawn dashed and fainter. A cable leaves its note
+  between the rows of its grid, climbs the plates to the one both notes stand on, crosses it on
+  the streets (A\* with a cost per turn) and comes down to the other note (`iso/routes.ts`).
+- **All routes:** one cable per pair of projects in a vault that link to each other, in grey,
+  wider the more links it carries, with how many on a tag over its longest stretch. Links and
+  an index's members count; a shared topic does not.
+- **Search:** every result on the stage is bracketed in the accent, however small its block,
+  up to two hundred at once.
+- **Sharpness:** while the camera moves, the canvas's pixel ratio steps down from the screen's
+  own (2, 1.5, 1.25, 1, then also without the dot grid and the dashed stretches) when frames
+  come late, and back up when they come early again (`iso/quality.ts`). A browser that draws
+  less often whatever the machine, such as a 30 fps power saver, is judged at its own cadence.
+  Once the camera has been still for a moment, the map is drawn at its sharpest.
 - **Without WebGL** the classic map stays.
-- **Not yet in line art:** routes, search reticles, the growth replay, paths and the minimap.
+- **Not yet in line art:** the growth replay, paths and the minimap.
 
 **A layer is what gets drawn.** One popover, right after the view tabs, like a map's layers
 button. The Sentinel does not show it: its stage draws no layer. The layers still decide which
@@ -355,7 +372,7 @@ of `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` 
 | `components/graph/graph-view.tsx`                | React chrome: toolbar, layers, preview, legend; preferences.                                                                                                 |
 | `components/graph/graph-style.ts`                | Pure: which style the graph is drawn in (`?style=`, then what was stored), and the views line art draws so far. Tested.                                      |
 | `components/graph/graph-kit.ts`                  | The seam a drawing kit plugs into: what the controller lends it, and what it hands it each frame. Types only.                                                |
-| `components/graph/iso/`                          | Line art, loaded with `import()`: the iso camera, the layout and its worker, the boxes, picking, labels and the kit. Tested.                                 |
+| `components/graph/iso/`                          | Line art, loaded with `import()`: iso camera, layout and worker, boxes, cables, routes, picking, labels, quality steps and the kit. Tested.                  |
 | `lib/graph-theme.ts`                             | Line art's colours, from the `--graph-la-*` tokens, held to 3:1 where they mark something. Tested.                                                           |
 | `components/graph/graph-keys.ts`                 | Pure: which keys reach the graph, from the canvas and from the preview. Tested.                                                                              |
 | `components/graph/graph-return.ts`               | Pure: the way back from a note to where the graph was, kept in session storage. Tested.                                                                      |
@@ -446,6 +463,12 @@ are real, not before.
 The map costs nothing per frame once built. For 1,600 notes, placing them takes about 7 ms
 and the land about 16 ms (40 ms the first time, before the JIT warms up); it is rebuilt when
 the notes or layers change, and every 200 ms during a replay.
+
+**Line art** draws the plates and blocks in one instanced draw and the cables in two. On the
+bench, with WebGL in software (SwiftShader), a pan over 5,000 notes spends at most about 4 ms a
+frame on the main thread; the rest of each frame is the GPU's, which is why its frame rate is
+judged on real hardware and why the pixel ratio steps down while the camera moves. Routing the
+cables for a note with 40 links across 5,000 notes takes about 5 ms.
 
 **At rest it draws nothing.** Each frame lists what it would be drawn from — the camera, the
 stage's size, the model, what is pointed at, selected, found or traced, the map's fades, the
