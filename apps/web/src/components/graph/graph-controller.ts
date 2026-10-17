@@ -467,6 +467,8 @@ export class GraphController {
   private kit: GraphKit | null = null;
   /** The kit draws now: it handles the view, there is WebGL, and no stage is up. */
   private kitOn = false;
+  /** The view the kit was entered for: another it draws too is entered afresh. */
+  private kitFor: GraphView | null = null;
 
   // At rest: whether a frame draws at all (the end of `frame`).
   /** What the last frame drawn was drawn from, but for the time. */
@@ -994,11 +996,14 @@ export class GraphController {
     if (kit) {
       // Line art replays on its own map; the controller shows the chip and the button.
       this.clearSelection();
-      if (!kit.startGrowth()) return;
-      clearTimeout(this.chipTimer);
-      this.growing = true;
-      this.events.onGrowth(true);
-      return;
+      if (kit.startGrowth()) {
+        clearTimeout(this.chipTimer);
+        this.growing = true;
+        this.events.onGrowth(true);
+        return;
+      }
+      // A kit that draws the engine's layout shows the engine's replay, as the classic view does.
+      if (!kit.usesEngine()) return;
     }
     this.clearSelection();
     this.engine.startGrowth(performance.now());
@@ -1947,8 +1952,10 @@ export class GraphController {
   /** Enter or leave kit mode as the kit, the view or a stage come and go. Once a frame. */
   private syncKit(model: GraphModel): boolean {
     const kit = this.kit;
-    const on =
-      !!kit && !!this.scene && !this.staged && !this.disposed && kit.handles(this.engine.view);
+    const view = this.engine.view;
+    const on = !!kit && !!this.scene && !this.staged && !this.disposed && kit.handles(view);
+    // Another view the kit draws too: it starts afresh on it.
+    if (on && this.kitOn && this.kitFor !== view) this.leaveKit();
     if (on !== this.kitOn) {
       if (on) this.enterKit(model);
       else this.leaveKit();
@@ -1959,6 +1966,7 @@ export class GraphController {
   private enterKit(model: GraphModel): void {
     const kit = this.kit!;
     this.kitOn = true;
+    this.kitFor = this.engine.view;
     // What the classic graph had under way ends here: the kit has a camera and a pointer of its own.
     this.stopGrowth();
     this.stopFollowing();
@@ -2002,14 +2010,24 @@ export class GraphController {
       model,
       this.vp,
       this.dpr,
+      this.engine.view,
     );
   }
 
   private leaveKit(): void {
     this.kitOn = false;
-    // Its replay ends with it: everything shows.
+    // Asked before it leaves: the composite answers for the kit it is drawing with.
+    const usedEngine = this.kit?.usesEngine() ?? false;
+    // Its replay ends with it, and the engine's it showed: everything shows.
     this.kit?.leave();
+    if (this.engine.growth) this.engine.endGrowth();
     if (this.growing) this.finishGrowth();
+    // The layout settled under the kit, unseen by the classic camera: framed whole, as it would
+    // have been had the classic graph drawn it.
+    if (usedEngine && !this.engine.is3D && !this.engine.isMap && !this.engine.warming) {
+      this.cam = { ...this.cam, ...this.fitTarget() };
+      this.tween = null;
+    }
     this.drag = null;
     this.pinch = null;
     this.pointers.clear();
@@ -2030,6 +2048,13 @@ export class GraphController {
 
   private kitFrame(now: number, dt: number, model: GraphModel): void {
     if (this.syncVeil()) return;
+    // Network's forces go on under line art, which draws where they put the notes.
+    if (this.kit!.usesEngine()) {
+      this.engine.advance(now);
+      const moving = this.engine.moving;
+      if (this.wasMoving && !moving && !this.engine.growth) this.events.onSettled();
+      this.wasMoving = moving;
+    }
     this.kit!.frame({
       now,
       dt,
@@ -2043,7 +2068,7 @@ export class GraphController {
       routes: this.routesLayer,
       path: this.path,
     });
-    const growth = this.kit!.growthStatus();
+    const growth = this.kit!.growthStatus() ?? this.engine.growthStatus();
     if (growth) this.showGrowth(growth);
     else if (this.growing) this.finishGrowth();
   }

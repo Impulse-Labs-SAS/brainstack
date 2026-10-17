@@ -76,6 +76,7 @@ uniform vec2 uViewport;
 uniform float uDpr;
 uniform float uProgress;
 uniform float uHidden;
+uniform float uFade;
 
 in vec3 iStart;
 in vec3 iEnd;
@@ -125,7 +126,7 @@ void main() {
   float cut = (link && uProgress < 1.0) ? uProgress * iAlong.y : 1e30;
   vCut = cut;
   vColor = link ? uAccent : uRoute;
-  vAlpha = hidden ? HIDDEN_ALPHA[kind] : SEEN_ALPHA[kind];
+  vAlpha = (hidden ? HIDDEN_ALPHA[kind] : SEEN_ALPHA[kind]) * uFade;
   vWidth = hidden ? HIDDEN_PX[kind] : iWidth;
   vAcross = 0.0;
   vDash = 0.0;
@@ -277,6 +278,7 @@ export class CableLayer {
     uViewport: { value: new THREE.Vector2(800, 600) },
     uDpr: { value: 1 },
     uProgress: { value: 1 },
+    uFade: { value: 1 },
   };
   private inst: Instances;
   private capacity: number;
@@ -380,6 +382,11 @@ export class CableLayer {
     this.uniforms.uDpr.value = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
     const size = (v: number) => (Number.isFinite(v) && v > 1 ? v : 1);
     this.uniforms.uViewport.value.set(size(viewport.width), size(viewport.height));
+  }
+
+  /** How much of their own strength every cable keeps, 0..1: less while others are in focus. */
+  setFade(f: number): void {
+    this.uniforms.uFade.value = Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : 1;
   }
 
   /** The quality governor turns the dashed stretches off, and on again. */

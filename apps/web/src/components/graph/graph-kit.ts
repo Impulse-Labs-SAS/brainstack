@@ -1,5 +1,5 @@
-// The seam a drawing kit plugs into: a style of its own for some views (line art for
-// Territories), drawn with the graph's renderer on a camera and a layout of its own, taking the
+// The seam a drawing kit plugs into: a style of its own for some views (line art for Territories
+// and Network), drawn with the graph's renderer on a camera and a layout of its own, taking the
 // pointer and the keys while it draws. The controller holds at most one. With none, or over a
 // view it does not handle, or under a plugin's stage, nothing here runs and the classic graph
 // draws as it always has. Types only: a kit's code comes with import(), so the classic graph
@@ -79,8 +79,13 @@ export interface KitFrame {
 
 export interface GraphKit {
   handles(view: GraphView): boolean;
-  /** It starts drawing: the classic graph has stopped. */
-  enter(host: KitHost, model: GraphModel, vp: Viewport, dpr: number): void;
+  /** It starts drawing `view`: the classic graph has stopped. Another view it draws is another enter. */
+  enter(host: KitHost, model: GraphModel, vp: Viewport, dpr: number, view: GraphView): void;
+  /**
+   * It draws where the graph's own forces put the notes (Network): the controller keeps them
+   * settling under it, and replays the growth with them.
+   */
+  usesEngine(): boolean;
   /** It stops: the classic graph takes the renderer and the overlay back. */
   leave(): void;
   /** The notes changed, drawing or not: what it lays out next time it draws. */

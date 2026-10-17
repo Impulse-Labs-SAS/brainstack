@@ -148,6 +148,23 @@ describe('CableLayer', () => {
     layer.dispose();
   });
 
+  it('fades every cable by a share of its strength, both passes alike', () => {
+    const layer = new CableLayer(LINE_ART_COLORS);
+    expect(uniform(layer.visible, 'uFade')).toBe(1);
+    for (const [f, want] of [
+      [0.32, 0.32],
+      [0, 0],
+      [-1, 0],
+      [2, 1],
+      [Number.NaN, 1],
+    ] as const) {
+      layer.setFade(f);
+      expect(uniform(layer.visible, 'uFade'), `fade ${f}`).toBe(want);
+      expect(uniform(layer.hidden, 'uFade'), `fade ${f}, hidden`).toBe(want);
+    }
+    layer.dispose();
+  });
+
   it('grows the links in by a share of each one’s length, from none to whole', () => {
     const layer = new CableLayer(LINE_ART_COLORS);
     // Whole until told otherwise: a layer turned on mid-selection shows what it has.
@@ -323,7 +340,7 @@ describe('CableLayer', () => {
     const layer = new CableLayer(LINE_ART_COLORS);
     const vs = layer.visible.material.vertexShader;
     const fs = layer.visible.material.fragmentShader;
-    expect(vs).toContain('vAlpha = hidden ? HIDDEN_ALPHA[kind] : SEEN_ALPHA[kind];');
+    expect(vs).toContain('vAlpha = (hidden ? HIDDEN_ALPHA[kind] : SEEN_ALPHA[kind]) * uFade;');
     expect(vs).toContain('vWidth = hidden ? HIDDEN_PX[kind] : iWidth;');
     expect(vs).toContain('float cap = hidden ? 0.0 : 0.5 * vWidth;');
     expect(vs).toContain('vColor = link ? uAccent : uRoute;');

@@ -31,12 +31,13 @@ import type { GraphModel, GraphNode, GraphPath, GraphView } from '@/lib/graph-mo
 import { lineArtTheme, type LineArtTheme } from '@/lib/graph-theme';
 
 import type { GraphKit, KitFrame, KitHost, KitPlace } from '../graph-kit';
-import { LINEART_VIEWS } from '../graph-style';
 import { freeStage } from '../labels/chrome';
 import { LabelMemory, type Rect } from '../labels/placer';
 import { LABEL_COLORS, drawLabels, type LabelHit, type PlateMeta } from './labels';
 import { layoutInput } from './layout/input';
+import { LineArtKits } from './kits';
 import { LayoutClient } from './layout/client';
+import { NetworkKit } from './network/kit';
 import type { IsoLayout, IsoPlate } from './layout/territories';
 import {
   ISO_EL,
@@ -149,8 +150,9 @@ const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
+/** Line art's kits: Territories' plates, and Network's board when that view is first drawn. */
 export function createKit(): GraphKit {
-  return new LineArtKit();
+  return new LineArtKits(new LineArtKit(), () => new NetworkKit());
 }
 
 export class LineArtKit implements GraphKit {
@@ -295,7 +297,12 @@ export class LineArtKit implements GraphKit {
   private lastNow = 0;
 
   handles(view: GraphView): boolean {
-    return LINEART_VIEWS.includes(view);
+    return view === 'territories';
+  }
+
+  /** Its plates are laid out here, not by the graph's forces. */
+  usesEngine(): boolean {
+    return false;
   }
 
   enter(host: KitHost, model: GraphModel, vp: Viewport, dpr: number): void {

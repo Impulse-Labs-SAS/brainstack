@@ -13,7 +13,7 @@ import type { GraphLayers, GraphModel, GraphView } from '@/lib/graph-model';
 import { cn } from '@/lib/utils';
 
 import { GLASS } from './graph-preview';
-import type { GraphStyle } from './graph-style';
+import { LINEART_VIEWS, type GraphStyle } from './graph-style';
 
 interface GraphLayersMenuProps {
   model: GraphModel;
@@ -24,7 +24,7 @@ interface GraphLayersMenuProps {
   /** Whether shared vaults are fetched at all. */
   includeShared: boolean;
   onIncludeSharedChange(include: boolean): void;
-  /** How the map is drawn: offered on the map only, and only where line art can draw (WebGL). */
+  /** How the graph is drawn: offered on the views line art draws, and only with WebGL. */
   style?: GraphStyle;
   onStyleChange?(style: GraphStyle): void;
 }
@@ -86,12 +86,14 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
   // elsewhere, a ticked box could not be unticked. Its choice is kept for when
   // you come back, and only counts as a change where it can be seen.
   const onMap = view === 'territories';
+  // Line art's board draws notes only: a topic would pull on it unseen.
+  const topicsHere = !onMap && !(style === 'lineart' && view === 'network');
   const isDefault =
     includeShared &&
     !layers.hiddenVaults.length &&
     layers.affinity &&
     layers.indexes &&
-    !(onMap ? layers.routes : layers.topics);
+    !(onMap ? layers.routes : topicsHere && layers.topics);
 
   const setVault = (id: string, visible: boolean) =>
     onChange({ ...layers, hiddenVaults: visible ? layers.hiddenVaults.filter((v) => v !== id) : [...layers.hiddenVaults, id] });
@@ -184,7 +186,7 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
             >
               All routes
             </Row>
-          ) : (
+          ) : topicsHere ? (
             // A topic belongs to no project, so it has no place on the map.
             <>
               <div className="my-1 h-px bg-border-subtle" />
@@ -197,8 +199,8 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
                 Topics as nodes
               </Row>
             </>
-          )}
-          {onMap && onStyleChange && (
+          ) : null}
+          {LINEART_VIEWS.includes(view) && onStyleChange && (
             // How the map is drawn, not what: kept out of the dot that says the layers were changed.
             <>
               <div className="my-1 h-px bg-border-subtle" />

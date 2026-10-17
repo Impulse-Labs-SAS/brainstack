@@ -45,6 +45,25 @@ Territories count; its Brain, which nearly every browser holds, says nothing
 - Notes without a single link wait on a dotted ring around everything else, labelled with
   how many there are.
 
+**Line art, in beta**, as for Territories (below): chosen under Layers → Style, the same
+choice for both views. Network becomes a wiring board (`components/graph/iso/network/`).
+
+- **The board:** every note a short column on one plate, where the graph's own forces put it.
+  The engine settles the layout under line art as it does for the classic view, so a note
+  stands in the same place in either style and the views still flow into each other. The
+  camera keeps the whole board in view while it settles, until the person moves it.
+- **Links:** flat lines on the board within a project; a link between two projects arcs over
+  it. Only what a person wrote counts: links and an index's members, not topics shared by
+  chance, and topics are not nodes here.
+- **Layers on focus:** a selected note rises to a second level and what it links to to a
+  first; only their links run, as orthogonal wires in the accent between the two levels, and
+  the rest fades. A path lifts its ends and steps the same way and wires them in order, each
+  step numbered.
+- **Camera and keys:** isometric from one of four corners, `Q` and `E` turn it, `P` looks
+  straight down. The arrows walk the selected note's links and Enter opens it, as on the
+  classic view; Escape with nothing selected brings the whole board back.
+- Search brackets, the minimap and the growth replay (the engine's) work as in Territories.
+
 ### Territories
 
 - A project is a country, its area proportional to its notes. A vault's countries are packed
@@ -382,7 +401,8 @@ of `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` 
 | `components/graph/graph-view.tsx`                | React chrome: toolbar, layers, preview, legend; preferences.                                                                                                 |
 | `components/graph/graph-style.ts`                | Pure: which style the graph is drawn in (`?style=`, then what was stored), and the views line art draws so far. Tested.                                      |
 | `components/graph/graph-kit.ts`                  | The seam a drawing kit plugs into: what the controller lends it, and what it hands it each frame. Types only.                                                |
-| `components/graph/iso/`                          | Line art, loaded with `import()`: iso camera, layout and worker, boxes, cables, routes, picking, labels, quality steps and the kit. Tested.                  |
+| `components/graph/iso/`                          | Line art, loaded with `import()`: iso camera, layout and worker, boxes, cables, routes, picking, labels, quality steps and the kits. Tested.                 |
+| `components/graph/iso/network/`                  | Network in line art: the wiring board over the engine's layout, its levels on focus and its wires. Tested.                                                   |
 | `lib/graph-theme.ts`                             | Line art's colours, from the `--graph-la-*` tokens, held to 3:1 where they mark something. Tested.                                                           |
 | `components/graph/graph-keys.ts`                 | Pure: which keys reach the graph, from the canvas and from the preview. Tested.                                                                              |
 | `components/graph/graph-return.ts`               | Pure: the way back from a note to where the graph was, kept in session storage. Tested.                                                                      |

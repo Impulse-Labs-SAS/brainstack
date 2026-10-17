@@ -457,6 +457,35 @@ export class BoxLayer {
     this.write(this.inst.lift, this.dirtyLift, i, lift);
   }
 
+  /**
+   * The same boxes in new places (a layout still settling): their bounds only, every state and
+   * lift kept. No upload until flush.
+   */
+  moveBoxes(bounds: Float32Array): void {
+    if (bounds.length !== this.n * 6) {
+      throw new RangeError(
+        `moveBoxes: ${this.n} boxes want ${this.n * 6} bounds, got ${bounds.length}`,
+      );
+    }
+    const { min, max } = this.inst;
+    const lo = min.array as Float32Array;
+    const hi = max.array as Float32Array;
+    for (let i = 0; i < this.n; i++) {
+      lo[i * 3] = bounds[i * 6]!;
+      lo[i * 3 + 1] = bounds[i * 6 + 1]!;
+      lo[i * 3 + 2] = bounds[i * 6 + 2]!;
+      hi[i * 3] = bounds[i * 6 + 3]!;
+      hi[i * 3 + 1] = bounds[i * 6 + 4]!;
+      hi[i * 3 + 2] = bounds[i * 6 + 5]!;
+    }
+    for (const attribute of [min, max]) {
+      attribute.clearUpdateRanges();
+      if (this.n > 0) attribute.addUpdateRange(0, this.n * attribute.itemSize);
+      attribute.needsUpdate = true;
+    }
+    this.pending = true;
+  }
+
   /** Upload what changed since the last flush: only the ranges touched. True when anything was uploaded. */
   flush(): boolean {
     let any = this.pending;
