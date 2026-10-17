@@ -625,6 +625,12 @@ export class GraphController {
     reason: RebuildReason,
     saved?: ReadonlyMap<string, { x: number; y: number; z: number }>,
   ): void {
+    // Line art's replay counts the notes it had: a new model ends it, and the button and the
+    // chip with it. The classic graph's ends in the engine.
+    if (this.growing && this.drawingKit) {
+      this.drawingKit.stopGrowth();
+      this.finishGrowth();
+    }
     this.growing = false;
     this.engine.setModel(model, reason, performance.now(), saved);
     this.scene?.setModel(model);
@@ -922,7 +928,7 @@ export class GraphController {
 
   /** Pick the other end of a path with the next click. */
   startPathFrom(node: GraphNode): void {
-    if (this.staged || this.kitOn) return;
+    if (this.staged) return;
     this.pathFrom = node;
     this.pathPick = true;
     this.events.onToast('Click the note to trace a path to.');
@@ -983,8 +989,17 @@ export class GraphController {
   }
 
   startGrowth(): void {
-    // Line art has no replay yet.
-    if (this.staged || this.kitOn || !this.model?.nodes.length) return;
+    if (this.staged || !this.model?.nodes.length) return;
+    const kit = this.drawingKit;
+    if (kit) {
+      // Line art replays on its own map; the controller shows the chip and the button.
+      this.clearSelection();
+      if (!kit.startGrowth()) return;
+      clearTimeout(this.chipTimer);
+      this.growing = true;
+      this.events.onGrowth(true);
+      return;
+    }
     this.clearSelection();
     this.engine.startGrowth(performance.now());
     this.userMoved = false;
@@ -994,6 +1009,14 @@ export class GraphController {
   }
 
   stopGrowth(): void {
+    const kit = this.drawingKit;
+    if (kit && this.growing) {
+      kit.stopGrowth();
+      // A classic replay under way as the kit came in ends too: the engine's notes all placed.
+      if (this.engine.growth) this.engine.endGrowth();
+      this.finishGrowth();
+      return;
+    }
     if (!this.engine.growth) return;
     this.engine.endGrowth();
     this.finishGrowth();
@@ -1332,8 +1355,18 @@ export class GraphController {
   }
 
   minimapPoint(e: PointerEvent): void {
+    if (this.staged) return;
+    const kit = this.drawingKit;
+    if (kit) {
+      // From its content box, inside the border, where the kit draws.
+      const m = this.el.minimap;
+      const r = m.getBoundingClientRect();
+      kit.minimapPoint(e.clientX - r.left - m.clientLeft, e.clientY - r.top - m.clientTop);
+      this.userMoved = true;
+      return;
+    }
     const t = this.minimapTransform;
-    if (!t || this.staged || this.kitOn) return;
+    if (!t) return;
     this.stopFollowing();
     const r = this.el.minimap.getBoundingClientRect();
     this.cam = {
@@ -1889,8 +1922,15 @@ export class GraphController {
     this.events.onGrowth(false);
     clearTimeout(this.chipTimer);
     this.chipTimer = window.setTimeout(() => {
-      if (!this.engine.growth) this.el.timeChip.hidden = true;
+      if (!this.growing) this.el.timeChip.hidden = true;
     }, 1600);
+  }
+
+  /** The replay's chip: the month of the newest note so far, and how many there are. */
+  private showGrowth(growth: { at: number; count: number }): void {
+    this.el.timeChip.hidden = false;
+    const date = MONTH_YEAR.format(growth.at);
+    this.el.timeChip.textContent = `${date} · ${growth.count} ${growth.count === 1 ? 'note' : 'notes'}`;
   }
 
   // -- Kit mode --------------------------------------------------------------------
@@ -1934,8 +1974,6 @@ export class GraphController {
     this.setHotCountry(null);
     this.kept = null;
     this.tooltipStyle('visibility', 'hidden');
-    // The minimap is the classic camera's.
-    this.el.minimap.style.visibility = 'hidden';
     this.setCursor('grab');
     kit.enter(
       {
@@ -1949,11 +1987,17 @@ export class GraphController {
         },
         setCursor: (cursor) => this.setCursor(cursor),
         select: (node) => this.select(node),
-        clearSelection: () => this.clearSelection(),
+        pick: (node, shift) => this.clickNode(node, shift),
+        // Bare ground while the path's other end is being picked keeps the pick, as on the
+        // classic graph.
+        clearSelection: () => {
+          if (!this.pathPick) this.clearSelection();
+        },
         open: (node) => this.events.onOpen(node),
         onPlace: (steps) => this.events.onPlace?.(steps),
         onCursor: (node) => this.events.onCursor?.(node),
         setPixelRatio: (dpr) => this.scene?.resize(this.vp, Math.min(dpr, this.dpr)),
+        minimap: this.el.minimap,
       },
       model,
       this.vp,
@@ -1963,11 +2007,12 @@ export class GraphController {
 
   private leaveKit(): void {
     this.kitOn = false;
+    // Its replay ends with it: everything shows.
     this.kit?.leave();
+    if (this.growing) this.finishGrowth();
     this.drag = null;
     this.pinch = null;
     this.pointers.clear();
-    this.el.minimap.style.visibility = '';
     this.events.onPlace?.([]);
     this.events.onCursor?.(null);
     // The kit may have drawn at a lower pixel ratio: the page's comes back. Not on the way out:
@@ -1996,7 +2041,11 @@ export class GraphController {
       previewed: this.previewed,
       matches: this.matched,
       routes: this.routesLayer,
+      path: this.path,
     });
+    const growth = this.kit!.growthStatus();
+    if (growth) this.showGrowth(growth);
+    else if (this.growing) this.finishGrowth();
   }
 
   // -- Stage mode ------------------------------------------------------------------
@@ -2559,13 +2608,8 @@ export class GraphController {
     }
 
     const growth = this.engine.growthStatus();
-    if (growth) {
-      this.el.timeChip.hidden = false;
-      const date = MONTH_YEAR.format(growth.at);
-      this.el.timeChip.textContent = `${date} · ${growth.count} ${growth.count === 1 ? 'note' : 'notes'}`;
-    } else if (this.growing) {
-      this.finishGrowth();
-    }
+    if (growth) this.showGrowth(growth);
+    else if (this.growing) this.finishGrowth();
 
     const is3D = this.engine.is3D;
     const edgesFading = this.easeViews(dt);

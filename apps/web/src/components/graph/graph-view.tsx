@@ -148,14 +148,14 @@ const VIEWS: Array<{ id: View; label: string; icon: typeof Brain; hint: string }
 // (SentinelPanel below), so the other three never download it.
 /** Territories in line art, while it is in beta: what the plates are, and how to move them. */
 const LINEART_HINT =
-  'Line art, in beta. Each vault is a plate, each project a plate on it and each folder a plate on that; every note is a block. Drag to move the map and scroll to zoom; Q and E turn it, and P looks straight down.';
+  'Line art, in beta. Each vault is a plate, each project a plate on it and each folder a plate on that; every note is a block. Drag to move the map and scroll to zoom; Q and E turn it, and P looks straight down. Shift+click two notes for the path between them.';
 
 const SENTINEL_HINT =
   'Ask your brain something and watch the Sentinel look for it: it walks the links to every note your question refers to, and lights each thread it takes. Drag to look around while it walks.';
 const GRAPH_LABEL =
   'Graph of your notes. With a note selected, arrow keys move along its links and Enter opens it.';
 const LINEART_LABEL =
-  'Territories in line art. Arrow keys move between notes, Space shows the one you are on and Enter opens it, and ] and [ walk the selected note’s links. Q and E turn the map, P looks straight down, Escape steps out a level.';
+  'Territories in line art. Arrow keys move between notes, Space shows the one you are on and Enter opens it, Shift+Enter traces a path to it, and ] and [ walk the selected note’s links. Q and E turn the map, P looks straight down, Escape steps out a level.';
 const SENTINEL_LABEL =
   'The Sentinel walking your notes. Drag to turn the view, Shift+drag to move it; the wheel zooms.';
 
@@ -678,7 +678,7 @@ export function GraphView({
     if (lost && (!active || active === document.body)) overlayRef.current?.focus(POINTER_FOCUS);
   }, [selection]);
 
-  // Line art draws this view: its legend is its own, and it has no growth replay yet.
+  // Line art draws this view: its legend is its own.
   const kitView = lineart && !sentinel && LINEART_VIEWS.includes(view);
 
   const onStageKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -844,7 +844,7 @@ export function GraphView({
 
         <span className="flex-1" />
 
-        {!sentinel && !kitView && (
+        {!sentinel && (
           <Button
             onPress={() => (growing ? c()?.stopGrowth() : c()?.startGrowth())}
             isDisabled={!model?.nodes.length}
@@ -912,7 +912,7 @@ export function GraphView({
           onSelect={(n, e) => fromSheet(e, () => c()?.select(n))}
           onOpen={open}
           // Line art traces no paths yet.
-          onPathFrom={kitView ? undefined : (n) => c()?.startPathFrom(n)}
+          onPathFrom={(n) => c()?.startPathFrom(n)}
           onBack={(e) => fromSheet(e, () => c()?.back())}
           onFrame={(notes) => c()?.frameNotes(notes)}
           walk={kitView ? 'brackets' : 'arrows'}
@@ -1136,6 +1136,9 @@ export function GraphView({
             {layers.routes && (
               <LegendItem glyph={<LineArtGlyph kind="route" />}>links between projects</LegendItem>
             )}
+            {selection?.kind === 'path' && (
+              <LegendItem glyph={<LineArtGlyph kind="path" />}>a path, step by step</LegendItem>
+            )}
           </ul>
         )}
       </div>
@@ -1286,7 +1289,7 @@ function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultL
 function LineArtGlyph({
   kind,
 }: {
-  kind: 'note' | 'index' | 'shared' | 'link' | 'hidden' | 'found' | 'route';
+  kind: 'note' | 'index' | 'shared' | 'link' | 'hidden' | 'found' | 'route' | 'path';
 }) {
   const edge = 'var(--graph-la-block-edge)';
   const block = (
@@ -1335,6 +1338,14 @@ function LineArtGlyph({
       )}
       {kind === 'route' && (
         <path d="M3 12h9V6h13" fill="none" stroke="var(--graph-la-route)" strokeWidth="2" />
+      )}
+      {kind === 'path' && (
+        <>
+          <path d="M4 13h8V5h12" fill="none" stroke="var(--accent)" strokeWidth="1.6" />
+          <circle cx="4" cy="13" r="2" fill="var(--accent)" />
+          <circle cx="12" cy="9" r="1.6" fill="var(--accent)" />
+          <circle cx="24" cy="5" r="2" fill="var(--accent)" />
+        </>
       )}
     </svg>
   );
