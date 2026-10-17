@@ -1066,8 +1066,9 @@ describe('LineArtKit: paths, the growth replay and the minimap', () => {
     expect(count).toBeLessThan(n * 0.6);
     const shown = model.nodes.filter((m) => st[boxOf(kit, m)] !== STATE.hidden);
     const hidden = model.nodes.filter((m) => st[boxOf(kit, m)] === STATE.hidden);
-    // The newest come up out of their plates.
-    frame({}, 120);
+    // The newest come up out of their plates. A note comes every 1/6 s at this size: over 200 ms
+    // one always does, wherever the halfway mark rounded to.
+    frame({}, 200);
     const rising = [...inside(kit).lifts.values()].filter((l) => l.now < 0);
     expect(rising.length).toBeGreaterThan(0);
     expect(shown).toHaveLength(count);
