@@ -86,6 +86,34 @@ describe('applyEdits', () => {
     );
   });
 
+  it('finds a section by the start of its heading, in any case and without accents', () => {
+    const note = '# Orbit\n## Estado actual — próximo paso\nhoy\n## Riesgos\nr\n';
+    expect(body(note, { op: 'append', section: 'Estado actual', text: 'mañana' })).toBe(
+      '# Orbit\n## Estado actual — próximo paso\nhoy\nmañana\n## Riesgos\nr\n',
+    );
+    expect(body(note, { op: 'prepend', section: '## ESTADO actual', text: 'x' })).toContain(
+      '## Estado actual — próximo paso\nx\nhoy\n',
+    );
+    expect(
+      body('## Próximos pasos\na\n', { op: 'append', section: 'proximos pasos', text: 'b' }),
+    ).toBe('## Próximos pasos\na\nb\n');
+  });
+
+  it('prefers the heading that reads exactly so over one that starts with it', () => {
+    expect(
+      body('## Notas\na\n## Notas viejas\nb\n', { op: 'append', section: 'notas', text: 'c' }),
+    ).toBe('## Notas\na\nc\n## Notas viejas\nb\n');
+  });
+
+  it('refuses a start that ends mid-word or that several headings share', () => {
+    expect(() => body('## Estado\na\n', { op: 'append', section: 'Esta', text: 'x' })).toThrow(
+      /no section "Esta"; its sections are "Estado"/,
+    );
+    expect(() =>
+      body('## Plan Q1\na\n## Plan Q2\nb\n', { op: 'append', section: 'Plan', text: 'x' }),
+    ).toThrow(/no section "Plan", and 2 start with it: "Plan Q1", "Plan Q2"; name the one/);
+  });
+
   it('applies edits in order and says which one failed', () => {
     expect(
       body('x\n', { op: 'replace', find: 'x', replace: 'y' }, { op: 'append', text: 'z' }),
