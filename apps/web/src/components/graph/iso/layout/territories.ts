@@ -69,7 +69,7 @@ const PLATE_H = 0.3;
 /** Room inside a plate's edge, by its kind. */
 const PADS: Record<PlateKind, number> = { vault: 1.6, project: 0.9, folder: 0.55 };
 /** Room between what stands on a plate, by the plate's kind; between vaults, `world`. */
-const GAPS = { world: 5, vault: 2.4, project: 1.2, folder: 0.8 } as const;
+export const GAPS = { world: 5, vault: 2.4, project: 1.2, folder: 0.8 } as const;
 
 /** Something packed: a plate's own grid, or a plate. `rx`, `ry` are its offset in the box it was packed in. */
 interface Item {

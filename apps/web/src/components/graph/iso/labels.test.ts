@@ -632,6 +632,38 @@ describe('drawLabels', () => {
     drawLabels(frameOf(s, ctx, camOn(plateCentre(s, 0), 30), { dpr: 2 }));
     expect(ctx.transform).toEqual([2, 0, 0, 2, 0, 0]);
   });
+
+  it('says how many links a route carries on it, where there is room, and picks nothing', () => {
+    const s = scene(ATLAS);
+    const c = plateCentre(s, 0);
+    const cam = camOn(c, 30);
+    const at: [number, number, number] = [c.x, c.y, c.z];
+    const ctx = new FakeContext();
+    // Two at one point: the second finds the first's room taken, and is dropped.
+    const counts = [
+      { at, text: '12' },
+      { at, text: '34' },
+    ];
+    const hits = drawLabels(frameOf(s, ctx, cam, { state: { counts } }));
+    const said = ctx.texts.filter((t) => t.text === '12' || t.text === '34');
+    expect(said.map((t) => t.text)).toEqual(['12']);
+    expect(said[0]!.ink).toBe(LABEL_COLORS.quiet);
+    expect(said[0]!.font).toContain(FONTS.mono);
+    // Centred on the point, in a tag edged in the routes' grey.
+    const p = isoProject(cam, VP)(...at);
+    const edge = ctx.strokes.find((st) => st.stroke === LABEL_COLORS.route && inside(p, st.rect));
+    expect(edge).toBeDefined();
+    expect(Math.abs(edge!.rect.x + edge!.rect.w / 2 - p.x)).toBeLessThan(1);
+    expect(Math.abs(edge!.rect.y + edge!.rect.h / 2 - p.y)).toBeLessThan(1);
+    // Nothing a pointer could pick, and no name drawn over it.
+    expect(hits.some((h) => inside(p, h.rect))).toBe(false);
+    // Off the stage, not drawn at all.
+    const away = new FakeContext();
+    drawLabels(
+      frameOf(s, away, cam, { state: { counts: [{ at: [c.x + 500, c.y, c.z], text: '12' }] } }),
+    );
+    expect(away.texts.some((t) => t.text === '12')).toBe(false);
+  });
 });
 
 describe('the notes that matter', () => {

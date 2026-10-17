@@ -13,6 +13,7 @@ import type { GraphLayers, GraphModel, GraphView } from '@/lib/graph-model';
 import { cn } from '@/lib/utils';
 
 import { GLASS } from './graph-preview';
+import type { GraphStyle } from './graph-style';
 
 interface GraphLayersMenuProps {
   model: GraphModel;
@@ -23,6 +24,9 @@ interface GraphLayersMenuProps {
   /** Whether shared vaults are fetched at all. */
   includeShared: boolean;
   onIncludeSharedChange(include: boolean): void;
+  /** How the map is drawn: offered on the map only, and only where line art can draw (WebGL). */
+  style?: GraphStyle;
+  onStyleChange?(style: GraphStyle): void;
 }
 
 export function Row({
@@ -73,7 +77,7 @@ export const Heading = ({ children }: { children: ReactNode }) => (
   <div className="px-1.5 pb-1 pt-2 font-mono text-[11px] uppercase tracking-wider text-fg-tertiary first:pt-0.5">{children}</div>
 );
 
-export function GraphLayersMenu({ model, layers, onChange, view, includeShared, onIncludeSharedChange }: GraphLayersMenuProps) {
+export function GraphLayersMenu({ model, layers, onChange, view, includeShared, onIncludeSharedChange, style, onStyleChange }: GraphLayersMenuProps) {
   const hidden = new Set(layers.hiddenVaults);
   const visibleVaults = model.vaults.filter((v) => !hidden.has(v.id));
   const shown = new Map<string, number>();
@@ -191,6 +195,24 @@ export function GraphLayersMenu({ model, layers, onChange, view, includeShared, 
                 glyph={<span aria-hidden className="shrink-0 text-[11px] leading-none text-fg-secondary">⬡</span>}
               >
                 Topics as nodes
+              </Row>
+            </>
+          )}
+          {onMap && onStyleChange && (
+            // How the map is drawn, not what: kept out of the dot that says the layers were changed.
+            <>
+              <div className="my-1 h-px bg-border-subtle" />
+              <Heading>Style</Heading>
+              <Row
+                isSelected={style === 'lineart'}
+                onChange={(on) => onStyleChange(on ? 'lineart' : 'classic')}
+                glyph={
+                  <svg aria-hidden viewBox="0 0 16 10" className="h-2.5 w-4 shrink-0 text-fg-secondary">
+                    <path d="M8 1 15 4.5 8 8 1 4.5Z" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                  </svg>
+                }
+              >
+                Line art <span className="text-fg-tertiary">(beta)</span>
               </Row>
             </>
           )}

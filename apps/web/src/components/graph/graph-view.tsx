@@ -67,7 +67,7 @@ import { GraphLayersMenu } from './graph-layers';
 import { FLOAT_GLASS, GLASS, GraphPreview, edited } from './graph-preview';
 import { readReturn, writeReturn } from './graph-return';
 import { FilterChips, GraphSearch } from './graph-search';
-import { LINEART_VIEWS, STYLE_KEY, graphStyle } from './graph-style';
+import { LINEART_VIEWS, STYLE_KEY, graphStyle, type GraphStyle } from './graph-style';
 import { chromeRects } from './labels/chrome';
 
 /** The preview sheet's heading, where focus goes after a pick made from the keyboard. */
@@ -301,6 +301,39 @@ export function GraphView({
   const [webgl, setWebgl] = useState(true);
   /** Line art came and draws the views it has (graph-style). */
   const [lineart, setLineart] = useState(false);
+  /** The style chosen: line art draws only once its code has come (`lineart`). */
+  const [style, setStyle] = useState<GraphStyle>('classic');
+  /** Bumped by every switch of style: a load that comes back after one is dropped. */
+  const kitLoad = useRef(0);
+  // Line art's code, fetched and handed to the controller; the classic graph shows meanwhile.
+  const loadKit = useCallback(
+    (controller: GraphController, asked = false) => {
+      if (!controller.webgl) return;
+      const load = ++kitLoad.current;
+      const current = () => controllerRef.current === controller && kitLoad.current === load;
+      void import('./iso/kit')
+        .then((m) => {
+          // Switched back to classic while it came, or asked for again: not this load's to install.
+          if (!current()) return;
+          controller.setKit(m.createKit());
+          setLineart(true);
+        })
+        .catch((error) => {
+          console.warn('Line art failed to load; the classic graph shows.', error);
+          if (!current()) return;
+          // The box would stay ticked over the classic map.
+          setStyle('classic');
+          // Stored and failed on the way in, it is kept, so a reload after a deploy that moved the
+          // code tries again. Asked for and failed, it is not: the box, unticked, could not undo it,
+          // and every visit would fail again.
+          if (asked && persist) writePref(STYLE_KEY, 'classic');
+          // Said when it was asked for, or where it would have drawn: not over the Brain.
+          if (asked || LINEART_VIEWS.includes(controller.view))
+            setToast('Line art could not load. Reload the page and try again.');
+        });
+    },
+    [persist],
+  );
   /** Where line art's map is, for its breadcrumb. */
   const [place, setPlace] = useState<readonly KitPlace[]>([]);
   /** The note line art's keyboard cursor is on, said to a screen reader. */
@@ -389,19 +422,11 @@ export function GraphView({
     controllerRef.current = controller;
     setWebgl(controller.webgl);
     // Line art draws the views it has so far, the classic graph the rest, and all of them without
-    // WebGL. Its code comes only when asked for (`?style=lineart`), and the graph shows meanwhile.
-    if (graphStyle(window.location.search, persist ? readPref(STYLE_KEY) : null) === 'lineart') {
-      if (controller.webgl)
-        void import('./iso/kit')
-          .then((m) => {
-            if (controllerRef.current !== controller) return;
-            controller.setKit(m.createKit());
-            setLineart(true);
-          })
-          .catch((error) =>
-            console.warn('Line art failed to load; the classic graph shows.', error),
-          );
-    }
+    // WebGL. Its code comes only when asked for (the layers' Style, or `?style=lineart`), and the
+    // graph shows meanwhile.
+    const drawn = graphStyle(window.location.search, persist ? readPref(STYLE_KEY) : null);
+    setStyle(drawn);
+    if (drawn === 'lineart') loadKit(controller);
 
     const opening = openingView(
       window.location.hash,
@@ -435,7 +460,7 @@ export function GraphView({
       controller.dispose();
       controllerRef.current = null;
     };
-  }, [saveLayout, persist]);
+  }, [saveLayout, persist, loadKit]);
 
   // The chrome's rectangles for the labels to keep clear of, measured again whenever something
   // in the stage appears, goes, changes class or changes its text (a panel, the search's
@@ -781,6 +806,24 @@ export function GraphView({
             view={view}
             includeShared={includeShared}
             onIncludeSharedChange={onIncludeSharedChange}
+            // Line art needs WebGL; without it there is no style to choose.
+            {...(webgl && {
+              style,
+              onStyleChange: (next: GraphStyle) => {
+                const controller = controllerRef.current;
+                setStyle(next);
+                if (persist) writePref(STYLE_KEY, next);
+                if (!controller) return;
+                // Switched live: the kit comes or goes, and the graph is not mounted again.
+                if (next === 'lineart') loadKit(controller, true);
+                else {
+                  // A load still on its way is dropped when it comes.
+                  kitLoad.current++;
+                  controller.setKit(null);
+                  setLineart(false);
+                }
+              },
+            })}
           />
         )}
         {model && !sentinel && (
@@ -1078,6 +1121,23 @@ export function GraphView({
             </>
           )}
         </ul>
+        {kitView && (
+          <ul className="flex flex-wrap gap-x-3.5 gap-y-1" aria-label="What the marks mean">
+            <LegendItem glyph={<LineArtGlyph kind="note" />}>note</LegendItem>
+            {layers.indexes && (
+              <LegendItem glyph={<LineArtGlyph kind="index" />}>project&apos;s index</LegendItem>
+            )}
+            {visibleVaults.some((v) => !v.own) && (
+              <LegendItem glyph={<LineArtGlyph kind="shared" />}>shared vault</LegendItem>
+            )}
+            <LegendItem glyph={<LineArtGlyph kind="link" />}>link of the selected note</LegendItem>
+            <LegendItem glyph={<LineArtGlyph kind="hidden" />}>behind something</LegendItem>
+            <LegendItem glyph={<LineArtGlyph kind="found" />}>search match</LegendItem>
+            {layers.routes && (
+              <LegendItem glyph={<LineArtGlyph kind="route" />}>links between projects</LegendItem>
+            )}
+          </ul>
+        )}
       </div>
 
       <div
@@ -1219,6 +1279,64 @@ function CountryTooltip({ country, vaultLabel }: { country: CountryHover; vaultL
         zoom in
       </span>
     </>
+  );
+}
+
+/** Line art's marks, drawn as the map draws them, in its tokens. */
+function LineArtGlyph({
+  kind,
+}: {
+  kind: 'note' | 'index' | 'shared' | 'link' | 'hidden' | 'found' | 'route';
+}) {
+  const edge = 'var(--graph-la-block-edge)';
+  const block = (
+    <>
+      <path d="M14 3 22 7 14 11 6 7Z" fill="var(--graph-la-block-top)" stroke={edge} />
+      <path d="M6 7v4l8 4v-4M22 7v4l-8 4" fill="none" stroke={edge} />
+    </>
+  );
+  return (
+    <svg viewBox="0 0 28 18" className="h-3 w-5">
+      {kind === 'note' && block}
+      {kind === 'index' && (
+        <>
+          {block}
+          <path d="M14 5 18 7 14 9 10 7Z" fill="none" stroke={edge} />
+        </>
+      )}
+      {kind === 'shared' && (
+        <path
+          d="M2 9 14 3 26 9 14 15Z"
+          fill="none"
+          stroke="var(--graph-la-route)"
+          strokeDasharray="3 2.5"
+        />
+      )}
+      {kind === 'link' && (
+        <path d="M3 12h9V6h13" fill="none" stroke="var(--accent)" strokeWidth="1.6" />
+      )}
+      {kind === 'hidden' && (
+        <path
+          d="M3 12h9V6h13"
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="1.2"
+          strokeDasharray="3 3"
+          opacity="0.6"
+        />
+      )}
+      {kind === 'found' && (
+        <path
+          d="M7 6V3h3M18 3h3v3M21 12v3h-3M10 15H7v-3"
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="1.5"
+        />
+      )}
+      {kind === 'route' && (
+        <path d="M3 12h9V6h13" fill="none" stroke="var(--graph-la-route)" strokeWidth="2" />
+      )}
+    </svg>
   );
 }
 

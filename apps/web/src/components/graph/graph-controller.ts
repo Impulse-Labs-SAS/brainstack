@@ -1953,6 +1953,7 @@ export class GraphController {
         open: (node) => this.events.onOpen(node),
         onPlace: (steps) => this.events.onPlace?.(steps),
         onCursor: (node) => this.events.onCursor?.(node),
+        setPixelRatio: (dpr) => this.scene?.resize(this.vp, Math.min(dpr, this.dpr)),
       },
       model,
       this.vp,
@@ -1969,6 +1970,9 @@ export class GraphController {
     this.el.minimap.style.visibility = '';
     this.events.onPlace?.([]);
     this.events.onCursor?.(null);
+    // The kit may have drawn at a lower pixel ratio: the page's comes back. Not on the way out:
+    // a full-size buffer for a renderer about to be freed is memory for nothing.
+    if (!this.parked && !this.disposed) this.scene?.resize(this.vp, this.dpr);
     // The kit drew with the renderer and over the overlay: the classic graph draws all of it again.
     this.reupload = true;
     this.edgesDirty = true;
@@ -1991,6 +1995,7 @@ export class GraphController {
       selected: this.selected,
       previewed: this.previewed,
       matches: this.matched,
+      routes: this.routesLayer,
     });
   }
 
