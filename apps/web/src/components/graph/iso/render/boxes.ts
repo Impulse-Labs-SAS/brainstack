@@ -16,7 +16,16 @@ import * as THREE from 'three';
 import { lineArtRgb, type LineArtTheme } from '@/lib/graph-theme';
 
 export const KIND = { vault: 0, project: 1, folder: 2, sub: 3, note: 4 } as const;
-export const STATE = { rest: 0, dim: 1, hover: 2, linked: 3, found: 4, selected: 5 } as const;
+/** How a box is lit; `hidden` draws nothing at all (a note the growth replay has not reached). */
+export const STATE = {
+  rest: 0,
+  dim: 1,
+  hover: 2,
+  linked: 3,
+  found: 4,
+  selected: 5,
+  hidden: 6,
+} as const;
 /** Bit flags: a dashed rim (the shared vault's plate), an inner square (a project's index note). */
 export const FLAG = { dashed: 1, index: 2 } as const;
 
@@ -162,7 +171,12 @@ const float EDGE_PX[6] = float[6](${EDGE_PX.map(glsl).join(', ')});
 
 void main() {
   int kind = clamp(int(iKind + 0.5), 0, 4);
-  int state = clamp(int(iState + 0.5), 0, 5);
+  int state = clamp(int(iState + 0.5), 0, ${STATE.hidden});
+  if (state == ${STATE.hidden}) {
+    // Past the far plane: clipped whole, so not a fragment of it is drawn.
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    return;
+  }
   int flags = int(iFlags + 0.5);
   bool note = kind == ${KIND.note};
   bool top = normal.z > 0.5;
