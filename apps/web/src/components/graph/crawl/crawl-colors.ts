@@ -7,8 +7,12 @@ export const CRAWL_COLORS = {
   named: '#b8a6ff',
   linked: '#5eead4',
   decision: '#4ade80',
-  /** A note the assistant created or changed after it read. */
-  written: '#60a5fa',
+  /**
+   * A note the assistant created or changed after it read. Light enough that a
+   * card's reason line in it holds 4.5:1 on its glass, aged and over a lit
+   * thread (crawl-draw.test.ts) — a darker blue fell short.
+   */
+  written: '#93c5fd',
   ask: '#fbbf24',
 } as const;
 

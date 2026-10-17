@@ -335,7 +335,7 @@ describe('drawCrawl cards', () => {
 
   it('writes 12px or larger, and every line of an aging card at 4.5:1 or more on its glass', () => {
     const { replay, view } = finished();
-    const labels = (['named', 'linked', 'decision', 'ask'] as const).map((k, i) => hung(view, 100 + i * 300, 200, `Note ${k}`, k, 30));
+    const labels = (['named', 'linked', 'decision', 'written', 'ask'] as const).map((k, i) => hung(view, 100 + i * 300, 200, `Note ${k}`, k, 30));
     const { ctx, ops } = recorder();
     drawCrawl(ctx, screen, drawing(replay, view, { labels, width: 1400, height: 400 }));
     for (const font of writes(ops, 'font') as string[]) {
@@ -347,8 +347,8 @@ describe('drawCrawl cards', () => {
     // stage's own dark and over the brightest thing that can lie behind a card: a lit thread at
     // full strength, in the brightest of the walk's colours.
     const drawn = inked(ops);
-    expect(drawn.glass.length).toBe(4);
-    expect(drawn.text.length).toBe(8);
+    expect(drawn.glass.length).toBe(5);
+    expect(drawn.text.length).toBe(10);
     for (const behind of ['#0a0a0a', CRAWL_COLORS.linked]) {
       for (const g of drawn.glass) {
         const glass = over(g, parseColor(behind)!.rgb);
