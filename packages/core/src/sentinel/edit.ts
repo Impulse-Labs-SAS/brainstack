@@ -13,6 +13,14 @@
 // silently. Headings inside fenced code are not sections: a `# comment` in a
 // shell block is not where anyone meant to append.
 //
+// A section is named by its heading, in any case and with or without accents —
+// or by the start of it, when no heading reads exactly so and only one begins
+// with those words: "Estado actual" names "Estado actual — próximo paso". An
+// assistant recalls a long heading by its first words, and refusing that sends
+// it back to read a note just to copy a title it already got right. The start
+// must end where a word does, so "Esta" names no "Estado", and a start several
+// headings share is refused with all of them, like any other ambiguous anchor.
+//
 // A note saved from Windows keeps its CRLF line breaks. Edits are matched and
 // applied on LF — what an assistant sends — and the result is written back with
 // the note's own line breaks, so neither a heading nor a passage is missed for
@@ -173,14 +181,30 @@ function findSection(body: string, name: string): Section {
       `the note has ${matches.length} sections called "${name}"; use a replace edit on the text around the one you mean`,
     );
   }
-  const known = sections.map((s) => `"${s.heading}"`).join(', ');
+  const starts = sections.filter((s) => startsWithWords(headingKey(s.heading), wanted));
+  if (starts.length === 1) return starts[0]!;
+  const quoted = (list: Section[]) => list.map((s) => `"${s.heading}"`).join(', ');
+  if (starts.length > 1) {
+    throw new NoteEditError(
+      `the note has no section "${name}", and ${starts.length} start with it: ${quoted(starts)}; ` +
+        'name the one you mean in full',
+    );
+  }
   throw new NoteEditError(
     `the note has no section "${name}"` +
-      (known ? `; its sections are ${known}` : '; it has no headings'),
+      (sections.length ? `; its sections are ${quoted(sections)}` : '; it has no headings'),
   );
 }
 
-const headingKey = (heading: string) => heading.trim().toLocaleLowerCase();
+/** A heading as it is compared: trimmed, spaces collapsed, lower case, accents dropped. */
+const headingKey = (heading: string) =>
+  heading.normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+
+/** Whether `key` begins with `start` and the start ends where a word does. */
+function startsWithWords(key: string, start: string): boolean {
+  if (start === '' || !key.startsWith(start)) return false;
+  return !/[\p{L}\p{N}]/u.test(key.charAt(start.length));
+}
 
 function mergeFrontmatter(current: Frontmatter, values: Record<string, unknown>): Frontmatter {
   // Built from entries rather than assigned key by key: `next['__proto__'] = v`

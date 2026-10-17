@@ -88,7 +88,9 @@ const EDIT = z.discriminatedUnion('op', [
     text: noteContent(),
     section: field()
       .optional()
-      .describe('A heading, like "Notas" or "## Notas". Omit to append to the end of the note.'),
+      .describe(
+        'A heading, like "Notas" or "## Notas" — or the start of one, when only one heading begins with it. Omit to append to the end of the note.',
+      ),
   }),
   z.object({
     op: z.literal('prepend'),
@@ -489,7 +491,7 @@ export function buildMcpServer({
     {
       title: 'Edit part of a note',
       description:
-        'Change an existing note by saying what changes, without sending it back whole — prefer this to update_note for any change that is not a full rewrite. `edits` apply in order: `replace` swaps one exact passage (it must appear exactly once; an empty `replace` deletes it), `append` adds text at the end of the note or of a `section` (a heading such as "Notas"), `prepend` adds it at the start or right under a section\'s heading, `set_frontmatter` merges keys (null removes one). Text is inserted as whole lines; for a paragraph of its own, start an appended text with an empty line and end a prepended one with one. `replace` works on the body only. If an anchor is missing or ambiguous nothing is written and the error says which. Pass the `checksum` from gather_context or get_note as `expectedChecksum`; without one the edit still lands only on the version it was applied to. You do not need to open the note first when gather_context already showed you the passage or listed the section.' +
+        'Change an existing note by saying what changes, without sending it back whole — prefer this to update_note for any change that is not a full rewrite. `edits` apply in order: `replace` swaps one exact passage (it must appear exactly once; an empty `replace` deletes it), `append` adds text at the end of the note or of a `section` (a heading such as "Notas", in any case and with or without accents; the start of a heading names it too, when only one heading begins with it), `prepend` adds it at the start or right under a section\'s heading, `set_frontmatter` merges keys (null removes one). Text is inserted as whole lines; for a paragraph of its own, start an appended text with an empty line and end a prepended one with one. `replace` works on the body only. If an anchor is missing or ambiguous nothing is written and the error says which. Pass the `checksum` from gather_context or get_note as `expectedChecksum`; without one the edit still lands only on the version it was applied to. You do not need to open the note first when gather_context already showed you the passage or listed the section.' +
         ` The body may not grow past ${NOTE_MAX_CHARS} characters (TOO_LONG): split the note instead. A note already past it may only shrink.`,
       inputSchema: {
         path: field().min(1),
