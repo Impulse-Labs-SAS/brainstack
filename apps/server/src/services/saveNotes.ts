@@ -26,7 +26,13 @@
 // the Sentinel view can one day replay a write the way it replays a read.
 
 import { extractFrontmatter, normalizeRelativePath, type Frontmatter } from '@brainstack/core';
-import { fitsNoteLimit, noteSize, type NoteEdit, type NoteSize } from '@brainstack/core/sentinel';
+import {
+  fitsNoteLimit,
+  HOW_TO_SPLIT,
+  noteSize,
+  type NoteEdit,
+  type NoteSize,
+} from '@brainstack/core/sentinel';
 
 import { AppError, describeError, toAppError } from '../lib/errors.js';
 
@@ -243,14 +249,12 @@ function tooLong(
 ): AppError {
   const was =
     before && before.chars > max
-      ? ` It is already ${before.chars} characters, past the limit, so a change may shrink it but not grow it.`
+      ? ` It is already ${before.chars} characters, past the limit: a change may shrink it but not grow it.`
       : '';
   return new AppError(
     `${path} would be ${after.chars} characters (${after.lines} lines); a note an assistant ` +
       `writes stays within ${max}, so that it always reaches an assistant whole.${was} ` +
-      `Split it instead: move each part into a note of its own in the same folder, and keep ` +
-      `this note as a short summary that links to them — one save_notes with the creates and ` +
-      `an edit that replaces each moved part with its link. Tell the user how you would split it.`,
+      HOW_TO_SPLIT,
     'TOO_LONG',
     413,
   );

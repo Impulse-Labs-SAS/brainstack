@@ -2,7 +2,13 @@
 // and exposes a helper to connect to a given transport (Streamable HTTP).
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { MAX_EDITS, NOTE_MAX_CHARS, noteSize, type NoteEdit } from '@brainstack/core/sentinel';
+import {
+  HOW_TO_SPLIT,
+  MAX_EDITS,
+  NOTE_MAX_CHARS,
+  noteSize,
+  type NoteEdit,
+} from '@brainstack/core/sentinel';
 import { z } from 'zod';
 
 import type { Logger } from 'pino';
@@ -259,12 +265,20 @@ export function buildMcpServer({
 
   /**
    * A note past the size limit says so when it is read, with what an edit may
-   * do to it: an assistant about to work on it learns to split it first.
+   * do to it and how to make room: an assistant about to work on it learns to
+   * split it first, rather than trim it to fit.
    */
   const sizeNotice = (body: string) => {
     const size = noteSize(body);
     return size.chars > NOTE_MAX_CHARS
-      ? { tooLong: { ...size, maxChars: NOTE_MAX_CHARS, mayOnlyShrink: true } }
+      ? {
+          tooLong: {
+            ...size,
+            maxChars: NOTE_MAX_CHARS,
+            mayOnlyShrink: true,
+            howToFix: HOW_TO_SPLIT,
+          },
+        }
       : {};
   };
 
@@ -927,7 +941,7 @@ export function buildMcpServer({
     {
       title: 'Gather context for a question or a prompt',
       description:
-        "Start here for any question or task about the user's notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user's message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision`, its `checksum` and its body in `excerpt`, whole when it fits `maxChars`; a `truncated` one also lists its `sections` (every heading of the whole note), and one marked `tooLong` is past the size an assistant may write — propose splitting it before adding to it. That is enough to change a note with edit_note or save_notes without opening it — pass the `checksum` as `expectedChecksum`. Open a note with get_note (several with get_notes) only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user's own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user's own crawl history, which they can replay in the web app.",
+        "Start here for any question or task about the user's notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user's message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision`, its `checksum` and its body in `excerpt`, whole when it fits `maxChars`; a `truncated` one also lists its `sections` (every heading of the whole note), and one marked `tooLong` is past the size an assistant may write — propose splitting it into linked notes before adding to it, never condensing it. That is enough to change a note with edit_note or save_notes without opening it — pass the `checksum` as `expectedChecksum`. Open a note with get_note (several with get_notes) only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user's own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user's own crawl history, which they can replay in the web app.",
       inputSchema: {
         text: z.string().min(1).max(MAX_TEXT_CHARS),
         terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),
