@@ -47,6 +47,8 @@ export interface LabelState {
    * so arriving at a large folder never leaves it untitled.
    */
   focus?: number | null;
+  /** Counts to name along the All routes cables: how many links each carries, where in the world. */
+  counts?: readonly { at: readonly [number, number, number]; text: string }[];
 }
 
 export interface LabelColors {
@@ -206,6 +208,7 @@ export function drawLabels(f: LabelFrame): LabelHit[] {
   );
   for (const list of [vaults, projects, folders])
     for (const p of shownFirst(list, (i) => layout.plates[i]!.id, f.memory)) pass.plate(p, false);
+  for (const c of f.state.counts ?? []) pass.count(c.at, c.text);
 
   // Any note there is room for, by the level: the index notes from the project level, the rest
   // from the folder level; last frame's first, then the most linked.
@@ -407,6 +410,26 @@ class Pass {
     this.f.memory.shown(plate.id);
     this.tag(rect, text, style);
     this.hits.push({ rect, plate: p });
+  }
+
+  /** How many links a route carries, centred on a point of it; dropped with no room there. */
+  count(at: readonly [number, number, number], text: string): void {
+    const { px, fonts, colors } = this.f;
+    const p = this.project(at[0], at[1], at[2]);
+    const font = `500 ${px}px ${fonts.mono}`;
+    const w = Math.ceil(this.width(text, font, null)) + 2 * INSET;
+    const h = px + 7;
+    const rect = this.claim([slot(p.x - w / 2, p.y - h / 2, w, h)], false);
+    if (!rect) return;
+    this.tag(rect, text, {
+      font,
+      ink: colors.quiet,
+      edge: colors.route,
+      edgeWidth: 1,
+      dash: [],
+      swatch: null,
+      spacing: null,
+    });
   }
 
   private plateTag(

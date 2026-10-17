@@ -43,6 +43,11 @@ export interface KitHost {
   onPlace(steps: readonly KitPlace[]): void;
   /** The keyboard moved the cursor to a note: for a screen reader to say which. */
   onCursor(node: GraphNode | null): void;
+  /**
+   * Draw the renderer's buffer at this pixel ratio, lower than the page's when frames come late:
+   * the controller gives it back its own when the kit leaves.
+   */
+  setPixelRatio(dpr: number): void;
 }
 
 /** What the kit is handed each frame it draws. */
@@ -59,6 +64,8 @@ export interface KitFrame {
   previewed: GraphNode | null;
   /** What a search found; null with no search. */
   matches: ReadonlySet<GraphNode> | null;
+  /** The All routes layer: every link drawn, between projects. */
+  routes: boolean;
 }
 
 export interface GraphKit {

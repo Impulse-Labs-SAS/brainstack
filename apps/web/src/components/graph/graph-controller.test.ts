@@ -3504,6 +3504,11 @@ describe('GraphController with a kit', () => {
     expect(f.selected).toBe(a);
     expect(f.previewed).toBe(b);
     expect([...f.matches!]).toEqual([a, b]);
+    // And whether All routes is on.
+    expect(f.routes).toBe(false);
+    c.setRoutes(true);
+    h.step(1);
+    expect(kit.frames.at(-1)!.routes).toBe(true);
   });
 
   it('gives the kit the pointer, the wheel and its own keys', () => {
@@ -3681,6 +3686,29 @@ describe('GraphController with a kit', () => {
     h.resize(640, 480);
     h.el.gl.listeners.get('webglcontextrestored')!();
     expect(kit.calls).toEqual(['resize 640x480 1', 'invalidate']);
+  });
+
+  it("draws at the kit's pixel ratio, never above the page's, and at the page's once it leaves", () => {
+    const { h, c, kit } = kitOnTheMap();
+    h.step(1);
+    const from = sceneResizes().length;
+    kit.host!.setPixelRatio(3);
+    kit.host!.setPixelRatio(0.5);
+    expect(sceneResizes().slice(from)).toEqual([
+      [{ width: 800, height: 600 }, 1],
+      [{ width: 800, height: 600 }, 0.5],
+    ]);
+    c.setKit(null);
+    expect(sceneResizes().slice(from + 2)).toEqual([[{ width: 800, height: 600 }, 1]]);
+  });
+
+  it('sizes no buffer for a renderer on its way out, whatever ratio the kit drew at', () => {
+    const { h, c, kit } = kitOnTheMap();
+    h.step(1);
+    kit.host!.setPixelRatio(0.5);
+    const from = sceneResizes().length;
+    c.dispose();
+    expect(sceneResizes().slice(from)).toEqual([]);
   });
 
   it('owns the kit it is given: disposed when replaced, when taken back, and with the controller', () => {

@@ -12,6 +12,12 @@
 // (the arrows), selects the one it is on (Space) or opens it (Enter), walks the selected note's
 // links (] and [) and steps out a level at a time (Escape, through the controller). Where the map is — the plate
 // last flown to, or the one the middle of the stage stands on — is the breadcrumb's.
+//
+// Cables are drawn only for what is active: the selected note's links, run along the streets
+// between plates and grown in from it, and with All routes on one cable per pair of projects
+// that link to each other, as wide as the links it carries and labelled with how many. What a
+// search found is bracketed wherever it is on the stage. While the camera moves the map is drawn
+// as sharply as the machine keeps up with (see quality.ts); at rest, always at its sharpest.
 
 import * as THREE from 'three';
 
@@ -44,8 +50,11 @@ import { BoxLayer, FLAG, KIND, STATE } from './render/boxes';
 import { GroundGrid } from './render/grid';
 import { LiftMarks, type LiftMark } from './render/marks';
 import { applyIsoCamera } from './render/ortho';
+import { CABLE, CableLayer, GROW_MS, routeWidth, type CableSet } from './render/cables';
 import { BLOCK, BLOCK_H } from './block';
 import { PickIndex } from './pick/ray';
+import { QualityGovernor, type QualityLevel } from './quality';
+import { projectRoutes, routesFrom, type ProjectRoute, type Vec3 } from './routes';
 
 /** How far a block rises: the selected one, and the one a result in the list points at. */
 const LIFT_SELECTED = 0.55;
@@ -73,6 +82,35 @@ const SETTLE_FRAMES = 3;
 /** A second press this soon and this near the first is the rest of a double click: it picks nothing. */
 const DOUBLE_MS = 500;
 const REPEAT_PX = 6;
+/** Search results bracketed on the stage at the most: past that many, more brackets say nothing. */
+const FOUND_BRACKETS = 200;
+/**
+ * A frame this long after the last is a pause (a hidden tab, a debugger), not a late frame. A
+ * slow machine's frames can take a few hundred milliseconds: those are the ones to count.
+ */
+const PAUSE_MS = 1000;
+/**
+ * The camera still this long, and for this many frames, the map is drawn at its sharpest: a pan
+ * held a moment is not rest. Counted in frames too, as a machine slower than that would take the
+ * frame after each wheel notch for rest, and size the buffer up and down on every one.
+ */
+const REST_MS = 150;
+const REST_FRAMES = 3;
+/**
+ * What the governor is told. A draw's cost reaches the frames after it a frame or two late, as
+ * the GPU catches up, and lands on whichever comes then, moving or not. So a draw the camera
+ * moved for is charged the longest wait among the frames after it, until the camera moves again
+ * or IDLE_AFTER frames have passed; and a frame tells the browser's own cadence only once nothing
+ * has been drawn for as many. The draw after the buffer was resized is not counted: the resizing
+ * is in its cost.
+ */
+const IDLE_AFTER = 3;
+const SKIP_AFTER_RESIZE = 1;
+/**
+ * A drag or a pinch with no movement for this long is rest, as a hand held still would be. Its
+ * lifting may never come (an app switch, a system gesture), and the map would stay coarse.
+ */
+const HELD_MS = 1000;
 
 interface Tween {
   from: IsoCam;
@@ -88,6 +126,7 @@ interface Pointer {
 }
 
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 export function createKit(): GraphKit {
@@ -149,7 +188,38 @@ export class LineArtKit implements GraphKit {
     boxes: BoxLayer;
     grid: GroundGrid;
     marks: LiftMarks;
+    cables: CableLayer;
   } | null = null;
+
+  /** What the cables were laid for: a change to any of it lays them again. */
+  private cabled: {
+    selected: GraphNode | null;
+    layout: IsoLayout;
+    model: GraphModel;
+    routes: boolean;
+  } | null = null;
+  /** The All routes cables, for the layout and the model they were found in. */
+  private routesFor: { layout: IsoLayout; model: GraphModel; routes: ProjectRoute[] } | null = null;
+  /** Where each of those says how many links it carries, while All routes is on. */
+  private counts: { at: Vec3; text: string }[] = [];
+  /** How far the selected note's links have grown in from it, 0..1. */
+  private grown = 1;
+  /** How sharply the map is drawn while the camera moves, by how late those frames come. */
+  private quality: QualityGovernor | null = null;
+  /** The pixel ratio the renderer draws at: the page's, or the governor's step under it. */
+  private renderDpr = 1;
+  /** When the camera last moved, the frames since, and whether the last draw was at the sharpest. */
+  private movedAt = 0;
+  private stillFrames = 0;
+  private sharp = true;
+  /** Moving draws not to count after the buffer was resized, and frames since the last draw. */
+  private skipSamples = 0;
+  private sinceDraw = 0;
+  /** The longest wait since the last draw the camera moved for, and the frames in it; null with none. */
+  private charge: number | null = null;
+  private chargeFrames = 0;
+  /** When the person last moved the camera, in the frames' time. */
+  private heldAt = 0;
 
   private cam: IsoCam = { tx: 0, ty: 0, tz: 0, az: snapAz(0, false), el: ISO_EL, ppu: 10 };
   private turns = 0;
@@ -194,9 +264,19 @@ export class LineArtKit implements GraphKit {
     this.host = host;
     this.vp = vp;
     this.dpr = dpr;
+    // The controller's renderer draws at the page's ratio as the kit comes in. A step lost on an
+    // earlier visit is where it starts again, not where it must stay.
+    this.renderDpr = dpr;
+    this.quality = new QualityGovernor(dpr, this.quality?.remembered);
+    this.skipSamples = 0;
+    this.sinceDraw = 0;
+    this.charge = null;
     this.theme = lineArtTheme();
     if (!this.three) this.three = this.build();
-    else this.three.boxes.setTheme(this.theme);
+    else {
+      this.three.boxes.setTheme(this.theme);
+      this.three.cables.setTheme(this.theme);
+    }
     this.model = model;
     // At once, so the first frame has the map; later changes come from the worker (setModel).
     if (!this.layout || this.laidOut !== model)
@@ -225,8 +305,13 @@ export class LineArtKit implements GraphKit {
   }
 
   resize(vp: Viewport, dpr: number): void {
+    // Another screen: its ratio is the one the steps are measured against.
+    if (dpr !== this.dpr) this.quality = new QualityGovernor(dpr, this.quality?.remembered);
     this.vp = vp;
     this.dpr = dpr;
+    // The controller has just sized the renderer at the page's ratio, at a cost of its own.
+    this.renderDpr = dpr;
+    this.skipSamples = SKIP_AFTER_RESIZE;
     this.dirty = true;
   }
 
@@ -234,8 +319,14 @@ export class LineArtKit implements GraphKit {
     const three = this.three;
     if (!this.host || !three || !this.layout) return;
     if (f.vp.width < 1 || f.vp.height < 1) return;
-    const dt = this.lastNow ? Math.min(64, f.now - this.lastNow) : 16;
+    // As it was, for the quality governor; capped, for what moves by it.
+    const interval = this.lastNow ? f.now - this.lastNow : 0;
+    const dt = this.lastNow ? Math.min(64, interval) : 16;
     this.lastNow = f.now;
+    // How often the browser draws at all, from frames well clear of the last draw (IDLE_AFTER).
+    const measured = interval > 0 && interval < PAUSE_MS;
+    if (measured && this.sinceDraw >= IDLE_AFTER) this.quality?.idle(interval);
+    this.sinceDraw++;
     this.vp = f.vp;
     this.dpr = f.dpr;
     if (f.chrome !== this.chrome) {
@@ -285,17 +376,46 @@ export class LineArtKit implements GraphKit {
       this.matches = f.matches;
       this.light(f.model);
     }
+    this.layCables(f.model, f.routes);
+    if (this.stepGrowth(dt)) moving = true;
     if (this.stepLifts(dt)) moving = true;
     if (this.focusStale && !moving && !this.drag && !this.pinch && !this.tween) this.findFocus();
     this.reportPlace();
     const camMoved = !this.drawnCam || !sameCam(this.drawnCam, this.cam);
     const uploaded = three.boxes.flush();
+    // The last draw the camera moved for, charged with the waits after it (IDLE_AFTER).
+    if (this.charge !== null) {
+      // A pause says nothing of what the draw cost.
+      if (!measured) this.charge = null;
+      else {
+        this.charge = Math.max(this.charge, interval);
+        if (camMoved || ++this.chargeFrames >= IDLE_AFTER) {
+          this.judge(this.charge);
+          this.charge = null;
+        }
+      }
+    }
+    // The camera moving, or about to again (a drag held still, a flight under way): drawn at the
+    // governor's step. Still a while, drawn once more at the sharpest if it was not.
+    const held = !!(this.pinch || this.drag?.moved) && f.now - this.heldAt < HELD_MS;
+    if (camMoved || this.tween || held) {
+      this.movedAt = f.now;
+      this.stillFrames = 0;
+    } else this.stillFrames++;
+    const resting = f.now - this.movedAt >= REST_MS && this.stillFrames >= REST_FRAMES;
+    if (resting && !this.sharp) this.dirty = true;
     if (!this.dirty && !camMoved && !uploaded && !moving) return;
     // A draw for something that changed starts the labels' settling afresh.
     if (!this.settleDraw || camMoved || uploaded || moving) this.settling = 0;
     this.dirty = false;
     this.settleDraw = false;
-    this.draw();
+    this.draw(resting ? null : this.quality?.level);
+    this.sinceDraw = 0;
+    // A draw the camera moved for: what it cost comes with the frames after it.
+    if (camMoved) {
+      this.charge = 0;
+      this.chargeFrames = 0;
+    }
     // Labels that moved find their places again over the next few frames, then the map rests.
     if (!this.memory.settled && this.settling < SETTLE_FRAMES) {
       this.settling++;
@@ -587,6 +707,7 @@ export class LineArtKit implements GraphKit {
     three.boxes.dispose();
     three.grid.dispose();
     three.marks.dispose();
+    three.cables.dispose();
     this.three = null;
   }
 
@@ -598,8 +719,76 @@ export class LineArtKit implements GraphKit {
     const boxes = new BoxLayer(this.theme);
     const grid = new GroundGrid(this.theme);
     const marks = new LiftMarks(this.theme);
-    scene.add(grid.mesh, boxes.mesh, marks.object);
-    return { scene, camera, boxes, grid, marks };
+    const cables = new CableLayer(this.theme);
+    scene.add(grid.mesh, boxes.mesh, marks.object, cables.hidden, cables.visible);
+    return { scene, camera, boxes, grid, marks, cables };
+  }
+
+  /**
+   * The cables for what is shown: the selected note's links, and with All routes on every pair of
+   * projects that link to each other. Laid again only when one of those, or the map, changed.
+   */
+  private layCables(model: GraphModel, routes: boolean): void {
+    const three = this.three;
+    const layout = this.layout;
+    if (!three || !layout) return;
+    const was = this.cabled;
+    if (
+      was &&
+      was.selected === this.selected &&
+      was.layout === layout &&
+      was.model === model &&
+      was.routes === routes
+    )
+      return;
+    this.cabled = { selected: this.selected, layout, model, routes };
+    const sets: CableSet[] = [];
+    const from = this.selected ? this.indexOf(this.selected) : null;
+    if (from !== null) {
+      const to = this.linkedOf(this.selected!, model)
+        .map((n) => this.indexOf(n))
+        .filter((k): k is number => k !== null && k !== from);
+      sets.push({ kind: CABLE.link, routes: routesFrom(layout, from, to) });
+      // A new selection's links grow in from it; the same one's, laid again, stay as grown.
+      if (was?.selected !== this.selected) this.grown = this.host?.reduceMotion ? 1 : 0;
+    }
+    this.counts = [];
+    if (routes) {
+      const all = this.projectRoutesOf(layout, model);
+      sets.push({ kind: CABLE.route, routes: all, widths: all.map((r) => routeWidth(r.count)) });
+      this.counts = all.map((r) => ({
+        at: longestMiddle(r.points),
+        text: r.count.toLocaleString('en-US'),
+      }));
+    }
+    three.cables.set(sets);
+    three.cables.setProgress(easeOut(this.grown));
+    this.dirty = true;
+  }
+
+  /** Every pair of projects linked to each other, found once for a layout and a model. */
+  private projectRoutesOf(layout: IsoLayout, model: GraphModel): ProjectRoute[] {
+    const memo = this.routesFor;
+    if (memo && memo.layout === layout && memo.model === model) return memo.routes;
+    const pairs: [number, number][] = [];
+    for (const e of model.edges) {
+      // What a person wrote: links and an index's members, not topics shared by chance.
+      if (e.kind !== 'link' && e.kind !== 'structure') continue;
+      const a = this.indexOf(e.source);
+      const b = this.indexOf(e.target);
+      if (a !== null && b !== null) pairs.push([a, b]);
+    }
+    const routes = projectRoutes(layout, pairs);
+    this.routesFor = { layout, model, routes };
+    return routes;
+  }
+
+  /** The selected note's links growing in from it; true while they still are. */
+  private stepGrowth(dt: number): boolean {
+    if (this.grown >= 1) return false;
+    this.grown = this.host?.reduceMotion ? 1 : Math.min(1, this.grown + dt / GROW_MS);
+    this.three?.cables.setProgress(easeOut(this.grown));
+    return true;
   }
 
   /** Take a layout: boxes for its plates and notes, the lighting it shows, the camera kept. */
@@ -770,20 +959,34 @@ export class LineArtKit implements GraphKit {
     return moving;
   }
 
-  private draw(): void {
+  /** Draw the map: at `level` while the camera moves, at the sharpest with none. */
+  private draw(level?: QualityLevel | null): void {
     const host = this.host;
     const three = this.three;
     if (!host || !three) return;
-    const { camera, boxes, grid, marks } = three;
+    const { camera, boxes, grid, marks, cables } = three;
+    // Never sharper than the page: the governor's ratio is a ceiling under it.
+    const dpr = Math.min(level?.dpr ?? this.dpr, this.dpr);
+    if (dpr !== this.renderDpr) {
+      host.setPixelRatio(dpr);
+      this.renderDpr = dpr;
+      this.skipSamples = SKIP_AFTER_RESIZE;
+    }
+    grid.setVisible(level?.grid ?? true);
+    cables.setHiddenVisible(level?.hidden ?? true);
+    this.sharp = dpr === this.dpr && (level?.grid ?? true) && (level?.hidden ?? true);
     applyIsoCamera(camera, this.cam, this.vp, this.reach());
     boxes.setView([Math.cos(this.cam.az), Math.sin(this.cam.az)]);
-    boxes.setScale(this.cam.ppu, this.dpr);
-    grid.setScale(this.cam.ppu, this.dpr);
+    // Edges and cables are measured in the renderer's pixels; the labels, over it, in the page's.
+    boxes.setScale(this.cam.ppu, dpr);
+    grid.setScale(this.cam.ppu, dpr);
+    cables.setScale(this.cam.ppu, dpr, this.vp);
     marks.set(this.liftMarks(), this.cam.ppu);
     host.renderer.render(three.scene, camera);
     const ctx = host.overlay;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    this.drawFound(ctx);
     this.drawCursor(ctx);
     this.labelHits = this.drawLabelsNow(ctx);
     this.drawnCam = { ...this.cam };
@@ -824,7 +1027,14 @@ export class LineArtKit implements GraphKit {
     return out;
   }
 
+  /** What a draw the camera moved for cost, told the governor: but not the one a resize is in. */
+  private judge(ms: number): void {
+    if (this.skipSamples > 0) this.skipSamples--;
+    else this.quality?.moving(ms);
+  }
+
   private userCamera(): void {
+    this.heldAt = this.lastNow;
     this.fitted = null;
     this.aim = null;
     this.focusStale = true;
@@ -1163,6 +1373,7 @@ export class LineArtKit implements GraphKit {
         found: indices(this.matches ?? []),
         hoverPlate: this.hoverPlate,
         focus: this.focusPlateIndex(),
+        counts: this.counts,
       },
       chrome: this.chrome,
       px: host.labelPx,
@@ -1185,10 +1396,45 @@ export class LineArtKit implements GraphKit {
     const layout = this.layout;
     const k = this.cursor;
     if (!layout || k === null || !this.keyboard || !this.host) return;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.beginPath();
+    this.bracket(ctx, isoProject(this.cam, this.vp), k);
+    ctx.strokeStyle = this.theme.accent;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  /**
+   * What a search found, bracketed as the cursor is wherever it is on the stage: a result is
+   * found at any zoom, however small its block.
+   */
+  private drawFound(ctx: CanvasRenderingContext2D): void {
+    if (!this.layout || !this.matches?.size) return;
+    const project = isoProject(this.cam, this.vp);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.beginPath();
+    let drawn = 0;
+    for (const n of this.matches) {
+      const k = this.indexOf(n);
+      if (k === null || !this.bracket(ctx, project, k)) continue;
+      if (++drawn >= FOUND_BRACKETS) break;
+    }
+    if (!drawn) return;
+    ctx.strokeStyle = this.theme.accent;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  /** Brackets round a note's block, as drawn now, added to the path; false off the stage. */
+  private bracket(
+    ctx: CanvasRenderingContext2D,
+    project: ReturnType<typeof isoProject>,
+    k: number,
+  ): boolean {
+    const layout = this.layout!;
     const x = layout.cells[k * 3]!;
     const y = layout.cells[k * 3 + 1]!;
     const z = layout.cells[k * 3 + 2]! + (this.lifts.get(layout.plates.length + k)?.now ?? 0);
-    const project = isoProject(this.cam, this.vp);
     let x0 = Infinity;
     let y0 = Infinity;
     let x1 = -Infinity;
@@ -1204,8 +1450,8 @@ export class LineArtKit implements GraphKit {
         }
     const pad = 4;
     const l = 6;
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.beginPath();
+    if (x1 + pad < 0 || y1 + pad < 0 || x0 - pad > this.vp.width || y0 - pad > this.vp.height)
+      return false;
     for (const [cx, cy, sx, sy] of [
       [x0 - pad, y0 - pad, 1, 1],
       [x1 + pad, y0 - pad, -1, 1],
@@ -1216,9 +1462,7 @@ export class LineArtKit implements GraphKit {
       ctx.lineTo(cx, cy);
       ctx.lineTo(cx + sx * l, cy);
     }
-    ctx.strokeStyle = this.theme.accent;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    return true;
   }
 
   private startPinch(): void {
@@ -1324,4 +1568,23 @@ function sameCam(a: IsoCam, b: IsoCam): boolean {
     a.el === b.el &&
     a.ppu === b.ppu
   );
+}
+
+/**
+ * The middle of a cable's longest stretch: where there is most room to say what it carries. A
+ * project route runs on its vault's plate from end to end, so every stretch of it is level.
+ */
+function longestMiddle(points: readonly Vec3[]): Vec3 {
+  let best: Vec3 = points[0] ?? [0, 0, 0];
+  let most = -1;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (l > most) {
+      most = l;
+      best = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+    }
+  }
+  return best;
 }
