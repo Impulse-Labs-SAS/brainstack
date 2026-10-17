@@ -9,7 +9,7 @@ export type GraphStyle = 'classic' | 'lineart';
 export const STYLE_KEY = 'brainstack.graph.style';
 
 /** The views line art draws so far. */
-export const LINEART_VIEWS: readonly GraphView[] = ['territories'];
+export const LINEART_VIEWS: readonly GraphView[] = ['territories', 'network'];
 
 const isStyle = (v: unknown): v is GraphStyle => v === 'classic' || v === 'lineart';
 

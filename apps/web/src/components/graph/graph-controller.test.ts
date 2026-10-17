@@ -3367,8 +3367,16 @@ class FakeKit implements GraphKit {
   handles(view: GraphView): boolean {
     return this.views.includes(view);
   }
-  enter(host: KitHost, model: GraphModel, vp: Viewport, dpr: number): void {
+  /** Whether it draws the engine's layout, as Network's line art does. */
+  engine = false;
+  usesEngine(): boolean {
+    return this.engine;
+  }
+  /** The view each enter was for. */
+  readonly entered: GraphView[] = [];
+  enter(host: KitHost, model: GraphModel, vp: Viewport, dpr: number, view: GraphView): void {
     this.host = host;
+    this.entered.push(view);
     this.calls.push(`enter ${model.nodes.length} ${vp.width}x${vp.height} ${dpr}`);
   }
   leave(): void {
@@ -3792,6 +3800,57 @@ describe('GraphController with a kit', () => {
     Object.assign(h.el.minimap, { clientLeft: 1, clientTop: 1 });
     h.minimap(60, 40);
     expect(kit.calls.at(-1)).toBe('minimap 59,39');
+  });
+
+  it('enters the kit afresh for each view it draws, told which', () => {
+    const h = harness(GraphController);
+    const model = twoVaults();
+    h.controller.initView('territories');
+    h.controller.setModel(model, 'init');
+    h.step(60);
+    const kit = new FakeKit(['territories', 'network']);
+    h.controller.setKit(kit);
+    h.step(1);
+    expect(kit.entered).toEqual(['territories']);
+    h.controller.setView('network');
+    h.step(1);
+    expect(kit.entered).toEqual(['territories', 'network']);
+    expect(kit.calls.filter((c) => c === 'leave')).toHaveLength(1);
+    // A view it does not draw: it leaves, and the classic graph draws.
+    h.controller.setView('brain');
+    h.step(1);
+    expect(kit.calls.at(-1)).toBe('leave');
+    expect(kit.entered).toHaveLength(2);
+  });
+
+  it("keeps the engine's forces going under a kit that draws them, and replays growth with them", () => {
+    const h = harness(GraphController);
+    const model = twoVaults();
+    h.controller.initView('network');
+    const kit = new FakeKit(['network']);
+    kit.engine = true;
+    kit.grows = false;
+    h.controller.setKit(kit);
+    h.controller.setModel(model, 'init');
+    h.step(1);
+    // The first layout settles under the kit, and every note comes in.
+    h.step(300);
+    expect(model.nodes.every((n) => Number.isFinite(n.x) && n.bornAt !== Infinity)).toBe(true);
+    expect(h.events.some((e) => e.name === 'onSettled')).toBe(true);
+    // The kit has no replay of its own: the engine's plays, its chip from the engine.
+    const growth = () => h.events.filter((e) => e.name === 'onGrowth').map((e) => e.args[0]);
+    h.controller.startGrowth();
+    expect(kit.calls).toContain('startGrowth');
+    expect(growth()).toEqual([true]);
+    h.step(20);
+    expect(h.el.timeChip.hidden).toBe(false);
+    // Line art turned off mid-replay: the replay ends with it, the chip goes, the classic
+    // camera frames the layout it never saw settle.
+    h.controller.setKit(null);
+    expect(growth()).toEqual([true, false]);
+    const inner = h.controller as unknown as { cam: { dist: number }; engine: { growth: unknown } };
+    expect(inner.engine.growth).toBeNull();
+    expect(inner.cam.dist).not.toBe(800);
   });
 
   it('sizes no buffer for a renderer on its way out, whatever ratio the kit drew at', () => {
