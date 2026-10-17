@@ -576,6 +576,7 @@ export function CrawlPanel({
                 answer={answer}
                 rows={rows}
                 unresolved={unresolved}
+                written={snap?.found.written ?? 0}
                 curation={curation}
                 walking={!done}
                 onCuration={setCuration}

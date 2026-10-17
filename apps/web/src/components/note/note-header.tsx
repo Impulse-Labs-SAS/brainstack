@@ -371,18 +371,25 @@ function SizeMeter({ chars, lines, max }: { chars: number; lines: number; max: n
       : level === 'near'
         ? 'Close to the length an assistant may write a note to.'
         : 'An assistant reads a note this long whole.';
+  // The short count is for the eye; the sentence is what a screen reader gets,
+  // as text it reads rather than a label on an element with no role. `title`
+  // stays for a pointer, though it never shows on touch.
   return (
     <span
       title={`${exact}. ${hint}`}
-      aria-label={`${exact}. ${hint}`}
       className={cn(
         'shrink-0 whitespace-nowrap px-1 font-mono text-[11px]',
-        level === 'ok' && 'text-fg-muted',
+        // fg-tertiary, not fg-muted: muted is for glyphs and falls short of
+        // 4.5:1 as text (globals.css).
+        level === 'ok' && 'text-fg-tertiary',
         level === 'near' && 'text-warning',
         level === 'over' && 'text-danger',
       )}
     >
-      {shortCount(chars)}/{shortCount(max)}
+      <span aria-hidden>
+        {shortCount(chars)}/{shortCount(max)}
+      </span>
+      <span className="sr-only">{`${exact}. ${hint}`}</span>
     </span>
   );
 }

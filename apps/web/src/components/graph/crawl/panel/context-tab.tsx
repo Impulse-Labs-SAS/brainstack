@@ -34,6 +34,7 @@ export function ContextTab({
   answer,
   rows,
   unresolved,
+  written = 0,
   curation,
   walking,
   onCuration,
@@ -46,6 +47,8 @@ export function ContextTab({
   rows: Row[];
   /** The references to settle: as far as the walk has asked, or all of them. */
   unresolved: Unresolved[];
+  /** Notes the walk has shown the assistant writing: not handed over, so not rows, but lit on the stage. */
+  written?: number;
   curation: Curation;
   walking: boolean;
   onCuration(next: Curation): void;
@@ -82,7 +85,7 @@ export function ContextTab({
       </p>
     );
   }
-  const count = { named: 0, linked: 0, decision: 0, written: 0 };
+  const count = { named: 0, linked: 0, decision: 0, written };
   for (const r of rows) count[r.kind]++;
   const open = unresolved.filter((u) => !curation.settled.has(u.term)).length;
 
@@ -98,6 +101,14 @@ export function ContextTab({
           label={count.decision === 1 ? 'decision' : 'decisions'}
           title="a note that records a decision"
         />
+        {count.written > 0 && (
+          <Chip
+            kind="written"
+            n={count.written}
+            label="written"
+            title="a note the assistant created or changed after reading"
+          />
+        )}
         {unresolved.length > 0 && (
           <Chip kind="ask" n={open} label="to clarify" title="references to settle with you" />
         )}
