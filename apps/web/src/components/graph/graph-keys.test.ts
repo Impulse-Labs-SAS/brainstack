@@ -23,10 +23,18 @@ describe('reachesGraph', () => {
   });
 
   it('walks, opens, goes back and closes from the sheet’s heading', () => {
-    for (const key of ['Enter', 'Escape', 'Backspace', ...ARROWS]) {
+    // The brackets walk a note's links in line art, whose arrows move on the map instead.
+    for (const key of ['Enter', 'Escape', 'Backspace', '[', ']', ...ARROWS]) {
       expect(reachesGraph(key, 'sheet-heading')).toBe(true);
     }
     expect(reachesGraph(' ', 'sheet-heading')).toBe(false);
+  });
+
+  it('in line art leaves the arrows to the sheet, whose note they would not walk', () => {
+    for (const key of ARROWS) expect(reachesGraph(key, 'sheet-heading', true)).toBe(false);
+    for (const key of ['Enter', 'Escape', 'Backspace', '[', ']'])
+      expect(reachesGraph(key, 'sheet-heading', true)).toBe(true);
+    for (const key of ARROWS) expect(reachesGraph(key, 'canvas', true)).toBe(true);
   });
 
   it('takes nothing pressed elsewhere on the stage', () => {
@@ -62,5 +70,14 @@ describe('browserShortcut', () => {
 
   it('takes a plain key, or one held with Shift, for the graph', () => {
     expect(browserShortcut(keys({}))).toBe(false);
+  });
+
+  it('takes a key typed with AltGr, which Windows reports as Ctrl+Alt: ] on a Spanish keyboard', () => {
+    const altGr = {
+      ...keys({ altKey: true, ctrlKey: true }),
+      getModifierState: (m: string) => m === 'AltGraph',
+    };
+    expect(browserShortcut(altGr)).toBe(false);
+    expect(browserShortcut({ ...altGr, getModifierState: () => false })).toBe(true);
   });
 });

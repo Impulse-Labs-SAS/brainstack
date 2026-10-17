@@ -484,6 +484,11 @@ export class GraphScene {
     this.renderer.render(this.scene, this.camera);
   }
 
+  /** The renderer, for a kit that draws a view in the graph's stead (graph-kit): one WebGL context. */
+  get sharedRenderer(): THREE.WebGLRenderer {
+    return this.renderer;
+  }
+
   /** The brain's mesh is still fading in or out: the next frame differs from the last. */
   get easing(): boolean {
     return this.brainAlpha !== (this.brainWanted ? 1 : 0);

@@ -64,6 +64,45 @@ Territories count; its Brain, which nearly every browser holds, says nothing
 - Topics are not nodes here: a topic belongs to no project, so it has no place on the map.
 - Dragging a note moves the map, not the note: its place is where it is filed.
 
+**Line art, in beta.** With `?style=lineart` on the URL, Territories is drawn as an isometric
+map of plates instead. Its code (`components/graph/iso/`) loads only when asked for, and the
+classic style stays the default until line art is accepted.
+
+- **Plates:** one per vault, one per project on it, and one per folder and sub-folder on that.
+  Each note is a block in a grid on its plate, and the project's index stands at its front
+  corner. A shared vault's plate has a dashed rim.
+- **Look:** flat near-black fills and thin edges, one width at any zoom. The one accent is kept
+  for what is active: the selected note, what it links to, what a search found. Seen from far
+  off, a block at rest is a flat tile.
+- **Camera:** orthographic, from one of four corners at 30°, or straight down (`P`). `Q` and `E`
+  turn it a quarter, and it never turns on its own. A turn keeps the selected note where it is,
+  or else refits what was fitted.
+- **Stable:** a plate grows in steps (a k×k or (k+1)×k grid), so one more note rarely moves
+  anything.
+- **Cost:** laying out 5,000 notes takes about 10 ms. The first layout on entering the map runs
+  at once, so the first frame has the map; later changes run in a worker. The drawing is one
+  instanced mesh whose edges the fragment shader draws, and at rest nothing is drawn.
+- **Labels:** on the overlay, each on an opaque tag, placed like the classic graph's: never one
+  over another, and none under the chrome but the few always named, when there is no room
+  elsewhere. Those are the selected note, the one pointed at and the keyboard's cursor; then come
+  what the selected note links to and what a search found. Vault chips and project names show
+  from the whole map in, folder names once their plate is wide enough, index notes from the
+  project level and every note from the folder level, or at any zoom on the plate just flown to.
+- **Picking:** what is under the pointer is what the view ray meets first, found by walking the
+  cells the ray crosses, so a block in front hides the one behind it. Blocks are picked at rest,
+  so one lifted under the pointer does not slide from under it; the selected one where it is
+  drawn. A label picks what it names. A finger picks a block only once its cell is 44 px
+  across, and before that the plate; a label, at any zoom.
+- **Moving about:** a click selects a note, opening the preview, or flies to a plate; bare
+  ground clears the selection, and a double click opens the note. The breadcrumb over the map
+  says where it is and flies to each step. Escape closes the preview, then steps out a level at
+  a time.
+- **Keys:** the arrows move a cursor between the blocks on screen, which a screen reader is
+  told; Space selects the one it is on and Enter opens it. `]` and `[` walk the selected note's
+  links, AltGr or not. One Tab stop, the canvas, holds all of it.
+- **Without WebGL** the classic map stays.
+- **Not yet in line art:** routes, search reticles, the growth replay, paths and the minimap.
+
 **A layer is what gets drawn.** One popover, right after the view tabs, like a map's layers
 button. The Sentinel does not show it: its stage draws no layer. The layers still decide which
 notes its walk can reach, so when they leave some out, the Sentinel's panel says how many.
@@ -314,6 +353,10 @@ of `notes.graph`; vault names come from the roots in `sharing.listSharedWithMe` 
 | `components/graph/labels/chrome.ts`              | What floats over the graph, measured: what labels and the Sentinel's cards keep clear of.                                                                    |
 | `components/graph/graph-controller.ts`           | Camera, pointer, keyboard, focus, growth replay and the frame loop. No React re-render while it animates.                                                    |
 | `components/graph/graph-view.tsx`                | React chrome: toolbar, layers, preview, legend; preferences.                                                                                                 |
+| `components/graph/graph-style.ts`                | Pure: which style the graph is drawn in (`?style=`, then what was stored), and the views line art draws so far. Tested.                                      |
+| `components/graph/graph-kit.ts`                  | The seam a drawing kit plugs into: what the controller lends it, and what it hands it each frame. Types only.                                                |
+| `components/graph/iso/`                          | Line art, loaded with `import()`: the iso camera, the layout and its worker, the boxes, picking, labels and the kit. Tested.                                 |
+| `lib/graph-theme.ts`                             | Line art's colours, from the `--graph-la-*` tokens, held to 3:1 where they mark something. Tested.                                                           |
 | `components/graph/graph-keys.ts`                 | Pure: which keys reach the graph, from the canvas and from the preview. Tested.                                                                              |
 | `components/graph/graph-return.ts`               | Pure: the way back from a note to where the graph was, kept in session storage. Tested.                                                                      |
 | `components/graph/bench/`                        | The bench: the graph's own view over an invented vault of any size, with a frame probe. Its settings and the probe are tested.                               |

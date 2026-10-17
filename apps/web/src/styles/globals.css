@@ -44,6 +44,35 @@
   --warning: #f59e0b;
   --danger: #ef4444;
   --info: #3b82f6;
+
+  /* The graph's line art: flat near-black fills a step lighter per level, thin edges, and
+     --accent only for what is active. The canvas keeps a copy (lib/graph-theme.ts) that its
+     test holds equal to these. It also holds a block's edge, the hover edge and the accent to
+     3:1 on the plate and block tops they are drawn on. */
+  --graph-la-grid: #2c2c34;
+  --graph-la-vault-top: #0e0e11;
+  --graph-la-vault-side: #08080a;
+  --graph-la-vault-edge: #363640;
+  --graph-la-project-top: #121216;
+  --graph-la-project-side: #0b0b0e;
+  --graph-la-project-edge: #40404a;
+  --graph-la-folder-top: #16161b;
+  --graph-la-folder-side: #0d0d10;
+  --graph-la-folder-edge: #4b4b56;
+  --graph-la-sub-top: #1a1a20;
+  --graph-la-block-top: #1e1e25;
+  --graph-la-block-left: #15151a;
+  --graph-la-block-right: #101014;
+  --graph-la-block-edge: #72727e;
+  /* A block's edge while another note is selected and this one is not linked to it. */
+  --graph-la-block-dim: #565662;
+  /* A block at rest seen from far off: a flat tile, its edges too close to tell apart. */
+  --graph-la-block-tile: #3c3c46;
+  --graph-la-hover-top: #27272f;
+  --graph-la-hover-edge: #e2e2ea;
+  --graph-la-sel-top: #221c3a;
+  /* The shared vault's dashed rim. */
+  --graph-la-route: #85858f;
 }
 
 html,

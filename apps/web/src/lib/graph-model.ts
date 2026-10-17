@@ -592,23 +592,30 @@ export function foreignOwner(node: Pick<GraphNode, 'foreign' | 'ownerId'>): stri
   return node.foreign && node.ownerId ? node.ownerId : null;
 }
 
+/** Where the last frame projected a note; null off the stage. */
+const projected = (n: GraphNode) => (n.onScreen ? { x: n.sx, y: n.sy } : null);
+
 /**
  * The neighbour of `from` that lies most nearly in screen direction (dx, dy),
  * for walking links with the arrow keys. Uses the last projected screen
- * positions; ignores neighbours more than ~70° off the direction.
+ * positions, or where `screenOf` says a note is drawn (a kit drawing the view
+ * on a camera of its own); ignores neighbours more than ~70° off the direction.
  */
 export function neighbourToward(
   model: Pick<GraphModel, 'adjacency'>,
   from: GraphNode,
   dx: number,
   dy: number,
+  screenOf: (n: GraphNode) => { x: number; y: number } | null = projected,
 ): GraphNode | null {
+  const origin = screenOf(from) ?? { x: from.sx, y: from.sy };
   let best: GraphNode | null = null;
   let bestScore = 0.35;
   for (const { node } of model.adjacency.get(from) ?? []) {
-    if (!node.onScreen) continue;
-    const vx = node.sx - from.sx;
-    const vy = node.sy - from.sy;
+    const at = screenOf(node);
+    if (!at) continue;
+    const vx = at.x - origin.x;
+    const vy = at.y - origin.y;
     const score = (vx * dx + vy * dy) / (Math.hypot(vx, vy) || 1);
     if (score > bestScore) {
       bestScore = score;

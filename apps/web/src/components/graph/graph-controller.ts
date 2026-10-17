@@ -3,7 +3,9 @@
 // paths, growth replay and the frame loop. React owns the chrome around the
 // canvas and hears about selection, hover and the rest through `events`. A
 // feature built over the graph plugs in as a GraphPlugin, and may bring a
-// stage of its own that the graph steps aside for (stage mode, below).
+// stage of its own that the graph steps aside for (stage mode, below). A style
+// of its own for some views (line art) comes as a GraphKit, which draws those
+// views instead of the classic graph while it holds them (kit mode, below).
 //
 // Nothing here re-renders React while the graph animates: the loop runs on
 // refs and plain objects, and only changes a panel shows go through events.
@@ -39,6 +41,7 @@ import {
 } from '@/lib/graph-model';
 
 import { GraphEngine, type RebuildReason } from './graph-engine';
+import type { GraphKit, KitPlace } from './graph-kit';
 import {
   drawMinimap,
   drawOverlay,
@@ -148,6 +151,10 @@ export interface ControllerEvents {
   onOpen(node: GraphNode): void;
   /** The layout came to rest: a good moment to remember it. */
   onSettled(): void;
+  /** Where a kit's map is, for the breadcrumb over it; empty when no kit draws. */
+  onPlace?(steps: readonly KitPlace[]): void;
+  /** The note a kit's keyboard cursor moved to, for a screen reader; null when it goes. */
+  onCursor?(node: GraphNode | null): void;
 }
 
 interface Elements {
@@ -456,6 +463,11 @@ export class GraphController {
   private reupload = false;
   private disposed = false;
 
+  // Kit mode: a kit draws the view instead of the classic graph (see `syncKit`).
+  private kit: GraphKit | null = null;
+  /** The kit draws now: it handles the view, there is WebGL, and no stage is up. */
+  private kitOn = false;
+
   // At rest: whether a frame draws at all (the end of `frame`).
   /** What the last frame drawn was drawn from, but for the time. */
   private drawnFrom: readonly unknown[] = [];
@@ -542,6 +554,20 @@ export class GraphController {
   }
 
   /**
+   * Hand the drawing of the views a kit handles to it (line art), or take them back with null.
+   * The kit draws while the view is one of them (see `syncKit`). It is this controller's from
+   * here: disposed when another replaces it, and with the controller.
+   */
+  setKit(kit: GraphKit | null): void {
+    if (kit === this.kit) return;
+    if (this.kitOn) this.leaveKit();
+    this.kit?.dispose();
+    this.kit = this.disposed ? null : kit;
+    if (this.disposed) kit?.dispose();
+    this.stale = true;
+  }
+
+  /**
    * A plugin is on its way, or no longer: the page knows it opens on a view that brings one
    * before the plugin's code has even arrived, and the graph should not show meanwhile. Once a
    * plugin is attached, its own `veil` decides.
@@ -574,6 +600,9 @@ export class GraphController {
   dispose(): void {
     this.disposed = true;
     this.leaveStage();
+    if (this.kitOn) this.leaveKit();
+    this.kit?.dispose();
+    this.kit = null;
     cancelAnimationFrame(this.raf);
     this.el.gl.removeEventListener('webglcontextrestored', this.restored);
     document.fonts?.removeEventListener('loadingdone', this.fontsCame);
@@ -599,6 +628,7 @@ export class GraphController {
     this.growing = false;
     this.engine.setModel(model, reason, performance.now(), saved);
     this.scene?.setModel(model);
+    this.kit?.setModel(model);
     if (reason === 'init') {
       const angle = this.engine.is3D ? ANGLES.threeQuarter : { yaw: 0, pitch: 0 };
       // Under a stage the framing is the brain's, for when it comes back.
@@ -725,6 +755,12 @@ export class GraphController {
    */
   frameNotes(notes: readonly GraphNode[]): void {
     if (this.staged) return;
+    const kit = this.drawingKit;
+    if (kit) {
+      kit.frameNotes(notes);
+      this.userMoved = true;
+      return;
+    }
     const list = notes.filter((n) => Number.isFinite(n.x));
     if (!list.length) return;
     this.stopFollowing();
@@ -756,6 +792,12 @@ export class GraphController {
     this.stopFollowing();
     if (nodes.length === 1) {
       this.flyTo(nodes[0]!);
+      return;
+    }
+    const kit = this.drawingKit;
+    if (kit) {
+      kit.frameNotes(nodes);
+      this.userMoved = true;
       return;
     }
     this.setSpin(false);
@@ -823,7 +865,8 @@ export class GraphController {
     this.edgesDirty = true;
     this.announce(s);
     this.setSpin(false);
-    if (step.view !== this.engine.view) {
+    // The trail keeps the classic camera, which a kit does not draw from: it flies there afresh.
+    if (step.view !== this.engine.view || this.kitOn) {
       if (s.kind === 'note') this.flyTo(s.node);
       else this.framePath(s.path);
     } else {
@@ -844,7 +887,8 @@ export class GraphController {
    * note the graph does not hold.
    */
   returnState(node: GraphNode): ReturnEntry | null {
-    if (this.staged || !this.model?.nodes.includes(node)) return null;
+    // A kit's camera is not the one the way back records.
+    if (this.staged || this.kitOn || !this.model?.nodes.includes(node)) return null;
     const step = node === this.selected ? null : this.stepLeaving({ kind: 'note', node });
     const cam = offsetFrom(
       node === this.selected ? (this.tween?.to ?? this.cam) : this.noteTarget(node),
@@ -878,7 +922,7 @@ export class GraphController {
 
   /** Pick the other end of a path with the next click. */
   startPathFrom(node: GraphNode): void {
-    if (this.staged) return;
+    if (this.staged || this.kitOn) return;
     this.pathFrom = node;
     this.pathPick = true;
     this.events.onToast('Click the note to trace a path to.');
@@ -890,6 +934,12 @@ export class GraphController {
       if (stage.locked) return;
       this.plugin?.onUserCamera();
       this.zoomStage(stage, factor);
+      return;
+    }
+    const kit = this.drawingKit;
+    if (kit) {
+      kit.zoom(factor);
+      this.userMoved = true;
       return;
     }
     this.stopFollowing();
@@ -907,7 +957,9 @@ export class GraphController {
       return;
     }
     this.stopFollowing();
-    this.animateTo({ ...this.cam, ...this.fitTarget() });
+    const kit = this.drawingKit;
+    if (kit) kit.fit();
+    else this.animateTo({ ...this.cam, ...this.fitTarget() });
     this.userMoved = false;
   }
 
@@ -931,7 +983,8 @@ export class GraphController {
   }
 
   startGrowth(): void {
-    if (this.staged || !this.model?.nodes.length) return;
+    // Line art has no replay yet.
+    if (this.staged || this.kitOn || !this.model?.nodes.length) return;
     this.clearSelection();
     this.engine.startGrowth(performance.now());
     this.userMoved = false;
@@ -955,6 +1008,17 @@ export class GraphController {
   pointerDown(e: PointerEvent): void {
     const model = this.model;
     if (!model) return;
+    const kit = this.drawingKit;
+    if (kit) {
+      try {
+        this.el.overlay.setPointerCapture(e.pointerId);
+      } catch {
+        // a pointer the browser no longer tracks cannot be captured; the drag works without it
+      }
+      const { x, y } = this.local(e);
+      kit.pointerDown(e, x, y);
+      return;
+    }
     this.stopFollowing();
     const { x, y } = this.local(e);
     // A primary pointer is the first of its kind down. Any of its kind still recorded is a ghost
@@ -1014,6 +1078,11 @@ export class GraphController {
     const model = this.model;
     if (!model) return;
     const { x, y } = this.local(e);
+    const kit = this.drawingKit;
+    if (kit) {
+      kit.pointerMove(e, x, y);
+      return;
+    }
     const down = this.pointers.get(e.pointerId);
     if (down) {
       down.x = x;
@@ -1085,6 +1154,12 @@ export class GraphController {
     } catch {
       // the pointer was never captured; nothing to release
     }
+    const kit = this.drawingKit;
+    if (kit) {
+      const { x, y } = this.local(e);
+      kit.pointerUp(e, x, y, cancelled);
+      return;
+    }
     if (this.pinch) {
       // Of three fingers one lifted: the pinch goes on between the two left, measured afresh.
       if (this.pointers.size >= 2) this.pinch = this.pinchSpan();
@@ -1135,6 +1210,11 @@ export class GraphController {
   }
 
   pointerLeave(): void {
+    const kit = this.drawingKit;
+    if (kit) {
+      kit.pointerLeave();
+      return;
+    }
     if (this.staged || this.drag) return;
     this.setHotCountry(null);
     if (!this.hover) return;
@@ -1151,15 +1231,27 @@ export class GraphController {
       this.zoomStage(stage, e.deltaY < 0 ? 1.12 : 1 / 1.12);
       return;
     }
+    const { x, y } = this.local(e);
+    const kit = this.drawingKit;
+    if (kit) {
+      kit.wheel(e, x, y);
+      return;
+    }
     this.setSpin(false);
     this.stopFollowing();
     this.plugin?.onUserCamera();
-    const { x, y } = this.local(e);
     this.zoomAt(x, y, e.deltaY < 0 ? 1.12 : 1 / 1.12);
   }
 
   doubleClick(e: MouseEvent): void {
     const model = this.model;
+    const kit = this.drawingKit;
+    if (kit) {
+      // A kit picks what it draws itself.
+      const { x, y } = this.local(e);
+      kit.doubleClick(x, y);
+      return;
+    }
     if (!model || this.staged) return;
     const { x, y } = this.local(e);
     // What its first click picked, before that note flew off from under the pointer; nothing
@@ -1197,6 +1289,17 @@ export class GraphController {
       else return false;
       return true;
     }
+    const kit = this.drawingKit;
+    if (kit) {
+      // Its own keys first; then what stays the controller's: the camera's keys as its buttons
+      // are, the selection and Back, and the arrows for a kit that leaves them (line art moves
+      // its own cursor with them), walked from where the kit draws each note.
+      if (kit.key(e)) return true;
+      if (e.key === 'f' || e.key === 'F') {
+        this.fit();
+        return true;
+      }
+    }
     if (e.key === 'Escape') return this.escape();
     if (e.key === 'Backspace') return this.back();
     if (e.key === '+' || e.key === '=') {
@@ -1221,14 +1324,16 @@ export class GraphController {
     };
     const dir = dirs[e.key];
     if (!dir) return false;
-    const next = neighbourToward(this.model, selected, dir[0], dir[1]);
+    const next = kit
+      ? neighbourToward(this.model, selected, dir[0], dir[1], (n) => kit.screenOf(n))
+      : neighbourToward(this.model, selected, dir[0], dir[1]);
     if (next) this.select(next);
     return true;
   }
 
   minimapPoint(e: PointerEvent): void {
     const t = this.minimapTransform;
-    if (!t || this.staged) return;
+    if (!t || this.staged || this.kitOn) return;
     this.stopFollowing();
     const r = this.el.minimap.getBoundingClientRect();
     this.cam = {
@@ -1258,9 +1363,20 @@ export class GraphController {
       this.clearSelection();
       return true;
     }
+    // A kit's map steps out a level at a time: a folder, its project, its vault, the whole map.
+    const kit = this.drawingKit;
+    if (kit) return kit.up();
     if (!this.userMoved) return false;
     this.fit();
     return true;
+  }
+
+  /** A step of the breadcrumb over a kit's map: that plate brought into view; null, the whole map. */
+  focusPlace(id: string | null): void {
+    const kit = this.drawingKit;
+    if (!kit) return;
+    kit.focusPlace(id);
+    this.userMoved = true;
   }
 
   /** What is selected now, as the trail keeps it. */
@@ -1427,6 +1543,12 @@ export class GraphController {
 
   /** The whole of a path in view, clear of the preview: beside it, or between it and the chrome. */
   private framePath(path: GraphPath): void {
+    const kit = this.drawingKit;
+    if (kit) {
+      kit.frameNotes(path.nodes);
+      this.userMoved = true;
+      return;
+    }
     const band = this.sheetBand();
     const target = {
       ...this.cam,
@@ -1537,7 +1659,9 @@ export class GraphController {
   }
 
   private flyTo(node: GraphNode): void {
-    this.animateTo(this.noteTarget(node));
+    const kit = this.drawingKit;
+    if (kit) kit.reveal(node);
+    else this.animateTo(this.noteTarget(node));
     this.userMoved = true;
   }
 
@@ -1626,17 +1750,20 @@ export class GraphController {
     // Parked, the graph's buffer stays 1×1: it takes the new size when the stage goes.
     if (!this.parked) this.scene?.resize(this.vp, this.dpr);
     this.staged?.resize(this.vp, this.dpr);
+    this.drawingKit?.resize(this.vp, this.dpr);
     // A canvas resized is a canvas cleared.
     this.stale = true;
   }
 
   private readonly restored = (): void => {
     this.stale = true;
+    this.drawingKit?.invalidate();
   };
 
   private readonly fontsCame = (): void => {
     forgetTextWidths();
     this.stale = true;
+    this.drawingKit?.invalidate();
   };
 
   private cloud(): number {
@@ -1764,6 +1891,107 @@ export class GraphController {
     this.chipTimer = window.setTimeout(() => {
       if (!this.engine.growth) this.el.timeChip.hidden = true;
     }, 1600);
+  }
+
+  // -- Kit mode --------------------------------------------------------------------
+  //
+  // While the kit handles the view, and no stage takes precedence, it draws the view instead of
+  // the classic graph: with the graph's renderer and overlay, its own layout and camera, and the
+  // pointer and the keys. The selection, the search and Back stay the controller's: the kit is
+  // shown them each frame and asked to fly where they go. Nothing here runs without a kit.
+
+  private get drawingKit(): GraphKit | null {
+    return this.kitOn ? this.kit : null;
+  }
+
+  /** Enter or leave kit mode as the kit, the view or a stage come and go. Once a frame. */
+  private syncKit(model: GraphModel): boolean {
+    const kit = this.kit;
+    const on =
+      !!kit && !!this.scene && !this.staged && !this.disposed && kit.handles(this.engine.view);
+    if (on !== this.kitOn) {
+      if (on) this.enterKit(model);
+      else this.leaveKit();
+    }
+    return on;
+  }
+
+  private enterKit(model: GraphModel): void {
+    const kit = this.kit!;
+    this.kitOn = true;
+    // What the classic graph had under way ends here: the kit has a camera and a pointer of its own.
+    this.stopGrowth();
+    this.stopFollowing();
+    // A note held by a drag would stay pinned: its lifting goes to the kit now.
+    if (this.drag?.kind === 'node' && this.drag.node) this.engine.release(this.drag.node);
+    this.drag = null;
+    this.pinch = null;
+    this.pointers.clear();
+    if (this.hover) {
+      this.hover = null;
+      this.events.onHover(null);
+    }
+    this.setHotCountry(null);
+    this.kept = null;
+    this.tooltipStyle('visibility', 'hidden');
+    // The minimap is the classic camera's.
+    this.el.minimap.style.visibility = 'hidden';
+    this.setCursor('grab');
+    kit.enter(
+      {
+        renderer: this.scene!.sharedRenderer,
+        overlay: this.ctx,
+        fonts: this.fonts,
+        labelPx: this.labelPx,
+        reduceMotion: this.reduceMotion,
+        onUserCamera: () => {
+          this.userMoved = true;
+        },
+        setCursor: (cursor) => this.setCursor(cursor),
+        select: (node) => this.select(node),
+        clearSelection: () => this.clearSelection(),
+        open: (node) => this.events.onOpen(node),
+        onPlace: (steps) => this.events.onPlace?.(steps),
+        onCursor: (node) => this.events.onCursor?.(node),
+      },
+      model,
+      this.vp,
+      this.dpr,
+    );
+  }
+
+  private leaveKit(): void {
+    this.kitOn = false;
+    this.kit?.leave();
+    this.drag = null;
+    this.pinch = null;
+    this.pointers.clear();
+    this.el.minimap.style.visibility = '';
+    this.events.onPlace?.([]);
+    this.events.onCursor?.(null);
+    // The kit drew with the renderer and over the overlay: the classic graph draws all of it again.
+    this.reupload = true;
+    this.edgesDirty = true;
+    this.stale = true;
+  }
+
+  private setCursor(cursor: string): void {
+    if (this.el.overlay.style.cursor !== cursor) this.el.overlay.style.cursor = cursor;
+  }
+
+  private kitFrame(now: number, dt: number, model: GraphModel): void {
+    if (this.syncVeil()) return;
+    this.kit!.frame({
+      now,
+      dt,
+      vp: this.vp,
+      dpr: this.dpr,
+      model,
+      chrome: this.chrome,
+      selected: this.selected,
+      previewed: this.previewed,
+      matches: this.matched,
+    });
   }
 
   // -- Stage mode ------------------------------------------------------------------
@@ -2256,8 +2484,13 @@ export class GraphController {
     this.frameNo++;
     if (!model) return;
     const stage = this.syncStage();
+    const kit = this.syncKit(model);
     if (stage) {
       this.stageFrame(now, dt, model, stage);
+      return;
+    }
+    if (kit) {
+      this.kitFrame(now, dt, model);
       return;
     }
 

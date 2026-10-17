@@ -77,7 +77,8 @@ interface GraphPreviewProps {
   /** A connection or a step of the path, with the press that picked it: focus follows a keyboard's. */
   onSelect(node: GraphNode, e: PressEvent): void;
   onOpen(node: GraphNode): void;
-  onPathFrom(node: GraphNode): void;
+  /** Trace a path from the note; without it (line art, for now) the button is not offered. */
+  onPathFrom?(node: GraphNode): void;
   /** Back to what was selected before: offered while `selection.back` names it. */
   onBack(e: PressEvent): void;
   /** A step up from the note — its folder, project or vault — brought into view. */
@@ -85,9 +86,11 @@ interface GraphPreviewProps {
   onClose(): void;
   /** Read each note's first lines from the server: off where the vault is invented (the bench). */
   excerpts: boolean;
+  /** Which keys walk a note's links: the arrows, or in line art (whose arrows move on the map) the brackets. */
+  walk?: 'arrows' | 'brackets';
 }
 
-export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, onBack, onFrame, onClose, excerpts }: GraphPreviewProps) {
+export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, onBack, onFrame, onClose, excerpts, walk = 'arrows' }: GraphPreviewProps) {
   return (
     <aside
       data-graph-chrome
@@ -117,6 +120,7 @@ export function GraphPreview({ selection, model, onSelect, onOpen, onPathFrom, o
           back={selection.back}
           model={model}
           excerpts={excerpts}
+          walk={walk}
           onSelect={onSelect}
           onOpen={onOpen}
           onPathFrom={onPathFrom}
@@ -177,6 +181,7 @@ function NodeBody({
   back,
   model,
   excerpts,
+  walk,
   onSelect,
   onOpen,
   onPathFrom,
@@ -188,9 +193,10 @@ function NodeBody({
   back?: string;
   model: GraphModel;
   excerpts: boolean;
+  walk: 'arrows' | 'brackets';
   onSelect(node: GraphNode, e: PressEvent): void;
   onOpen(node: GraphNode): void;
-  onPathFrom(node: GraphNode): void;
+  onPathFrom?(node: GraphNode): void;
   onBack(e: PressEvent): void;
   onFrame(notes: readonly GraphNode[]): void;
   onClose(): void;
@@ -230,13 +236,15 @@ function NodeBody({
             Open note <Kbd className="h-4 border-white/25 bg-white/15 text-white">↵</Kbd>
           </Button>
         )}
-        <Button size="sm" className="touch:h-11" onPress={() => onPathFrom(node)}>
-          Path from here
-        </Button>
+        {onPathFrom && (
+          <Button size="sm" className="touch:h-11" onPress={() => onPathFrom(node)}>
+            Path from here
+          </Button>
+        )}
       </div>
       {/* Keyed by the note: the filter and what was shown in full belong to the note they were for. */}
       <Connections key={node.id} node={node} model={model} onSelect={onSelect} />
-      <p className="text-[11px] text-fg-tertiary">Arrows walk its links{back ? ' · Backspace goes back' : ''} · Esc closes</p>
+      <p className="text-[11px] text-fg-tertiary">{walk === 'brackets' ? '] and [ walk its links' : 'Arrows walk its links'}{back ? ' · Backspace goes back' : ''} · Esc closes</p>
     </>
   );
 }
