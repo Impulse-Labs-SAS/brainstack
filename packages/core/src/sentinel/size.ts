@@ -26,6 +26,18 @@
  */
 export const NOTE_MAX_CHARS = 6_000;
 
+/**
+ * What an assistant does with a note past the limit, said the same way when it
+ * reads one (`tooLong`) and when a write is refused (`TOO_LONG`). The note may
+ * shrink, so the obvious way out is to condense it — and that drops what
+ * someone wrote. Splitting keeps every word.
+ */
+export const HOW_TO_SPLIT =
+  'Split it — never condense or cut what it says to make it fit: move each part into a note of ' +
+  'its own in the same folder, and keep this note as a short summary that links to them, in one ' +
+  'save_notes with a create for each part and an edit that replaces each moved part with its ' +
+  'link. Tell the user how you would split it before writing.';
+
 export interface NoteSize {
   chars: number;
   lines: number;

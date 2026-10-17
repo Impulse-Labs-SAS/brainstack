@@ -522,7 +522,11 @@ describe('the note size limit', () => {
 
     const read = await call(client, 'get_note', { path: 'orbit/legacy.md' });
     expect(read.value).toMatchObject({
-      tooLong: { maxChars: NOTE_MAX_CHARS, mayOnlyShrink: true },
+      tooLong: {
+        maxChars: NOTE_MAX_CHARS,
+        mayOnlyShrink: true,
+        howToFix: expect.stringMatching(/^Split it — never condense/),
+      },
     });
     const crawl = await call(client, 'gather_context', { text: 'Long' });
     expect((crawl.value as { notes: Array<{ path: string; tooLong?: boolean }> }).notes).toEqual(
@@ -533,7 +537,9 @@ describe('the note size limit', () => {
       path: 'orbit/legacy.md',
       edits: [{ op: 'append', section: 'Tail', text: 'more' }],
     });
-    expect(grow.error).toMatch(/^\[TOO_LONG\].*already \d+ characters, past the limit/);
+    expect(grow.error).toMatch(
+      /^\[TOO_LONG\].*already \d+ characters, past the limit.*Split it — never condense/,
+    );
     const shrink = await call(client, 'edit_note', {
       path: 'orbit/legacy.md',
       edits: [{ op: 'replace', find: '## Tail\nend\n', replace: '' }],
