@@ -666,6 +666,57 @@ describe('drawLabels', () => {
   });
 });
 
+describe('a path, and the growth replay', () => {
+  it("numbers a path's notes, the two ends whatever the room, and a step keeps its number when pointed at", () => {
+    const s = scene(ATLAS);
+    const cam = camOn(plateCentre(s, plateAt(s, 'f:own|Atlas/maps')), 30);
+    // In three places, so each has room: the middle step is named when there is room, as a link is.
+    const steps = [
+      noteAt(s, 'own/Atlas/maps/note 3.md'),
+      noteAt(s, 'own/Atlas/note 2.md'),
+      noteAt(s, 'own/Atlas/charts/note 5.md'),
+    ];
+    const ctx = new FakeContext();
+    const hits = drawLabels(frameOf(s, ctx, cam, { state: { steps } }));
+    const said = (c: FakeContext) => c.texts.map((t) => t.text);
+    steps.forEach((k, i) => {
+      // The title cut to its room, after the number.
+      const named = said(ctx).some((t) => t.startsWith(`${i + 1} · ${s.titles[k]!.slice(0, 12)}`));
+      expect(named, `${i + 1}`).toBe(true);
+      expect(notesIn(hits)).toContain(k);
+    });
+    // The ends read as a selection does, the step between as a name in the accent's rim.
+    const end = ctx.texts.find((t) => t.text.startsWith('1 · '))!;
+    const mid = ctx.texts.find((t) => t.text.startsWith('2 · '))!;
+    expect(end.font.startsWith('600')).toBe(true);
+    expect(mid.font.startsWith('500')).toBe(true);
+    // Pointed at, the step keeps its number.
+    const pointed = new FakeContext();
+    drawLabels(frameOf(s, pointed, cam, { state: { steps, hovered: steps[1]! } }));
+    expect(said(pointed).some((t) => t.startsWith('2 · '))).toBe(true);
+  });
+
+  it('names nothing the growth replay has not brought yet', () => {
+    const s = scene(ATLAS);
+    const cam = camOn(plateCentre(s, plateAt(s, 'f:own|Atlas/maps')), 30);
+    const notes = new Uint8Array(s.layout.ids.length).fill(1);
+    const plates = new Uint8Array(s.layout.plates.length).fill(1);
+    const none = new FakeContext();
+    expect(drawLabels(frameOf(s, none, cam, { state: { unborn: { notes, plates } } }))).toEqual([]);
+    expect(none.texts).toEqual([]);
+    // One note in, with the plates under it: it and they may be named, nothing else.
+    const k = noteAt(s, 'own/Atlas/maps/note 3.md');
+    notes[k] = 0;
+    for (let q = s.layout.plateOf[k]!; q >= 0; q = s.layout.plates[q]!.parent) plates[q] = 0;
+    const one = new FakeContext();
+    const hits = drawLabels(
+      frameOf(s, one, cam, { state: { unborn: { notes, plates }, selected: k } }),
+    );
+    expect(notesIn(hits)).toEqual([k]);
+    for (const h of hits) if (h.plate !== undefined) expect(plates[h.plate]).toBe(0);
+  });
+});
+
 describe('the notes that matter', () => {
   it('names the selected note on a stage packed with notes and chrome', () => {
     const s = scene(WORLD);

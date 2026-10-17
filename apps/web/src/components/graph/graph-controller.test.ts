@@ -227,6 +227,8 @@ function element(tape: Tape, name: string, box: Box, ops: Op[] | null = null): F
     hidden: false,
     width: 300,
     height: 150,
+    clientLeft: 0,
+    clientTop: 0,
     getBoundingClientRect: () => ({
       left: 0,
       top: 0,
@@ -3429,6 +3431,24 @@ class FakeKit implements GraphKit {
   invalidate(): void {
     this.calls.push('invalidate');
   }
+  /** Whether it has a replay to play, and how far it has got: null once it ends. */
+  grows = true;
+  growth: { at: number; count: number } | null = null;
+  startGrowth(): boolean {
+    this.calls.push('startGrowth');
+    if (this.grows) this.growth = { at: 0, count: 0 };
+    return this.grows;
+  }
+  stopGrowth(): void {
+    this.calls.push('stopGrowth');
+    this.growth = null;
+  }
+  growthStatus(): { at: number; count: number } | null {
+    return this.growth;
+  }
+  minimapPoint(x: number, y: number): void {
+    this.calls.push(`minimap ${x},${y}`);
+  }
   dispose(): void {
     this.calls.push('dispose');
   }
@@ -3470,16 +3490,18 @@ describe('GraphController with a kit', () => {
     const scenes = scene.calls.length;
     const ops = h.overlayOps!.length;
     h.step(30);
-    // The kit draws each frame it holds; the classic graph draws nothing, not even its minimap.
+    // The kit draws each frame it holds; the classic graph draws nothing, not even its minimap,
+    // which it lends the kit to draw its own map in.
     expect(kit.frames.length).toBe(31);
     expect(since(scene.calls, scenes)).toEqual([]);
     expect(since(h.overlayOps!, ops)).toEqual([]);
-    expect(h.el.minimap.style.visibility).toBe('hidden');
+    expect(kit.host!.minimap).toBe(h.el.minimap);
+    expect(h.el.minimap.style.visibility).not.toBe('hidden');
 
     h.controller.setView('network');
     h.step(1);
     expect(kit.calls.at(-1)).toBe('leave');
-    expect(h.el.minimap.style.visibility).toBe('');
+    expect(h.el.minimap.style.visibility).not.toBe('hidden');
     // The classic graph uploads everything again: the kit drew with the same renderer.
     const back = renders().at(-1)!;
     expect(back.view).toBe('network');
@@ -3552,9 +3574,10 @@ describe('GraphController with a kit', () => {
       'key F passed',
       'fit',
     ]);
-    // A growth replay does not start: line art has none yet.
+    // A growth replay is the kit's to play.
     c.startGrowth();
-    expect(h.events.some((e) => e.name === 'onGrowth')).toBe(false);
+    expect(kit.calls.at(-1)).toBe('startGrowth');
+    expect(h.events.filter((e) => e.name === 'onGrowth').at(-1)!.args).toEqual([true]);
   });
 
   it("walks the selected note's links with the arrows, from where the kit draws each note", () => {
@@ -3700,6 +3723,75 @@ describe('GraphController with a kit', () => {
     ]);
     c.setKit(null);
     expect(sceneResizes().slice(from + 2)).toEqual([[{ width: 800, height: 600 }, 1]]);
+  });
+
+  it("hands a growth replay to the kit, shows its chip, and ends it with the kit's", () => {
+    const { h, c, model, kit } = kitOnTheMap();
+    h.step(1);
+    const growth = () => h.events.filter((e) => e.name === 'onGrowth').map((e) => e.args[0]);
+    c.startGrowth();
+    expect(kit.calls.at(-1)).toBe('startGrowth');
+    expect(growth()).toEqual([true]);
+    kit.growth = { at: Date.UTC(2024, 2, 15), count: 12 };
+    h.step(1);
+    expect(h.el.timeChip.hidden).toBe(false);
+    expect(h.el.timeChip.textContent).toBe('Mar 2024 · 12 notes');
+    // Over in the kit: the button comes back.
+    kit.growth = null;
+    h.step(1);
+    expect(growth()).toEqual([true, false]);
+    // Stopped from the button.
+    c.startGrowth();
+    h.step(1);
+    c.stopGrowth();
+    expect(kit.calls.at(-1)).toBe('stopGrowth');
+    expect(growth()).toEqual([true, false, true, false]);
+    // Ended by a new model: the kit's replay counted the notes it had.
+    c.startGrowth();
+    h.step(1);
+    c.setModel(model, 'layers');
+    expect(kit.calls).toContain('stopGrowth');
+    expect(growth().at(-1)).toBe(false);
+    // Nothing to replay, nothing starts.
+    kit.grows = false;
+    const before = growth().length;
+    c.startGrowth();
+    expect(growth()).toHaveLength(before);
+  });
+
+  it('traces a path from the kit: Shift picks each end, and bare ground keeps the pick', () => {
+    const { h, c, model, kit } = kitOnTheMap();
+    h.step(1);
+    const a = model.nodes.find((n) => (model.adjacency.get(n)?.length ?? 0) > 0)!;
+    const b = model.adjacency.get(a)![0]!.node;
+    const last = () => h.events.filter((e) => e.name === 'onSelection').at(-1)?.args[0];
+    kit.host!.pick(a, true);
+    expect(last()).toMatchObject({ kind: 'note', node: a });
+    // A stray click on bare ground while the other end is picked keeps the pick.
+    kit.host!.clearSelection();
+    expect(last()).toMatchObject({ kind: 'note', node: a });
+    kit.host!.pick(b, true);
+    expect(last()).toMatchObject({ kind: 'path' });
+    expect(kit.calls.at(-1)).toBe('frameNotes 2');
+    h.step(1);
+    expect(kit.frames.at(-1)!.path!.nodes).toEqual([a, b]);
+    // Bare ground, now, clears it; a plain click selects.
+    kit.host!.clearSelection();
+    expect(last()).toBeNull();
+    kit.host!.pick(b, false);
+    expect(last()).toMatchObject({ kind: 'note', node: b });
+    // From the preview: the next click ends the path.
+    c.startPathFrom(a);
+    kit.host!.pick(b, false);
+    expect(last()).toMatchObject({ kind: 'path' });
+  });
+
+  it('routes a click on the minimap to the kit, from inside its border', () => {
+    const { h, kit } = kitOnTheMap();
+    h.step(1);
+    Object.assign(h.el.minimap, { clientLeft: 1, clientTop: 1 });
+    h.minimap(60, 40);
+    expect(kit.calls.at(-1)).toBe('minimap 59,39');
   });
 
   it('sizes no buffer for a renderer on its way out, whatever ratio the kit drew at', () => {

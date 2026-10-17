@@ -18,11 +18,16 @@
 // that link to each other, as wide as the links it carries and labelled with how many. What a
 // search found is bracketed wherever it is on the stage. While the camera moves the map is drawn
 // as sharply as the machine keeps up with (see quality.ts); at rest, always at its sharpest.
+//
+// A path traced between two notes (Shift+click both, or the preview's "Path from here") runs as
+// cables from step to step, each step numbered. The growth replay brings the notes in by order of
+// creation, each in its own place, a plate rising with its first note. The minimap is the map
+// from straight above, north up, with the stage's view on it; a click there moves the camera.
 
 import * as THREE from 'three';
 
 import type { Viewport } from '@/lib/graph-camera';
-import type { GraphModel, GraphNode, GraphView } from '@/lib/graph-model';
+import type { GraphModel, GraphNode, GraphPath, GraphView } from '@/lib/graph-model';
 import { lineArtTheme, type LineArtTheme } from '@/lib/graph-theme';
 
 import type { GraphKit, KitFrame, KitHost, KitPlace } from '../graph-kit';
@@ -54,7 +59,14 @@ import { CABLE, CableLayer, GROW_MS, routeWidth, type CableSet } from './render/
 import { BLOCK, BLOCK_H } from './block';
 import { PickIndex } from './pick/ray';
 import { QualityGovernor, type QualityLevel } from './quality';
-import { projectRoutes, routesFrom, type ProjectRoute, type Vec3 } from './routes';
+import {
+  projectRoutes,
+  routeBetween,
+  routesFrom,
+  type ProjectRoute,
+  type Route,
+  type Vec3,
+} from './routes';
 
 /** How far a block rises: the selected one, and the one a result in the list points at. */
 const LIFT_SELECTED = 0.55;
@@ -84,6 +96,14 @@ const DOUBLE_MS = 500;
 const REPEAT_PX = 6;
 /** Search results bracketed on the stage at the most: past that many, more brackets say nothing. */
 const FOUND_BRACKETS = 200;
+/** The growth replay's length: the classic graph's, about 28 ms a note within 7 to 15 seconds. */
+const REPLAY_MS_PER_NOTE = 28;
+const REPLAY_MS: readonly [number, number] = [7000, 15000];
+/** Room round the map on the minimap, a share of its size, and the most search results it marks. */
+const MINI_MARGIN = 0.12;
+const MINI_FOUND = 200;
+/** Over what the stage does not show, on the minimap: the tags' near-black, a third through. */
+const MINI_VEIL = 'rgba(9, 9, 11, 0.35)';
 /**
  * A frame this long after the last is a pause (a hidden tab, a debugger), not a late frame. A
  * slow machine's frames can take a few hundred milliseconds: those are the ones to count.
@@ -197,6 +217,7 @@ export class LineArtKit implements GraphKit {
     layout: IsoLayout;
     model: GraphModel;
     routes: boolean;
+    path: GraphPath | null;
   } | null = null;
   /** The All routes cables, for the layout and the model they were found in. */
   private routesFor: { layout: IsoLayout; model: GraphModel; routes: ProjectRoute[] } | null = null;
@@ -212,6 +233,23 @@ export class LineArtKit implements GraphKit {
   private movedAt = 0;
   private stillFrames = 0;
   private sharp = true;
+  /** The path traced between two notes, as the controller shows it; its notes by index, start first. */
+  private path: GraphPath | null = null;
+  private pathSteps: number[] = [];
+  private pathSet = new Set<number>();
+  /**
+   * The growth replay: notes by index in order of creation, how many show so far, and what has
+   * not come yet (a 1 per note and per plate). `t0` is set by the first frame it plays in.
+   */
+  private replay: {
+    order: number[];
+    t0: number;
+    ms: number;
+    shown: number;
+    unborn: { notes: Uint8Array; plates: Uint8Array };
+  } | null = null;
+  /** The minimap's camera, from straight above, fitted to the map at the minimap's size. */
+  private mini: { layout: IsoLayout; vp: Viewport; cam: IsoCam } | null = null;
   /** Moving draws not to count after the buffer was resized, and frames since the last draw. */
   private skipSamples = 0;
   private sinceDraw = 0;
@@ -285,6 +323,7 @@ export class LineArtKit implements GraphKit {
   }
 
   leave(): void {
+    this.stopGrowth();
     this.host = null;
     this.pointers.clear();
     this.drag = null;
@@ -348,10 +387,18 @@ export class LineArtKit implements GraphKit {
       if (t >= 1) this.tween = null;
       else moving = true;
     }
+    // A note selected or a path traced in the replay ends it: what it shows is then on the map.
+    // Not a selection cleared, as the controller clears it to start one.
+    if (
+      this.replay &&
+      ((f.selected && f.selected !== this.selected) || (f.path && f.path !== this.path))
+    )
+      this.stopGrowth();
     if (
       f.selected !== this.selected ||
       f.previewed !== this.previewed ||
-      f.matches !== this.matches
+      f.matches !== this.matches ||
+      f.path !== this.path
     ) {
       if (f.selected !== this.selected) {
         if (this.aim !== f.selected) this.aim = null;
@@ -374,8 +421,13 @@ export class LineArtKit implements GraphKit {
       this.selected = f.selected;
       this.previewed = f.previewed;
       this.matches = f.matches;
+      if (f.path !== this.path) {
+        this.path = f.path;
+        this.setSteps(this.stepsOf(f.path));
+      }
       this.light(f.model);
     }
+    if (this.stepReplay(f.now)) moving = true;
     this.layCables(f.model, f.routes);
     if (this.stepGrowth(dt)) moving = true;
     if (this.stepLifts(dt)) moving = true;
@@ -533,7 +585,7 @@ export class LineArtKit implements GraphKit {
       this.drag = null;
       this.host?.setCursor('grab');
     }
-    if (tap) this.tap(x, y, e.pointerType !== 'mouse');
+    if (tap) this.tap(x, y, e.pointerType !== 'mouse', e.shiftKey);
   }
 
   pointerLeave(): void {
@@ -594,8 +646,12 @@ export class LineArtKit implements GraphKit {
       }
       case 'Enter': {
         // The note the keyboard moved the cursor to, when it is not the one selected; the
-        // selected one is the controller's to open.
+        // selected one is the controller's to open. With Shift, an end of a path, as Shift+click.
         const note = this.keyboard && this.cursor !== null ? this.noteAt[this.cursor] : null;
+        if (e.shiftKey) {
+          if (note) this.host?.pick(note, true);
+          return true;
+        }
         if (!note || note === this.selected) return false;
         this.host?.open(note);
         return true;
@@ -699,6 +755,77 @@ export class LineArtKit implements GraphKit {
     this.dirty = true;
   }
 
+  startGrowth(): boolean {
+    const layout = this.layout;
+    const three = this.three;
+    if (!this.host || !layout || !three || !layout.ids.length) return false;
+    const n = layout.ids.length;
+    const born = (k: number) => this.noteAt[k]?.createdAt ?? 0;
+    const order = Array.from({ length: n }, (_, k) => k).sort((a, b) => born(a) - born(b) || a - b);
+    this.replay = {
+      order,
+      t0: -1,
+      ms: clamp(n * REPLAY_MS_PER_NOTE, REPLAY_MS[0], REPLAY_MS[1]),
+      shown: 0,
+      unborn: {
+        notes: new Uint8Array(n).fill(1),
+        plates: new Uint8Array(layout.plates.length).fill(1),
+      },
+    };
+    for (let p = 0; p < layout.plates.length; p++) three.boxes.setState(p, STATE.hidden);
+    // The cables are laid again for what has come: none yet.
+    this.cabled = null;
+    if (this.model) this.light(this.model);
+    // The whole map, as it opens: what grows is all of it.
+    const opening = this.opening();
+    this.aim = null;
+    this.fitted = opening.map((p) => p.id);
+    this.focus = opening.length === 1 ? opening[0]!.id : null;
+    this.focusStale = false;
+    this.fly(this.fitCam(opening));
+    this.dirty = true;
+    return true;
+  }
+
+  stopGrowth(): void {
+    if (!this.replay) return;
+    this.replay = null;
+    this.cabled = null;
+    const layout = this.layout;
+    const three = this.three;
+    if (layout && three)
+      for (let p = 0; p < layout.plates.length; p++) three.boxes.setState(p, STATE.rest);
+    if (this.model) this.light(this.model);
+    this.dirty = true;
+  }
+
+  growthStatus(): { at: number; count: number } | null {
+    const r = this.replay;
+    if (!r) return null;
+    const newest = r.order[Math.max(0, r.shown - 1)]!;
+    return { at: this.noteAt[newest]?.createdAt ?? 0, count: r.shown };
+  }
+
+  minimapPoint(x: number, y: number): void {
+    const mini = this.mini;
+    if (!mini || !this.host) return;
+    const z = this.miniZ();
+    const at = isoUnproject(mini.cam, mini.vp, x, y, z);
+    const free = this.free();
+    this.stopTween();
+    this.cam = {
+      ...this.cam,
+      ...targetFor(
+        this.cam,
+        this.vp,
+        { ...at, z },
+        { x: free.x + free.w / 2, y: free.y + free.h / 2 },
+      ),
+    };
+    this.userCamera();
+    this.dirty = true;
+  }
+
   dispose(): void {
     this.leave();
     this.client.dispose();
@@ -738,11 +865,21 @@ export class LineArtKit implements GraphKit {
       was.selected === this.selected &&
       was.layout === layout &&
       was.model === model &&
-      was.routes === routes
+      was.routes === routes &&
+      was.path === this.path
     )
       return;
-    this.cabled = { selected: this.selected, layout, model, routes };
+    this.cabled = { selected: this.selected, layout, model, routes, path: this.path };
     const sets: CableSet[] = [];
+    const steps = this.pathSteps;
+    if (this.path && steps.length > 1) {
+      // From each step to the next along the streets, growing in from the start.
+      const legs: Route[] = [];
+      for (let i = 1; i < steps.length; i++)
+        legs.push(routeBetween(layout, steps[i - 1]!, steps[i]!));
+      sets.push({ kind: CABLE.link, routes: legs });
+      if (was?.path !== this.path) this.grown = this.host?.reduceMotion ? 1 : 0;
+    }
     const from = this.selected ? this.indexOf(this.selected) : null;
     if (from !== null) {
       const to = this.linkedOf(this.selected!, model)
@@ -754,7 +891,10 @@ export class LineArtKit implements GraphKit {
     }
     this.counts = [];
     if (routes) {
-      const all = this.projectRoutesOf(layout, model);
+      const unborn = this.replay?.unborn.plates;
+      const all = this.projectRoutesOf(layout, model).filter(
+        (r) => !unborn || (!unborn[r.a] && !unborn[r.b]),
+      );
       sets.push({ kind: CABLE.route, routes: all, widths: all.map((r) => routeWidth(r.count)) });
       this.counts = all.map((r) => ({
         at: longestMiddle(r.points),
@@ -795,6 +935,8 @@ export class LineArtKit implements GraphKit {
   private adopt(layout: IsoLayout, model: GraphModel): void {
     const three = this.three;
     if (!three) return;
+    // A replay counts notes by their place in the layout: a new one ends it.
+    if (layout !== this.layout) this.stopGrowth();
     this.laidOut = model;
     if (layout === this.layout) {
       // The same notes in the same places (a layer that hides nothing here): only the lighting.
@@ -854,7 +996,8 @@ export class LineArtKit implements GraphKit {
       if (i === undefined) continue;
       this.lifts.set(i, { ...l });
       three.boxes.setLift(i, l.now);
-      if (id === this.selected?.id) this.pick.setLift(i - plates.length, l.now);
+      if (id === this.selected?.id || this.path?.nodes.some((n) => n.id === id))
+        this.pick.setLift(i - plates.length, l.now);
     }
     // What the pointer and the cursor were on may have gone, or moved to another index, and so
     // may what the labels say and pick: described again from the model this layout was made for.
@@ -864,8 +1007,24 @@ export class LineArtKit implements GraphKit {
     this.lastTap = null;
     this.describedFor = null;
     this.cursor = this.selected ? this.indexOf(this.selected) : null;
+    this.setSteps(this.stepsOf(this.path));
     this.light(model);
     this.dirty = true;
+  }
+
+  private setSteps(steps: number[]): void {
+    this.pathSteps = steps;
+    this.pathSet = new Set(steps);
+  }
+
+  /** Whether a note is picked where it is drawn: the selected one, and a path's, stand lifted. */
+  private heldUp(note: number): boolean {
+    return this.noteAt[note] === this.selected || this.pathSet.has(note);
+  }
+
+  /** A path's notes by index in this layout, start first; empty with none. */
+  private stepsOf(path: GraphPath | null): number[] {
+    return (path?.nodes ?? []).map((n) => this.indexOf(n)).filter((k): k is number => k !== null);
   }
 
   /** What labels say and the keys walk, by note and plate index, from the model they show. */
@@ -913,6 +1072,9 @@ export class LineArtKit implements GraphKit {
     };
     if (this.selected)
       for (const n of model.nodes) if (n !== this.selected && !linked.has(n)) set(n, STATE.dim);
+    const path = this.path?.nodes ?? [];
+    const onPath = new Set(path);
+    if (path.length) for (const n of model.nodes) if (!onPath.has(n)) set(n, STATE.dim);
     for (const n of this.matches ?? []) set(n, STATE.found);
     for (const n of linked) set(n, STATE.linked);
     if (this.previewed) set(this.previewed, STATE.hover);
@@ -922,6 +1084,15 @@ export class LineArtKit implements GraphKit {
       .filter((n): n is GraphNode => !!n && n !== this.selected);
     for (const n of pointed) set(n, STATE.hover);
     if (this.selected) set(this.selected, STATE.selected);
+    // A path's ends are lit as a selection is, the steps between as links.
+    path.forEach((n, i) =>
+      set(n, i === 0 || i === path.length - 1 ? STATE.selected : STATE.linked),
+    );
+    // What the replay has not reached is not drawn at all.
+    const unborn = this.replay?.unborn.notes;
+    if (unborn)
+      for (let k = 0; k < unborn.length; k++)
+        if (unborn[k]) three.boxes.setState(base + k, STATE.hidden);
     const want = new Map<number, number>();
     const lift = (n: GraphNode | null, to: number) => {
       const i = n ? this.boxOf.get(n.id) : undefined;
@@ -930,11 +1101,20 @@ export class LineArtKit implements GraphKit {
     lift(this.previewed, LIFT_PREVIEWED);
     for (const n of pointed) lift(n, LIFT_PREVIEWED);
     lift(this.selected, LIFT_SELECTED);
+    path.forEach((n, i) =>
+      lift(n, i === 0 || i === path.length - 1 ? LIFT_SELECTED : LIFT_PREVIEWED),
+    );
     for (const [i, l] of this.lifts) if (!want.has(i)) l.to = 0;
     for (const [i, to] of want) {
       const l = this.lifts.get(i);
       if (l) l.to = to;
       else this.lifts.set(i, { now: 0, to });
+    }
+    // A block that stays as high but becomes or stops being held up (selected, then a path's
+    // end) is picked where it now is: stepLifts only touches those still moving.
+    for (const [i, l] of this.lifts) {
+      const note = i - base;
+      if (note >= 0) this.pick?.setLift(note, this.heldUp(note) ? l.now : 0);
     }
   }
 
@@ -950,9 +1130,10 @@ export class LineArtKit implements GraphKit {
       if (Math.abs(l.now - l.to) < 0.004) l.now = l.to;
       three.boxes.setLift(i, l.now);
       // Picked at rest, as the plan has it: a block lifted under the pointer would slide from
-      // under it. The selected one only is picked where it is drawn.
+      // under it. The selected one only is picked where it is drawn; a plate rises only in the
+      // replay, and is picked where it stands.
       const note = i - (this.layout?.plates.length ?? 0);
-      this.pick?.setLift(note, this.noteAt[note] === this.selected ? l.now : 0);
+      if (note >= 0) this.pick?.setLift(note, this.heldUp(note) ? l.now : 0);
       if (l.now !== l.to) moving = true;
     }
     for (const [i, l] of this.lifts) if (l.now === 0 && l.to === 0) this.lifts.delete(i);
@@ -989,7 +1170,205 @@ export class LineArtKit implements GraphKit {
     this.drawFound(ctx);
     this.drawCursor(ctx);
     this.labelHits = this.drawLabelsNow(ctx);
+    this.drawMinimap();
     this.drawnCam = { ...this.cam };
+  }
+
+  /** Notes due by now in the replay brought in, each rising from its plate; true while it plays. */
+  private stepReplay(now: number): boolean {
+    const r = this.replay;
+    const layout = this.layout;
+    const three = this.three;
+    if (!r || !layout || !three) return false;
+    if (r.t0 < 0) r.t0 = now;
+    const p = clamp((now - r.t0) / r.ms, 0, 1);
+    // An even pace, in order of creation, as the classic replay: timestamps bunch up.
+    const due = Math.ceil(p * r.order.length);
+    if (due > r.shown) {
+      const base = layout.plates.length;
+      const rise = !this.host?.reduceMotion;
+      while (r.shown < due) {
+        const k = r.order[r.shown++]!;
+        r.unborn.notes[k] = 0;
+        if (rise) this.lifts.set(base + k, { now: -BLOCK_H, to: 0 });
+        // Its plate, and the plates under that, come with the first note on them.
+        for (
+          let q = layout.plateOf[k]!;
+          q >= 0 && r.unborn.plates[q];
+          q = layout.plates[q]!.parent
+        ) {
+          r.unborn.plates[q] = 0;
+          // A project come in may bring routes to lay.
+          this.cabled = null;
+          three.boxes.setState(q, STATE.rest);
+          if (!rise) continue;
+          const pl = layout.plates[q]!;
+          this.lifts.set(q, { now: pl.z0 - pl.z1, to: 0 });
+          three.boxes.setLift(q, pl.z0 - pl.z1);
+        }
+      }
+      if (this.model) this.light(this.model);
+      this.dirty = true;
+    }
+    if (p >= 1 && r.shown >= r.order.length) {
+      this.replay = null;
+      this.cabled = null;
+      if (this.model) this.light(this.model);
+      this.dirty = true;
+    }
+    return true;
+  }
+
+  /** The height the minimap's points stand at: the vaults' tops, where the projects sit. */
+  private miniZ(): number {
+    let z = 0;
+    for (const p of this.layout?.plates ?? []) if (p.kind === 'vault') z = Math.max(z, p.z1);
+    return z;
+  }
+
+  /**
+   * The map from straight above, north up, as the plan view stands before any turn: its vaults
+   * and projects, the selection, a path and what a search found, and the stage's view on it.
+   */
+  private drawMinimap(): void {
+    const canvas = this.host?.minimap;
+    const layout = this.layout;
+    if (!canvas || !layout) return;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    // Hidden, on a phone: nothing to draw, nothing to click.
+    if (w < 1 || h < 1) {
+      this.mini = null;
+      return;
+    }
+    const bw = Math.round(w * this.dpr);
+    const bh = Math.round(h * this.dpr);
+    if (canvas.width !== bw) canvas.width = bw;
+    if (canvas.height !== bh) canvas.height = bh;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const vp = { width: w, height: h };
+    let mini = this.mini;
+    if (!mini || mini.layout !== layout || mini.vp.width !== w || mini.vp.height !== h) {
+      const plan: IsoCam = { tx: 0, ty: 0, tz: 0, az: snapAz(0, true), el: PLAN_EL, ppu: 1 };
+      const vaults = layout.plates
+        .filter((p) => p.kind === 'vault')
+        .map((p) => ({ x0: p.x, y0: p.y, z0: p.z0, x1: p.x + p.w, y1: p.y + p.h, z1: p.z1 }));
+      const cam = isoFit(
+        plan,
+        vp,
+        vaults,
+        { x: 0, y: 0, w, h },
+        {
+          margin: MINI_MARGIN,
+          minPpu: 1e-4,
+          maxPpu: 1e4,
+        },
+      );
+      mini = this.mini = { layout, vp, cam };
+    }
+    const project = isoProject(mini.cam, vp);
+    const theme = this.theme;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = LABEL_COLORS.tag;
+    ctx.fillRect(0, 0, w, h);
+    const unborn = this.replay?.unborn.plates;
+    const quad = (x0: number, y0: number, x1: number, y1: number, z: number) => {
+      ctx.beginPath();
+      const corners = [
+        [x0, y0],
+        [x1, y0],
+        [x1, y1],
+        [x0, y1],
+      ] as const;
+      corners.forEach(([x, y], i) => {
+        const q = project(x, y, z);
+        if (i) ctx.lineTo(q.x, q.y);
+        else ctx.moveTo(q.x, q.y);
+      });
+      ctx.closePath();
+    };
+    layout.plates.forEach((p, i) => {
+      if ((p.kind !== 'vault' && p.kind !== 'project') || unborn?.[i]) return;
+      const vault = p.kind === 'vault';
+      quad(p.x, p.y, p.x + p.w, p.y + p.h, p.z1);
+      ctx.fillStyle = vault ? theme.vaultTop : theme.projectTop;
+      ctx.fill();
+      ctx.setLineDash(vault && p.shared ? [3, 2] : []);
+      // Brighter than the stage's own edges: at this size those would not read.
+      ctx.strokeStyle =
+        vault && p.shared ? theme.route : vault ? theme.blockEdge : theme.folderEdge;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    const z = this.miniZ();
+    const at = (k: number) => project(layout.cells[k * 3]!, layout.cells[k * 3 + 1]!, z);
+    // The stage's view: its free part's corners where they meet the vaults' tops. What lies
+    // outside it is veiled; it is outlined too once it is smaller than the minimap, as a frame
+    // larger than the map would only cross it in stray strokes.
+    const free = this.free();
+    const view = [
+      [free.x, free.y],
+      [free.x + free.w, free.y],
+      [free.x + free.w, free.y + free.h],
+      [free.x, free.y + free.h],
+    ].map(([sx, sy]) => {
+      const g = isoUnproject(this.cam, this.vp, sx!, sy!, z);
+      return project(g.x, g.y, z);
+    });
+    const outline = () => {
+      view.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+      ctx.closePath();
+    };
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    outline();
+    ctx.fillStyle = MINI_VEIL;
+    ctx.fill('evenodd');
+    const inside = view.every((q) => q.x >= -1 && q.y >= -1 && q.x <= w + 1 && q.y <= h + 1);
+    if (inside) {
+      // A neutral frame: the accent is for what is active, and a path is drawn in it too.
+      ctx.beginPath();
+      outline();
+      ctx.strokeStyle = LABEL_COLORS.hoverEdge;
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    // What is active over the veil, so it reads wherever it is: only what the replay has brought.
+    const unbornNote = this.replay?.unborn.notes;
+    const shown = (k: number | null): k is number => k !== null && !unbornNote?.[k];
+    ctx.fillStyle = theme.accent;
+    let found = 0;
+    for (const n of this.matches ?? []) {
+      const k = this.indexOf(n);
+      if (!shown(k)) continue;
+      const q = at(k);
+      ctx.fillRect(q.x - 1.5, q.y - 1.5, 3, 3);
+      if (++found >= MINI_FOUND) break;
+    }
+    const steps = this.pathSteps.filter(shown);
+    if (steps.length > 1) {
+      ctx.beginPath();
+      steps.forEach((k, i) => {
+        const q = at(k);
+        if (i) ctx.lineTo(q.x, q.y);
+        else ctx.moveTo(q.x, q.y);
+      });
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    const sel = this.selected ? this.indexOf(this.selected) : null;
+    if (shown(sel)) {
+      const q = at(sel);
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   /**
@@ -1008,8 +1387,11 @@ export class LineArtKit implements GraphKit {
     if (!layout) return [];
     const base = layout.plates.length;
     const out: LiftMark[] = [];
+    const accent = new Set(this.path?.nodes.map((n) => n.id));
+    if (this.selected) accent.add(this.selected.id);
+    const unborn = this.replay?.unborn.notes;
     for (const [i, l] of this.lifts) {
-      if (l.now < 0.02) continue;
+      if (l.now < 0.02 || i < base || unborn?.[i - base]) continue;
       const k = i - base;
       const x = layout.cells[k * 3]!;
       const y = layout.cells[k * 3 + 1]!;
@@ -1021,7 +1403,7 @@ export class LineArtKit implements GraphKit {
         y1: y + BLOCK / 2,
         base: z,
         lifted: z + l.now,
-        color: this.selected?.id === layout.ids[k] ? 'accent' : 'hover',
+        color: accent.has(layout.ids[k]!) ? 'accent' : 'hover',
       });
     }
     return out;
@@ -1150,6 +1532,9 @@ export class LineArtKit implements GraphKit {
       cellSnap: touch && fingerBlocks,
     });
     if (!hit) return null;
+    // Not there yet in the replay: nothing to point at.
+    const unborn = this.replay?.unborn;
+    if (hit.kind === 'note' ? unborn?.notes[hit.note] : unborn?.plates[hit.plate]) return null;
     return hit.kind === 'note' ? { note: hit.note } : { plate: hit.plate };
   }
 
@@ -1166,7 +1551,9 @@ export class LineArtKit implements GraphKit {
   }
 
   /** A click or a tap: a note is selected; a plate flown to; bare ground clears the selection. */
-  private tap(x: number, y: number, touch: boolean): void {
+  private tap(x: number, y: number, touch: boolean, shift = false): void {
+    // A click in the replay ends it first: what it picks is then on the map.
+    this.stopGrowth();
     const hit = this.hitAt(x, y, touch);
     this.lastTap = {
       note: hit?.note ?? null,
@@ -1176,14 +1563,14 @@ export class LineArtKit implements GraphKit {
       type: touch ? 'touch' : 'mouse',
     };
     if (!hit) {
-      if (this.selected) this.host?.clearSelection();
+      if (this.selected || this.path) this.host?.clearSelection();
       return;
     }
     if (hit.note !== undefined) {
       const note = this.noteAt[hit.note];
       if (!note) return;
       this.cursor = hit.note;
-      this.host?.select(note);
+      this.host?.pick(note, shift);
       return;
     }
     const plate = this.layout!.plates[hit.plate!]!;
@@ -1223,8 +1610,9 @@ export class LineArtKit implements GraphKit {
     const origin = from ?? { x: free.x + free.w / 2, y: free.y + free.h / 2 };
     let best: number | null = null;
     let score = Infinity;
+    const unborn = this.replay?.unborn.notes;
     for (let k = 0; k < layout.ids.length; k++) {
-      if (k === this.cursor) continue;
+      if (k === this.cursor || unborn?.[k]) continue;
       const p = at(k);
       if (!p) continue;
       const ex = p.x - origin.x;
@@ -1374,6 +1762,8 @@ export class LineArtKit implements GraphKit {
         hoverPlate: this.hoverPlate,
         focus: this.focusPlateIndex(),
         counts: this.counts,
+        steps: this.path ? this.pathSteps : undefined,
+        unborn: this.replay?.unborn ?? null,
       },
       chrome: this.chrome,
       px: host.labelPx,
@@ -1432,6 +1822,7 @@ export class LineArtKit implements GraphKit {
     k: number,
   ): boolean {
     const layout = this.layout!;
+    if (this.replay?.unborn.notes[k]) return false;
     const x = layout.cells[k * 3]!;
     const y = layout.cells[k * 3 + 1]!;
     const z = layout.cells[k * 3 + 2]! + (this.lifts.get(layout.plates.length + k)?.now ?? 0);

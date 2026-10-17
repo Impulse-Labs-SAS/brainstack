@@ -8,7 +8,7 @@
 import type { WebGLRenderer } from 'three';
 
 import type { Viewport } from '@/lib/graph-camera';
-import type { GraphModel, GraphNode, GraphView } from '@/lib/graph-model';
+import type { GraphModel, GraphNode, GraphPath, GraphView } from '@/lib/graph-model';
 
 import type { Rect } from './labels/placer';
 
@@ -35,6 +35,11 @@ export interface KitHost {
   setCursor(cursor: string): void;
   /** A note picked on the map: selected as a click on it selects it, the preview opened. */
   select(node: GraphNode): void;
+  /**
+   * A note clicked or tapped: selected, or with Shift (or after the preview's "Path from here")
+   * an end of a path, as a click on the classic graph is.
+   */
+  pick(node: GraphNode, shift: boolean): void;
   /** Bare ground clicked: nothing selected any more. */
   clearSelection(): void;
   /** Open a note's page. */
@@ -48,6 +53,8 @@ export interface KitHost {
    * the controller gives it back its own when the kit leaves.
    */
   setPixelRatio(dpr: number): void;
+  /** The graph's minimap, for the kit to draw its own map into: hidden on a phone. */
+  readonly minimap: HTMLCanvasElement | null;
 }
 
 /** What the kit is handed each frame it draws. */
@@ -66,6 +73,8 @@ export interface KitFrame {
   matches: ReadonlySet<GraphNode> | null;
   /** The All routes layer: every link drawn, between projects. */
   routes: boolean;
+  /** The path traced between two notes, start first; null with none. */
+  path: GraphPath | null;
 }
 
 export interface GraphKit {
@@ -102,5 +111,13 @@ export interface GraphKit {
   screenOf(node: GraphNode): { x: number; y: number } | null;
   /** What it drew is gone (a context restored, the fonts in): draw again. */
   invalidate(): void;
+  /** Replay how the map grew, note by note in order of creation; false with nothing to replay. */
+  startGrowth(): boolean;
+  /** Show every note at once, the replay over. */
+  stopGrowth(): void;
+  /** When the newest note so far was created, and how many show; null when not replaying. */
+  growthStatus(): { at: number; count: number } | null;
+  /** A point on the minimap, CSS pixels from its corner: the camera goes there. */
+  minimapPoint(x: number, y: number): void;
   dispose(): void;
 }

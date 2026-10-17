@@ -118,7 +118,17 @@ line art is accepted. Without WebGL the choice is not offered.
   less often whatever the machine, such as a 30 fps power saver, is judged at its own cadence.
   Once the camera has been still for a moment, the map is drawn at its sharpest.
 - **Without WebGL** the classic map stays.
-- **Not yet in line art:** the growth replay, paths and the minimap.
+- **Paths:** Shift+click two notes, or "Path from here" in the preview and then the other note,
+  or Shift+Enter on each with the keyboard's cursor. The path's notes stand lifted, its ends lit
+  as a selection, and cables run from step to step along the streets; each step is named with
+  its number, the two ends whatever the room. The preview lists the steps. Bare ground clears it.
+- **Growth replay:** the notes come in by order of creation at an even pace, as on the classic
+  map, each in its own place: nothing moves, and a plate rises with the first note on it. The
+  map is framed whole first. A click, a selection or Stop ends it, and everything shows.
+- **Minimap** (not on a phone): the map from straight above, north up as the plan view stands
+  before a turn, with what the stage does not show veiled and, once zoomed in, its view framed.
+  It marks the selection, a path and what a search found. A click or a drag there moves the
+  camera.
 
 **A layer is what gets drawn.** One popover, right after the view tabs, like a map's layers
 button. The Sentinel does not show it: its stage draws no layer. The layers still decide which

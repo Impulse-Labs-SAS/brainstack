@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_LAYERS,
   buildGraphModel,
+  findPath,
   type GraphModel,
   type GraphNode,
   type InputNode,
@@ -14,9 +15,10 @@ import {
 import type { KitFrame, KitHost } from '../graph-kit';
 import type { Rect } from '../labels/placer';
 import { LineArtKit } from './kit';
-import { snapAz, type IsoCam } from './math/camera';
+import { isoProject, isoUnproject, snapAz, type IsoCam } from './math/camera';
 import type { QualityGovernor } from './quality';
 import { CABLE, GROW_MS, routeWidth, type CableLayer } from './render/cables';
+import { STATE, type BoxLayer } from './render/boxes';
 import type { GroundGrid } from './render/grid';
 
 const T0 = Date.UTC(2026, 0, 1);
@@ -57,8 +59,13 @@ interface Inside {
   fitted: string[] | null;
   tween: unknown;
   lifts: Map<number, { now: number; to: number }>;
-  layout: { plates: { id: string; kind: string; shared: boolean }[] } | null;
-  three: { cables: CableLayer; grid: GroundGrid } | null;
+  layout: {
+    plates: { id: string; kind: string; shared: boolean; parent: number }[];
+    ids: string[];
+    plateOf: Uint32Array | number[];
+  } | null;
+  three: { cables: CableLayer; grid: GroundGrid; boxes: BoxLayer } | null;
+  mini: { cam: IsoCam; vp: { width: number; height: number } } | null;
 }
 const inside = (kit: LineArtKit) => kit as unknown as Inside;
 
@@ -154,11 +161,14 @@ function setup(width = 1200, height = 800, model = vaults(), dpr = 1) {
     onPlace: vi.fn(),
     onCursor: vi.fn(),
     setPixelRatio: vi.fn(),
+    pick: vi.fn(),
+    minimap: null,
   } as unknown as KitHost &
     Record<
       | 'onUserCamera'
       | 'setCursor'
       | 'select'
+      | 'pick'
       | 'clearSelection'
       | 'open'
       | 'onPlace'
@@ -181,6 +191,7 @@ function setup(width = 1200, height = 800, model = vaults(), dpr = 1) {
     previewed: null,
     matches: null,
     routes: false,
+    path: null,
   };
   const frame = (over: Partial<KitFrame> = {}, ms = 16) => {
     now += ms;
@@ -377,13 +388,13 @@ describe('LineArtKit', () => {
     // Just under the middle of its top: on its front faces, whichever turn the map is at.
     kit.pointerDown(pointer(1, 'mouse', true), p.x, p.y + 4);
     kit.pointerUp(pointer(1, 'mouse', true), p.x, p.y + 4, false);
-    expect(host.select).toHaveBeenCalledWith(n);
-    // A drag selects nothing.
-    host.select.mockClear();
+    expect(host.pick).toHaveBeenCalledWith(n, false);
+    // A drag picks nothing.
+    host.pick.mockClear();
     kit.pointerDown(pointer(1, 'mouse', true), p.x, p.y + 4);
     kit.pointerMove(pointer(1, 'mouse', true), p.x + 40, p.y + 30);
     kit.pointerUp(pointer(1, 'mouse', true), p.x + 40, p.y + 30, false);
-    expect(host.select).not.toHaveBeenCalled();
+    expect(host.pick).not.toHaveBeenCalled();
     // Far out on the ground, with something selected: nothing is.
     kit.fit();
     frame({ selected: n }, 4000);
@@ -484,13 +495,13 @@ describe('LineArtKit', () => {
       kit.pointerUp(pointer(1, 'mouse', true), p.x, p.y + 4, false);
     };
     click();
-    expect(host.select).toHaveBeenLastCalledWith(n);
+    expect(host.pick).toHaveBeenLastCalledWith(n, false);
     // The controller selects it and the kit flies to it; the second click comes mid-flight.
     kit.reveal(n);
     frame({ selected: n }, 200);
     expect(Math.hypot(at(n).x - p.x, at(n).y - p.y)).toBeGreaterThan(20);
     click();
-    expect(host.select).toHaveBeenCalledTimes(1);
+    expect(host.pick).toHaveBeenCalledTimes(1);
     kit.doubleClick(p.x, p.y + 4);
     expect(host.open).toHaveBeenCalledWith(n);
   });
@@ -943,5 +954,236 @@ describe('LineArtKit', () => {
       frame({}, 2000);
     }
     expect(host.setPixelRatio).not.toHaveBeenCalled();
+  });
+});
+
+/** How each box is lit, plates first, as the layer holds it. */
+const states = (kit: LineArtKit) =>
+  inside(kit).three!.boxes.mesh.geometry.getAttribute('iState').array as Float32Array;
+/** A note's box, by its node. */
+const boxOf = (kit: LineArtKit, n: GraphNode) => {
+  const layout = inside(kit).layout!;
+  return layout.plates.length + layout.ids.indexOf(n.id);
+};
+const shift = (e: PointerEvent) => ({ ...e, shiftKey: true }) as PointerEvent;
+
+/** A 2D context that keeps the name of every call made on it. */
+function recording() {
+  const calls: string[] = [];
+  const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+    get: (o, key) => (key in o ? o[key] : (..._: unknown[]) => calls.push(String(key))),
+    set: (o, key, value) => {
+      o[key] = value;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+  return { ctx, calls };
+}
+
+describe('LineArtKit: paths, the growth replay and the minimap', () => {
+  it('lights a path step by step, numbers its notes and picks its ends where they are drawn', () => {
+    const { kit, host, model, frame, overlay, at } = setup();
+    frame();
+    const [n0, n1, n2] = model.nodes as [GraphNode, GraphNode, GraphNode];
+    const path = findPath(model, n1, n2)!;
+    expect(path.nodes).toEqual([n1, n0, n2]);
+    kit.frameNotes(path.nodes);
+    for (let i = 0; i < 40; i++) frame({ path }, 30);
+    const st = states(kit);
+    // Its ends as a selection, the step between as a link, every other note dimmed.
+    expect(st[boxOf(kit, n1)]).toBe(STATE.selected);
+    expect(st[boxOf(kit, n2)]).toBe(STATE.selected);
+    expect(st[boxOf(kit, n0)]).toBe(STATE.linked);
+    expect(st[boxOf(kit, model.nodes[5]!)]).toBe(STATE.dim);
+    // A cable from each step to the next, grown in.
+    expect(cablesOf(kit).map((c) => c.kind)).toEqual([CABLE.link, CABLE.link]);
+    expect(progressOf(kit)).toBe(1);
+    // Each named with its step's number.
+    for (const n of ['1', '2', '3'])
+      expect(overlay.texts.some((t) => t.startsWith(`${n} · `))).toBe(true);
+    // Its ends stand lifted, and a click picks them where they are drawn.
+    const lifted = inside(kit).lifts.get(boxOf(kit, n2))!.now;
+    expect(lifted).toBeGreaterThan(0.5);
+    const p = at(n2);
+    kit.pointerDown(pointer(1, 'mouse', true), p.x, p.y + 4);
+    kit.pointerUp(pointer(1, 'mouse', true), p.x, p.y + 4, false);
+    expect(host.pick).toHaveBeenLastCalledWith(n2, false);
+    // Bare ground clears it, as it clears a selection.
+    kit.fit();
+    frame({}, 4000);
+    kit.pointerDown(pointer(1, 'mouse', true), 2, 2);
+    kit.pointerUp(pointer(1, 'mouse', true), 2, 2, false);
+    expect(host.clearSelection).toHaveBeenCalled();
+    // Gone, everything is lit as before.
+    for (let i = 0; i < 40; i++) frame({ path: null }, 30);
+    expect(cablesOf(kit)).toEqual([]);
+    expect(st[boxOf(kit, model.nodes[5]!)]).toBe(STATE.rest);
+  });
+
+  it("picks a path's end with Shift, by a click or by the keyboard's cursor", () => {
+    const { kit, host, model, frame, at } = setup();
+    frame();
+    const n = model.nodes[2]!;
+    kit.reveal(n);
+    kit.zoom(0.6);
+    frame({}, 4000);
+    const p = at(n);
+    kit.pointerDown(shift(pointer(1, 'mouse', true)), p.x, p.y + 4);
+    kit.pointerUp(shift(pointer(1, 'mouse', true)), p.x, p.y + 4, false);
+    expect(host.pick).toHaveBeenLastCalledWith(n, true);
+    // No cursor shown since the pointer: Shift+Enter is still the kit's, and picks nothing.
+    host.pick.mockClear();
+    expect(kit.key({ key: 'Enter', shiftKey: true } as KeyboardEvent)).toBe(true);
+    expect(host.pick).not.toHaveBeenCalled();
+    // The cursor on a note: Shift+Enter picks it.
+    frame({ selected: n });
+    expect(kit.key({ key: 'ArrowRight' } as KeyboardEvent)).toBe(true);
+    frame();
+    expect(kit.key({ key: 'Enter', shiftKey: true } as KeyboardEvent)).toBe(true);
+    const picked = host.pick.mock.lastCall!;
+    expect(picked[1]).toBe(true);
+    expect(picked[0]).not.toBe(n);
+  });
+
+  it('replays the growth by order of creation, a plate with its first note, then shows it all', () => {
+    const { kit, model, frame, overlay } = setup();
+    for (let i = 0; i < 6; i++) frame();
+    const n = model.nodes.length;
+    const plates = inside(kit).layout!.plates.length;
+    expect(kit.growthStatus()).toBeNull();
+    expect(kit.startGrowth()).toBe(true);
+    overlay.texts.length = 0;
+    frame({}, 16);
+    // Nothing yet: no block, no plate, no name.
+    const st = states(kit);
+    expect([...st.slice(0, plates + n)].every((v) => v === STATE.hidden)).toBe(true);
+    expect(overlay.texts).toEqual([]);
+    expect(kit.growthStatus()!.count).toBe(0);
+    // Halfway through its seven seconds, about half the notes, the oldest first.
+    frame({}, 3500);
+    const { count } = kit.growthStatus()!;
+    expect(count).toBeGreaterThan(n * 0.4);
+    expect(count).toBeLessThan(n * 0.6);
+    const shown = model.nodes.filter((m) => st[boxOf(kit, m)] !== STATE.hidden);
+    const hidden = model.nodes.filter((m) => st[boxOf(kit, m)] === STATE.hidden);
+    // The newest come up out of their plates.
+    frame({}, 120);
+    const rising = [...inside(kit).lifts.values()].filter((l) => l.now < 0);
+    expect(rising.length).toBeGreaterThan(0);
+    expect(shown).toHaveLength(count);
+    expect(Math.max(...shown.map((m) => m.createdAt))).toBeLessThanOrEqual(
+      Math.min(...hidden.map((m) => m.createdAt)),
+    );
+    // A plate shows once a note on it does, and with it every plate under it.
+    const layout = inside(kit).layout!;
+    for (let q = 0; q < plates; q++) {
+      const notesOn = layout.ids.filter((_, k) => {
+        for (let r = layout.plateOf[k]!; r >= 0; r = layout.plates[r]!.parent)
+          if (r === q) return true;
+        return false;
+      });
+      const anyShown = notesOn.some((id) => shown.some((m) => m.id === id));
+      expect(st[q] === STATE.hidden, layout.plates[q]!.id).toBe(!anyShown);
+    }
+    // Stopped, everything shows at once.
+    kit.stopGrowth();
+    frame();
+    expect(kit.growthStatus()).toBeNull();
+    expect([...st.slice(0, plates + n)].includes(STATE.hidden)).toBe(false);
+    // And left to play, it ends by itself.
+    kit.startGrowth();
+    frame();
+    frame({}, 8000);
+    frame();
+    expect(kit.growthStatus()).toBeNull();
+    expect([...st.slice(0, plates + n)].includes(STATE.hidden)).toBe(false);
+  });
+
+  it('ends the replay for a click, a note selected or the map left, and never points at what has not come', () => {
+    const { kit, host, model, frame, at } = setup();
+    for (let i = 0; i < 6; i++) frame();
+    kit.startGrowth();
+    frame();
+    frame({}, 600);
+    // Nothing the pointer is over that has not come: no hand over it.
+    const st0 = states(kit);
+    const away = model.nodes.find((m) => st0[boxOf(kit, m)] === STATE.hidden && kit.screenOf(m))!;
+    const q = at(away);
+    kit.pointerMove(pointer(1, 'mouse', true), q.x, q.y + 4);
+    expect(host.setCursor).toHaveBeenLastCalledWith('grab');
+    // The cursor walks only what is on the map.
+    const st = states(kit);
+    for (let i = 0; i < 8; i++) kit.key({ key: 'ArrowRight' } as KeyboardEvent);
+    const cursor = (kit as unknown as { cursor: number | null }).cursor;
+    if (cursor !== null)
+      expect(st[inside(kit).layout!.plates.length + cursor]).not.toBe(STATE.hidden);
+    // A selection ends it.
+    frame({ selected: model.nodes[20]! });
+    expect(kit.growthStatus()).toBeNull();
+    // A click does too, before it picks.
+    frame({ selected: null });
+    kit.startGrowth();
+    frame();
+    kit.pointerDown(pointer(1, 'mouse', true), 2, 2);
+    kit.pointerUp(pointer(1, 'mouse', true), 2, 2, false);
+    expect(kit.growthStatus()).toBeNull();
+    // And leaving the map.
+    kit.startGrowth();
+    frame();
+    kit.leave();
+    expect(kit.growthStatus()).toBeNull();
+    expect(host.select).not.toHaveBeenCalled();
+  });
+
+  it('runs All routes in the replay only between projects that have come', () => {
+    const model = projects();
+    const { kit, frame } = setup(1200, 800, model);
+    for (let i = 0; i < 4; i++) frame({ routes: true });
+    expect(cablesOf(kit)).toHaveLength(2);
+    kit.startGrowth();
+    frame();
+    expect(cablesOf(kit)).toEqual([]);
+    frame({}, 7000);
+    frame();
+    expect(cablesOf(kit)).toHaveLength(2);
+  });
+
+  it('draws the map from above on the minimap, and moves the camera to a point on it', () => {
+    const { kit, host, frame } = setup();
+    const { ctx, calls } = recording();
+    const canvas = {
+      clientWidth: 176,
+      clientHeight: 116,
+      width: 0,
+      height: 0,
+      getContext: () => ctx,
+    };
+    (host as unknown as { minimap: unknown }).minimap = canvas;
+    frame();
+    expect([canvas.width, canvas.height]).toEqual([176, 116]);
+    // Its vaults and projects filled, the view veiled round.
+    expect(calls.filter((c) => c === 'fill').length).toBeGreaterThan(3);
+    // A point on it goes to the middle of the free stage.
+    const mini = inside(kit).mini!;
+    kit.minimapPoint(60, 50);
+    frame();
+    const z = mini.cam.tz;
+    void z;
+    const world = isoUnproject(mini.cam, mini.vp, 60, 50, 0);
+    const vp = { width: 1200, height: 800 };
+    const onStage = isoProject(inside(kit).cam, vp)(world.x, world.y, 0);
+    expect(Math.abs(onStage.x - 600)).toBeLessThan(40);
+    expect(Math.abs(onStage.y - 400)).toBeLessThan(40);
+    expect(host.onUserCamera).toHaveBeenCalled();
+    // Hidden, on a phone: nothing drawn, a click nothing.
+    canvas.clientWidth = 0;
+    canvas.clientHeight = 0;
+    calls.length = 0;
+    kit.invalidate();
+    frame();
+    expect(calls).toEqual([]);
+    const cam = { ...inside(kit).cam };
+    kit.minimapPoint(60, 50);
+    expect(inside(kit).cam).toEqual(cam);
   });
 });

@@ -49,6 +49,16 @@ export interface LabelState {
   focus?: number | null;
   /** Counts to name along the All routes cables: how many links each carries, where in the world. */
   counts?: readonly { at: readonly [number, number, number]; text: string }[];
+  /**
+   * A path traced between two notes, its note indices start first: each named with its step's
+   * number, the two ends whatever the room.
+   */
+  steps?: readonly number[];
+  /**
+   * During the growth replay, what has not come yet: a 1 for each note (by index) and each plate
+   * not drawn. Nothing of theirs is named.
+   */
+  unborn?: { notes: Uint8Array; plates: Uint8Array } | null;
 }
 
 export interface LabelColors {
@@ -156,7 +166,7 @@ const FORCED_GAP = 2;
  * folder level every note.
  */
 export type MapLevel = 'atlas' | 'project' | 'folder';
-type NoteKind = 'selected' | 'pointed' | 'linked' | 'found' | 'index' | 'rest';
+type NoteKind = 'selected' | 'pointed' | 'step' | 'linked' | 'found' | 'index' | 'rest';
 
 interface Pt {
   x: number;
@@ -265,8 +275,13 @@ function keyNotes(
     return true;
   };
   add(state.selected, 'selected', true);
+  const steps = state.steps ?? [];
+  // A path's two ends, as a selection is; the steps between, in order, as links are.
+  add(steps[0] ?? null, 'step', true);
+  add(steps.length > 1 ? steps[steps.length - 1]! : null, 'step', true);
   add(state.hovered, 'pointed', true);
   add(state.cursor, 'pointed', true);
+  for (const k of steps.slice(1, -1)) add(k, 'step', false);
   for (const k of state.linked) add(k, 'linked', false);
   let tried = 0;
   for (const k of state.found) {
@@ -312,6 +327,7 @@ class Pass {
 
   /** Whether a note's block stands on the stage: a name for one off it would point at nothing. */
   onStage(k: number): boolean {
+    if (this.f.state.unborn?.notes[k]) return false;
     const { cells } = this.f.layout;
     const z = cells[k * 3 + 2]! + this.f.lift(k) + BLOCK_H / 2;
     const c = this.project(cells[k * 3]!, cells[k * 3 + 1]!, z);
@@ -331,9 +347,15 @@ class Pass {
     const title = this.f.titles[k] ?? '';
     if (!title) return;
     const { px, fonts, colors } = this.f;
-    const selected = kind === 'selected';
+    // On the path whatever it was named for: pointed at, a step keeps its number.
+    const step = (this.f.state.steps?.indexOf(k) ?? -1) + 1;
+    const steps = this.f.state.steps?.length ?? 0;
+    // A path's ends read as a selection does; its steps carry their number, so the order shows
+    // wherever the cables run.
+    const selected = kind === 'selected' || (step > 0 && (step === 1 || step === steps));
     const font = selected ? `600 ${px + 1}px ${fonts.sans}` : `500 ${px}px ${fonts.sans}`;
-    const text = cut(title, selected ? SELECTED_MAX : TITLE_MAX);
+    const name = cut(title, selected ? SELECTED_MAX : TITLE_MAX);
+    const text = step > 0 ? `${step} · ${name}` : name;
     const w = Math.ceil(this.width(text, font, null)) + 2 * INSET;
     const h = px + (selected ? 11 : 9);
     const b = this.box(k);
@@ -357,8 +379,8 @@ class Pass {
     const pointed = kind === 'pointed';
     this.tag(rect, text, {
       font,
-      ink: selected || pointed ? colors.strong : colors.body,
-      edge: selected ? colors.accent : pointed ? colors.hoverEdge : colors.tagEdge,
+      ink: selected || pointed || step > 0 ? colors.strong : colors.body,
+      edge: selected || step > 0 ? colors.accent : pointed ? colors.hoverEdge : colors.tagEdge,
       edgeWidth: selected ? 1.5 : 1,
       dash: NO_DASH,
       swatch: null,
@@ -375,7 +397,7 @@ class Pass {
   plate(p: number, force: boolean): void {
     const plate = this.f.layout.plates[p];
     const meta = this.f.plates[p];
-    if (!plate || !meta || this.places.has(p)) return;
+    if (!plate || !meta || this.places.has(p) || this.f.state.unborn?.plates[p]) return;
     const { top, bounds } = this.shape(plate);
     const { width, height } = this.f.vp;
     const inView =
