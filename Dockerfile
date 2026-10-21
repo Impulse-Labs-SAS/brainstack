@@ -14,7 +14,9 @@
 # ---- build: install everything and compile every workspace ------------------
 FROM node:22-bookworm-slim AS build
 
-RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
+# pnpm from npm, at the version package.json names. Not corepack: Node stopped shipping it in
+# v25, and an image on a newer Node would fail on its first line.
+RUN npm install -g pnpm@10.30.3
 WORKDIR /app
 
 # Manifests first, so a source change does not reinstall dependencies.
