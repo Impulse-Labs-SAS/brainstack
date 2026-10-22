@@ -17,24 +17,24 @@
   },
   "dependencies": {
     "@brainstack/core": "workspace:*",
-    "@hono/node-server": "^2.1.4",
+    "@hono/node-server": "^2.1.5",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@oslojs/encoding": "^1.1.0",
     "@oslojs/otp": "^1.1.0",
-    "@trpc/server": "^11.17.0",
+    "@trpc/server": "^11.19.0",
     "arctic": "^3.7.0",
     "dotenv": "^17.4.2",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "nanoid": "^5.1.16",
-    "nodemailer": "^10.0.12",
-    "pino": "^10.3.1",
-    "resend": "^6.12.3",
+    "nodemailer": "^10.1.7",
+    "pino": "^10.4.0",
+    "resend": "^6.34.1",
     "superjson": "^2.2.6",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.5",
-    "tsx": "^4.19.0"
+    "@electric-sql/pglite": "^0.5.10",
+    "tsx": "^4.23.15"
   }
 }
