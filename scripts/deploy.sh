@@ -23,7 +23,7 @@
 #     /api while byte-identical drafts answered 200; publishing the verified
 #     draft (restoreSiteDeploy) is the path that has never lied.
 #
-# Requires: Node 20 + unzip on PATH, a clone at ~/brainstack, a Netlify CLI
+# Requires: Node 24 + unzip on PATH, a clone at ~/brainstack, a Netlify CLI
 # login for the account that owns the site, and where that site is:
 #
 #   BRAINSTACK_SITE_ID    the Netlify site id

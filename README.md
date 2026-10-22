@@ -21,7 +21,7 @@ If you work with several AI assistants, you keep retyping the same context every
 
 ```
 apps/
-  server/     Hono + tRPC + MCP server (Node 22+), with its own OAuth 2.1 provider for MCP clients
+  server/     Hono + tRPC + MCP server (Node 24+), with its own OAuth 2.1 provider for MCP clients
   web/        Next.js 15 web app: react-aria-components + CodeMirror 6
 packages/
   core/       Markdown parsing, wikilink resolution, Postgres store and full-text search

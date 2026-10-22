@@ -9,7 +9,7 @@ Read the relevant ones before making non-trivial changes.
 
 ## Stack
 
-- pnpm workspaces, TypeScript strict, Node 22+.
+- pnpm workspaces, TypeScript strict, Node 24+.
 - Backend: Hono + `@modelcontextprotocol/sdk` + tRPC + Drizzle.
 - Frontend: Next.js 15 App Router + Tailwind + `react-aria-components` + CodeMirror 6.
 - Storage: **Postgres** — any provider. `openPgDatabase` picks the driver from the connection string: Neon over its HTTP driver, everything else over node-postgres. Tests run on PGlite — real Postgres, in process.
