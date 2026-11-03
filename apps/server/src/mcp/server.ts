@@ -31,7 +31,12 @@ import {
   MAX_TEXT_CHARS,
 } from '../services/gatherContext.js';
 import { MAX_TREE_DEPTH, type NoteService } from '../services/NoteService.js';
-import { MAX_WRITES, saveNotes, type NoteWrite, type SaveOptions } from '../services/saveNotes.js';
+import {
+  applyChanges,
+  MAX_CHANGES,
+  type ApplyOptions,
+  type Change,
+} from '../services/applyChanges.js';
 import type { SearchService } from '../services/SearchService.js';
 import { normalizeFolderPath, type SharingService } from '../services/SharingService.js';
 
@@ -231,7 +236,7 @@ export function buildMcpServer({
    * Every assistant write goes through Sentinel's batch, one write or many, so
    * each meets the same checks — the note size limit among them.
    */
-  const SAVE: SaveOptions = {
+  const SAVE: ApplyOptions = {
     onUnexpected: (err) => logger.error({ err }, 'MCP write failed'),
     maxChars: NOTE_MAX_CHARS,
   };
@@ -239,19 +244,25 @@ export function buildMcpServer({
    * Run writes through the batch, then note in the crawl history what landed —
    * after the crawl the assistant read from, for the Sentinel view to replay.
    */
-  const save = async (writes: NoteWrite[]) => {
+  const save = async (changes: Change[]) => {
     const userId = requireUserId();
-    const report = await saveNotes(notes, userId, writes, SAVE);
+    const report = await applyChanges(notes, userId, changes, SAVE);
     await crawls.recordWrites(
       userId,
       principal?.clientRef ?? null,
       report.results
         .filter((r) => r.status === 'done')
-        .map(({ action, path, ownerId }) => ({ action, path, ...(ownerId ? { ownerId } : {}) })),
+        // The crawl view replays writes to notes; a move or a new folder has
+        // no note of its own to light up.
+        .flatMap(({ action, path, ownerId }) =>
+          action === 'move' || action === 'create_folder'
+            ? []
+            : [{ action, path, ...(ownerId ? { ownerId } : {}) }],
+        ),
     );
     return report;
   };
-  const writeOne = async (write: NoteWrite) => {
+  const writeOne = async (write: Change) => {
     const [result] = (await save([write])).results;
     if (result!.status === 'done') return { done: result! };
     const { code, message } = result!.error!;
@@ -534,83 +545,121 @@ export function buildMcpServer({
     },
   );
 
+  /**
+   * apply_changes, and save_notes, its name until it learnt to move notes and
+   * create folders. The old name stays for one release so a client that still
+   * lists it keeps working; both run the same code and answer the same way.
+   */
+  const CHANGE_FIELDS = {
+    ownerId: OWNER_ARG,
+  };
+  const CHANGES = z
+    .array(
+      z.discriminatedUnion('action', [
+        z.object({
+          action: z.literal('create'),
+          path: field().min(1),
+          content: noteContent(),
+          frontmatter: frontmatterField().optional(),
+          ...CHANGE_FIELDS,
+        }),
+        z.object({
+          action: z.literal('edit'),
+          path: field().min(1),
+          edits: EDITS,
+          expectedChecksum: field().optional(),
+          ...CHANGE_FIELDS,
+        }),
+        z.object({
+          action: z.literal('replace'),
+          path: field().min(1),
+          content: noteContent(),
+          expectedChecksum: field().optional(),
+          ...CHANGE_FIELDS,
+        }),
+        z.object({
+          action: z.literal('delete'),
+          path: field().min(1),
+          recursive: z.boolean().optional(),
+          ...CHANGE_FIELDS,
+        }),
+        z.object({
+          action: z.literal('create_folder'),
+          path: field().min(1),
+          ...CHANGE_FIELDS,
+        }),
+        z.object({
+          action: z.literal('move'),
+          from: field().min(1),
+          to: field().min(1),
+          ...CHANGE_FIELDS,
+        }),
+      ]),
+    )
+    .min(1)
+    .max(MAX_CHANGES);
+  type ChangeInput = z.infer<typeof CHANGES>[number];
+
+  const APPLY_DESCRIPTION = `Apply a plan of changes in one call — use it whenever a plan has more than one step: reorganising (create folders, move or rename notes and folders), creating notes and linking them from their index, adjusting the notes that mention them, removing one. Each change has an \`action\`: \`create\` (path, content, frontmatter?), \`edit\` (path, edits — the same edits as edit_note, expectedChecksum?), \`replace\` (path, content, expectedChecksum? — a full rewrite), \`delete\` (path, recursive?), \`create_folder\` (path) or \`move\` (from, to — a note, attachment or folder, inside one vault). Each takes an optional \`ownerId\` for a folder shared with the user. Changes run in order and each sees what the ones before it left: after moving \`a/\` to \`b/\`, edit \`b/...\`. Moving a folder rewrites every wikilink to what it held and renames its index note with it (\`a/_a.md\` becomes \`b/_b.md\`). Everything is checked before anything is written: paths, permission, that what you change or move exists, that every destination is free, every edit's anchor, every checksum. If any check fails nothing is written and \`results\` says which change failed and why. If one still fails while writing (someone saved that note a moment ago) the ones before it stay, the rest are \`skipped\`, and \`saved\` is false. A note may be written (create, edit, replace, delete) by one change only; moving it does not count. The answer carries the state the plan left, so there is no need to read again: each note's final \`path\` and \`checksum\`, each move's \`moved\` notes and \`linksRewritten\`, \`touched\` (notes a move rewrote that no change named, with their new checksum) and a one-line \`summary\`. At most ${MAX_CHANGES} changes. No note's body may grow past ${NOTE_MAX_CHARS} characters (TOO_LONG): a longer note is split into several, linked from a short summary note — which is itself one apply_changes. Moving notes into another person's vault is not a change: that is move_to_owner. Needs the user's approval like any other write: put the whole plan to them once.`;
+
+  const runChanges = async (changes: ChangeInput[]) => {
+    try {
+      requireWriteAccess();
+      const userId = requireUserId();
+      // Permission for every change before any note is looked at, with the
+      // shared roots fetched once rather than once per change.
+      const roots = await sharing.listSharedRoots(userId);
+      await Promise.all(
+        changes.map(async (c, i) => {
+          const paths = c.action === 'move' ? [c.from, c.to] : [c.path];
+          try {
+            for (const p of paths) {
+              await sharing.assertCanWrite(userId, ownerOf(c.ownerId), p);
+              if (c.ownerId === undefined) {
+                await sharing.assertNotShadowingShare(userId, p, roots);
+              }
+            }
+          } catch (err) {
+            const known = toAppError(err);
+            if (!known) throw err;
+            throw new AppError(
+              `change ${i + 1} (${paths[0]}): ${known.message}`,
+              known.code,
+              known.status,
+            );
+          }
+        }),
+      );
+      const planned = changes.map((c): Change => {
+        const owner = ownerOf(c.ownerId);
+        if (c.action === 'move') return { action: 'move', path: c.from, to: c.to, owner };
+        const { ownerId: _ownerId, ...rest } = c;
+        return { ...rest, owner } as Change;
+      });
+      return JSON_TEXT(await save(planned));
+    } catch (err) {
+      return toMcpError(err);
+    }
+  };
+
+  server.registerTool(
+    'apply_changes',
+    {
+      title: 'Apply several changes at once',
+      description: APPLY_DESCRIPTION,
+      inputSchema: { changes: CHANGES },
+    },
+    async ({ changes }) => runChanges(changes),
+  );
+
   server.registerTool(
     'save_notes',
     {
-      title: 'Save several changes at once',
-      description: `Several writes in one call — use it whenever a plan touches more than one note: creating notes and linking them from their index, adjusting the notes that mention them, removing one. Each write has an \`action\`: \`create\` (path, content, frontmatter?), \`edit\` (path, edits — the same edits as edit_note, expectedChecksum?), \`replace\` (path, content, expectedChecksum? — a full rewrite) or \`delete\` (path, recursive?). Each takes an optional \`ownerId\` for a folder shared with the user. Everything is checked before anything is written: paths, permission, that the notes to change exist, every edit's anchor, every checksum. If any check fails nothing is written and \`results\` says which write failed and why. Writes then run in order; if one still fails (someone saved that note a moment ago) the ones before it stay, the rest are \`skipped\`, and \`saved\` is false. A path may appear in only one write. To link a new note from its index, add an \`edit\` that appends the link to the index's section — no need to read the index first. At most ${MAX_WRITES} writes. No note's body may grow past ${NOTE_MAX_CHARS} characters (TOO_LONG): a longer note is split into several, linked from a short summary note — which is itself one save_notes. Needs the user's approval like any other write: put the whole plan to them once.`,
-      inputSchema: {
-        writes: z
-          .array(
-            z.discriminatedUnion('action', [
-              z.object({
-                action: z.literal('create'),
-                path: field().min(1),
-                content: noteContent(),
-                frontmatter: frontmatterField().optional(),
-                ownerId: OWNER_ARG,
-              }),
-              z.object({
-                action: z.literal('edit'),
-                path: field().min(1),
-                edits: EDITS,
-                expectedChecksum: field().optional(),
-                ownerId: OWNER_ARG,
-              }),
-              z.object({
-                action: z.literal('replace'),
-                path: field().min(1),
-                content: noteContent(),
-                expectedChecksum: field().optional(),
-                ownerId: OWNER_ARG,
-              }),
-              z.object({
-                action: z.literal('delete'),
-                path: field().min(1),
-                recursive: z.boolean().optional(),
-                ownerId: OWNER_ARG,
-              }),
-            ]),
-          )
-          .min(1)
-          .max(MAX_WRITES),
-      },
+      title: 'Save several changes at once (deprecated)',
+      description: `Deprecated: use apply_changes, which takes the same changes as \`changes\`. This name stays for one release and then goes. ${APPLY_DESCRIPTION}`,
+      inputSchema: { writes: CHANGES },
     },
-    async ({ writes }) => {
-      try {
-        requireWriteAccess();
-        const userId = requireUserId();
-        // Permission for every write before any note is looked at, with the
-        // shared roots fetched once rather than once per write.
-        const roots = await sharing.listSharedRoots(userId);
-        await Promise.all(
-          writes.map(async (w, i) => {
-            try {
-              await sharing.assertCanWrite(userId, ownerOf(w.ownerId), w.path);
-              if (w.ownerId === undefined) {
-                await sharing.assertNotShadowingShare(userId, w.path, roots);
-              }
-            } catch (err) {
-              const known = toAppError(err);
-              if (!known) throw err;
-              throw new AppError(
-                `write ${i + 1} (${w.path}): ${known.message}`,
-                known.code,
-                known.status,
-              );
-            }
-          }),
-        );
-        const planned = writes.map(({ ownerId, ...w }) => ({
-          ...w,
-          owner: ownerOf(ownerId),
-        })) as NoteWrite[];
-        const report = await save(planned);
-        return JSON_TEXT(report);
-      } catch (err) {
-        return toMcpError(err);
-      }
-    },
+    async ({ writes }) => runChanges(writes),
   );
 
   server.registerTool(
@@ -672,8 +721,13 @@ export function buildMcpServer({
     async ({ path, ownerId }) => {
       try {
         await assertWrite(path, ownerId);
-        const final = await notes.createFolder(ownerOf(ownerId), path);
-        return TEXT(`Created folder ${final}`);
+        const { done, failed } = await writeOne({
+          action: 'create_folder',
+          owner: ownerOf(ownerId),
+          path,
+        });
+        if (failed) return failed;
+        return TEXT(`Created folder ${done.path}`);
       } catch (err) {
         return toMcpError(err);
       }
@@ -685,7 +739,7 @@ export function buildMcpServer({
     {
       title: 'Move or rename a note, attachment, or folder',
       description:
-        'Move/rename a path. Wikilinks pointing at the moved path(s) — including aliases, sections, and attachment embeds — are rewritten across the vault. Folders are moved with all their contents. Returns the final path plus `affectedMocs`: existing `_<Folder>.md` index notes in the source and destination parent folders that you should consider updating.',
+        'Move/rename a path. Wikilinks pointing at the moved path(s) — including aliases, sections, and attachment embeds — are rewritten across the vault. Folders are moved with all their contents, and a renamed folder renames its index note with it (`a/_a.md` becomes `b/_b.md`). Returns the final path, `moved` (each note that changed path, with its checksum), `linksRewritten` (the notes whose links were rewritten) and `affectedMocs`: existing `_<Folder>.md` index notes that you should consider updating. To move several things, or move and then edit, send one apply_changes.',
       inputSchema: { from: field().min(1), to: field().min(1), ownerId: OWNER_ARG },
     },
     async ({ from, to, ownerId }) => {
@@ -693,8 +747,20 @@ export function buildMcpServer({
         // One owner for both ends: a move stays inside a single vault.
         await assertWrite(from, ownerId);
         await assertWrite(to, ownerId);
-        const result = await notes.move(ownerOf(ownerId), from, to);
-        return JSON_TEXT(result);
+        const { done, failed } = await writeOne({
+          action: 'move',
+          owner: ownerOf(ownerId),
+          path: from,
+          to,
+        });
+        if (failed) return failed;
+        return JSON_TEXT({
+          path: done.path,
+          affectedMocs: done.affectedMocs ?? [],
+          moved: done.moved ?? [],
+          linksRewritten: done.linksRewritten ?? [],
+          ...(done.checksum ? { checksum: done.checksum } : {}),
+        });
       } catch (err) {
         return toMcpError(err);
       }
@@ -941,7 +1007,7 @@ export function buildMcpServer({
     {
       title: 'Gather context for a question or a prompt',
       description:
-        "Start here for any question or task about the user's notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user's message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision`, its `checksum` and its body in `excerpt`, whole when it fits `maxChars`; a `truncated` one also lists its `sections` (every heading of the whole note), and one marked `tooLong` is past the size an assistant may write — propose splitting it into linked notes before adding to it, never condensing it. That is enough to change a note with edit_note or save_notes without opening it — pass the `checksum` as `expectedChecksum`. Open a note with get_note (several with get_notes) only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user's own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user's own crawl history, which they can replay in the web app.",
+        "Start here for any question or task about the user's notes: one call instead of search_brain, list_notes and get_note one by one. Pass the user's message as `text` (and, if you like, the vague phrases in it as `terms`). Returns `notes`, ranked: the notes the text names by title, alias or [[link]]; the best full-text hits for the question itself and for each term; and the notes those link to or from (`depth` hops, default 1) — decisions weigh extra. Each note comes with `reason`, `isDecision`, its `checksum` and its body in `excerpt`, whole when it fits `maxChars`; a `truncated` one also lists its `sections` (every heading of the whole note), and one marked `tooLong` is past the size an assistant may write — propose splitting it into linked notes before adding to it, never condensing it. That is enough to change a note with edit_note or apply_changes without opening it — pass the `checksum` as `expectedChecksum`. Open a note with get_note (several with get_notes) only when `truncated` is true and you need the rest. `leftOut` names the strongest notes that did not fit (path, title, reason, no body): open one with get_note if the answer needs it. Returns `unresolved`: terms that matched nothing, and titles several notes share (with `candidates`) — never guess those, ask the user. Reads the user's own vault and the folders other people shared with them: a note in a shared folder comes with its `ownerId` — pass it to get_note with the same `path`. Writes no note; the call is kept in the user's own crawl history, which they can replay in the web app.",
       inputSchema: {
         text: z.string().min(1).max(MAX_TEXT_CHARS),
         terms: z.array(z.string().min(1).max(200)).max(MAX_TERMS).optional(),
@@ -975,7 +1041,7 @@ export function buildMcpServer({
     {
       title: 'Find where a new note goes',
       description:
-        "Before creating a note: where it belongs, whether one like it already exists, and what it should link to — one call instead of list_tree, search_brain and opening indexes by hand. Pass the `title` it would have and its `text` (or a summary). Returns `duplicates` (notes already called that: propose adding to one of them instead), `folder` (the folder the most related notes live in, with `reason` and its `index` note when it has one — link the new note from it in the same save_notes) and up to two `alternatives`, and `links` (the notes the text names, then the most related; a wikilink cannot cross into another owner's vault). A folder or note in a folder shared with the user comes with its `ownerId`, and a shared folder says whether the user may write there (`writable`). Writes nothing: put the proposal to the user, as for any write. Kept in the user's crawl history like gather_context.",
+        "Before creating a note: where it belongs, whether one like it already exists, and what it should link to — one call instead of list_tree, search_brain and opening indexes by hand. Pass the `title` it would have and its `text` (or a summary). Returns `duplicates` (notes already called that: propose adding to one of them instead), `folder` (the folder the most related notes live in, with `reason` and its `index` note when it has one — link the new note from it in the same apply_changes) and up to two `alternatives`, and `links` (the notes the text names, then the most related; a wikilink cannot cross into another owner's vault). A folder or note in a folder shared with the user comes with its `ownerId`, and a shared folder says whether the user may write there (`writable`). Writes nothing: put the proposal to the user, as for any write. Kept in the user's crawl history like gather_context.",
       inputSchema: {
         title: field().min(1),
         text: z.string().max(MAX_TEXT_CHARS).optional(),

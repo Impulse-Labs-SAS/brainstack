@@ -111,6 +111,17 @@ export interface MutationResult {
 }
 
 /**
+ * What a move did, in full, so that whoever asked for it does not have to read
+ * the vault again to find out.
+ */
+export interface MoveResult extends MutationResult {
+  /** Every note that changed path, old and new; one for a note, one per note for a folder. */
+  moved: Array<{ from: string; to: string }>;
+  /** Notes whose wikilinks were rewritten to follow what moved. Their checksums changed. */
+  linksRewritten: string[];
+}
+
+/**
  * What a move between two vaults did, and what it cost.
  *
  * A wikilink has no way to name another person's vault, so a link that crossed
@@ -721,6 +732,33 @@ export class NoteService {
     return this.store.exists(this.toPhysical(ownerId, path));
   }
 
+  /** The notes under a folder, by logical path. Matched by prefix in memory, not with `LIKE` alone. */
+  async notesUnder(ownerId: string, folder: string): Promise<string[]> {
+    const physical = this.toPhysical(ownerId, folder);
+    const rows = await this.opts.db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(and(this.ownedBy(ownerId), like(notes.path, `${escapeLike(physical)}/%`)));
+    return rows
+      .filter((r) => r.path.startsWith(`${physical}/`))
+      .map((r) => this.toLogical(ownerId, r.path));
+  }
+
+  /** The current checksum of each note that exists, by logical path; one query for all of them. */
+  async checksums(ownerId: string, paths: readonly string[]): Promise<Map<string, string>> {
+    if (paths.length === 0) return new Map();
+    const rows = await this.opts.db
+      .select({ path: notes.path, checksum: notes.checksum })
+      .from(notes)
+      .where(
+        inArray(
+          notes.path,
+          paths.map((p) => this.toPhysical(ownerId, p)),
+        ),
+      );
+    return new Map(rows.map((r) => [this.toLogical(ownerId, r.path), r.checksum]));
+  }
+
   /**
    * Delete a note, or a folder and everything under it.
    *
@@ -806,11 +844,11 @@ export class NoteService {
    * Every wikilink pointing at anything that moved is rewritten in a single
    * pass, with one mapping per note, rather than a pass per note.
    */
-  async move(ownerId: string, fromPath: string, toPath: string): Promise<MutationResult> {
+  async move(ownerId: string, fromPath: string, toPath: string): Promise<MoveResult> {
     const from = this.toPhysical(ownerId, fromPath);
     const to = this.toPhysical(ownerId, toPath);
     if (from === to) {
-      return { path: this.toLogical(ownerId, to), affectedMocs: [] };
+      return { path: this.toLogical(ownerId, to), affectedMocs: [], moved: [], linksRewritten: [] };
     }
     // A folder cannot be moved inside itself: the destination would be carried
     // along by the very move that is creating it.
@@ -835,18 +873,65 @@ export class NoteService {
       // `[[u_42/Gondor/nota]]`. Passing the stored path meant only a changed
       // basename ever matched, and moving a note between folders left every
       // full-path link pointing at where it used to be.
-      await rewriteLinkTargets(this.bodySource(ownerId), [
+      const { filesChanged } = await rewriteLinkTargets(this.bodySource(ownerId), [
         { from: this.toLogical(ownerId, from), to: this.toLogical(ownerId, to) },
       ]);
       const logical = this.toLogical(ownerId, saved.path);
-      return { path: logical, affectedMocs: await this.mocsFor(ownerId, logical) };
+      return {
+        path: logical,
+        affectedMocs: await this.mocsFor(ownerId, logical),
+        moved: [{ from: this.toLogical(ownerId, from), to: logical }],
+        linksRewritten: filesChanged.map((p) => this.toLogical(ownerId, p)),
+      };
     }
 
-    return this.moveFolder(ownerId, from, to);
+    const folder = await this.moveFolder(ownerId, from, to);
+    const index = await this.renameFolderIndex(ownerId, from, to);
+    if (!index) return folder;
+    return {
+      ...folder,
+      moved: folder.moved.map((m) => (m.to === index.from ? { ...m, to: index.to } : m)),
+      linksRewritten: [
+        ...new Set(
+          [...folder.linksRewritten, ...index.linksRewritten].map((p) =>
+            p === index.from ? index.to : p,
+          ),
+        ),
+      ],
+    };
+  }
+
+  /**
+   * The folder's index note follows the folder's name: `luna/_luna.md` moved
+   * to `simon/` becomes `simon/_simon.md`, with every link to it rewritten.
+   * Left as it was, the index of `simon/` was named after a folder that no
+   * longer exists, and every rename took a second move to put it right.
+   *
+   * Only when the old index is there and the new name is free: a folder that
+   * already has an index under its new name keeps both, and nothing is
+   * overwritten. `indexRenameFor` is the same rule, for a batch to plan with.
+   */
+  private async renameFolderIndex(
+    ownerId: string,
+    fromPhysical: string,
+    toPhysical: string,
+  ): Promise<{ from: string; to: string; linksRewritten: string[] } | null> {
+    const rename = indexRenameFor(
+      this.toLogical(ownerId, fromPhysical),
+      this.toLogical(ownerId, toPhysical),
+    );
+    if (!rename) return null;
+    const [present, taken] = await Promise.all([
+      this.hasNote(ownerId, rename.from),
+      this.hasNote(ownerId, rename.to),
+    ]);
+    if (!present || taken) return null;
+    const moved = await this.move(ownerId, rename.from, rename.to);
+    return { from: rename.from, to: moved.path, linksRewritten: moved.linksRewritten };
   }
 
   /** The folder half of `move`. Assumes `from` is not a note. */
-  private async moveFolder(ownerId: string, from: string, to: string): Promise<MutationResult> {
+  private async moveFolder(ownerId: string, from: string, to: string): Promise<MoveResult> {
     const contents = await this.opts.db
       .select({ path: notes.path })
       .from(notes)
@@ -904,18 +989,20 @@ export class NoteService {
     // point at. Rewriting once at the end left every link to an already moved
     // note stale whenever the loop failed, and a retry only knew about the
     // notes still left to move.
+    const rewritten = new Set<string>();
     for (let i = 0; i < mappings.length; i += LINK_REWRITE_BATCH) {
       const batch = mappings.slice(i, i + LINK_REWRITE_BATCH);
       for (const mapping of batch) {
         await this.asCaller(ownerId, () => this.store.move(mapping.from, mapping.to));
       }
-      await rewriteLinkTargets(
+      const { filesChanged } = await rewriteLinkTargets(
         this.bodySource(ownerId),
         batch.map((m) => ({
           from: this.toLogical(ownerId, m.from),
           to: this.toLogical(ownerId, m.to),
         })),
       );
+      for (const p of filesChanged) rewritten.add(this.toLogical(ownerId, p));
     }
 
     // The folder rows follow their notes. Registered first so an empty folder
@@ -935,7 +1022,15 @@ export class NoteService {
         ),
       );
 
-    return { path: logicalTo, affectedMocs: await this.mocsFor(ownerId, logicalTo) };
+    return {
+      path: logicalTo,
+      affectedMocs: await this.mocsFor(ownerId, logicalTo),
+      moved: mappings.map((m) => ({
+        from: this.toLogical(ownerId, m.from),
+        to: this.toLogical(ownerId, m.to),
+      })),
+      linksRewritten: [...rewritten],
+    };
   }
 
   /**
@@ -1800,4 +1895,18 @@ function sortTree(node: TreeNode): void {
     return a.name.localeCompare(b.name);
   });
   for (const child of node.children) sortTree(child);
+}
+
+/**
+ * The rename a folder's index note takes when the folder moves: `a/luna` to
+ * `b/simon` takes `b/simon/_luna.md` (where the folder move left it) to
+ * `b/simon/_simon.md`. Null when the folder keeps its name. Logical paths.
+ */
+export function indexRenameFor(from: string, to: string): { from: string; to: string } | null {
+  const base = (p: string) => p.split('/').filter(Boolean).pop() ?? '';
+  const oldName = base(from);
+  const newName = base(to);
+  if (!oldName || !newName || oldName === newName) return null;
+  const folder = to.replace(/\/+$/, '');
+  return { from: `${folder}/_${oldName}.md`, to: `${folder}/_${newName}.md` };
 }
