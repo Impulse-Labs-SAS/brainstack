@@ -174,7 +174,7 @@ mode is gone because zooming out now shows projects (below).
 
 **"Sentinel" names two things that are one:** BrainStack's engine for reading and writing notes
 (`@brainstack/core/sentinel` — behind `gather_context`, `search_brain`, `edit_note` and
-`save_notes`), and its figure in this view — a creature that walks your notes the way the engine
+`apply_changes`), and its figure in this view — a creature that walks your notes the way the engine
 read them. What an assistant then wrote is replayed too: every assistant write is added to its
 latest crawl (from the same client, within 30 minutes; otherwise a record of its own, listed as
 "Saved N notes"), and after the context is handed over the walk goes on to each note it created
