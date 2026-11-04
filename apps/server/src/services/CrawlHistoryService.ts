@@ -7,7 +7,7 @@
 // was handed are not stored; they are the notes themselves, and a second copy
 // would outlive an edit or a delete.
 //
-// What an assistant then wrote is kept with what it read: `save_notes` (and
+// What an assistant then wrote is kept with what it read: `apply_changes` (and
 // every single-note write, which goes through it) adds each note it created,
 // changed or deleted to the assistant's latest crawl, so the replay can go
 // "read this, then wrote this" as one walk. Only where — a path, an owner, what

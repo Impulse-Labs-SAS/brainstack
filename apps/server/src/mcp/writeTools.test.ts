@@ -1,4 +1,4 @@
-// Sentinel's writing tools — edit_note, save_notes, get_notes — driven the way
+// Sentinel's writing tools — edit_note, apply_changes, get_notes — driven the way
 // a client drives them: a real MCP session over an in-memory transport, so the
 // tool schemas, the permission checks and the store are all in the path.
 
@@ -16,7 +16,7 @@ import { NoteService } from '../services/NoteService.js';
 import { SearchService } from '../services/SearchService.js';
 import { NOTE_MAX_CHARS } from '@brainstack/core/sentinel';
 
-import { saveNotes } from '../services/saveNotes.js';
+import { applyChanges } from '../services/applyChanges.js';
 import { SharingService } from '../services/SharingService.js';
 import { createTestDatabase, type TestDatabase } from '../services/testDb.js';
 
@@ -92,10 +92,12 @@ beforeEach(async () => {
 });
 
 describe('the tools are offered', () => {
-  it('lists edit_note, save_notes and get_notes with valid schemas', async () => {
+  it('lists edit_note, apply_changes, its old name save_notes and get_notes with valid schemas', async () => {
     const client = await clientFor(OWNER.id);
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(['edit_note', 'save_notes', 'get_notes']));
+    expect(names).toEqual(
+      expect.arrayContaining(['edit_note', 'apply_changes', 'save_notes', 'get_notes']),
+    );
   });
 });
 
@@ -174,12 +176,12 @@ describe('edit_note', () => {
   });
 });
 
-describe('save_notes', () => {
+describe('apply_changes', () => {
   it('creates, links from the index, rewrites and deletes in one call', async () => {
     const client = await clientFor(OWNER.id);
     await notes.create(OWNER.id, 'orbit/old.md', 'Old.\n');
-    const { value } = await call(client, 'save_notes', {
-      writes: [
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
         {
           action: 'create',
           path: 'orbit/lore.md',
@@ -218,8 +220,8 @@ describe('save_notes', () => {
 
   it('writes nothing when any write would fail, and says which', async () => {
     const client = await clientFor(OWNER.id);
-    const { value } = await call(client, 'save_notes', {
-      writes: [
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
         { action: 'create', path: 'orbit/lore.md', content: '# Lore\n' },
         {
           action: 'edit',
@@ -244,8 +246,8 @@ describe('save_notes', () => {
   it('reports and records a delete by the path the store knows', async () => {
     const client = await clientFor(OWNER.id);
     await notes.create(OWNER.id, 'orbit/old.md', 'Old.');
-    const { value } = await call(client, 'save_notes', {
-      writes: [{ action: 'delete', path: './orbit/old.md' }],
+    const { value } = await call(client, 'apply_changes', {
+      changes: [{ action: 'delete', path: './orbit/old.md' }],
     });
     expect(value).toMatchObject({ saved: true, results: [{ path: 'orbit/old.md' }] });
   });
@@ -262,15 +264,18 @@ describe('save_notes', () => {
 
   it('refuses two writes to one path', async () => {
     const client = await clientFor(OWNER.id);
-    const { value } = await call(client, 'save_notes', {
-      writes: [
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
         { action: 'edit', path: 'orbit/plan.md', edits: [{ op: 'append', text: 'a' }] },
         { action: 'edit', path: './orbit/plan.md', edits: [{ op: 'append', text: 'b' }] },
       ],
     });
     expect(value).toMatchObject({
       saved: false,
-      results: [{ status: 'failed' }, { status: 'failed' }],
+      results: [
+        { status: 'skipped' },
+        { status: 'failed', error: { message: expect.stringContaining('change 1 too') } },
+      ],
     });
     expect(await body(OWNER.id, 'orbit/plan.md')).toBe('# Plan\n\nStep one.\n');
   });
@@ -278,13 +283,13 @@ describe('save_notes', () => {
   it('refuses the whole call when one write lands where the caller may not write', async () => {
     const client = await clientFor(FRODO.id);
     await notes.create(FRODO.id, 'mine.md', 'Mine.\n');
-    const { error } = await call(client, 'save_notes', {
-      writes: [
+    const { error } = await call(client, 'apply_changes', {
+      changes: [
         { action: 'edit', path: 'mine.md', edits: [{ op: 'append', text: 'x' }] },
         { action: 'delete', path: 'orbit/plan.md', ownerId: OWNER.id },
       ],
     });
-    expect(error).toMatch(/^\[FORBIDDEN\] write 2 \(orbit\/plan\.md\)/);
+    expect(error).toMatch(/^\[FORBIDDEN\] change 2 \(orbit\/plan\.md\)/);
     expect(await body(FRODO.id, 'mine.md')).toBe('Mine.\n');
     expect(await notes.hasNote(OWNER.id, 'orbit/plan.md')).toBe(true);
   });
@@ -298,8 +303,8 @@ describe('save_notes', () => {
       permission: 'write',
     });
     const client = await clientFor(FRODO.id);
-    const { value } = await call(client, 'save_notes', {
-      writes: [
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
         {
           action: 'edit',
           path: 'orbit/plan.md',
@@ -313,6 +318,174 @@ describe('save_notes', () => {
       results: [{ ownerId: OWNER.id, path: 'orbit/plan.md', status: 'done' }],
     });
     expect(await body(OWNER.id, 'orbit/plan.md')).toContain('From Frodo.');
+  });
+});
+
+describe('apply_changes reorganising', () => {
+  // A folder renamed, its index following it, a subfolder and notes created
+  // in it and the index edited — one call, as an assistant tidying up sends it.
+  beforeEach(async () => {
+    await notes.create(
+      OWNER.id,
+      'crew/erebor/_erebor.md',
+      '# Erebor\n\n## Notas\n- [[crew/erebor/log|Log]]\n',
+    );
+    await notes.create(OWNER.id, 'crew/erebor/log.md', '# Log\n\nBack to [[_erebor]].\n');
+    await notes.create(
+      OWNER.id,
+      'home.md',
+      '# Home\n\n- [[crew/erebor/_erebor|Erebor]]\n- [[log]]\n',
+    );
+  });
+
+  it('moves a folder, renames its index, creates and edits in one call, and says what it left', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
+        { action: 'move', from: 'crew/erebor', to: 'crew/atlas' },
+        { action: 'create_folder', path: 'crew/atlas/archive' },
+        { action: 'create', path: 'crew/atlas/archive/old.md', content: '# Old\n' },
+        {
+          action: 'edit',
+          path: 'crew/atlas/_atlas.md',
+          edits: [{ op: 'append', section: 'Notas', text: '- [[crew/atlas/archive/old|Old]]' }],
+        },
+      ],
+    });
+    const report = value as {
+      saved: boolean;
+      results: Array<Record<string, unknown>>;
+      touched: Array<{ path: string; checksum: string }>;
+      summary: string;
+    };
+    expect(report.saved).toBe(true);
+    expect(report.results[0]).toMatchObject({
+      action: 'move',
+      from: 'crew/erebor',
+      path: 'crew/atlas',
+      status: 'done',
+      moved: expect.arrayContaining([
+        {
+          from: 'crew/erebor/_erebor.md',
+          to: 'crew/atlas/_atlas.md',
+          checksum: expect.any(String),
+        },
+        { from: 'crew/erebor/log.md', to: 'crew/atlas/log.md', checksum: expect.any(String) },
+      ]),
+      linksRewritten: expect.arrayContaining(['home.md', 'crew/atlas/log.md']),
+    });
+    expect(report.results[3]).toMatchObject({ path: 'crew/atlas/_atlas.md', status: 'done' });
+    expect(report.summary).toContain('1 moved (2 notes)');
+
+    expect(await notes.hasNote(OWNER.id, 'crew/erebor/_erebor.md')).toBe(false);
+    expect(await notes.hasNote(OWNER.id, 'crew/atlas/archive/old.md')).toBe(true);
+    expect(await body(OWNER.id, 'crew/atlas/_atlas.md')).toBe(
+      '# Erebor\n\n## Notas\n- [[crew/atlas/log|Log]]\n- [[crew/atlas/archive/old|Old]]\n',
+    );
+    expect(await body(OWNER.id, 'crew/atlas/log.md')).toBe('# Log\n\nBack to [[_atlas]].\n');
+    expect(await body(OWNER.id, 'home.md')).toBe(
+      '# Home\n\n- [[crew/atlas/_atlas|Erebor]]\n- [[log]]\n',
+    );
+
+    // Every checksum handed back is the one stored: nothing needs reading again.
+    const home = report.touched.find((t) => t.path === 'home.md');
+    expect(home?.checksum).toBe((await notes.get(OWNER.id, 'home.md')).checksum);
+    expect(report.touched.map((t) => t.path)).not.toContain('crew/atlas/_atlas.md');
+    expect(report.results[3]!.checksum).toBe(
+      (await notes.get(OWNER.id, 'crew/atlas/_atlas.md')).checksum,
+    );
+  });
+
+  it('lands an edit on a note whose links an earlier move rewrote, with the checksum read before', async () => {
+    const client = await clientFor(OWNER.id);
+    const { checksum } = await notes.get(OWNER.id, 'orbit/_orbit.md');
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
+        { action: 'move', from: 'orbit/plan.md', to: 'orbit/roadmap.md' },
+        {
+          action: 'edit',
+          path: 'orbit/_orbit.md',
+          expectedChecksum: checksum,
+          edits: [{ op: 'append', section: 'Refs', text: '- seen' }],
+        },
+      ],
+    });
+    expect(value).toMatchObject({ saved: true });
+    expect(await body(OWNER.id, 'orbit/_orbit.md')).toBe(
+      '# Orbit\n\n## Notas\n- [[orbit/roadmap|Plan]]\n\n## Refs\n- seen\n',
+    );
+  });
+
+  it('checks every change against what the ones before it leave, and writes nothing on a miss', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
+        { action: 'move', from: 'crew/erebor', to: 'crew/atlas' },
+        { action: 'edit', path: 'crew/erebor/log.md', edits: [{ op: 'append', text: 'x' }] },
+        { action: 'move', from: 'home.md', to: 'orbit/plan.md' },
+        { action: 'create', path: 'crew/atlas/log.md', content: 'x' },
+      ],
+    });
+    expect(value).toMatchObject({
+      saved: false,
+      results: [
+        { status: 'skipped' },
+        { status: 'failed', error: { code: 'NOT_FOUND' } },
+        { status: 'failed', error: { code: 'ALREADY_EXISTS' } },
+        { status: 'failed', error: { code: 'ALREADY_EXISTS' } },
+      ],
+    });
+    expect(await notes.hasNote(OWNER.id, 'crew/erebor/_erebor.md')).toBe(true);
+    expect(await notes.hasNote(OWNER.id, 'home.md')).toBe(true);
+  });
+
+  it('refuses a folder move whose notes would land on notes already there, before moving any', async () => {
+    await notes.create(OWNER.id, 'crew/atlas/log.md', '# Taken\n');
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'apply_changes', {
+      changes: [{ action: 'move', from: 'crew/erebor', to: 'crew/atlas' }],
+    });
+    expect(value).toMatchObject({
+      saved: false,
+      results: [{ status: 'failed', error: { code: 'ALREADY_EXISTS' } }],
+    });
+    expect(await notes.hasNote(OWNER.id, 'crew/erebor/log.md')).toBe(true);
+  });
+
+  it('move on its own renames the index too and reports the rewritten links', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'move', { from: 'crew/erebor', to: 'crew/atlas' });
+    expect(value).toMatchObject({
+      path: 'crew/atlas',
+      moved: expect.arrayContaining([
+        expect.objectContaining({ from: 'crew/erebor/_erebor.md', to: 'crew/atlas/_atlas.md' }),
+      ]),
+      linksRewritten: expect.arrayContaining(['home.md']),
+    });
+    expect(await notes.hasNote(OWNER.id, 'crew/atlas/_atlas.md')).toBe(true);
+  });
+
+  it('keeps an index already named after the new folder, and the old one beside it', async () => {
+    await notes.create(OWNER.id, 'crew/erebor/_atlas.md', '# Atlas\n');
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'apply_changes', {
+      changes: [{ action: 'move', from: 'crew/erebor', to: 'crew/atlas' }],
+    });
+    expect(value).toMatchObject({ saved: true });
+    expect(await body(OWNER.id, 'crew/atlas/_atlas.md')).toBe('# Atlas\n');
+    expect(await notes.hasNote(OWNER.id, 'crew/atlas/_erebor.md')).toBe(true);
+  });
+
+  it('still answers to save_notes, its old name', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'save_notes', {
+      writes: [
+        { action: 'move', from: 'home.md', to: 'start.md' },
+        { action: 'create', path: 'orbit/new.md', content: '# New\n' },
+      ],
+    });
+    expect(value).toMatchObject({ saved: true, summary: expect.stringContaining('1 created') });
+    expect(await notes.hasNote(OWNER.id, 'start.md')).toBe(true);
   });
 });
 
@@ -350,25 +523,25 @@ describe('the checks the review asked for', () => {
       edits: [{ op: 'append', text: 'x' }],
     });
     expect(edit.error).toMatch(/^\[FORBIDDEN\].*shared with you/);
-    const save = await call(client, 'save_notes', {
-      writes: [{ action: 'create', path: 'orbit/new.md', content: 'x' }],
+    const save = await call(client, 'apply_changes', {
+      changes: [{ action: 'create', path: 'orbit/new.md', content: 'x' }],
     });
-    expect(save.error).toMatch(/^\[FORBIDDEN\] write 1 \(orbit\/new\.md\).*shared with you/);
+    expect(save.error).toMatch(/^\[FORBIDDEN\] change 1 \(orbit\/new\.md\).*shared with you/);
     expect(await notes.hasNote(OWNER.id, 'orbit/new.md')).toBe(false);
   });
 
-  it('save_notes refuses a read-only key', async () => {
+  it('apply_changes refuses a read-only key', async () => {
     const client = await clientFor(OWNER.id, { readOnly: true });
-    const { error } = await call(client, 'save_notes', {
-      writes: [{ action: 'create', path: 'orbit/new.md', content: 'x' }],
+    const { error } = await call(client, 'apply_changes', {
+      changes: [{ action: 'create', path: 'orbit/new.md', content: 'x' }],
     });
     expect(error).toMatch(/^\[FORBIDDEN\]/);
   });
 
   it('refuses a write inside a folder the same call deletes, and a recursive delete of nothing', async () => {
     const client = await clientFor(OWNER.id);
-    const { value } = await call(client, 'save_notes', {
-      writes: [
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
         { action: 'delete', path: 'orbit', recursive: true },
         { action: 'edit', path: 'orbit/_orbit.md', edits: [{ op: 'append', text: 'x' }] },
         { action: 'delete', path: 'nowhere', recursive: true },
@@ -378,7 +551,7 @@ describe('the checks the review asked for', () => {
       saved: false,
       results: [
         { status: 'skipped' },
-        { status: 'failed', error: { message: expect.stringContaining('which write 1 deletes') } },
+        { status: 'failed', error: { message: expect.stringContaining('deleted by change 1') } },
         { status: 'failed', error: { code: 'NOT_FOUND' } },
       ],
     });
@@ -387,8 +560,8 @@ describe('the checks the review asked for', () => {
 
   it('reports an edit to a missing note as NOT_FOUND', async () => {
     const client = await clientFor(OWNER.id);
-    const { value } = await call(client, 'save_notes', {
-      writes: [{ action: 'edit', path: 'orbit/gone.md', edits: [{ op: 'append', text: 'x' }] }],
+    const { value } = await call(client, 'apply_changes', {
+      changes: [{ action: 'edit', path: 'orbit/gone.md', edits: [{ op: 'append', text: 'x' }] }],
     });
     expect(value).toMatchObject({ saved: false, results: [{ error: { code: 'NOT_FOUND' } }] });
   });
@@ -401,7 +574,7 @@ describe('the checks the review asked for', () => {
       await notes.update(OWNER.id, 'orbit/plan.md', '# Plan\n\nSomeone else.\n');
       return plan;
     };
-    const report = await saveNotes(
+    const report = await applyChanges(
       racing,
       OWNER.id,
       [
@@ -502,8 +675,8 @@ describe('the note size limit', () => {
 
   it('writes nothing in a batch where one note would be too long', async () => {
     const client = await clientFor(OWNER.id);
-    const { value } = await call(client, 'save_notes', {
-      writes: [
+    const { value } = await call(client, 'apply_changes', {
+      changes: [
         { action: 'create', path: 'orbit/ok.md', content: 'Fine.' },
         { action: 'replace', path: 'orbit/plan.md', content: long(NOTE_MAX_CHARS + 1) },
       ],
@@ -552,8 +725,8 @@ describe('the crawl history', () => {
   it('keeps what an assistant wrote with the crawl it read, for the Sentinel to replay', async () => {
     const client = await clientFor(OWNER.id);
     await call(client, 'gather_context', { text: 'Plan' });
-    await call(client, 'save_notes', {
-      writes: [
+    await call(client, 'apply_changes', {
+      changes: [
         { action: 'create', path: 'orbit/lore.md', content: '# Lore' },
         { action: 'edit', path: 'orbit/plan.md', edits: [{ op: 'append', text: 'x' }] },
       ],
@@ -640,8 +813,8 @@ describe('place_note', () => {
       title: 'Yearly close',
       text: 'Closing the books after the audit.',
     });
-    await call(client, 'save_notes', {
-      writes: [{ action: 'create', path: 'ledger/close.md', content: '# Yearly close' }],
+    await call(client, 'apply_changes', {
+      changes: [{ action: 'create', path: 'ledger/close.md', content: '# Yearly close' }],
     });
     const history = new CrawlHistoryService({ db: database.db, retentionDays: 30 });
     const [latest] = await history.list(OWNER.id);

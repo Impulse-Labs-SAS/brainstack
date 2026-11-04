@@ -33,7 +33,7 @@
     "geist": "^1.5.1",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.475.0",
-    "next": "^15.5.27",
+    "next": "^15.5.29",
     "react": "^19.2.0",
     "react-aria-components": "^1.13.0",
     "react-dom": "^19.2.0",
@@ -47,7 +47,7 @@
     "tailwind-variants": "^3.2.2",
     "three": "^0.180.0",
     "unist-util-visit": "^5.0.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/d3-hierarchy": "^3.1.7",
@@ -55,7 +55,7 @@
     "@types/react-dom": "^19.2.0",
     "@types/three": "^0.180.0",
     "autoprefixer": "^10.4.20",
-    "eslint-config-next": "^15.5.27",
+    "eslint-config-next": "^15.5.29",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.18",
     "tailwindcss-react-aria-components": "^1.2.0"
