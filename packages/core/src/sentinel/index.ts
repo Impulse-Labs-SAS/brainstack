@@ -1,6 +1,7 @@
 // Sentinel — BrainStack's engine for working with notes: it reads (the
-// context behind `gather_context` and every search) and writes (edits that say
-// what changes instead of resending a note whole). It is part of BrainStack,
+// context behind `gather_context` and every search), places (where a new note
+// goes) and writes (edits that say what changes instead of resending a note
+// whole, and plans of changes checked before any of them runs). It is part of BrainStack,
 // not a product of its own; the entry point `@brainstack/core/sentinel` only
 // keeps it in one place.
 
@@ -43,3 +44,14 @@ export {
   type NoteEdit,
   type Section,
 } from './edit.js';
+export {
+  ChangePlan,
+  NotePlanError,
+  indexRenameFor,
+  summarizeChanges,
+  touchedByMoves,
+  type ChangeOutcome,
+  type CheckedChange,
+  type PlanLookup,
+  type PlannedChange,
+} from './plan.js';
