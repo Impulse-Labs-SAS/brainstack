@@ -5,17 +5,15 @@
 // link them from its index and adjust three others used to spend one round
 // trip per step, each a full turn of the model, and then read the vault again
 // to learn what the moves had done. Here the whole plan arrives at once and is
-// checked before anything is written: every path is valid, every note to
-// change exists, every destination is free, every edit's anchor is there,
-// every checksum is current. One failure and nothing is written — the answer
-// says which changes would have failed and why, so the plan can be fixed and
-// sent again whole.
+// checked before anything is written. One failure and nothing is written —
+// the answer says which changes would have failed and why, so the plan can be
+// fixed and sent again whole.
 //
-// Changes run in the order given, and each is checked against what the ones
-// before it leave behind: an edit of `b/_b.md` after the move that renames
-// `a/` to `b/` is checked against `a/_a.md`, which is where that note still is
-// while the plan is being checked. A note may be written by one change only
-// (moves aside): every change to it goes in one edit.
+// What a plan means — the order, what each change finds where the ones before
+// it left things, which note each change writes — is Sentinel's
+// (`@brainstack/core/sentinel`, plan.ts). This file runs it against the store:
+// it answers the planner's lookups, checks each edit's anchors and each note's
+// size against its stored body, and writes.
 //
 // There is no transaction to make the writes themselves atomic (the Neon HTTP
 // driver has none). They run in order, and an edit lands only on the version
@@ -40,16 +38,19 @@
 
 import { extractFrontmatter, normalizeRelativePath, type Frontmatter } from '@brainstack/core';
 import {
+  ChangePlan,
   fitsNoteLimit,
   HOW_TO_SPLIT,
   noteSize,
+  summarizeChanges,
+  touchedByMoves,
   type NoteEdit,
   type NoteSize,
 } from '@brainstack/core/sentinel';
 
 import { AppError, describeError, toAppError } from '../lib/errors.js';
 
-import { indexRenameFor, type NoteService, type PlannedEdit } from './NoteService.js';
+import type { NoteService, PlannedEdit } from './NoteService.js';
 
 /** Changes accepted in one call, at most. */
 export const MAX_CHANGES = 25;
@@ -146,11 +147,11 @@ export async function applyChanges(
   };
 
   // -- Phase one: check everything, in order, write nothing -----------------
-  const plan = new Plan(notes, maxChars);
+  const plan = new ChangePlan(notes);
   const checked: Array<{ ok: Checked } | { error: ChangeResult['error'] }> = [];
   for (const [i, change] of changes.entries()) {
     try {
-      checked.push({ ok: await plan.check(change, i) });
+      checked.push({ ok: await check(notes, plan, change, i, maxChars) });
     } catch (err) {
       checked.push({ error: failure(err) });
     }
@@ -160,7 +161,7 @@ export async function applyChanges(
       const r = checked[i]!;
       return 'error' in r ? { ...head(c), status: 'failed', error: r.error } : head(c);
     });
-    return { saved: false, results, touched: [], summary: summarize(results) };
+    return { saved: false, results, touched: [], summary: summarizeChanges(results) };
   }
 
   // -- Phase two: write, in order --------------------------------------------
@@ -185,221 +186,63 @@ export async function applyChanges(
     }
   }
   const touched = await touchedBy(notes, viewerId, changes, results);
-  return { saved, results, touched, summary: summarize(results) };
+  return { saved, results, touched, summary: summarizeChanges(results) };
 }
 
 const key = (owner: string, path: string) => `${owner}\u0000${path}`;
-const under = (path: string, folder: string) => path === folder || path.startsWith(`${folder}/`);
-
 /**
- * The vault as the plan will have left it, change by change, without writing
- * any of it: what moved where, what was created or deleted, and which note
- * each change writes. Asked about a path, it answers for the state after the
- * changes checked so far.
+ * One change, checked: the plan says whether it can run and which note it
+ * means; the store says whether an edit's anchors are there, whether a
+ * checksum is current and whether the note stays within its size.
  */
-class Plan {
-  private readonly moves: Array<{ owner: string; from: string; to: string }> = [];
-  private readonly created = new Map<string, number>();
-  private readonly createdFolders = new Set<string>();
-  private readonly deleted: Array<{ owner: string; path: string; recursive: boolean; at: number }> =
-    [];
-  /** The note each content change writes, by its path before the plan: a note is written once. */
-  private readonly written = new Map<string, number>();
-
-  constructor(
-    private readonly notes: NoteService,
-    private readonly maxChars: number | undefined,
-  ) {}
-
-  /**
-   * Where a path named now was before the plan began, following the moves
-   * back; null when nothing was there — it is where something moved away from.
-   */
-  private origin(owner: string, path: string): string | null {
-    let p = path;
-    for (let i = this.moves.length - 1; i >= 0; i--) {
-      const m = this.moves[i]!;
-      if (m.owner !== owner) continue;
-      if (under(p, m.to)) p = m.from + p.slice(m.to.length);
-      else if (under(p, m.from)) return null;
+async function check(
+  notes: NoteService,
+  plan: ChangePlan,
+  change: Change,
+  i: number,
+  maxChars: number | undefined,
+): Promise<Checked> {
+  const limit = (after: NoteSize, before?: NoteSize) => {
+    if (maxChars !== undefined && !fitsNoteLimit(after, before, maxChars)) {
+      throw tooLong(change.path, after, before, maxChars);
     }
-    return p;
-  }
-
-  /** The change, by number, that deleted this note or a folder above it. */
-  private deletedBy(owner: string, origin: string): number | undefined {
-    const d = this.deleted.find(
-      (x) => x.owner === owner && (x.recursive ? under(origin, x.path) : origin === x.path),
-    );
-    return d?.at;
-  }
-
-  private async noteExists(owner: string, path: string): Promise<boolean> {
-    if (!path.toLowerCase().endsWith('.md')) return false; // a folder or an attachment
-    const origin = this.origin(owner, path);
-    if (origin === null) return this.created.has(key(owner, `#${path}`));
-    if (this.deletedBy(owner, origin) !== undefined) return false;
-    if (this.created.has(key(owner, origin))) return true;
-    return this.notes.hasNote(owner, origin);
-  }
-
-  /** A note, or a folder — one created in this plan, or one implied by a note in it. */
-  private async anythingAt(owner: string, path: string): Promise<boolean> {
-    const origin = this.origin(owner, path);
-    if (origin === null) return false;
-    if (this.deletedBy(owner, origin) !== undefined) return false;
-    const mine = (k: string) =>
-      k.startsWith(`${owner}\u0000`) && under(k.slice(owner.length + 1), origin);
-    if ([...this.created.keys()].some(mine) || [...this.createdFolders].some(mine)) return true;
-    return this.notes.exists(owner, origin);
-  }
-
-  /** The note a content change writes, as it was named before the plan; refused if another change writes it too. */
-  private claim(change: Change, i: number): string {
-    const path = normalizeRelativePath(change.path);
-    const origin = this.origin(change.owner, path) ?? `#${path}`;
-    const k = key(change.owner, origin);
-    const earlier = this.written.get(k);
-    if (earlier !== undefined) {
-      throw new AppError(
-        `${change.path} is written by change ${earlier + 1} too; put every change to it in one edit`,
-        'INVALID_INPUT',
-        400,
+  };
+  switch (change.action) {
+    case 'create':
+      // With a frontmatter argument the content is stored whole as the body,
+      // a block of its own included; without one, its block is split off.
+      normalizeRelativePath(change.path);
+      limit(
+        noteSize(change.frontmatter ? change.content : extractFrontmatter(change.content).body),
       );
+      await plan.check(change, i);
+      return { change };
+    case 'edit': {
+      const { origin } = await plan.check(change, i);
+      const planned = await notes.planEdit(change.owner, origin!, change.edits, {
+        ...(change.expectedChecksum ? { expectedChecksum: change.expectedChecksum } : {}),
+      });
+      limit(planned.size.after, planned.size.before);
+      return { change, plan: planned };
     }
-    const gone = this.deletedBy(change.owner, origin);
-    if (gone !== undefined) {
-      throw new AppError(`${change.path} is deleted by change ${gone + 1}`, 'INVALID_INPUT', 400);
-    }
-    this.written.set(k, i);
-    return origin;
-  }
-
-  private limit(path: string, after: NoteSize, before?: NoteSize) {
-    if (this.maxChars !== undefined && !fitsNoteLimit(after, before, this.maxChars)) {
-      throw tooLong(path, after, before, this.maxChars);
-    }
-  }
-
-  async check(change: Change, i: number): Promise<Checked> {
-    // An empty or climbing path is refused before any lookup.
-    const path = normalizeRelativePath(change.path);
-    const { owner } = change;
-    switch (change.action) {
-      case 'create': {
-        // With a frontmatter argument the content is stored whole as the body,
-        // a block of its own included; without one, its block is split off.
-        this.limit(
-          change.path,
-          noteSize(change.frontmatter ? change.content : extractFrontmatter(change.content).body),
+    case 'replace': {
+      const { origin } = await plan.check(change, i);
+      const current = await notes.get(change.owner, origin!);
+      // A stale read first: the size is judged against the version the caller
+      // read, and a caller working from an old one needs to hear that.
+      if (change.expectedChecksum && change.expectedChecksum !== current.checksum) {
+        throw new AppError(
+          `${change.path} was changed by someone else since you read it`,
+          'CHANGED',
+          409,
         );
-        if (await this.noteExists(owner, path)) {
-          throw new AppError(`${change.path} already exists`, 'ALREADY_EXISTS', 409);
-        }
-        const origin = this.claim(change, i);
-        this.created.set(key(owner, origin), i);
-        return { change };
       }
-      case 'edit': {
-        // A note created earlier in the plan was claimed by its create.
-        const origin = this.claim(change, i);
-        if (origin.startsWith('#'))
-          throw new AppError(`${change.path} does not exist`, 'NOT_FOUND', 404);
-        const plan = await this.notes.planEdit(owner, origin, change.edits, {
-          ...(change.expectedChecksum ? { expectedChecksum: change.expectedChecksum } : {}),
-        });
-        this.limit(change.path, plan.size.after, plan.size.before);
-        return { change, plan };
-      }
-      case 'replace': {
-        const origin = this.claim(change, i);
-        if (origin.startsWith('#'))
-          throw new AppError(`${change.path} does not exist`, 'NOT_FOUND', 404);
-        const current = await this.notes.get(owner, origin);
-        // A stale read first: the size is judged against the version the caller
-        // read, and a caller working from an old one needs to hear that.
-        if (change.expectedChecksum && change.expectedChecksum !== current.checksum) {
-          throw new AppError(
-            `${change.path} was changed by someone else since you read it`,
-            'CHANGED',
-            409,
-          );
-        }
-        this.limit(
-          change.path,
-          noteSize(extractFrontmatter(change.content).body),
-          noteSize(current.body),
-        );
-        return { change, baseChecksum: current.checksum };
-      }
-      case 'delete': {
-        // A recursive delete may name a folder, which `exists` answers for too.
-        const found = change.recursive
-          ? await this.anythingAt(owner, path)
-          : await this.noteExists(owner, path);
-        if (!found) throw new AppError(`${change.path} does not exist`, 'NOT_FOUND', 404);
-        const origin = this.claim(change, i);
-        if (change.recursive) {
-          const inside = [...this.written.entries()].find(
-            ([k]) =>
-              k.startsWith(`${owner}\u0000`) && k.slice(owner.length + 1).startsWith(`${origin}/`),
-          );
-          if (inside) {
-            throw new AppError(
-              `${change.path} holds a note change ${inside[1] + 1} writes; deleting it would undo that`,
-              'INVALID_INPUT',
-              400,
-            );
-          }
-        }
-        this.deleted.push({ owner, path: origin, recursive: change.recursive ?? false, at: i });
-        return { change };
-      }
-      case 'create_folder': {
-        const origin = this.origin(owner, path) ?? `#${path}`;
-        this.createdFolders.add(key(owner, origin));
-        return { change };
-      }
-      case 'move': {
-        const to = normalizeRelativePath(change.to);
-        if (to === path) return { change };
-        if (to.startsWith(`${path}/`)) {
-          throw new AppError(`can't move ${change.path} inside itself`, 'INVALID_INPUT', 400);
-        }
-        const isNote = await this.noteExists(owner, path);
-        if (!isNote && !(await this.anythingAt(owner, path))) {
-          throw new AppError(`${change.path} does not exist`, 'NOT_FOUND', 404);
-        }
-        if (await this.noteExists(owner, to)) {
-          throw new AppError(`${change.to} already exists`, 'ALREADY_EXISTS', 409);
-        }
-        if (!isNote) {
-          // A folder's notes must each find their place free, or the move stops
-          // halfway through with the folder split across two places.
-          const origin = this.origin(owner, path);
-          const inside = origin ? await this.notes.notesUnder(owner, origin) : [];
-          for (const n of inside) {
-            const dest = to + n.slice(origin!.length);
-            if (await this.noteExists(owner, dest)) {
-              throw new AppError(`${dest} already exists`, 'ALREADY_EXISTS', 409);
-            }
-          }
-        }
-        this.moves.push({ owner, from: path, to });
-        if (!isNote) {
-          // The index follows the folder's name, as NoteService.move does it.
-          const rename = indexRenameFor(path, to);
-          if (
-            rename &&
-            (await this.noteExists(owner, rename.from)) &&
-            !(await this.noteExists(owner, rename.to))
-          ) {
-            this.moves.push({ owner, ...rename });
-          }
-        }
-        return { change };
-      }
+      limit(noteSize(extractFrontmatter(change.content).body), noteSize(current.body));
+      return { change, baseChecksum: current.checksum };
     }
+    default:
+      await plan.check(change, i);
+      return { change };
   }
 }
 
@@ -484,78 +327,19 @@ async function write(
   }
 }
 
-/**
- * The notes moves rewrote that no change named, at their final path, with
- * their checksum now. A note a later change wrote carries its own checksum,
- * and one a later change deleted is gone.
- */
+/** The notes moves rewrote that no change named, with their checksum now. */
 async function touchedBy(
   notes: NoteService,
   viewerId: string,
   changes: readonly Change[],
   results: readonly ChangeResult[],
 ): Promise<ChangeReport['touched']> {
-  const pending = new Map<string, Set<string>>(); // owner -> paths
-  for (const [i, r] of results.entries()) {
-    if (r.status !== 'done') continue;
-    const owner = changes[i]!.owner;
-    const set = pending.get(owner) ?? new Set<string>();
-    pending.set(owner, set);
-    if (r.action === 'move') {
-      // Follow what this move carried: a rewritten note may itself move later.
-      const map = new Map((r.moved ?? []).map((m) => [m.from, m.to]));
-      for (const p of [...set]) {
-        if (map.has(p)) {
-          set.delete(p);
-          set.add(map.get(p)!);
-        }
-      }
-      for (const p of r.linksRewritten ?? []) set.add(p);
-    } else if (r.action === 'delete') {
-      for (const p of [...set]) {
-        if ((r.deleted ?? []).includes(p)) set.delete(p);
-      }
-    } else if (r.action !== 'create_folder') {
-      set.delete(r.path);
-    }
-  }
   const out: ChangeReport['touched'] = [];
-  for (const [owner, set] of pending) {
-    if (set.size === 0) continue;
-    const sums = await notes.checksums(owner, [...set]);
+  for (const [owner, paths] of touchedByMoves(changes, results)) {
+    const sums = await notes.checksums(owner, paths);
     for (const [path, checksum] of sums) {
       out.push({ path, checksum, ...(owner !== viewerId ? { ownerId: owner } : {}) });
     }
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-/** "1 folder moved (6 notes), 3 notes' links rewritten, 2 notes created, 1 edited". */
-function summarize(results: readonly ChangeResult[]): string {
-  const done = results.filter((r) => r.status === 'done');
-  const count = (a: ChangeResult['action']) => done.filter((r) => r.action === a).length;
-  const parts: string[] = [];
-  const moves = done.filter((r) => r.action === 'move');
-  if (moves.length) {
-    const notesMoved = moves.reduce((n, r) => n + (r.moved?.length ?? 0), 0);
-    parts.push(`${moves.length} moved (${notesMoved} note${notesMoved === 1 ? '' : 's'})`);
-    const rewritten = new Set(moves.flatMap((r) => r.linksRewritten ?? [])).size;
-    if (rewritten) parts.push(`links rewritten in ${rewritten} note${rewritten === 1 ? '' : 's'}`);
-  }
-  const folders = count('create_folder');
-  if (folders) parts.push(`${folders} folder${folders === 1 ? '' : 's'} created`);
-  for (const [a, word] of [
-    ['create', 'created'],
-    ['edit', 'edited'],
-    ['replace', 'rewritten'],
-    ['delete', 'deleted'],
-  ] as const) {
-    const n = count(a);
-    if (n) parts.push(`${n} ${word}`);
-  }
-  const failed = results.filter((r) => r.status === 'failed').length;
-  const skipped = results.filter((r) => r.status === 'skipped').length;
-  if (failed) parts.push(`${failed} failed`);
-  if (skipped) parts.push(`${skipped} not run`);
-  return parts.length ? parts.join(', ') : 'nothing changed';
 }

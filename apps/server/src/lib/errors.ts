@@ -6,7 +6,7 @@ import {
   PgNoteChangedError,
   PgNoteNotFoundError,
 } from '@brainstack/core/pg';
-import { NoteEditError } from '@brainstack/core/sentinel';
+import { NoteEditError, NotePlanError } from '@brainstack/core/sentinel';
 
 export class AppError extends Error {
   override readonly name = 'AppError';
@@ -51,6 +51,11 @@ export function toAppError(err: unknown): AppError | null {
   // An edit whose anchor is missing or ambiguous: the message says which, for
   // the caller to fix and resend.
   if (err instanceof NoteEditError) return new AppError(err.message, 'INVALID_INPUT', 400);
+  // A plan of changes that cannot run as written: which change, and why.
+  if (err instanceof NotePlanError) {
+    const status = { NOT_FOUND: 404, ALREADY_EXISTS: 409, INVALID_INPUT: 400 }[err.code];
+    return new AppError(err.message, err.code, status);
+  }
   return null;
 }
 

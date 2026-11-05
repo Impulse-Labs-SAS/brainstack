@@ -37,7 +37,13 @@ import {
   type MentionTerm,
   type NoteBodySource,
 } from '@brainstack/core';
-import { applyEdits, noteSize, type NoteEdit, type NoteSize } from '@brainstack/core/sentinel';
+import {
+  applyEdits,
+  indexRenameFor,
+  noteSize,
+  type NoteEdit,
+  type NoteSize,
+} from '@brainstack/core/sentinel';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 
 import { MAX_FRONTMATTER_CHARS, MAX_NOTE_CHARS } from '../config/limits.js';
@@ -909,7 +915,8 @@ export class NoteService {
    *
    * Only when the old index is there and the new name is free: a folder that
    * already has an index under its new name keeps both, and nothing is
-   * overwritten. `indexRenameFor` is the same rule, for a batch to plan with.
+   * overwritten. Sentinel's `indexRenameFor` names the rename, and its planner
+   * expects exactly this rule when it checks a plan.
    */
   private async renameFolderIndex(
     ownerId: string,
@@ -1895,18 +1902,4 @@ function sortTree(node: TreeNode): void {
     return a.name.localeCompare(b.name);
   });
   for (const child of node.children) sortTree(child);
-}
-
-/**
- * The rename a folder's index note takes when the folder moves: `a/luna` to
- * `b/simon` takes `b/simon/_luna.md` (where the folder move left it) to
- * `b/simon/_simon.md`. Null when the folder keeps its name. Logical paths.
- */
-export function indexRenameFor(from: string, to: string): { from: string; to: string } | null {
-  const base = (p: string) => p.split('/').filter(Boolean).pop() ?? '';
-  const oldName = base(from);
-  const newName = base(to);
-  if (!oldName || !newName || oldName === newName) return null;
-  const folder = to.replace(/\/+$/, '');
-  return { from: `${folder}/_${oldName}.md`, to: `${folder}/_${newName}.md` };
 }
