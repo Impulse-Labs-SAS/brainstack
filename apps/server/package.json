@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@brainstack/core": "workspace:*",
-    "@hono/node-server": "^2.1.4",
+    "@hono/node-server": "^2.1.6",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@oslojs/encoding": "^1.1.0",
     "@oslojs/otp": "^1.1.0",
@@ -25,7 +25,7 @@
     "arctic": "^3.7.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "nanoid": "^5.1.16",
     "nodemailer": "^10.3.1",
     "pino": "^10.3.1",
