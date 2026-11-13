@@ -15,17 +15,9 @@
 // export in it, which the runtime answers as 502. Nothing to resolve, nothing
 // to get wrong.
 
-import { ensurePgSchema, openPgDatabase } from '@brainstack/core/pg';
-import { sql } from 'drizzle-orm';
-
-import { API_BASE_PATH } from '../../apps/server/src/config/api.js';
+import { createBrainStack } from '../../apps/server/src/boot.js';
 import { loadConfig } from '../../apps/server/src/config/env.js';
-import { buildApp } from '../../apps/server/src/http/app.js';
 import { getLogger } from '../../apps/server/src/lib/logger.js';
-import { buildMcpServer } from '../../apps/server/src/mcp/server.js';
-import { purgeExpired } from '../../apps/server/src/services/Maintenance.js';
-import { backfillOwnerId } from '../../apps/server/src/services/OwnerBackfill.js';
-import { buildServices } from '../../apps/server/src/wiring.js';
 
 import type { Config } from '@netlify/functions';
 import type { Hono } from 'hono';
@@ -52,107 +44,18 @@ export function getApp(): Promise<Hono<never>> {
 }
 
 async function boot(): Promise<Hono<never>> {
-  const cfg = loadConfig();
-  const logger = getLogger();
-
-  const { db } = openPgDatabase(cfg.DATABASE_URL);
-
-  /*
-   * Applying migrations here rather than from a deploy step or an admin
-   * endpoint: every statement is `IF NOT EXISTS` and the applied ones are
-   * recorded, so this is a couple of queries on a warm schema and the right
-   * ones exactly once on a new database. It also means a deploy cannot land
-   * with code ahead of its schema — the alternative is remembering to call
-   * something after every deploy, and forgetting once is an outage.
-   */
-  await ensurePgSchema(db);
-
-  const services = buildServices({
-    db,
-    logger,
-    publicOrigin: cfg.PUBLIC_ORIGIN,
+  const { app } = await createBrainStack({
+    config: loadConfig(),
+    logger: getLogger(),
     // One origin serves both, which is what keeps the session cookie
     // first-party and takes CORS out of the picture entirely.
-    appOrigin: cfg.PUBLIC_ORIGIN,
-    authorizedEmails: cfg.authorizedEmails,
-    apiBasePath: API_BASE_PATH,
-    email: cfg.email,
-    openSignup: cfg.OPEN_SIGNUP,
-    googleClientId: cfg.GOOGLE_OAUTH_CLIENT_ID,
-    googleClientSecret: cfg.GOOGLE_OAUTH_CLIENT_SECRET,
-    googleRedirectUri: cfg.GOOGLE_OAUTH_REDIRECT_URI,
-    crawlHistoryDays: cfg.CRAWL_HISTORY_DAYS,
-  });
-
-  // Turning the history off, or shortening it, takes effect now rather than
-  // at the next crawl.
-  await services.crawls.applyRetention();
-  if (!services.crawls.enabled)
-    logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
-
-  // No process outlives a request here, so expired sessions, links and OAuth
-  // rows are cleared whenever a container starts.
-  // Housekeeping never stands between the server and its first request: a
-  // purge that fails is logged and tried again later.
-  await purgeExpired(db, { logger }).catch((err: unknown) =>
-    logger.warn({ err }, 'purging expired rows failed at startup'),
-  );
-
-  // Notes written before ownership existed belong to nobody and are listed by
-  // nobody. Claiming them before the first listing keeps them from vanishing.
-  const backfill = await backfillOwnerId(db, { logger });
-  if (!backfill.skipped) {
-    logger.info({ notesUpdated: backfill.notesUpdated }, 'claimed notes that had no owner');
-  }
-
-  return buildApp({
-    logger,
-    ping: async () => {
-      await db.execute(sql`select 1`);
-    },
-    auth: services.auth,
-    apiKeys: services.apiKeys,
-    notes: services.notes,
-    search: services.search,
-    sharing: services.sharing,
-    invites: services.invites,
-    crossOwner: services.crossOwner,
-    crawls: services.crawls,
-    totp: services.totp,
-    ...(services.google ? { google: services.google } : {}),
-    resolveUserForApiKey: services.resolveUserForApiKey,
-    rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
+    sameOrigin: true,
     // Netlify's edge writes the client address into its own header.
     trustedProxy: 'netlify',
-    /*
-     * Derived from the origin rather than NODE_ENV. A Secure cookie only means
-     * anything over https and PUBLIC_ORIGIN says so directly; setting
-     * NODE_ENV=production on Netlify would also apply to the build, where it
-     * makes pnpm skip devDependencies and the build fails.
-     */
-    secureCookies: cfg.PUBLIC_ORIGIN.startsWith('https://'),
-    // Same origin, so there is no cross-origin request to allow.
-    corsOrigins: [],
-    appHome: cfg.PUBLIC_ORIGIN,
-    // MCP hosts (claude.ai, Claude Code, Cursor) authenticate via OAuth: the
-    // `.well-known` documents, /api/oauth/* and provider-issued tokens all
-    // hang off this. The issuer is the configured origin, never the request's.
-    oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
-    basePath: API_BASE_PATH,
-    buildMcpServer: (principal) =>
-      buildMcpServer({
-        notes: services.notes,
-        search: services.search,
-        sharing: services.sharing,
-        // `list_links` masks backlink sources the caller cannot read, and
-        // needs the same cross-owner reader the app itself gets above.
-        crossOwner: services.crossOwner,
-        auth: services.auth,
-        crawls: services.crawls,
-        logger,
-        principal,
-      }),
-  }) as unknown as Hono<never>;
+    // No process outlives a request here, so expired rows are purged when a
+    // container starts, which createBrainStack does on every boot.
+  });
+  return app as unknown as Hono<never>;
 }
 
 export default async (req: Request): Promise<Response> => {

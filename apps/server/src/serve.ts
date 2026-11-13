@@ -5,120 +5,27 @@
 // in the way: this listens on its own port, the web app runs on another, and
 // CORS lets them talk.
 //
-// Boot order matters. The schema is built before anything queries it, and the
-// owner backfill runs before the first listing, so notes written before
-// ownership existed are not invisible on the first page load.
+// What it boots is `createBrainStack`, shared with the Netlify function; this
+// file only adds what a long-lived process needs: a port, an hourly purge and
+// a clean shutdown.
 
 import { serve } from '@hono/node-server';
-import { ensurePgSchema, openPgDatabase } from '@brainstack/core/pg';
-import { sql } from 'drizzle-orm';
 
-import { API_BASE_PATH } from './config/api.js';
+import { createBrainStack } from './boot.js';
 import { loadConfig } from './config/env.js';
-import { buildApp } from './http/app.js';
 import { getLogger } from './lib/logger.js';
-import { buildMcpServer } from './mcp/server.js';
-import { purgeExpired } from './services/Maintenance.js';
-import { backfillOwnerId } from './services/OwnerBackfill.js';
-import { buildServices } from './wiring.js';
 
 async function main(): Promise<void> {
-  const cfg = loadConfig();
+  const config = loadConfig();
   const logger = getLogger();
 
-  const { db, close: closeDb } = openPgDatabase(cfg.DATABASE_URL);
-  await ensurePgSchema(db);
+  const { app, purgeExpired, close: closeDb } = await createBrainStack({ config, logger });
 
-  const services = buildServices({
-    db,
-    logger,
-    publicOrigin: cfg.PUBLIC_ORIGIN,
-    // The web app runs on its own port in development.
-    appOrigin: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
-    authorizedEmails: cfg.authorizedEmails,
-    // Verification and reset links point at endpoints, which sit behind it.
-    apiBasePath: API_BASE_PATH,
-    email: cfg.email,
-    openSignup: cfg.OPEN_SIGNUP,
-    googleClientId: cfg.GOOGLE_OAUTH_CLIENT_ID,
-    googleClientSecret: cfg.GOOGLE_OAUTH_CLIENT_SECRET,
-    googleRedirectUri: cfg.GOOGLE_OAUTH_REDIRECT_URI,
-    crawlHistoryDays: cfg.CRAWL_HISTORY_DAYS,
-  });
-
-  // Said once, at boot, so whoever runs the instance knows what it cannot do.
-  if (!services.auth.canSendEmail) {
-    logger.warn(
-      'no email configured (RESEND_API_KEY or SMTP_HOST, plus AUTH_EMAIL_FROM): ' +
-        'the first account is created without verification, but nobody else can sign up with a password ' +
-        'and password resets need the reset-password command',
-    );
-  }
-  if (cfg.OPEN_SIGNUP) logger.info('OPEN_SIGNUP is on: anyone who reaches this server can sign up');
-
-  // Turning the history off, or shortening it, takes effect now rather than
-  // at the next crawl.
-  await services.crawls.applyRetention();
-  if (!services.crawls.enabled) logger.info('CRAWL_HISTORY_DAYS=0: crawls are not kept for the Sentinel view');
-
-  // Expired sessions, links and OAuth rows, now and every hour after.
-  // Housekeeping never stands between the server and its first request: a
-  // purge that fails is logged and tried again later.
-  await purgeExpired(db, { logger }).catch((err: unknown) =>
-    logger.warn({ err }, 'purging expired rows failed at startup'),
-  );
-  const purge = setInterval(() => {
-    purgeExpired(db, { logger }).catch((err: unknown) =>
-      logger.error({ err }, 'purging expired rows failed'),
-    );
-  }, 60 * 60 * 1000);
+  // Expired sessions, links and OAuth rows: once at boot, then every hour.
+  const purge = setInterval(() => void purgeExpired(), 60 * 60 * 1000);
   purge.unref();
 
-  const backfill = await backfillOwnerId(db, { logger });
-  if (!backfill.skipped) {
-    logger.info({ notesUpdated: backfill.notesUpdated }, 'claimed notes that had no owner');
-  }
-
-  const app = buildApp({
-    logger,
-    ping: async () => {
-      await db.execute(sql`select 1`);
-    },
-    auth: services.auth,
-    apiKeys: services.apiKeys,
-    notes: services.notes,
-    search: services.search,
-    sharing: services.sharing,
-    invites: services.invites,
-    crossOwner: services.crossOwner,
-    crawls: services.crawls,
-    totp: services.totp,
-    ...(services.google ? { google: services.google } : {}),
-    resolveUserForApiKey: services.resolveUserForApiKey,
-    rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
-    trustedProxy: cfg.TRUSTED_PROXY,
-    // A Secure cookie only means anything over https, and the origin says so.
-    secureCookies: cfg.PUBLIC_ORIGIN.startsWith('https://'),
-    corsOrigins: cfg.corsOrigins,
-    appHome: cfg.corsOrigins[0] ?? cfg.PUBLIC_ORIGIN,
-    // Same OAuth provider as production, so the whole flow is testable locally.
-    oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
-    // Same prefix as production, so a URL that works here works deployed.
-    basePath: API_BASE_PATH,
-    buildMcpServer: (principal) =>
-      buildMcpServer({
-        notes: services.notes,
-        search: services.search,
-        sharing: services.sharing,
-        crossOwner: services.crossOwner,
-        auth: services.auth,
-        crawls: services.crawls,
-        logger,
-        principal,
-      }),
-  });
-
-  const server = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
+  const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
     logger.info({ port: info.port }, 'BrainStack server listening');
   });
 
