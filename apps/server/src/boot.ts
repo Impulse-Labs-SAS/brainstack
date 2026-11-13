@@ -20,7 +20,8 @@ import type { AppConfig } from './config/env.js';
 import { buildApp } from './http/app.js';
 import type { AuthBindings } from './http/middleware/auth.js';
 import type { TrustedProxy } from './lib/clientIp.js';
-import { buildMcpServer } from './mcp/server.js';
+import { buildMcpServer, type McpPrincipal } from './mcp/server.js';
+import type { BrainStackPlugin } from './plugin.js';
 import { purgeExpired } from './services/Maintenance.js';
 import { backfillOwnerId } from './services/OwnerBackfill.js';
 import { buildServices, type Services } from './wiring.js';
@@ -36,6 +37,8 @@ export interface CreateBrainStackOptions {
   sameOrigin?: boolean;
   /** Overrides `TRUSTED_PROXY`, for a host whose edge names the client itself. */
   trustedProxy?: TrustedProxy;
+  /** Optional additions; see `plugin.ts`. None by default. */
+  plugins?: readonly BrainStackPlugin[];
 }
 
 export interface BrainStack {
@@ -117,6 +120,32 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     logger.info({ notesUpdated: backfill.notesUpdated }, 'claimed notes that had no owner');
   }
 
+  const plugins = opts.plugins ?? [];
+  const names = new Set<string>();
+  for (const plugin of plugins) {
+    if (names.has(plugin.name)) throw new Error(`plugin ${plugin.name} is passed twice`);
+    names.add(plugin.name);
+  }
+  if (plugins.length > 0) logger.info({ plugins: [...names] }, 'plugins loaded');
+
+  const mcpFor = (principal: McpPrincipal | null) =>
+    buildMcpServer({
+      notes: services.notes,
+      search: services.search,
+      sharing: services.sharing,
+      // `list_links` masks backlink sources the caller cannot read, and
+      // needs the same cross-owner reader the app itself gets above.
+      crossOwner: services.crossOwner,
+      auth: services.auth,
+      crawls: services.crawls,
+      logger,
+      principal,
+      plugins,
+    });
+  // MCP servers are built per session, so a plugin tool whose name is taken
+  // would only fail on the first call. Building one now fails the boot instead.
+  if (plugins.length > 0) mcpFor(null);
+
   const app = buildApp({
     logger,
     ping: async () => {
@@ -151,19 +180,7 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     oauth: { service: services.oauthProvider, issuer: cfg.PUBLIC_ORIGIN },
     // The same prefix everywhere, so a URL that works locally works deployed.
     basePath: API_BASE_PATH,
-    buildMcpServer: (principal) =>
-      buildMcpServer({
-        notes: services.notes,
-        search: services.search,
-        sharing: services.sharing,
-        // `list_links` masks backlink sources the caller cannot read, and
-        // needs the same cross-owner reader the app itself gets above.
-        crossOwner: services.crossOwner,
-        auth: services.auth,
-        crawls: services.crawls,
-        logger,
-        principal,
-      }),
+    buildMcpServer: mcpFor,
   });
 
   return { app, services, db, purgeExpired: purge, close };
