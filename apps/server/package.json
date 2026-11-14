@@ -4,6 +4,19 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/extend.d.ts",
+      "default": "./dist/extend.js"
+    },
+    "./trpc": {
+      "types": "./src/trpc/router.ts"
+    }
+  },
   "scripts": {
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
