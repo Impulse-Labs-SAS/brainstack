@@ -12,6 +12,7 @@ import { nanoid } from 'nanoid';
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
+import type { EmitEvent } from './events.js';
 
 const { folderShares, folderShareInvites, shareBlocks, shareRequests, users } = pgSchema;
 
@@ -26,6 +27,8 @@ export type SharePermission = 'read' | 'write';
 export interface SharingServiceOptions {
   db: PgDb;
   now?: () => number;
+  /** Told about every grant, revoke and share request. See `events.ts`. */
+  emit?: EmitEvent;
 }
 
 export interface SharedRoot {
@@ -262,6 +265,13 @@ export class SharingService {
       .returning({ id: folderShares.id });
 
     if (!row) throw new AppError('could not create share', 'INTERNAL', 500);
+    await this.opts.emit?.({
+      type: 'share.granted',
+      ownerId: params.ownerId,
+      path: folderPath,
+      userId: params.sharedWithUserId,
+      permission,
+    });
     return row.id;
   }
 
@@ -295,7 +305,19 @@ export class SharingService {
     folderPath: string;
   }): Promise<void> {
     const folderPath = normalizeFolderPath(params.folderPath);
-    await this.deleteGrantsUnder(params.ownerId, params.sharedWithUserId, folderPath);
+    const removed = await this.deleteGrantsUnder(
+      params.ownerId,
+      params.sharedWithUserId,
+      folderPath,
+    );
+    if (removed > 0) {
+      await this.opts.emit?.({
+        type: 'share.revoked',
+        ownerId: params.ownerId,
+        path: folderPath,
+        userId: params.sharedWithUserId,
+      });
+    }
 
     // The invites that would hand the folder, or one inside it, straight back:
     // every link invite and this person's email invites. Matched in memory —
@@ -488,7 +510,16 @@ export class SharingService {
     folderPath: string;
     block?: boolean;
   }): Promise<void> {
-    await this.deleteGrantsUnder(params.ownerId, params.userId, normalizeFolderPath(params.folderPath));
+    const folderPath = normalizeFolderPath(params.folderPath);
+    const removed = await this.deleteGrantsUnder(params.ownerId, params.userId, folderPath);
+    if (removed > 0) {
+      await this.opts.emit?.({
+        type: 'share.revoked',
+        ownerId: params.ownerId,
+        path: folderPath,
+        userId: params.userId,
+      });
+    }
     if (params.block) await this.block(params.userId, params.ownerId);
   }
 
@@ -533,7 +564,7 @@ export class SharingService {
     ownerId: string,
     userId: string,
     folderPath: string,
-  ): Promise<void> {
+  ): Promise<number> {
     const rows = await this.opts.db
       .select({ id: folderShares.id, folderPath: folderShares.folderPath })
       .from(folderShares)
@@ -542,6 +573,7 @@ export class SharingService {
     if (doomed.length > 0) {
       await this.opts.db.delete(folderShares).where(inArray(folderShares.id, doomed));
     }
+    return doomed.length;
   }
 
   /**
@@ -578,6 +610,7 @@ export class SharingService {
         .update(shareRequests)
         .set({ permission: params.permission ?? 'read', createdAt: now, expiresAt })
         .where(eq(shareRequests.id, same.id));
+      await this.emitRequested(params.ownerId, folderPath, email, params.permission);
       return { id: same.id, expiresAt };
     }
     if (pending.length >= MAX_PENDING_SHARE_REQUESTS) {
@@ -599,7 +632,18 @@ export class SharingService {
       createdAt: now,
       expiresAt,
     });
+    await this.emitRequested(params.ownerId, folderPath, email, params.permission);
     return { id, expiresAt };
+  }
+
+  private emitRequested(
+    ownerId: string,
+    path: string,
+    email: string,
+    permission: SharePermission = 'read',
+  ): Promise<void> {
+    const event = { type: 'share.requested' as const, ownerId, path, email, permission };
+    return this.opts.emit?.(event) ?? Promise.resolve();
   }
 
   /** Requests still waiting for this owner, newest first. */

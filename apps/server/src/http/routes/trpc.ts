@@ -53,6 +53,8 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
 
   router.all('*', async (c) => {
     const principal = await resolvePrincipal(c, options);
+    // Where the rest of the app looks for the caller, events included.
+    if (principal) c.set('principal', principal);
 
     const response = await fetchRequestHandler({
       endpoint: options.endpoint ?? '/trpc',

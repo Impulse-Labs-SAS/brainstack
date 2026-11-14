@@ -21,6 +21,7 @@ import type { AnyTRPCRouter } from '@trpc/server';
 import type { Hono, MiddlewareHandler } from 'hono';
 import type { Logger } from 'pino';
 
+import type { BrainStackEvent } from './events.js';
 import type { AuthBindings } from './http/middleware/auth.js';
 import type { McpToolContext } from './mcp/context.js';
 import type { PluginTrpc } from './trpc/router.js';
@@ -145,6 +146,15 @@ export interface BrainStackPlugin {
    * stands.
    */
   onToolCall?(call: ToolCall): void | Promise<void>;
+  /**
+   * Hears what changed — a note written, moved or deleted, a folder created,
+   * a share requested, granted or revoked, a sign-up or sign-in, an API key
+   * or OAuth client added — with whose vault it is, who did it and through
+   * what (`web`, `api`, `mcp`, `plugin`, `system`). Called after the change
+   * has landed, and awaited, so nothing is lost on a runtime that stops after
+   * the response. A listener that throws is logged and the change stands.
+   */
+  onEvent?(event: BrainStackEvent): void | Promise<void>;
   /**
    * HTTP routes, served under `/plugins/<name>`: a route `/callback` answers
    * at `<API prefix>/plugins/<name>/callback`. Built once, at boot.

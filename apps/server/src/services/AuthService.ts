@@ -27,6 +27,7 @@ import { generateToken, sha256 } from '../lib/tokens.js';
 
 import type { EmailSender } from './EmailSender.js';
 import type { TotpService } from './TotpService.js';
+import type { EmitEvent } from './events.js';
 
 const {
   emailVerificationTokens,
@@ -89,6 +90,8 @@ export interface AuthServiceOptions {
   totp?: TotpService;
   /** Override timestamp source for tests. */
   now?: () => number;
+  /** Told about what this service changes. See `events.ts`. */
+  emit?: EmitEvent;
 }
 
 export interface User {
@@ -311,11 +314,23 @@ export class AuthService {
 
     if (!row) throw new AppError('email already registered', 'ALREADY_EXISTS', 409);
 
-    if (first) return { user: toUser(row as UserRow), verification: null };
+    const user = toUser(row as UserRow);
+    const signedUp = () =>
+      this.opts.emit?.({
+        type: 'auth.signed_up',
+        userId: user.id,
+        actorId: user.id,
+        method: 'password',
+      });
+    if (first) {
+      await signedUp();
+      return { user, verification: null };
+    }
 
     try {
       const verification = await this.issueEmailVerification(row as UserRow, email);
-      return { user: toUser(row as UserRow), verification };
+      await signedUp();
+      return { user, verification };
     } catch (err) {
       // The mail never left. Kept, the row would hold the address unverified
       // and answer every retry with "already registered"; gone, the person can
@@ -385,6 +400,7 @@ export class AuthService {
       ipAddress: context.ipAddress ?? null,
     });
 
+    await this.opts.emit?.({ type: 'auth.signed_in', userId, actorId: userId });
     return { id, userId, token, createdAt: now, expiresAt };
   }
 
@@ -759,7 +775,16 @@ export class AuthService {
         403,
       );
     }
-    return toUser(row as UserRow);
+    const user = toUser(row as UserRow);
+    if (!existing) {
+      await this.opts.emit?.({
+        type: 'auth.signed_up',
+        userId: user.id,
+        actorId: user.id,
+        method: 'google',
+      });
+    }
+    return user;
   }
 
   async unlinkGoogle(userId: string): Promise<void> {

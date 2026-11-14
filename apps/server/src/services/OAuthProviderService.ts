@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { generateToken, sha256 } from '../lib/tokens.js';
+import type { EmitEvent } from './events.js';
 
 const { oauthClients, oauthAuthorizationCodes, oauthTokens } = pgSchema;
 
@@ -88,6 +89,8 @@ export interface OAuthAccessGrant {
 export interface OAuthProviderServiceOptions {
   db: PgDb;
   now?: () => number;
+  /** Told about what this service changes. See `events.ts`. */
+  emit?: EmitEvent;
 }
 
 /**
@@ -293,12 +296,20 @@ export class OAuthProviderService {
     if (pkceChallengeFrom(params.codeVerifier) !== row.codeChallenge) return null;
 
     // A fresh authorization begins a new token family, named after its code.
-    return this.issuePair({
+    const tokens = await this.issuePair({
       clientId: row.clientId,
       userId: row.userId,
       scope: row.scope,
       familyId: row.id,
     });
+    // The person approved this client; the token request itself comes from it.
+    await this.opts.emit?.({
+      type: 'oauth_client.connected',
+      userId: row.userId,
+      clientId: row.clientId,
+      actorId: row.userId,
+    });
+    return tokens;
   }
 
   private async revokeFamily(familyId: string, now: number): Promise<void> {

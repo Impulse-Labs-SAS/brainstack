@@ -17,6 +17,7 @@ import type { Logger } from 'pino';
 
 import { API_BASE_PATH } from './config/api.js';
 import type { AppConfig } from './config/env.js';
+import { buildEventBus, requestScope } from './events.js';
 import { buildApp } from './http/app.js';
 import type { AuthBindings } from './http/middleware/auth.js';
 import type { TrustedProxy } from './lib/clientIp.js';
@@ -60,6 +61,13 @@ export interface BrainStack {
 
 export async function createBrainStack(opts: CreateBrainStackOptions): Promise<BrainStack> {
   const { config: cfg, logger } = opts;
+  const plugins = opts.plugins ?? [];
+  assertPluginNames(plugins);
+  // Built before the services, which are handed it; only when someone listens.
+  const listeners = plugins.flatMap((p) =>
+    p.onEvent ? [{ name: p.name, listen: p.onEvent.bind(p) }] : [],
+  );
+  const emit = listeners.length > 0 ? buildEventBus(listeners, logger) : undefined;
   const { db, close } = opts.database ?? openPgDatabase(cfg.DATABASE_URL);
 
   /*
@@ -90,6 +98,7 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     googleClientSecret: cfg.GOOGLE_OAUTH_CLIENT_SECRET,
     googleRedirectUri: cfg.GOOGLE_OAUTH_REDIRECT_URI,
     crawlHistoryDays: cfg.CRAWL_HISTORY_DAYS,
+    ...(emit ? { emit } : {}),
   });
 
   // Said once, at boot, so whoever runs the instance knows what it cannot do.
@@ -126,8 +135,6 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     logger.info({ notesUpdated: backfill.notesUpdated }, 'claimed notes that had no owner');
   }
 
-  const plugins = opts.plugins ?? [];
-  assertPluginNames(plugins);
   if (plugins.length > 0) logger.info({ plugins: plugins.map((p) => p.name) }, 'plugins loaded');
 
   // After BrainStack's own schema, so a plugin table may reference one of its
@@ -198,6 +205,7 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     // The same prefix everywhere, so a URL that works locally works deployed.
     basePath: API_BASE_PATH,
     buildMcpServer: mcpFor,
+    ...(emit ? { requestScope } : {}),
     trpcRouter: withPluginRouters(trpcRouters),
     pluginRoutes: ({ requireAuth, optionalAuth }) =>
       plugins.flatMap((p) =>
