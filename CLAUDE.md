@@ -3,8 +3,9 @@
 This repo is BrainStack: shared second brain for humans + AI assistants.
 
 Design notes for the larger subsystems live in `docs/`: sharing and permissions (`Sharing-design.md`), the
-graph (`Graph-design.md`), and wikilinks, facets and the Connections panel
-(`Wiki-links-y-ecosistema-design.md`). Most of the reasoning lives next to the code, in comments that say why.
+graph (`Graph-design.md`), wikilinks, facets and the Connections panel (`Wiki-links-y-ecosistema-design.md`),
+and plugins (`Extending.md`). What `@brainstack/server/plugin` exports is a contract for code outside this
+repository, written out by `publicApi.test.ts`. Most of the reasoning lives next to the code, in comments that say why.
 Read the relevant ones before making non-trivial changes.
 
 ## Stack

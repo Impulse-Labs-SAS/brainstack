@@ -5,7 +5,7 @@ import { createTRPCReact, type CreateTRPCReact } from '@trpc/react-query';
 import { httpBatchLink } from '@trpc/client';
 import superjson from 'superjson';
 
-import type { AppRouter } from '@brainstack/server/src/trpc/router.js';
+import type { AppRouter } from '@brainstack/server/trpc';
 
 import { apiBase } from './server-url';
 

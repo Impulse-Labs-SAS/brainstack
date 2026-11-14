@@ -1,0 +1,126 @@
+interface AppConfig {
+  AUTHORIZED_EMAILS?: string | undefined;
+  AUTH_EMAIL_FROM?: string | undefined;
+  CORS_ORIGINS: string;
+  CRAWL_HISTORY_DAYS: number;
+  DATABASE_URL: string;
+  GOOGLE_OAUTH_CLIENT_ID?: string | undefined;
+  GOOGLE_OAUTH_CLIENT_SECRET?: string | undefined;
+  GOOGLE_OAUTH_REDIRECT_URI?: string | undefined;
+  LOG_LEVEL: "error" | "trace" | "debug" | "info" | "warn" | "fatal";
+  NODE_ENV: "development" | "production" | "test";
+  OPEN_SIGNUP: boolean;
+  PORT: number;
+  PUBLIC_ORIGIN: string;
+  RATE_LIMIT_PER_MINUTE: number;
+  RESEND_API_KEY?: string | undefined;
+  SMTP_HOST?: string | undefined;
+  SMTP_PASSWORD?: string | undefined;
+  SMTP_PORT: number;
+  SMTP_SECURE?: string | undefined;
+  SMTP_USER?: string | undefined;
+  TRUSTED_PROXY: "proxy" | "direct" | `header:${string}`;
+  authorizedEmails: Set<string>;
+  corsOrigins: string[];
+  email: EmailConfig;
+}
+
+const AppError: typeof AppError;
+
+interface AuthBindings {
+  Variables: { principal: Principal; };
+}
+
+interface BrainStack {
+  app: Hono<AuthBindings, BlankSchema, "/">;
+  close: () => Promise<void>;
+  db: NeonHttpDatabase<typeof import("schema")>;
+  purgeExpired: () => Promise<void>;
+  services: Services;
+}
+
+type BrainStackEvent = EventInput & { actorId: string | null; via: EventVia; at: number; };
+
+interface BrainStackPlugin {
+  mcpTools?: ((server: McpServer, ctx: { notes: NoteService; search: SearchService; sharing: SharingService; crossOwner: CrossOwnerReader; auth: AuthService; crawls: CrawlHistoryService; logger: Logger; toMcpError: (err: unknown) => { content: { type: "text"; text: string; }[]; isError: true; }; requireUserId: () => string; ownerOf: (ownerId?: string | undefined) => string; readOwner: (path: string | undefined, ownerId?: string | undefined) => Promise<string>; requireWriteAccess: () => void; assertWrite: (path: string, ownerId?: string | undefined) => Promise<void>; ownership: (owner: string) => { source: "own"; ownerId?: undefined; } | { source: "shared"; ownerId: string; }; SAVE: ApplyOptions; save: (changes: Change[]) => Promise<ChangeReport>; writeOne: (write: Change) => Promise<{ done: ChangeResult; failed?: undefined; } | { failed: { content: { type: "text"; text: string; }[]; isError: true; }; done?: undefined; }>; sizeNotice: (body: string) => { tooLong: { maxChars: number; mayOnlyShrink: boolean; howToFix: string; chars: number; lines: number; }; } | { tooLong?: undefined; }; OWNER_ARG: ZodOptional<ZodString>; principal: McpPrincipal | null; }) => void) | undefined;
+  migrations?: readonly PgMigration[] | undefined;
+  name: string;
+  onEvent?: ((event: BrainStackEvent) => void | Promise<void>) | undefined;
+  onToolCall?: ((call: ToolCall) => void | Promise<void>) | undefined;
+  routes?: ((ctx: PluginHttpContext) => Hono<AuthBindings, BlankSchema, "/">) | undefined;
+  setup?: ((ctx: PluginSetupContext) => void | Promise<void>) | undefined;
+  trpc?: ((t: PluginTrpc) => AnyRouter) | undefined;
+}
+
+function createBrainStack: (opts: CreateBrainStackOptions) => Promise<BrainStack>;
+
+interface CreateBrainStackOptions {
+  config: AppConfig;
+  database?: { db: PgDb; close(): Promise<void>; } | undefined;
+  logger: BaseLogger & LoggerExtras<never, boolean> & { customLevels: {}; useOnlyCustomLevels: boolean; } & { error: LogFn; trace: LogFn; debug: LogFn; info: LogFn; warn: LogFn; fatal: LogFn; } & {};
+  plugins?: readonly BrainStackPlugin[] | undefined;
+  sameOrigin?: boolean | undefined;
+  trustedProxy?: TrustedProxy | undefined;
+}
+
+type EventInput = { type: "note.created"; ownerId: string; path: string; } | { type: "note.updated"; ownerId: string; path: string; } | { type: "note.moved"; ownerId: string; from: string; to: string; toOwnerId?: string | undefined; } | { type: "note.deleted"; ownerId: string; paths: string[]; folders: string[]; } | { type: "folder.created"; ownerId: string; path: string; } | { type: "share.requested"; ownerId: string; path: string; email: string; permission: SharePermission; } | { type: "share.granted"; ownerId: string; path: string; userId: string; permission: SharePermission; } | { type: "share.revoked"; ownerId: string; path: string; userId: string; } | { type: "auth.signed_up"; userId: string; method: "password" | "google"; } | { type: "auth.signed_in"; userId: string; } | { type: "api_key.created"; userId: string; keyId: string; name: string; scopes: string[]; } | { type: "oauth_client.connected"; userId: string; clientId: string; };
+
+type EventVia = "web" | "api" | "mcp" | "plugin" | "system";
+
+function loadConfig: () => AppConfig;
+
+type McpToolContext = { notes: NoteService; search: SearchService; sharing: SharingService; crossOwner: CrossOwnerReader; auth: AuthService; crawls: CrawlHistoryService; logger: Logger; toMcpError: (err: unknown) => { content: { type: "text"; text: string; }[]; isError: true; }; requireUserId: () => string; ownerOf: (ownerId?: string | undefined) => string; readOwner: (path: string | undefined, ownerId?: string | undefined) => Promise<string>; requireWriteAccess: () => void; assertWrite: (path: string, ownerId?: string | undefined) => Promise<void>; ownership: (owner: string) => { source: "own"; ownerId?: undefined; } | { source: "shared"; ownerId: string; }; SAVE: ApplyOptions; save: (changes: Change[]) => Promise<ChangeReport>; writeOne: (write: Change) => Promise<{ done: ChangeResult; failed?: undefined; } | { failed: { content: { type: "text"; text: string; }[]; isError: true; }; done?: undefined; }>; sizeNotice: (body: string) => { tooLong: { maxChars: number; mayOnlyShrink: boolean; howToFix: string; chars: number; lines: number; }; } | { tooLong?: undefined; }; OWNER_ARG: ZodOptional<ZodString>; principal: McpPrincipal | null; };
+
+const PLUGIN_NAME: RegExp;
+
+interface PluginHttpContext {
+  appHome: string;
+  logger: BaseLogger & LoggerExtras<never, boolean> & { customLevels: {}; useOnlyCustomLevels: boolean; } & { error: LogFn; trace: LogFn; debug: LogFn; info: LogFn; warn: LogFn; fatal: LogFn; } & {};
+  mountPath: string;
+  optionalAuth: (c: Context<AuthBindings, string, {}>, next: Next) => Promise<void | Response>;
+  requireAuth: (c: Context<AuthBindings, string, {}>, next: Next) => Promise<void | Response>;
+  secureCookies: boolean;
+  services: Services;
+}
+
+const pluginMigrationName: (plugin: string, migration: string) => string;
+
+interface PluginSetupContext {
+  db: NeonHttpDatabase<typeof import("schema")>;
+  logger: BaseLogger & LoggerExtras<never, boolean> & { customLevels: {}; useOnlyCustomLevels: boolean; } & { error: LogFn; trace: LogFn; debug: LogFn; info: LogFn; warn: LogFn; fatal: LogFn; } & {};
+  services: Services;
+}
+
+interface PluginTrpc {
+  protectedProcedure: ProcedureBuilder<TrpcContext, object, { notes: NoteService; search: SearchService; sharing: SharingService; crossOwner: CrossOwnerReader; auth: AuthService; crawls: CrawlHistoryService; principal: Principal | null; user: User; sharedRoots: () => Promise<SharedRoot[]>; apiKeys: ApiKeyService; invites: InviteService; oauth: OAuthProviderService | undefined; }, UnsetMarker, UnsetMarker, UnsetMarker, UnsetMarker, false>;
+  publicProcedure: ProcedureBuilder<TrpcContext, object, {}, UnsetMarker, UnsetMarker, UnsetMarker, UnsetMarker, false>;
+  router: RouterBuilder<{ ctx: TrpcContext; meta: object; errorShape: { message: string; data: { stack: undefined; appCode: string; code: "PARSE_ERROR" | "BAD_REQUEST" | "INTERNAL_SERVER_ERROR" | "NOT_IMPLEMENTED" | "BAD_GATEWAY" | "SERVICE_UNAVAILABLE" | "GATEWAY_TIMEOUT" | "UNAUTHORIZED" | "PAYMENT_REQUIRED" | "FORBIDDEN" | "NOT_FOUND" | "METHOD_NOT_SUPPORTED" | "TIMEOUT" | "CONFLICT" | "PRECONDITION_FAILED" | "PAYLOAD_TOO_LARGE" | "UNSUPPORTED_MEDIA_TYPE" | "UNPROCESSABLE_CONTENT" | "PRECONDITION_REQUIRED" | "TOO_MANY_REQUESTS" | "CLIENT_CLOSED_REQUEST"; httpStatus: number; path?: string | undefined; }; code: TRPC_ERROR_CODE_NUMBER; }; transformer: true; }>;
+  sessionProcedure: ProcedureBuilder<TrpcContext, object, { notes: NoteService; search: SearchService; sharing: SharingService; crossOwner: CrossOwnerReader; auth: AuthService; crawls: CrawlHistoryService; principal: Principal | null; user: User; sharedRoots: () => Promise<SharedRoot[]>; apiKeys: ApiKeyService; invites: InviteService; oauth: OAuthProviderService | undefined; }, UnsetMarker, UnsetMarker, UnsetMarker, UnsetMarker, false>;
+}
+
+type Principal = { kind: "user"; user: User; } | { kind: "apiKey"; apiKey: ApiKey; user: User; };
+
+interface Services {
+  apiKeys: ApiKeyService;
+  auth: AuthService;
+  crawls: CrawlHistoryService;
+  crossOwner: CrossOwnerReader;
+  db: NeonHttpDatabase<typeof import("schema")>;
+  google?: GoogleOAuthService | undefined;
+  invites: InviteService;
+  notes: NoteService;
+  oauthProvider: OAuthProviderService;
+  resolveUserForApiKey: (apiKey: ApiKey) => Promise<User>;
+  search: SearchService;
+  sharing: SharingService;
+  totp: TotpService;
+}
+
+interface ToolCall {
+  args: unknown;
+  clientRef: string | null;
+  ms: number;
+  ok: boolean;
+  tool: string;
+  userId: string | null;
+}

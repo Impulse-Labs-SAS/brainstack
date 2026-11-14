@@ -1,11 +1,13 @@
-// @brainstack/server — public API.
-//
-// The web app imports the API and MCP handlers from here rather than reaching
-// into `src/` by path: deep imports have no exports map behind them, so webpack
-// cannot resolve them even though TypeScript can.
+// @brainstack/server — the server's building blocks, for code that runs inside
+// this repository's workspace. Only `@brainstack/server/plugin` (`extend.ts`)
+// is a contract for code outside it; what is exported here may change in any
+// release.
+
+// --- Boot and plugins --------------------------------------------------------
+export * from './extend.js';
 
 // --- Config and logging ------------------------------------------------------
-export { loadConfig, _resetConfigForTests, type AppConfig, type AppEnv } from './config/env.js';
+export { _resetConfigForTests, type AppEnv } from './config/env.js';
 export { getLogger } from './lib/logger.js';
 export { AppError } from './lib/errors.js';
 
