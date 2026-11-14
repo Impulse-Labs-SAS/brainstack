@@ -19,6 +19,7 @@ import { OAuthProviderService } from './services/OAuthProviderService.js';
 import { SearchService } from './services/SearchService.js';
 import { SharingService } from './services/SharingService.js';
 import { TotpService } from './services/TotpService.js';
+import type { EmitEvent } from './services/events.js';
 
 export interface Services {
   db: PgDb;
@@ -58,13 +59,16 @@ export interface BuildServicesOptions {
   googleRedirectUri?: string | undefined;
   /** Days crawls are kept for the Sentinel view; 0 turns the history off. Default 30. */
   crawlHistoryDays?: number;
+  /** Handed to every service that reports events. Left out, none do. */
+  emit?: EmitEvent;
 }
 
 export function buildServices(opts: BuildServicesOptions): Services {
   const emailSender = opts.emailSender ?? createEmailSender(opts.email ?? {});
+  const emit = opts.emit ? { emit: opts.emit } : {};
 
   // Before NoteService, which needs it to clean up after a folder it removes.
-  const sharing = new SharingService({ db: opts.db });
+  const sharing = new SharingService({ db: opts.db, ...emit });
 
   const notes = new NoteService({
     db: opts.db,
@@ -75,11 +79,12 @@ export function buildServices(opts: BuildServicesOptions): Services {
     onFolderMoved: async (ownerId, from, to) => {
       await sharing.reparentUnder({ ownerId, from, to });
     },
+    ...emit,
   });
   const search = new SearchService({ db: opts.db, search: new PgSearchService(opts.db) });
 
   const totp = new TotpService({ db: opts.db, issuer: 'BrainStack' });
-  const oauthProvider = new OAuthProviderService({ db: opts.db });
+  const oauthProvider = new OAuthProviderService({ db: opts.db, ...emit });
 
   const auth = new AuthService({
     db: opts.db,
@@ -91,6 +96,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     openSignup: opts.openSignup ?? false,
     ...(opts.apiBasePath ? { apiBasePath: opts.apiBasePath } : {}),
     totp,
+    ...emit,
   });
 
   const invites = new InviteService({
@@ -141,7 +147,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     notes,
     search,
     auth,
-    apiKeys: new ApiKeyService({ db: opts.db }),
+    apiKeys: new ApiKeyService({ db: opts.db, ...emit }),
     sharing,
     invites,
     totp,

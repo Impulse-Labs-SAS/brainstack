@@ -57,6 +57,7 @@ import {
   type Topic,
   type TopicRow,
 } from './affinity.js';
+import type { EmitEvent } from './events.js';
 import { resolveProjects, type ProjectRef } from './projects.js';
 import {
   facetSignal,
@@ -134,6 +135,17 @@ export interface MoveResult extends MutationResult {
  * the boundary cannot be rewritten — only reported. Both lists are the honest
  * accounting of that, in the logical terms of the vault each note now sits in.
  */
+export interface CrossVaultMoveParams {
+  fromOwnerId: string;
+  fromPath: string;
+  toOwnerId: string;
+  toPath: string;
+  /** Who asks for the move; the report names only notes they can read. */
+  viewerId: string;
+  /** Folders shared with the viewer, as `sharing.listSharedRoots` gives them. */
+  viewerScopes?: SharedScope[];
+}
+
 export interface CrossVaultMoveResult {
   path: string;
   movedNotes: number;
@@ -212,6 +224,12 @@ export interface NoteServiceOptions {
    * the folder is still theirs, so what is shared on it should follow it.
    */
   onFolderMoved?: (ownerId: string, fromPath: string, toPath: string) => Promise<void>;
+  /**
+   * Told about every note written, moved or deleted and every folder created,
+   * once it has landed. Unlike the two above it changes nothing that follows:
+   * it is for whoever wants to know. See `events.ts`.
+   */
+  emit?: EmitEvent;
 }
 
 const DEFAULT_TREE_DEPTH = 4;
@@ -602,7 +620,9 @@ export class NoteService {
       parent ? this.ensureFolders(ownerId, parent) : Promise.resolve(),
       this.mocsFor(ownerId, logical),
     ]);
-    return { path: this.toLogical(ownerId, saved.path), affectedMocs, checksum: saved.checksum };
+    const created = this.toLogical(ownerId, saved.path);
+    await this.opts.emit?.({ type: 'note.created', ownerId, path: created });
+    return { path: created, affectedMocs, checksum: saved.checksum };
   }
 
   /**
@@ -634,7 +654,9 @@ export class NoteService {
             this.store.replaceIfUnchanged(physical, raw, opts.expectedChecksum!, ownerId),
           )
         : await this.store.upsert(physical, raw, ownerId);
-      return { path: this.toLogical(ownerId, saved.path), checksum: saved.checksum };
+      const updated = this.toLogical(ownerId, saved.path);
+      await this.opts.emit?.({ type: 'note.updated', ownerId, path: updated });
+      return { path: updated, checksum: saved.checksum };
     } catch (err) {
       if (err instanceof PgNoteChangedError) {
         throw new AppError(
@@ -710,7 +732,9 @@ export class NoteService {
       const saved = await this.asCaller(ownerId, () =>
         this.store.replaceIfUnchanged(physical, plan.raw, plan.baseChecksum, ownerId),
       );
-      return { path: this.toLogical(ownerId, saved.path), checksum: saved.checksum };
+      const updated = this.toLogical(ownerId, saved.path);
+      await this.opts.emit?.({ type: 'note.updated', ownerId, path: updated });
+      return { path: updated, checksum: saved.checksum };
     } catch (err) {
       if (err instanceof PgNoteChangedError) {
         throw new AppError(
@@ -782,6 +806,21 @@ export class NoteService {
     path: string,
     opts: { recursive?: boolean } = {},
   ): Promise<{ deleted: string[]; deletedFolders: string[] }> {
+    const result = await this.removeAt(ownerId, path, opts);
+    await this.opts.emit?.({
+      type: 'note.deleted',
+      ownerId,
+      paths: result.deleted,
+      folders: result.deletedFolders,
+    });
+    return result;
+  }
+
+  private async removeAt(
+    ownerId: string,
+    path: string,
+    opts: { recursive?: boolean },
+  ): Promise<{ deleted: string[]; deletedFolders: string[] }> {
     const physical = this.toPhysical(ownerId, path);
     const logical = (p: string) => this.toLogical(ownerId, p);
 
@@ -851,6 +890,19 @@ export class NoteService {
    * pass, with one mapping per note, rather than a pass per note.
    */
   async move(ownerId: string, fromPath: string, toPath: string): Promise<MoveResult> {
+    const result = await this.moveWithin(ownerId, fromPath, toPath);
+    if (result.moved.length > 0) {
+      await this.opts.emit?.({
+        type: 'note.moved',
+        ownerId,
+        from: this.normalizeLogical(fromPath),
+        to: result.path,
+      });
+    }
+    return result;
+  }
+
+  private async moveWithin(ownerId: string, fromPath: string, toPath: string): Promise<MoveResult> {
     const from = this.toPhysical(ownerId, fromPath);
     const to = this.toPhysical(ownerId, toPath);
     if (from === to) {
@@ -1058,16 +1110,19 @@ export class NoteService {
    *
    * Nothing is silently repaired, and nothing is silently broken.
    */
-  async moveAcrossVaults(params: {
-    fromOwnerId: string;
-    fromPath: string;
-    toOwnerId: string;
-    toPath: string;
-    /** Who asks for the move; the report names only notes they can read. */
-    viewerId: string;
-    /** Folders shared with the viewer, as `sharing.listSharedRoots` gives them. */
-    viewerScopes?: SharedScope[];
-  }): Promise<CrossVaultMoveResult> {
+  async moveAcrossVaults(params: CrossVaultMoveParams): Promise<CrossVaultMoveResult> {
+    const result = await this.moveBetweenVaults(params);
+    await this.opts.emit?.({
+      type: 'note.moved',
+      ownerId: params.fromOwnerId,
+      from: this.normalizeLogical(params.fromPath),
+      to: result.path,
+      toOwnerId: params.toOwnerId,
+    });
+    return result;
+  }
+
+  private async moveBetweenVaults(params: CrossVaultMoveParams): Promise<CrossVaultMoveResult> {
     const { fromOwnerId, toOwnerId } = params;
     if (fromOwnerId === toOwnerId) {
       throw new AppError('same owner: use move instead', 'INVALID_INPUT', 400);
@@ -1225,6 +1280,7 @@ export class NoteService {
     const logical = this.normalizeLogical(path);
     if (!logical) throw new AppError('folder path is required', 'INVALID_INPUT', 400);
     await this.ensureFolders(ownerId, logical);
+    await this.opts.emit?.({ type: 'folder.created', ownerId, path: logical });
     return logical;
   }
 
@@ -1384,6 +1440,11 @@ export class NoteService {
       toMarkdown({ frontmatter: sourceRow.frontmatter, body: result.body }),
       ownerId,
     );
+    await this.opts.emit?.({
+      type: 'note.updated',
+      ownerId,
+      path: this.toLogical(ownerId, source),
+    });
     return { linked: result.linked };
   }
 

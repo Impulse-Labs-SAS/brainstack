@@ -11,12 +11,15 @@ import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
 import { generateToken, sha256 } from '../lib/tokens.js';
+import type { EmitEvent } from './events.js';
 
 const { apiKeys } = pgSchema;
 
 export interface ApiKeyServiceOptions {
   db: PgDb;
   now?: () => number;
+  /** Told about what this service changes. See `events.ts`. */
+  emit?: EmitEvent;
 }
 
 export interface ApiKey {
@@ -62,6 +65,7 @@ export class ApiKeyService {
       scopes,
       createdAt,
     });
+    await this.opts.emit?.({ type: 'api_key.created', userId, keyId: id, name, scopes });
 
     return {
       id,

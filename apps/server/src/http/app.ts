@@ -103,6 +103,11 @@ export interface BuildAppOptions {
    * Defaults to no prefix, which is what the tests build.
    */
   basePath?: string;
+  /**
+   * Runs every request inside it, first thing. Set when events are on, so an
+   * event can tell who caused it (see `events.ts`).
+   */
+  requestScope?: MiddlewareHandler<AuthBindings>;
   /** The tRPC router, when plugins add to it. Defaults to `appRouter`. */
   trpcRouter?: AnyTRPCRouter;
   /**
@@ -126,6 +131,7 @@ const loggablePath = (path: string) => path.replace(/(\/invite\/accept\/)[^/]+/,
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const app = new Hono<AuthBindings>();
+  if (opts.requestScope) app.use('*', opts.requestScope);
 
   // The API answers JSON, plus the OAuth consent page. Nothing here is ever
   // meant to be framed — the consent page least of all, where a framed
