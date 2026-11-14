@@ -10,7 +10,7 @@
 // owner backfill runs before the first listing, so notes written before
 // ownership existed are not invisible on the first page load.
 
-import { ensurePgSchema, openPgDatabase, type PgDb } from '@brainstack/core/pg';
+import { ensurePgSchema, openPgDatabase, runPgMigrations, type PgDb } from '@brainstack/core/pg';
 import { sql } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import type { Logger } from 'pino';
@@ -21,7 +21,7 @@ import { buildApp } from './http/app.js';
 import type { AuthBindings } from './http/middleware/auth.js';
 import type { TrustedProxy } from './lib/clientIp.js';
 import { buildMcpServer, type McpPrincipal } from './mcp/server.js';
-import { assertPluginNames, type BrainStackPlugin } from './plugin.js';
+import { assertPluginNames, pluginMigrations, type BrainStackPlugin } from './plugin.js';
 import { purgeExpired } from './services/Maintenance.js';
 import { backfillOwnerId } from './services/OwnerBackfill.js';
 import { pluginTrpc, withPluginRouters } from './trpc/router.js';
@@ -40,6 +40,11 @@ export interface CreateBrainStackOptions {
   trustedProxy?: TrustedProxy;
   /** Optional additions; see `plugin.ts`. None by default. */
   plugins?: readonly BrainStackPlugin[];
+  /**
+   * An open database to use instead of opening `DATABASE_URL`: tests, a
+   * plugin's included, pass an in-process one. `close` is whatever releases it.
+   */
+  database?: { db: PgDb; close(): Promise<void> };
 }
 
 export interface BrainStack {
@@ -55,7 +60,7 @@ export interface BrainStack {
 
 export async function createBrainStack(opts: CreateBrainStackOptions): Promise<BrainStack> {
   const { config: cfg, logger } = opts;
-  const { db, close } = openPgDatabase(cfg.DATABASE_URL);
+  const { db, close } = opts.database ?? openPgDatabase(cfg.DATABASE_URL);
 
   /*
    * Applying migrations here rather than from a deploy step or an admin
@@ -124,6 +129,15 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
   const plugins = opts.plugins ?? [];
   assertPluginNames(plugins);
   if (plugins.length > 0) logger.info({ plugins: plugins.map((p) => p.name) }, 'plugins loaded');
+
+  // After BrainStack's own schema, so a plugin table may reference one of its
+  // tables; before any plugin code runs, so that code meets its tables.
+  const migrations = pluginMigrations(plugins);
+  if (migrations.length > 0) {
+    const ran = await runPgMigrations(db, migrations);
+    if (ran.length > 0) logger.info({ migrations: ran }, 'applied plugin migrations');
+  }
+  for (const plugin of plugins) await plugin.setup?.({ db, services, logger });
 
   const mcpFor = (principal: McpPrincipal | null) =>
     buildMcpServer({

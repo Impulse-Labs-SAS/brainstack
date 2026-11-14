@@ -6,13 +6,16 @@
 // tools reach a vault only through the same context BrainStack's own tools
 // use, so the permission checks in `SharingService` hold for them too.
 //
-// So far: MCP tools, a hook after every tool call, HTTP routes and tRPC
-// procedures. Services and migrations come next, each in its own change.
+// What a plugin can bring: tables of its own (migrations), set-up that runs
+// once at boot with BrainStack's services and database (where it builds its
+// own services), MCP tools, a hook after every tool call, HTTP routes and tRPC
+// procedures.
 //
 // A plugin's routes and procedures live under its own name — `/plugins/<name>`
 // and `plugins.<name>.*` — so nothing a plugin mounts can answer in place of a
 // route BrainStack serves.
 
+import type { PgDb, PgMigration } from '@brainstack/core/pg';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AnyTRPCRouter } from '@trpc/server';
 import type { Hono, MiddlewareHandler } from 'hono';
@@ -29,6 +32,21 @@ import type { Services } from './wiring.js';
  */
 export const PLUGIN_NAME = /^[a-z][a-z0-9-]{0,39}$/;
 
+/** What `setup` is given, once, at boot. */
+export interface PluginSetupContext {
+  db: PgDb;
+  services: Services;
+  logger: Logger;
+}
+
+/**
+ * The name a plugin migration is recorded under in `_brainstack_migrations`.
+ * BrainStack's own names carry no prefix, so neither can take the other's
+ * place in the ledger, nor can two plugins.
+ */
+export const pluginMigrationName = (plugin: string, migration: string): string =>
+  `plugin:${plugin}:${migration}`;
+
 /**
  * Throws unless every name is well formed and used once. Checked at boot,
  * before anything is mounted under one.
@@ -42,6 +60,23 @@ export function assertPluginNames(plugins: readonly { name: string }[]): void {
     if (names.has(name)) throw new Error(`plugin ${name} is passed twice`);
     names.add(name);
   }
+}
+
+/** The plugins' migrations, in order, each under its ledger name. Throws on a repeated name. */
+export function pluginMigrations(
+  plugins: readonly Pick<BrainStackPlugin, 'name' | 'migrations'>[],
+): PgMigration[] {
+  return plugins.flatMap((plugin) => {
+    const seen = new Set<string>();
+    return (plugin.migrations ?? []).map((m) => {
+      if (!m.name) throw new Error(`plugin ${plugin.name} has a migration with no name`);
+      if (seen.has(m.name)) {
+        throw new Error(`plugin ${plugin.name} declares migration ${m.name} twice`);
+      }
+      seen.add(m.name);
+      return { name: pluginMigrationName(plugin.name, m.name), statements: m.statements };
+    });
+  });
 }
 
 /** What a plugin's routes are built with. */
@@ -80,6 +115,24 @@ export interface ToolCall {
 export interface BrainStackPlugin {
   /** Unique among the plugins a server runs; it names the plugin in logs. */
   name: string;
+  /**
+   * Schema the plugin needs, applied at boot after BrainStack's own and
+   * recorded under `plugin:<name>:<migration>`. The same contract as
+   * BrainStack's migrations: ordered, every statement idempotent
+   * (`IF NOT EXISTS`), no transaction. Never rename or edit one that shipped.
+   * Name the plugin's tables after it (`<name>_…`) and leave BrainStack's
+   * tables alone: their shape is not part of this interface.
+   */
+  migrations?: readonly PgMigration[];
+  /**
+   * Runs once at boot, after the migrations and before anything else of the
+   * plugin's is built: where it creates its own services from BrainStack's
+   * and the database. A throw fails the boot.
+   *
+   * Reach notes through `services.notes` and ask `services.sharing` before
+   * acting for a person: authorisation stays there.
+   */
+  setup?(ctx: PluginSetupContext): void | Promise<void>;
   /**
    * Registers the plugin's MCP tools. Called once per MCP session, after
    * BrainStack's own tools: a name already taken fails at boot.
