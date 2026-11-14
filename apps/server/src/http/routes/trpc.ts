@@ -2,6 +2,7 @@
 // adapter is the right fit for Hono since `c.req.raw` is already a Fetch
 // Request — no need to drop down to Node's req/res like we do for MCP.
 
+import type { AnyTRPCRouter } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { Hono } from 'hono';
 import type { Logger } from 'pino';
@@ -43,6 +44,8 @@ export interface TrpcRouterOptions {
    * once deployed, because development had no prefix.
    */
   endpoint?: string;
+  /** The router to serve, when plugins add to it. Defaults to `appRouter`. */
+  router?: AnyTRPCRouter;
 }
 
 export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings> {
@@ -54,7 +57,7 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
     const response = await fetchRequestHandler({
       endpoint: options.endpoint ?? '/trpc',
       req: c.req.raw,
-      router: appRouter,
+      router: options.router ?? appRouter,
       // Batched calls run concurrently; without a cap one request could carry
       // hundreds of them past any per-request limit.
       maxBatchSize: MAX_TRPC_BATCH,

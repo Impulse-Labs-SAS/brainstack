@@ -21,9 +21,10 @@ import { buildApp } from './http/app.js';
 import type { AuthBindings } from './http/middleware/auth.js';
 import type { TrustedProxy } from './lib/clientIp.js';
 import { buildMcpServer, type McpPrincipal } from './mcp/server.js';
-import type { BrainStackPlugin } from './plugin.js';
+import { assertPluginNames, type BrainStackPlugin } from './plugin.js';
 import { purgeExpired } from './services/Maintenance.js';
 import { backfillOwnerId } from './services/OwnerBackfill.js';
+import { pluginTrpc, withPluginRouters } from './trpc/router.js';
 import { buildServices, type Services } from './wiring.js';
 
 export interface CreateBrainStackOptions {
@@ -121,12 +122,8 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
   }
 
   const plugins = opts.plugins ?? [];
-  const names = new Set<string>();
-  for (const plugin of plugins) {
-    if (names.has(plugin.name)) throw new Error(`plugin ${plugin.name} is passed twice`);
-    names.add(plugin.name);
-  }
-  if (plugins.length > 0) logger.info({ plugins: [...names] }, 'plugins loaded');
+  assertPluginNames(plugins);
+  if (plugins.length > 0) logger.info({ plugins: plugins.map((p) => p.name) }, 'plugins loaded');
 
   const mcpFor = (principal: McpPrincipal | null) =>
     buildMcpServer({
@@ -146,6 +143,18 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
   // would only fail on the first call. Building one now fails the boot instead.
   if (plugins.length > 0) mcpFor(null);
 
+  const trpcRouters = Object.fromEntries(
+    plugins.flatMap((p) => (p.trpc ? [[p.name, p.trpc(pluginTrpc)] as const] : [])),
+  );
+
+  /*
+   * Derived from the origin rather than NODE_ENV. A Secure cookie only means
+   * anything over https and PUBLIC_ORIGIN says so directly; setting
+   * NODE_ENV=production on Netlify would also apply to the build, where it
+   * makes pnpm skip devDependencies and the build fails.
+   */
+  const secureCookies = cfg.PUBLIC_ORIGIN.startsWith('https://');
+
   const app = buildApp({
     logger,
     ping: async () => {
@@ -164,13 +173,7 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     resolveUserForApiKey: services.resolveUserForApiKey,
     rateLimitPerMinute: cfg.RATE_LIMIT_PER_MINUTE,
     trustedProxy: opts.trustedProxy ?? cfg.TRUSTED_PROXY,
-    /*
-     * Derived from the origin rather than NODE_ENV. A Secure cookie only means
-     * anything over https and PUBLIC_ORIGIN says so directly; setting
-     * NODE_ENV=production on Netlify would also apply to the build, where it
-     * makes pnpm skip devDependencies and the build fails.
-     */
-    secureCookies: cfg.PUBLIC_ORIGIN.startsWith('https://'),
+    secureCookies,
     // On one origin there is no cross-origin request to allow.
     corsOrigins: opts.sameOrigin ? [] : cfg.corsOrigins,
     appHome: appOrigin,
@@ -181,6 +184,26 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     // The same prefix everywhere, so a URL that works locally works deployed.
     basePath: API_BASE_PATH,
     buildMcpServer: mcpFor,
+    trpcRouter: withPluginRouters(trpcRouters),
+    pluginRoutes: ({ requireAuth, optionalAuth }) =>
+      plugins.flatMap((p) =>
+        p.routes
+          ? [
+              {
+                name: p.name,
+                routes: p.routes({
+                  services,
+                  logger,
+                  requireAuth,
+                  optionalAuth,
+                  secureCookies,
+                  appHome: appOrigin,
+                  mountPath: `${API_BASE_PATH}/plugins/${p.name}`,
+                }),
+              },
+            ]
+          : [],
+      ),
   });
 
   return { app, services, db, purgeExpired: purge, close };

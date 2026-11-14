@@ -1,7 +1,7 @@
 // Hono application factory. Combines middlewares and routers so that
 // `index.ts` only worries about boot order and shutdown.
 
-import { Hono, type Context } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
@@ -9,6 +9,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { Logger } from 'pino';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { AnyTRPCRouter } from '@trpc/server';
 
 import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
@@ -102,6 +103,19 @@ export interface BuildAppOptions {
    * Defaults to no prefix, which is what the tests build.
    */
   basePath?: string;
+  /** The tRPC router, when plugins add to it. Defaults to `appRouter`. */
+  trpcRouter?: AnyTRPCRouter;
+  /**
+   * Routes plugins bring, each mounted under `/plugins/<name>`. Called once,
+   * with the auth middlewares the app's own routes use.
+   */
+  pluginRoutes?(auth: PluginAuth): ReadonlyArray<{ name: string; routes: Hono<AuthBindings> }>;
+}
+
+/** The auth middlewares a plugin's routes are given. */
+export interface PluginAuth {
+  requireAuth: MiddlewareHandler<AuthBindings>;
+  optionalAuth: MiddlewareHandler<AuthBindings>;
 }
 
 /** Client registrations one address may make in a minute. */
@@ -209,6 +223,9 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   app.use('/auth/*', anonymousLimit);
   app.use('/invite/*', anonymousLimit);
   app.use('/trpc/*', trpcLimit);
+  // A plugin's routes may be anonymous (a sign-in callback, a webhook), so
+  // they get the anonymous budget whether or not they ask for a caller.
+  app.use('/plugins/*', anonymousLimit);
 
   app.route('/health', createHealthRouter(opts.ping, opts.logger));
   app.route('/config', createConfigRouter({ google: Boolean(opts.google) }));
@@ -307,8 +324,13 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       ...(opts.oauth ? { oauth: opts.oauth.service } : {}),
       logger: opts.logger,
       endpoint: `${opts.basePath ?? ''}/trpc`,
+      ...(opts.trpcRouter ? { router: opts.trpcRouter } : {}),
     }),
   );
+
+  for (const { name, routes } of opts.pluginRoutes?.({ requireAuth, optionalAuth }) ?? []) {
+    app.route(`/plugins/${name}`, routes);
+  }
 
   app.notFound((c) => c.json({ error: 'not found' }, 404));
   app.onError(onError);

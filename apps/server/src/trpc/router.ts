@@ -4,7 +4,7 @@
 
 import { serializeNote, type Frontmatter } from '@brainstack/core';
 import { NOTE_MAX_CHARS } from '@brainstack/core/sentinel';
-import { TRPCError, initTRPC } from '@trpc/server';
+import { TRPCError, initTRPC, type AnyTRPCRouter } from '@trpc/server';
 import superjson from 'superjson';
 import { z } from 'zod';
 
@@ -745,3 +745,28 @@ export const appRouter = t.router({
 });
 
 export type AppRouter = typeof appRouter;
+
+/** What a plugin builds its procedures with; see `BrainStackPlugin.trpc`. */
+export interface PluginTrpc {
+  router: typeof t.router;
+  publicProcedure: typeof publicProcedure;
+  protectedProcedure: typeof protectedProcedure;
+  sessionProcedure: typeof sessionProcedure;
+}
+
+export const pluginTrpc: PluginTrpc = {
+  router: t.router,
+  publicProcedure,
+  protectedProcedure,
+  sessionProcedure,
+};
+
+/**
+ * BrainStack's router with each plugin's under `plugins.<name>`. Without any,
+ * it is `appRouter` itself. The web app's `AppRouter` type does not include
+ * them: a plugin's client knows its own procedures.
+ */
+export function withPluginRouters(routers: Record<string, AnyTRPCRouter>): AnyTRPCRouter {
+  if (Object.keys(routers).length === 0) return appRouter;
+  return t.mergeRouters(appRouter, t.router({ plugins: t.router(routers) }));
+}
