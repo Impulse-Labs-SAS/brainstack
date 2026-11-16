@@ -229,24 +229,30 @@ export function creatureBounds(pose: SentinelPose): { centre: Vec3; radius: numb
   return centre.every(Number.isFinite) && Number.isFinite(radius) ? { centre, radius } : null;
 }
 
-/** The height three reads from a PMREM's image when it keys a program; null for anything else. */
-function cubeUvHeight(texture: THREE.Texture): number | null {
-  if (texture.mapping !== THREE.CubeUVReflectionMapping) return null;
-  const height = (texture.image as { height?: unknown } | null | undefined)?.height;
-  return typeof height === 'number' ? height : null;
+/**
+ * What three reads from a PMREM when it keys a program: the map's mapping and
+ * its prefiltered mip chain (`envMapMaxLod` and `envMapSize` in
+ * WebGLPrograms). Null for anything that is not a PMREM.
+ */
+function pmremKey(texture: THREE.Texture): string | null {
+  if (texture.isPMREMTexture !== true) return null;
+  const mipmaps: ReadonlyArray<{ width?: unknown }> = texture.mipmaps ?? [];
+  const size = mipmaps[0]?.width;
+  if (typeof size !== 'number') return null;
+  return `${texture.mapping}:${mipmaps.length - 1}:${size}`;
 }
 
 /**
  * True when a material drawn with either environment map uses the same
  * program. Three keys a standard material's program on its map's mapping and,
- * for a PMREM, on the map's height (`envMapCubeUVHeight` in WebGLPrograms),
- * never on the texture itself. Two PMREMs of one size share every program.
- * Anything else three converts to a PMREM of its own size first, or skips
- * while the image loads: either way, another program.
+ * for a PMREM, on its mip chain, never on the texture itself. Two PMREMs of
+ * one size share every program. Anything else three converts to a PMREM of
+ * its own size first, or skips while the image loads: either way, another
+ * program.
  */
 export function sharesPrograms(a: THREE.Texture, b: THREE.Texture): boolean {
-  const height = cubeUvHeight(a);
-  return height !== null && height === cubeUvHeight(b);
+  const key = pmremKey(a);
+  return key !== null && key === pmremKey(b);
 }
 
 export class SentinelView {

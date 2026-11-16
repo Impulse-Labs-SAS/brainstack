@@ -94,8 +94,10 @@ describe('creatureBounds', () => {
 /** What PMREMGenerator hands back, as far as three's program key reads it. */
 function pmrem(size: number): THREE.Texture {
   const t = new THREE.Texture();
-  t.image = { width: 3 * Math.max(size, 16 * 7), height: 4 * size, depth: 1 };
-  t.mapping = THREE.CubeUVReflectionMapping;
+  t.isPMREMTexture = true;
+  for (let lod = 0; lod <= Math.log2(size) - 3; lod++) {
+    t.mipmaps.push({ width: size >> lod, height: size >> lod } as never);
+  }
   return t;
 }
 
