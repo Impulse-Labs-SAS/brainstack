@@ -42,6 +42,7 @@ interface BrainStack {
 type BrainStackEvent = EventInput & { actorId: string | null; via: EventVia; at: number; };
 
 interface BrainStackPlugin {
+  authenticate?: ((token: string) => PluginCredential | Promise<PluginCredential | null> | null) | undefined;
   mcpTools?: ((server: McpServer, ctx: { notes: NoteService; search: SearchService; sharing: SharingService; crossOwner: CrossOwnerReader; auth: AuthService; crawls: CrawlHistoryService; logger: Logger; toMcpError: (err: unknown) => { content: { type: "text"; text: string; }[]; isError: true; }; requireUserId: () => string; ownerOf: (ownerId?: string | undefined) => string; readOwner: (path: string | undefined, ownerId?: string | undefined) => Promise<string>; requireWriteAccess: () => void; assertWrite: (path: string, ownerId?: string | undefined) => Promise<void>; ownership: (owner: string) => { source: "own"; ownerId?: undefined; } | { source: "shared"; ownerId: string; }; SAVE: ApplyOptions; save: (changes: Change[]) => Promise<ChangeReport>; writeOne: (write: Change) => Promise<{ done: ChangeResult; failed?: undefined; } | { failed: { content: { type: "text"; text: string; }[]; isError: true; }; done?: undefined; }>; sizeNotice: (body: string) => { tooLong: { maxChars: number; mayOnlyShrink: boolean; howToFix: string; chars: number; lines: number; }; } | { tooLong?: undefined; }; OWNER_ARG: ZodOptional<ZodString>; principal: McpPrincipal | null; }) => void) | undefined;
   migrations?: readonly PgMigration[] | undefined;
   name: string;
@@ -72,6 +73,12 @@ function loadConfig: () => AppConfig;
 type McpToolContext = { notes: NoteService; search: SearchService; sharing: SharingService; crossOwner: CrossOwnerReader; auth: AuthService; crawls: CrawlHistoryService; logger: Logger; toMcpError: (err: unknown) => { content: { type: "text"; text: string; }[]; isError: true; }; requireUserId: () => string; ownerOf: (ownerId?: string | undefined) => string; readOwner: (path: string | undefined, ownerId?: string | undefined) => Promise<string>; requireWriteAccess: () => void; assertWrite: (path: string, ownerId?: string | undefined) => Promise<void>; ownership: (owner: string) => { source: "own"; ownerId?: undefined; } | { source: "shared"; ownerId: string; }; SAVE: ApplyOptions; save: (changes: Change[]) => Promise<ChangeReport>; writeOne: (write: Change) => Promise<{ done: ChangeResult; failed?: undefined; } | { failed: { content: { type: "text"; text: string; }[]; isError: true; }; done?: undefined; }>; sizeNotice: (body: string) => { tooLong: { maxChars: number; mayOnlyShrink: boolean; howToFix: string; chars: number; lines: number; }; } | { tooLong?: undefined; }; OWNER_ARG: ZodOptional<ZodString>; principal: McpPrincipal | null; };
 
 const PLUGIN_NAME: RegExp;
+
+interface PluginCredential {
+  ref?: string | undefined;
+  scopes: readonly string[];
+  userId: string;
+}
 
 interface PluginHttpContext {
   appHome: string;

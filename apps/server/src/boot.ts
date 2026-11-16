@@ -207,6 +207,11 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
     buildMcpServer: mcpFor,
     ...(emit ? { requestScope } : {}),
     trpcRouter: withPluginRouters(trpcRouters),
+    bearerPlugins: plugins.flatMap((p) =>
+      p.authenticate
+        ? [{ name: p.name, authenticate: (token: string) => p.authenticate!(token) }]
+        : [],
+    ),
     pluginRoutes: ({ requireAuth, optionalAuth }) =>
       plugins.flatMap((p) =>
         p.routes

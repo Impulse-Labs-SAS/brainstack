@@ -8,8 +8,8 @@
 //
 // What a plugin can bring: tables of its own (migrations), set-up that runs
 // once at boot with BrainStack's services and database (where it builds its
-// own services), MCP tools, a hook after every tool call, HTTP routes and tRPC
-// procedures.
+// own services), MCP tools, a hook after every tool call, HTTP routes, tRPC
+// procedures, and a way to recognise bearer tokens another system issued.
 //
 // A plugin's routes and procedures live under its own name — `/plugins/<name>`
 // and `plugins.<name>.*` — so nothing a plugin mounts can answer in place of a
@@ -85,8 +85,9 @@ export interface PluginHttpContext {
   services: Services;
   logger: Logger;
   /**
-   * Answers 401 unless the caller is signed in — session cookie, API key or
-   * OAuth token, as on `/mcp` — and puts them on `c.var.principal`.
+   * Answers 401 unless the caller is signed in — session cookie, API key,
+   * OAuth token or a token a plugin recognises, as on `/mcp` — and puts them
+   * on `c.var.principal`.
    */
   requireAuth: MiddlewareHandler<AuthBindings>;
   /** Puts the caller on `c.var.principal` when there is one, and lets anyone through. */
@@ -111,6 +112,27 @@ export interface ToolCall {
   /** False when the tool answered with an error. */
   ok: boolean;
   ms: number;
+}
+
+/**
+ * Who a bearer token a plugin recognised stands for, as `authenticate`
+ * answers it.
+ */
+export interface PluginCredential {
+  /** The account the request acts as. It must exist; one that does not is refused. */
+  userId: string;
+  /**
+   * What the token may do, read like an API key's: `['notes:read']` is
+   * read-only, `['notes:write']` may also change, share and delete. Required,
+   * because an empty list is what an old, unscoped key carries, and it means
+   * full access.
+   */
+  scopes: readonly string[];
+  /**
+   * Names the credential where a tool call or log names the key it came
+   * with, after `plugin:<name>:`. Never the token itself.
+   */
+  ref?: string;
 }
 
 export interface BrainStackPlugin {
@@ -164,6 +186,23 @@ export interface BrainStackPlugin {
    * is authenticated for it: a route that needs a caller uses `requireAuth`.
    */
   routes?(ctx: PluginHttpContext): Hono<AuthBindings>;
+  /**
+   * Recognises a bearer token BrainStack did not issue — a JWT another system
+   * signed, say — and says which account it stands for. Answer `null` for a
+   * token that is not the plugin's.
+   *
+   * Asked only after BrainStack's own API keys and OAuth tokens have turned
+   * the token down, so a plugin can add a way in but never answer for a
+   * credential BrainStack knows. Plugins are asked in the order they were
+   * passed; the first to answer wins. Accepted where OAuth tokens are: `/mcp`
+   * and plugin routes behind `requireAuth`, not the web app's tRPC.
+   *
+   * Checking the token is the plugin's whole job: its signature, issuer,
+   * audience and expiry. What the account may then reach is still decided by
+   * `SharingService`, as for any other caller. A throw is logged and the
+   * token refused.
+   */
+  authenticate?(token: string): PluginCredential | null | Promise<PluginCredential | null>;
   /**
    * tRPC procedures, served as `plugins.<name>.*` next to BrainStack's own.
    * Build them with the procedures given, so they get the same context,
