@@ -92,12 +92,11 @@ beforeEach(async () => {
 });
 
 describe('the tools are offered', () => {
-  it('lists edit_note, apply_changes, its old name save_notes and get_notes with valid schemas', async () => {
+  it('lists edit_note, apply_changes and get_notes with valid schemas, and no longer save_notes', async () => {
     const client = await clientFor(OWNER.id);
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(
-      expect.arrayContaining(['edit_note', 'apply_changes', 'save_notes', 'get_notes']),
-    );
+    expect(names).toEqual(expect.arrayContaining(['edit_note', 'apply_changes', 'get_notes']));
+    expect(names).not.toContain('save_notes');
   });
 });
 
@@ -474,18 +473,6 @@ describe('apply_changes reorganising', () => {
     expect(value).toMatchObject({ saved: true });
     expect(await body(OWNER.id, 'crew/atlas/_atlas.md')).toBe('# Atlas\n');
     expect(await notes.hasNote(OWNER.id, 'crew/atlas/_erebor.md')).toBe(true);
-  });
-
-  it('still answers to save_notes, its old name', async () => {
-    const client = await clientFor(OWNER.id);
-    const { value } = await call(client, 'save_notes', {
-      writes: [
-        { action: 'move', from: 'home.md', to: 'start.md' },
-        { action: 'create', path: 'orbit/new.md', content: '# New\n' },
-      ],
-    });
-    expect(value).toMatchObject({ saved: true, summary: expect.stringContaining('1 created') });
-    expect(await notes.hasNote(OWNER.id, 'start.md')).toBe(true);
   });
 });
 
