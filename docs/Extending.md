@@ -1,8 +1,8 @@
 # Extending BrainStack with plugins
 
 A plugin is code a deployment passes to `createBrainStack` to add to what BrainStack does: tools for
-assistants, HTTP routes, tRPC procedures, tables of its own, and listeners for what happens in the
-instance. A plugin can add things but never replace them. Without plugins, BrainStack behaves exactly as
+assistants, HTTP routes, tRPC procedures, tables of its own, listeners for what happens in the
+instance, and a way to recognise bearer tokens another system issued. A plugin can add things but never replace them. Without plugins, BrainStack behaves exactly as
 it does today, and the `docker compose` setup needs none.
 
 Plugins are for code that lives outside this repository. A feature everyone should have belongs in
@@ -86,6 +86,7 @@ Each member, in the order BrainStack runs it at boot:
 | `mcpTools` | Once per MCP session, after BrainStack's tools | The MCP server and the same context BrainStack's tools use | Next to BrainStack's tools. A name already taken fails the boot |
 | `routes` | Once | `services`, `logger`, `requireAuth`, `optionalAuth`, `secureCookies`, `appHome`, `mountPath` | `<API prefix>/plugins/<name>/…` |
 | `trpc` | Once | BrainStack's `router`, `publicProcedure`, `protectedProcedure` and `sessionProcedure` | `plugins.<name>.*` |
+| `authenticate` | On a request whose bearer token BrainStack did not issue | The token | Wherever OAuth tokens authenticate: `/mcp` and plugin routes behind `requireAuth` |
 | `onToolCall` | After every MCP tool call | Tool, caller, arguments, outcome, duration | |
 | `onEvent` | After every change lands | The event, its vault, who did it and through what | |
 
@@ -101,12 +102,40 @@ plugin (`audit_…`) and leave BrainStack's tables alone, because their shape is
 Everything a plugin mounts lives under its own name, so it cannot answer in place of a BrainStack
 route. Every request to `/plugins/*` is rate limited per client address, and its body is capped like
 BrainStack's small routes, before it reaches the plugin. Nothing is authenticated for you: a route that
-needs a caller uses `requireAuth`, which accepts what `/mcp` accepts (session cookie, API key or OAuth
-token) and puts the caller on `c.var.principal`.
+needs a caller uses `requireAuth`, which accepts what `/mcp` accepts (session cookie, API key, OAuth
+token or a token a plugin recognises) and puts the caller on `c.var.principal`.
 
 Procedures built with `protectedProcedure` refuse anonymous callers and refuse a read-only key's
 mutations. Procedures built with `sessionProcedure` refuse anything but a signed-in person. The web
 app's `AppRouter` type does not include plugin procedures, so a plugin's client knows its own.
+
+### Bearer tokens
+
+`authenticate(token)` lets a plugin accept a token BrainStack did not issue, such as a JWT that another
+system signs for its own users. It answers `null` for a token that is not its own, or which account the
+token stands for and what it may do:
+
+```ts
+authenticate(token) {
+  const claims = verifyWithTheIssuersPublicKey(token); // signature, issuer, audience, expiry
+  if (!claims) return null;
+  return { userId: accountFor(claims), scopes: ['notes:read'], ref: claims.jti };
+}
+```
+
+- **It adds a way in and never replaces one.** BrainStack checks its own API keys and OAuth tokens
+  first. A plugin is asked only about a token they turned down. Plugins are asked in the order they
+  were passed, and the first one that answers wins.
+- **It works where OAuth tokens do**: on `/mcp` and on plugin routes behind `requireAuth`. It does not
+  work on the web app's tRPC, which reads a session cookie or an API key.
+- **Scopes read like an API key's.** `['notes:read']` is read-only. `['notes:write']` may also change,
+  share and delete. `scopes` is required because an empty list means full access, which is what a
+  key made before scopes existed carries.
+- **Checking the token is the plugin's whole job**, including signature, issuer, audience and
+  expiry. What the account can reach afterwards is still decided by `SharingService`, as for any other
+  caller. An account that does not exist is refused. A plugin that throws is logged, and the token is
+  refused instead of failing the request.
+- A tool call made with such a token reports `clientRef` as `plugin:<name>:<ref>`.
 
 ### Events
 

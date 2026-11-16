@@ -23,7 +23,7 @@ import type { TrustedProxy } from '../lib/clientIp.js';
 import { createLoginRateLimiter, type LoginRateLimiter } from '../lib/rateLimitLogin.js';
 import { describeError, toAppError } from '../lib/errors.js';
 
-import { buildAuthMiddleware, type AuthBindings } from './middleware/auth.js';
+import { buildAuthMiddleware, type AuthBindings, type BearerPlugin } from './middleware/auth.js';
 import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
@@ -115,6 +115,11 @@ export interface BuildAppOptions {
    * with the auth middlewares the app's own routes use.
    */
   pluginRoutes?(auth: PluginAuth): ReadonlyArray<{ name: string; routes: Hono<AuthBindings> }>;
+  /**
+   * Plugins that recognise bearer tokens of their own, asked after API keys
+   * and OAuth tokens wherever those authenticate (see `middleware/auth.ts`).
+   */
+  bearerPlugins?: readonly BearerPlugin[];
 }
 
 /** The auth middlewares a plugin's routes are given. */
@@ -201,6 +206,8 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
     auth: opts.auth,
     apiKeys: opts.apiKeys,
     resolveUser: opts.resolveUserForApiKey,
+    logger: opts.logger,
+    ...(opts.bearerPlugins?.length ? { bearerPlugins: opts.bearerPlugins } : {}),
     ...(opts.oauth
       ? {
           oauthTokens: opts.oauth.service,

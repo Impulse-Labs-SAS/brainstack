@@ -17,6 +17,7 @@ export {
   PLUGIN_NAME,
   pluginMigrationName,
   type BrainStackPlugin,
+  type PluginCredential,
   type PluginHttpContext,
   type PluginSetupContext,
   type ToolCall,

@@ -109,6 +109,33 @@ describe('plugin migrations and setup', () => {
     expect((await bs.app.fetch(new Request('http://test/api/health'))).status).toBe(200);
   });
 
+  it('let a plugin recognise bearer tokens of its own on /mcp', async () => {
+    let userId = '';
+    const sso: BrainStackPlugin = {
+      name: 'sso',
+      async setup({ services }) {
+        userId = (await services.auth.ensureUser('frodo@example.com')).id;
+      },
+      authenticate: (token) =>
+        token === 'signed-elsewhere' ? { userId, scopes: ['notes:read'], ref: 'test' } : null,
+    };
+    const bs = await boot([sso]);
+    const list = (authorization: string) =>
+      bs.app.fetch(
+        new Request('http://test/api/mcp', {
+          method: 'POST',
+          headers: {
+            authorization,
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+        }),
+      );
+    expect((await list('Bearer signed-elsewhere')).status).toBe(200);
+    expect((await list('Bearer forged')).status).toBe(401);
+  });
+
   it('fail the boot when a setup throws', async () => {
     const broken: BrainStackPlugin = {
       name: 'broken',
