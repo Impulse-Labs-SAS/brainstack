@@ -128,11 +128,7 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
     },
   );
 
-  /**
-   * apply_changes, and save_notes, its name until it learnt to move notes and
-   * create folders. The old name stays for one release so a client that still
-   * lists it keeps working; both run the same code and answer the same way.
-   */
+  /** apply_changes: a plan of writes, moves and new folders, run in order. */
   const CHANGE_FIELDS = {
     ownerId: OWNER_ARG,
   };
@@ -233,16 +229,6 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
       inputSchema: { changes: CHANGES },
     },
     async ({ changes }) => runChanges(changes),
-  );
-
-  server.registerTool(
-    'save_notes',
-    {
-      title: 'Save several changes at once (deprecated)',
-      description: `Deprecated: use apply_changes, which takes the same changes as \`changes\`. This name stays for one release and then goes. ${APPLY_DESCRIPTION}`,
-      inputSchema: { writes: CHANGES },
-    },
-    async ({ writes }) => runChanges(writes),
   );
 
   server.registerTool(
