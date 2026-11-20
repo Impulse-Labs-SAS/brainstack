@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAX_DOCUMENT_BYTES,
-  cleanDocxMarkdown,
+  htmlToMarkdown,
   documentKind,
   documentProblem,
   pdfToMarkdown,
+  type HtmlNode,
   type PdfRun,
 } from './import-document';
 
@@ -50,18 +51,63 @@ describe('pdfToMarkdown', () => {
     );
   });
 
-  it('ends a paragraph at the end of a page, and gives nothing for a page with no text', () => {
-    expect(pdfToMarkdown([[line('one', 100)], [], [line('two', 700)]])).toBe('one\n\ntwo');
+  it('carries a paragraph over a page break unless it ended a sentence', () => {
+    expect(pdfToMarkdown([[line('one.', 100)], [], [line('two', 700)]])).toBe('one.\n\ntwo');
+    expect(pdfToMarkdown([[line('cut in the', 100)], [line('middle.', 700)]])).toBe(
+      'cut in the middle.',
+    );
     expect(pdfToMarkdown([[], []])).toBe('');
   });
 });
 
-describe('cleanDocxMarkdown', () => {
-  it('drops images and anchors and undoes needless escapes', () => {
-    expect(
-      cleanDocxMarkdown(
-        '# <a id="x"></a>Title\n\n\n\n![](data:image/png;base64,AAA)Ends here\\. Really \\(yes\\)',
-      ),
-    ).toBe('# Title\n\nEnds here. Really (yes)');
+/** A tiny DOM, enough for the conversion: elements and text. */
+const el = (
+  name: string,
+  kids: Array<HtmlNode | string> = [],
+  attrs: Record<string, string> = {},
+): HtmlNode => ({
+  nodeType: 1,
+  nodeName: name.toUpperCase(),
+  textContent: null,
+  childNodes: kids.map((k) =>
+    typeof k === 'string' ? { nodeType: 3, nodeName: '#text', textContent: k, childNodes: [] } : k,
+  ),
+  getAttribute: (n) => attrs[n] ?? null,
+});
+
+describe('htmlToMarkdown', () => {
+  it('turns headings, paragraphs, lists, tables and emphasis into Markdown', () => {
+    const body = el('body', [
+      el('h1', [el('a', [], { id: '_x' }), 'Atlas']),
+      el('p', [
+        'Plain ',
+        el('strong', ['bold']),
+        ' and ',
+        el('em', ['italic']),
+        '. ',
+        el('img', [], { src: '' }),
+      ]),
+      el('ul', [el('li', ['One', el('ul', [el('li', ['Nested'])])]), el('li', ['Two'])]),
+      el('ol', [el('li', ['First']), el('li', ['Second'])]),
+      el('table', [
+        el('tr', [el('td', [el('p', ['Phase'])]), el('td', [el('p', ['Weeks'])])]),
+        el('tr', [el('td', [el('p', ['A|B'])]), el('td', [el('p', ['4'])])]),
+      ]),
+      el('p', [
+        el('a', ['site'], { href: 'https://example.com' }),
+        ' ',
+        el('a', ['local'], { href: 'javascript:x' }),
+      ]),
+    ]);
+    expect(htmlToMarkdown(body)).toBe(
+      [
+        '# Atlas',
+        'Plain **bold** and _italic_.',
+        '- One\n  - Nested\n- Two',
+        '1. First\n2. Second',
+        '| Phase | Weeks |\n| --- | --- |\n| A\\|B | 4 |',
+        '[site](https://example.com) local',
+      ].join('\n\n'),
+    );
   });
 });

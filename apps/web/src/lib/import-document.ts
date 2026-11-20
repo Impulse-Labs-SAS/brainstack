@@ -96,20 +96,21 @@ interface Line {
  * PDF text runs as Markdown. A PDF has no paragraphs or headings, only text
  * placed on a page, so they are read back from the layout: a line set in a
  * clearly larger font than the body is a heading, and a gap wider than the
- * usual line spacing ends a paragraph. Lines within a paragraph are joined,
+ * usual line spacing ends a paragraph, as does the end of a page when the
+ * paragraph ended a sentence there. Lines within a paragraph are joined,
  * a hyphen that broke a word at the end of a line rejoined.
  */
 export function pdfToMarkdown(pages: PdfRun[][]): string {
   const pageLines = pages.map(toLines);
   const body = bodySize(pageLines.flat());
   const blocks: string[] = [];
+  let paragraph = '';
+  const end = () => {
+    if (paragraph.trim()) blocks.push(paragraph.trim());
+    paragraph = '';
+  };
   for (const lines of pageLines) {
-    let paragraph = '';
     let previous: Line | null = null;
-    const end = () => {
-      if (paragraph.trim()) blocks.push(paragraph.trim());
-      paragraph = '';
-    };
     for (const line of lines) {
       const level = headingLevel(line, body);
       if (level) {
@@ -123,8 +124,10 @@ export function pdfToMarkdown(pages: PdfRun[][]): string {
       paragraph = joinLine(paragraph, line.text);
       previous = line;
     }
-    end();
+    // A paragraph that did not end a sentence carries on over the page break.
+    if (/[.!?:;)"»”]$/.test(paragraph.trim())) end();
   }
+  end();
   return blocks.join('\n\n');
 }
 
@@ -184,25 +187,146 @@ function joinLine(paragraph: string, line: string): string {
 // -- Word ---------------------------------------------------------------------
 
 async function readDocx(data: ArrayBuffer): Promise<string> {
-  const mammoth = (await import('mammoth')).default as unknown as {
-    convertToMarkdown(input: { arrayBuffer: ArrayBuffer }): Promise<{ value: string }>;
-  };
-  // Images are left out: a note carries text, and an embedded image would come
-  // back as a data URL many times longer than the document's words.
-  const { value } = await mammoth.convertToMarkdown({ arrayBuffer: data });
-  return cleanDocxMarkdown(value);
+  const mammoth = (await import('mammoth')).default;
+  const { value } = await mammoth.convertToHtml(
+    { arrayBuffer: data },
+    {
+      // A document's title is set in Word's Title style, not as a heading.
+      styleMap: ["p[style-name='Title'] => h1:fresh", "p[style-name='Subtitle'] => h2:fresh"],
+      // Images are left out: a note carries text, and an embedded image would
+      // come back as a data URL many times longer than the document's words.
+      convertImage: mammoth.images.imgElement(async () => ({ src: '' })),
+    },
+  );
+  const body = new DOMParser().parseFromString(value, 'text/html').body;
+  return htmlToMarkdown(body as unknown as HtmlNode);
+}
+
+/** The part of a DOM node the conversion reads, so it can be tested without a browser. */
+export interface HtmlNode {
+  /** 3 for text, 1 for an element. */
+  nodeType: number;
+  nodeName: string;
+  textContent: string | null;
+  childNodes: ArrayLike<HtmlNode>;
+  getAttribute?(name: string): string | null;
 }
 
 /**
- * Mammoth's Markdown, tidied: images dropped, the empty anchors it leaves at
- * every heading removed, and its escaping of ordinary punctuation undone where
- * Markdown would not misread it.
+ * The HTML Mammoth makes of a Word file, as Markdown: headings, paragraphs,
+ * lists (nested ones indented), tables, bold, italics and web links. What a
+ * note cannot carry — images, page layout — is left out.
  */
-export function cleanDocxMarkdown(markdown: string): string {
-  return markdown
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/<a id="[^"]*"><\/a>/g, '')
-    .replace(/\\([.()!])/g, '$1')
+export function htmlToMarkdown(root: HtmlNode): string {
+  return blocks(root, 0)
+    .join('\n\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+const children = (node: HtmlNode) => Array.from(node.childNodes);
+const tag = (node: HtmlNode) => node.nodeName.toLowerCase();
+
+function blocks(node: HtmlNode, depth: number): string[] {
+  const out: string[] = [];
+  for (const child of children(node)) {
+    if (child.nodeType === 3) {
+      const text = collapse(child.textContent ?? '');
+      if (text.trim()) out.push(text.trim());
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    const name = tag(child);
+    const heading = /^h([1-6])$/.exec(name);
+    if (heading) {
+      const text = inline(child).trim();
+      if (text) out.push(`${'#'.repeat(Number(heading[1]))} ${text.replace(/\n/g, ' ')}`);
+    } else if (name === 'p') {
+      const text = inline(child).trim();
+      if (text) out.push(text);
+    } else if (name === 'ul' || name === 'ol') {
+      out.push(list(child, depth));
+    } else if (name === 'table') {
+      out.push(table(child));
+    } else {
+      out.push(...blocks(child, depth));
+    }
+  }
+  return out.filter((b) => b !== '');
+}
+
+function list(node: HtmlNode, depth: number): string {
+  const ordered = tag(node) === 'ol';
+  const indent = '  '.repeat(depth);
+  const lines: string[] = [];
+  let n = 0;
+  for (const li of children(node)) {
+    if (li.nodeType !== 1 || tag(li) !== 'li') continue;
+    n++;
+    const nested: string[] = [];
+    let text = '';
+    for (const part of children(li)) {
+      if (part.nodeType === 1 && (tag(part) === 'ul' || tag(part) === 'ol')) {
+        nested.push(list(part, depth + 1));
+      } else {
+        text += part.nodeType === 3 ? collapse(part.textContent ?? '') : inline(part);
+      }
+    }
+    lines.push(`${indent}${ordered ? `${n}.` : '-'} ${text.trim().replace(/\n/g, ' ')}`, ...nested);
+  }
+  return lines.join('\n');
+}
+
+function table(node: HtmlNode): string {
+  const rows: string[][] = [];
+  const walk = (n: HtmlNode) => {
+    for (const child of children(n)) {
+      if (child.nodeType !== 1) continue;
+      if (tag(child) === 'tr') {
+        rows.push(
+          children(child)
+            .filter((c) => c.nodeType === 1 && (tag(c) === 'td' || tag(c) === 'th'))
+            .map((c) => blocks(c, 0).join(' ').replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()),
+        );
+      } else {
+        walk(child);
+      }
+    }
+  };
+  walk(node);
+  if (rows.length === 0) return '';
+  const width = Math.max(...rows.map((r) => r.length));
+  const row = (cells: string[]) =>
+    `| ${Array.from({ length: width }, (_, i) => cells[i] ?? '').join(' | ')} |`;
+  return [
+    row(rows[0]!),
+    row(Array.from({ length: width }, () => '---')),
+    ...rows.slice(1).map(row),
+  ].join('\n');
+}
+
+function inline(node: HtmlNode): string {
+  let out = '';
+  for (const child of children(node)) {
+    if (child.nodeType === 3) {
+      out += collapse(child.textContent ?? '');
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    const name = tag(child);
+    const inner = inline(child);
+    if (name === 'br') out += '\n';
+    else if (name === 'img') continue;
+    else if ((name === 'strong' || name === 'b') && inner.trim()) out += `**${inner.trim()}**`;
+    else if ((name === 'em' || name === 'i') && inner.trim()) out += `_${inner.trim()}_`;
+    else if (name === 'a') {
+      const href = child.getAttribute?.('href') ?? '';
+      out += /^https?:\/\//i.test(href) && inner.trim() ? `[${inner.trim()}](${href})` : inner;
+    } else out += inner;
+  }
+  return out;
+}
+
+function collapse(text: string): string {
+  return text.replace(/\s+/g, ' ');
 }
