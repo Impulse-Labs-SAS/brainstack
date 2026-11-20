@@ -16,7 +16,9 @@ const taken = (...paths: string[]): DocumentLookup => ({
 
 /** A paragraph of about `chars` characters, with spaces so it reads as words. */
 const para = (chars: number, word = 'ledger') =>
-  Array.from({ length: Math.ceil(chars / (word.length + 1)) }, () => word).join(' ').slice(0, chars);
+  Array.from({ length: Math.ceil(chars / (word.length + 1)) }, () => word)
+    .join(' ')
+    .slice(0, chars);
 
 describe('documentTitle', () => {
   it('keeps the basename without its extension', () => {
@@ -33,17 +35,28 @@ describe('documentTitle', () => {
 describe('planDocumentImport', () => {
   it('makes a short document one note, in the folder it was imported into', async () => {
     const plan = await planDocumentImport(
-      { markdown: '# Orbit\r\n\r\n\r\n\r\nShort text.  ', fileName: 'Orbit.pdf', folder: 'clients/' },
+      {
+        markdown: '# Orbit\r\n\r\n\r\n\r\nShort text.  ',
+        fileName: 'Orbit.pdf',
+        folder: 'clients/',
+      },
       none,
     );
     expect(plan.notes).toEqual([
-      { path: 'clients/Orbit.md', content: '# Orbit\n\nShort text.\n', frontmatter: { source: 'Orbit.pdf' } },
+      {
+        path: 'clients/Orbit.md',
+        content: '# Orbit\n\nShort text.\n',
+        frontmatter: { source: 'Orbit.pdf' },
+      },
     ]);
     expect(plan.entry).toBe('clients/Orbit.md');
   });
 
   it('puts a document imported at the root in Documentos', async () => {
-    const plan = await planDocumentImport({ markdown: 'text', fileName: 'a.txt', folder: '' }, none);
+    const plan = await planDocumentImport(
+      { markdown: 'text', fileName: 'a.txt', folder: '' },
+      none,
+    );
     expect(plan.entry).toBe('Documentos/a.md');
   });
 
@@ -65,7 +78,10 @@ describe('planDocumentImport', () => {
       '## not a heading',
       '```',
     ].join('\n');
-    const plan = await planDocumentImport({ markdown, fileName: 'Erebor.docx', folder: 'docs' }, none);
+    const plan = await planDocumentImport(
+      { markdown, fileName: 'Erebor.docx', folder: 'docs' },
+      none,
+    );
 
     expect(plan.folder).toBe('docs/Erebor');
     expect(plan.entry).toBe('docs/Erebor/_Erebor.md');
@@ -90,7 +106,11 @@ describe('planDocumentImport', () => {
     const paragraphs = Array.from({ length: 6 }, () => para(2_500)).join('\n\n');
     const wall = 'x'.repeat(13_000);
     const plan = await planDocumentImport(
-      { markdown: `## Long\n\n${paragraphs}\n\n## Wall\n\n${wall}`, fileName: 'Atlas.txt', folder: '' },
+      {
+        markdown: `## Long\n\n${paragraphs}\n\n## Wall\n\n${wall}`,
+        fileName: 'Atlas.txt',
+        folder: '',
+      },
       none,
     );
     const parts = plan.notes.slice(0, -1);
@@ -119,8 +139,13 @@ describe('planDocumentImport', () => {
   });
 
   it('refuses a document that would become too many notes', async () => {
-    const markdown = Array.from({ length: MAX_IMPORT_NOTES + 5 }, (_, i) => `## S${i}\n\n${para(5_500)}`).join('\n\n');
-    const err = await planDocumentImport({ markdown, fileName: 'big.pdf', folder: '' }, none).catch((e) => e);
+    const markdown = Array.from(
+      { length: MAX_IMPORT_NOTES + 5 },
+      (_, i) => `## S${i}\n\n${para(5_500)}`,
+    ).join('\n\n');
+    const err = await planDocumentImport({ markdown, fileName: 'big.pdf', folder: '' }, none).catch(
+      (e) => e,
+    );
     expect(err).toBeInstanceOf(DocumentImportError);
     expect(err.code).toBe('TOO_LONG');
   });

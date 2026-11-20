@@ -28,7 +28,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await database.reset();
   for (const id of ['alice', 'bob']) {
-    await database.db.insert(users).values({ id, email: `${id}@brain.test`, createdAt: Date.now(), updatedAt: 0 });
+    await database.db
+      .insert(users)
+      .values({ id, email: `${id}@brain.test`, createdAt: Date.now(), updatedAt: 0 });
   }
 });
 
@@ -54,7 +56,9 @@ function callerFor(id: string) {
   return appRouter.createCaller(buildContext(services, { kind: 'user', user: asUser(id) }));
 }
 
-const longDocument = ['## Scope', 'orbit '.repeat(800), '## Terms', 'ledger '.repeat(800)].join('\n\n');
+const longDocument = ['## Scope', 'orbit '.repeat(800), '## Terms', 'ledger '.repeat(800)].join(
+  '\n\n',
+);
 
 describe('notes.importDocument', () => {
   it('reports what a dry run would create and writes nothing', async () => {
@@ -77,7 +81,11 @@ describe('notes.importDocument', () => {
 
   it('writes the notes, searchable, with the file as their source', async () => {
     const alice = callerFor('alice');
-    await alice.notes.importDocument({ fileName: 'Orbit.pdf', folder: 'clients', markdown: longDocument });
+    await alice.notes.importDocument({
+      fileName: 'Orbit.pdf',
+      folder: 'clients',
+      markdown: longDocument,
+    });
 
     const index = await alice.notes.get({ path: 'clients/Orbit/_Orbit.md' });
     expect(index.body).toContain('[[Orbit 01 - Scope]]');
@@ -85,20 +93,30 @@ describe('notes.importDocument', () => {
     const part = await alice.notes.get({ path: 'clients/Orbit/Orbit 02 - Terms.md' });
     expect(part.body).toContain('[[clients/Orbit/_Orbit]]');
     const hits = await alice.search.query({ query: 'ledger' });
-    expect(hits.map((h: { path: string }) => h.path)).toContain('clients/Orbit/Orbit 02 - Terms.md');
+    expect(hits.map((h: { path: string }) => h.path)).toContain(
+      'clients/Orbit/Orbit 02 - Terms.md',
+    );
   });
 
   it('never overwrites: a second import of the same file gets the next name', async () => {
     const alice = callerFor('alice');
     await alice.notes.importDocument({ fileName: 'Atlas.txt', folder: 'x', markdown: 'first' });
-    const second = await alice.notes.importDocument({ fileName: 'Atlas.txt', folder: 'x', markdown: 'second' });
+    const second = await alice.notes.importDocument({
+      fileName: 'Atlas.txt',
+      folder: 'x',
+      markdown: 'second',
+    });
     expect(second.entry).toBe('x/Atlas (2).md');
     expect((await alice.notes.get({ path: 'x/Atlas.md' })).body).toContain('first');
   });
 
   it('refuses a document with no text', async () => {
     await expect(
-      callerFor('alice').notes.importDocument({ fileName: 'scan.pdf', folder: '', markdown: '   ' }),
+      callerFor('alice').notes.importDocument({
+        fileName: 'scan.pdf',
+        folder: '',
+        markdown: '   ',
+      }),
     ).rejects.toThrow(/no text/);
   });
 

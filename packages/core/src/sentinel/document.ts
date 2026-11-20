@@ -100,9 +100,15 @@ export async function planDocumentImport(
       'INVALID_INPUT',
     );
   }
-  const title = input.title !== undefined ? cleanName(input.title, MAX_TITLE_CHARS) : documentTitle(input.fileName);
+  const title =
+    input.title !== undefined
+      ? cleanName(input.title, MAX_TITLE_CHARS)
+      : documentTitle(input.fileName);
   if (title === '') {
-    throw new DocumentImportError(`no note name can be made from ${JSON.stringify(input.fileName)}`, 'INVALID_INPUT');
+    throw new DocumentImportError(
+      `no note name can be made from ${JSON.stringify(input.fileName)}`,
+      'INVALID_INPUT',
+    );
   }
   const base = trimSlashes(input.folder) || DEFAULT_IMPORT_FOLDER;
   const source = input.fileName.split(/[\\/]/).pop() ?? input.fileName;
@@ -129,7 +135,12 @@ function layout(
   const frontmatter = { source };
   if (noteSize(text).chars <= maxChars) {
     const path = `${base}/${title}.md`;
-    return { title, folder: base, entry: path, notes: [{ path, content: `${text}\n`, frontmatter }] };
+    return {
+      title,
+      folder: base,
+      entry: path,
+      notes: [{ path, content: `${text}\n`, frontmatter }],
+    };
   }
 
   const folder = `${base}/${title}`;
@@ -152,7 +163,12 @@ function layout(
     const number = String(i + 1).padStart(width, '0');
     const heading = part.heading ? cleanName(part.heading, MAX_HEADING_CHARS) : '';
     const name = heading ? `${title} ${number} - ${heading}` : `${title} ${number}`;
-    return { name, path: `${folder}/${name}.md`, content: `${part.text}\n\n${footer}\n`, frontmatter };
+    return {
+      name,
+      path: `${folder}/${name}.md`,
+      content: `${part.text}\n\n${footer}\n`,
+      frontmatter,
+    };
   });
   const index =
     `# ${title}\n\n` +
@@ -223,7 +239,10 @@ function pack(chunks: Chunk[], budget: number): Chunk[] {
 
 function cut(chunk: Chunk, budget: number): Chunk[] {
   if (noteSize(chunk.text).chars <= budget) return [chunk];
-  const at = (text: string): Chunk => ({ ...(chunk.heading !== undefined ? { heading: chunk.heading } : {}), text });
+  const at = (text: string): Chunk => ({
+    ...(chunk.heading !== undefined ? { heading: chunk.heading } : {}),
+    text,
+  });
   for (const separator of ['\n\n', '\n']) {
     const units = chunk.text.split(separator).filter((u) => u.trim() !== '');
     if (units.length < 2) continue;
@@ -242,18 +261,28 @@ function cut(chunk: Chunk, budget: number): Chunk[] {
   // character outside the BMP is never split in half.
   const points = [...chunk.text];
   const out: Chunk[] = [];
-  for (let i = 0; i < points.length; i += budget) out.push(at(points.slice(i, i + budget).join('').trim()));
+  for (let i = 0; i < points.length; i += budget)
+    out.push(
+      at(
+        points
+          .slice(i, i + budget)
+          .join('')
+          .trim(),
+      ),
+    );
   return out.filter((c) => c.text !== '');
 }
 
 function normalizeText(markdown: string): string {
-  return markdown
-    .replace(/\r\n?/g, '\n')
-    // eslint-disable-next-line no-control-regex -- control characters are what is removed
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
-    .replace(/[ \t]+$/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return (
+    markdown
+      .replace(/\r\n?/g, '\n')
+      // eslint-disable-next-line no-control-regex -- control characters are what is removed
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+      .replace(/[ \t]+$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  );
 }
 
 /**
