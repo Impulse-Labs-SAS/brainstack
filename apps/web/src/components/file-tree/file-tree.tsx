@@ -4,7 +4,9 @@
 // (server rewrites wikilinks). Every row has a ⋯ menu, also on right-click,
 // and Delete on a focused row asks to delete it. Drop OS `.md` files onto a
 // folder to import them as notes — imports run one-by-one so a single failure
-// doesn't take down the rest of the batch.
+// doesn't take down the rest of the batch. A PDF, Word or text file dropped
+// the same way is read in the browser and imported as notes after the person
+// sees how many it becomes (lib/import-document.ts).
 //
 // Three groups, top to bottom: the notes this browser opened last, your own
 // vault, and the folders other people shared with you, grouped by owner.
@@ -49,6 +51,7 @@ import { trpc } from '@/lib/trpc';
 import { useModKey, useOpenPalette } from '@/components/layout/app-shell';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
 import { isInside, nodeId, parseNodeId, sameNode, type NodeRef } from '@/lib/tree-node-id';
+import { documentProblem, readDocument } from '@/lib/import-document';
 import { importMarkdownFiles, isMarkdownFile, summarizeImport } from '@/lib/import-md';
 import { forgetRecent, useRecentNotes } from '@/lib/recent-notes';
 import { groupSharedOwners } from '@/lib/shared-owners';
@@ -537,6 +540,7 @@ export function FileTree() {
   const moveM = trpc.notes.move.useMutation();
   const moveToOwnerM = trpc.notes.moveToOwner.useMutation();
   const createM = trpc.notes.create.useMutation();
+  const importDocM = trpc.notes.importDocument.useMutation();
   const createFolderM = trpc.notes.createFolder.useMutation();
   const removeM = trpc.notes.remove.useMutation();
 
@@ -832,29 +836,81 @@ export function FileTree() {
    * carpeta compartida escribe en la bóveda de su dueño, que es lo que
    * mantiene el share cubriendo lo que acaba de entrar.
    */
-  const runImport = useCallback(
-    async (ref: NodeRef, fileList: FileList) => {
-      const files = Array.from(fileList).filter(isMarkdownFile);
-      const ignored = fileList.length - files.length;
-      if (files.length === 0) {
-        pushToast('error', 'nothing to import — only .md files');
+  /** The import waiting on the person: how many notes a document becomes, and where. */
+  const [importConfirm, setImportConfirm] = useState<{
+    title: string;
+    message: string;
+    resolve(ok: boolean): void;
+  } | null>(null);
+
+  /**
+   * A PDF, Word or text file as notes. Read here, in the browser — only its
+   * text goes to the server — then a dry run says what it would create, the
+   * person confirms, and the same call saves it.
+   */
+  const importDocument = useCallback(
+    async (ref: NodeRef, file: File) => {
+      const problem = documentProblem(file);
+      if (problem) {
+        pushToast('error', `${file.name}: ${problem}`);
         return;
       }
+      try {
+        const markdown = await readDocument(file);
+        const input = { fileName: file.name, folder: ref.path, markdown, ownerId: ref.ownerId };
+        const plan = await importDocM.mutateAsync({ ...input, dryRun: true });
+        const count = plan.notes.length;
+        const ok = await new Promise<boolean>((resolve) =>
+          setImportConfirm({
+            title: `Import ${file.name}?`,
+            message:
+              count === 1
+                ? `It becomes one note:\n${plan.entry}`
+                : `It becomes ${count} notes — ${count - 1} parts and an index — in a folder of its own:\n` +
+                  `${plan.folder}/\n\nThe original file is not kept, only its text.`,
+            resolve,
+          }),
+        );
+        if (!ok) return;
+        const saved = await importDocM.mutateAsync(input);
+        setExpanded((prev) => new Set(prev).add(nodeId(ref)));
+        await refresh();
+        pushToast(
+          'info',
+          `imported ${file.name} as ${saved.notes.length} note${saved.notes.length === 1 ? '' : 's'}`,
+        );
+        router.push(notePathToRoute({ ownerId: ref.ownerId, path: saved.entry }, mine));
+      } catch (err) {
+        pushToast('error', `${file.name}: ${(err as Error).message || 'could not be read'}`);
+      }
+    },
+    [importDocM, refresh, pushToast, router, mine],
+  );
+
+  const runImport = useCallback(
+    async (ref: NodeRef, fileList: FileList) => {
+      const all = Array.from(fileList);
+      const files = all.filter(isMarkdownFile);
+      const documents = all.filter((f) => !isMarkdownFile(f));
+      if (files.length === 0 && documents.length === 0) return;
 
       markBusy(ref, true);
       try {
-        const summary = await importMarkdownFiles(files, ref.path, ({ path, content }) =>
-          createM.mutateAsync({ path, ownerId: ref.ownerId, content }),
-        );
-        setExpanded((prev) => new Set(prev).add(nodeId(ref)));
-        await refresh();
-        const { kind, text } = summarizeImport(summary);
-        pushToast(kind, ignored > 0 ? `${text} — ${ignored} ignored (not .md)` : text);
+        if (files.length > 0) {
+          const summary = await importMarkdownFiles(files, ref.path, ({ path, content }) =>
+            createM.mutateAsync({ path, ownerId: ref.ownerId, content }),
+          );
+          setExpanded((prev) => new Set(prev).add(nodeId(ref)));
+          await refresh();
+          const { kind, text } = summarizeImport(summary);
+          pushToast(kind, text);
+        }
+        for (const file of documents) await importDocument(ref, file);
       } finally {
         markBusy(ref, false);
       }
     },
-    [createM, refresh, pushToast, markBusy],
+    [createM, refresh, pushToast, markBusy, importDocument],
   );
 
   /** El destino elegido, esperando a que el diálogo de archivos devuelva algo. */
@@ -1144,7 +1200,7 @@ export function FileTree() {
                   />
                   <HeaderAction
                     icon={FileUp}
-                    label="Import .md files"
+                    label="Import files (.md, PDF, Word, text)"
                     onClick={() => importNotes({ ownerId: mine, path: '' })}
                   />
                 </>
@@ -1231,7 +1287,7 @@ export function FileTree() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".md,.markdown,text/markdown"
+        accept=".md,.markdown,text/markdown,.pdf,application/pdf,.docx,.txt,text/plain,.csv,text/csv"
         className="hidden"
         onChange={onFilePicked}
       />
@@ -1250,6 +1306,21 @@ export function FileTree() {
         folderPath={shareFolderPath ?? ''}
         open={shareFolderPath !== null}
         onClose={() => setShareFolderPath(null)}
+      />
+
+      <ConfirmModal
+        open={importConfirm !== null}
+        title={importConfirm?.title ?? ''}
+        message={importConfirm?.message}
+        okLabel="Import"
+        onCancel={() => {
+          importConfirm?.resolve(false);
+          setImportConfirm(null);
+        }}
+        onConfirm={() => {
+          importConfirm?.resolve(true);
+          setImportConfirm(null);
+        }}
       />
 
       <ConfirmModal
@@ -1354,7 +1425,7 @@ function RowMenu({
           icon: FolderPlus,
           run: () => actions.newFolder(container),
         },
-        { label: 'Import .md files…', icon: FileUp, run: () => actions.importHere(container) },
+        { label: 'Import files…', icon: FileUp, run: () => actions.importHere(container) },
       );
     }
     if (!isRoot) {

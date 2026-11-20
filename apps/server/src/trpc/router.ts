@@ -3,13 +3,14 @@
 // same underlying services, so behaviour stays consistent.
 
 import { serializeNote, type Frontmatter } from '@brainstack/core';
-import { NOTE_MAX_CHARS } from '@brainstack/core/sentinel';
+import { DEFAULT_IMPORT_FOLDER, NOTE_MAX_CHARS } from '@brainstack/core/sentinel';
 import { TRPCError, initTRPC, type AnyTRPCRouter } from '@trpc/server';
 import superjson from 'superjson';
 import { z } from 'zod';
 
 import { emailField, field, frontmatterField, noteContent } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
+import { describeImport, planImport, writeImport } from '../services/importDocument.js';
 import { approveShareRequest } from '../services/shareRequests.js';
 import { AppError, INTERNAL_MESSAGE, toAppError } from '../lib/errors.js';
 import { API_KEY_SCOPES, READ_ONLY_MESSAGE, scopesAllowWrite } from '../lib/scopes.js';
@@ -383,6 +384,41 @@ export const appRouter = t.router({
           const owner = ownerOf(ctx, input.ownerId);
           await assertWritable(ctx, owner, input.path, input.ownerId !== undefined);
           return ctx.notes.createFolder(owner, input.path);
+        }),
+      ),
+    /**
+     * A document — a PDF, a Word file, plain text — as notes. The web app reads
+     * the file in the browser and sends its text as Markdown; Sentinel decides
+     * the notes (`planDocumentImport`). With `dryRun`, says what it would create
+     * and writes nothing, for the person to confirm.
+     */
+    importDocument: protectedProcedure
+      .input(
+        z.object({
+          fileName: field().min(1),
+          /** The folder it is imported into; '' is the root. */
+          folder: field(),
+          markdown: noteContent(),
+          title: field().optional(),
+          ownerId: OwnerInput,
+          dryRun: z.boolean().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          const owner = ownerOf(ctx, input.ownerId);
+          const named = input.ownerId !== undefined;
+          // Before the plan reads which names are taken in that vault.
+          await assertWritable(ctx, owner, input.folder || DEFAULT_IMPORT_FOLDER, named);
+          const plan = await planImport(ctx.notes, owner, {
+            markdown: input.markdown,
+            fileName: input.fileName,
+            folder: input.folder,
+            ...(input.title !== undefined ? { title: input.title } : {}),
+          });
+          await assertWritable(ctx, owner, plan.entry, named);
+          if (!input.dryRun) await writeImport(ctx.notes, owner, plan);
+          return { saved: !input.dryRun, ...describeImport(plan) };
         }),
       ),
     tree: protectedProcedure

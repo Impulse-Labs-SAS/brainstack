@@ -55,3 +55,14 @@ export {
   type PlanLookup,
   type PlannedChange,
 } from './plan.js';
+export {
+  DEFAULT_IMPORT_FOLDER,
+  DocumentImportError,
+  MAX_IMPORT_NOTES,
+  documentTitle,
+  planDocumentImport,
+  type DocumentImportInput,
+  type DocumentImportPlan,
+  type DocumentLookup,
+  type ImportedNote,
+} from './document.js';
