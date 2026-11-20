@@ -6,7 +6,7 @@ import {
   PgNoteChangedError,
   PgNoteNotFoundError,
 } from '@brainstack/core/pg';
-import { NoteEditError, NotePlanError } from '@brainstack/core/sentinel';
+import { DocumentImportError, NoteEditError, NotePlanError } from '@brainstack/core/sentinel';
 
 export class AppError extends Error {
   override readonly name = 'AppError';
@@ -54,6 +54,11 @@ export function toAppError(err: unknown): AppError | null {
   // A plan of changes that cannot run as written: which change, and why.
   if (err instanceof NotePlanError) {
     const status = { NOT_FOUND: 404, ALREADY_EXISTS: 409, INVALID_INPUT: 400 }[err.code];
+    return new AppError(err.message, err.code, status);
+  }
+  // A document that cannot be imported as it is: no text, too long, name taken.
+  if (err instanceof DocumentImportError) {
+    const status = { INVALID_INPUT: 400, ALREADY_EXISTS: 409, TOO_LONG: 413 }[err.code];
     return new AppError(err.message, err.code, status);
   }
   return null;
