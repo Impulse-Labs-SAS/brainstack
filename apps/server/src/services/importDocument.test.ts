@@ -56,6 +56,7 @@ function callerFor(id: string) {
   return appRouter.createCaller(buildContext(services, { kind: 'user', user: asUser(id) }));
 }
 
+const TEXT = 'a short document with enough real words in it to count as text';
 const longDocument = ['## Scope', 'orbit '.repeat(800), '## Terms', 'ledger '.repeat(800)].join(
   '\n\n',
 );
@@ -72,8 +73,8 @@ describe('notes.importDocument', () => {
     expect(plan.saved).toBe(false);
     expect(plan.entry).toBe('Documentos/Orbit/_Orbit.md');
     expect(plan.notes.map((n) => n.path)).toEqual([
-      'Documentos/Orbit/Orbit 01 - Scope.md',
-      'Documentos/Orbit/Orbit 02 - Terms.md',
+      'Documentos/Orbit/01 - Scope.md',
+      'Documentos/Orbit/02 - Terms.md',
       'Documentos/Orbit/_Orbit.md',
     ]);
     expect(await alice.notes.list()).toEqual([]);
@@ -88,23 +89,28 @@ describe('notes.importDocument', () => {
     });
 
     const index = await alice.notes.get({ path: 'clients/Orbit/_Orbit.md' });
-    expect(index.body).toContain('[[Orbit 01 - Scope]]');
-    expect(index.frontmatter).toMatchObject({ source: 'Orbit.pdf' });
-    const part = await alice.notes.get({ path: 'clients/Orbit/Orbit 02 - Terms.md' });
+    expect(index.body).toContain('[[01 - Scope]]');
+    expect(index.frontmatter).toMatchObject({ source: 'Orbit.pdf', title: 'Orbit' });
+    const part = await alice.notes.get({ path: 'clients/Orbit/02 - Terms.md' });
+    expect(part.frontmatter).toMatchObject({ title: 'Orbit — Terms' });
     expect(part.body).toContain('[[clients/Orbit/_Orbit]]');
     const hits = await alice.search.query({ query: 'ledger' });
     expect(hits.map((h: { path: string }) => h.path)).toContain(
-      'clients/Orbit/Orbit 02 - Terms.md',
+      'clients/Orbit/02 - Terms.md',
     );
   });
 
   it('never overwrites: a second import of the same file gets the next name', async () => {
     const alice = callerFor('alice');
-    await alice.notes.importDocument({ fileName: 'Atlas.txt', folder: 'x', markdown: 'first' });
+    await alice.notes.importDocument({
+      fileName: 'Atlas.txt',
+      folder: 'x',
+      markdown: `first ${TEXT}`,
+    });
     const second = await alice.notes.importDocument({
       fileName: 'Atlas.txt',
       folder: 'x',
-      markdown: 'second',
+      markdown: `second ${TEXT}`,
     });
     expect(second.entry).toBe('x/Atlas (2).md');
     expect((await alice.notes.get({ path: 'x/Atlas.md' })).body).toContain('first');
@@ -117,7 +123,7 @@ describe('notes.importDocument', () => {
         folder: '',
         markdown: '   ',
       }),
-    ).rejects.toThrow(/no text/);
+    ).rejects.toThrow(/OCR/);
   });
 
   it('cannot write into a vault that shared nothing', async () => {

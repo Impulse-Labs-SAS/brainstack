@@ -12,9 +12,13 @@
 // folder's index) that links every part, and the parts, cut at the document's
 // own headings and packed up to that length, each linking back to the index.
 // The headings are where the author already split it, so a part reads as a
-// section rather than as a page that starts mid-sentence. A section longer than
-// a note is cut at paragraphs, then at lines, then — a wall of text with no
-// breaks at all — at the length itself.
+// section rather than as a page that starts mid-sentence.
+//
+// The steps live apart, each testable on its own: `document/text.ts` tidies
+// the text and refuses one with too little in it (a scan), `document/outline.ts`
+// reads its headings as a tree, `document/partition.ts` decides where it is cut,
+// and `document/naming.ts` what each note is called. This file puts them
+// together and picks paths that are free.
 //
 // The paths are picked here too: a document never lands on a note that
 // already exists. When the name is taken, the next free `Title (2)`, `(3)`…
@@ -24,6 +28,22 @@
 // caller may write in the folder, and writes what this returns.
 
 import { NOTE_MAX_CHARS, noteSize } from './size.js';
+import { DocumentImportError } from './document/errors.js';
+import {
+  MAX_TITLE_CHARS,
+  cleanName,
+  documentTitle,
+  partFileName,
+  partName,
+  partTitle,
+  titleMatcher,
+} from './document/naming.js';
+import { parseOutline, sectionHeadings } from './document/outline.js';
+import { partition } from './document/partition.js';
+import { assertHasText, normalizeText } from './document/text.js';
+
+export { DocumentImportError } from './document/errors.js';
+export { documentTitle } from './document/naming.js';
 
 /** Notes one document may become, index included. Past it, import the part you need. */
 export const MAX_IMPORT_NOTES = 60;
@@ -31,22 +51,8 @@ export const MAX_IMPORT_NOTES = 60;
 /** Where a document imported at the root of a vault goes. */
 export const DEFAULT_IMPORT_FOLDER = 'Documentos';
 
-/** Characters of a document title kept in a note name. */
-const MAX_TITLE_CHARS = 80;
-/** Characters of a heading kept in a part's name. */
-const MAX_HEADING_CHARS = 60;
 /** `Title (2)` … `Title (MAX_SUFFIX)`, tried in order when the name is taken. */
 const MAX_SUFFIX = 20;
-
-export class DocumentImportError extends Error {
-  override readonly name = 'DocumentImportError';
-  constructor(
-    message: string,
-    readonly code: 'INVALID_INPUT' | 'ALREADY_EXISTS' | 'TOO_LONG',
-  ) {
-    super(message);
-  }
-}
 
 export interface DocumentImportInput {
   /** The document's text, as Markdown. */
@@ -57,6 +63,8 @@ export interface DocumentImportInput {
   folder: string;
   /** Overrides the title taken from the file name. */
   title?: string;
+  /** Size of the original file, when known: a lot of file with little text in it is a scan. */
+  fileBytes?: number;
 }
 
 /** What the planner asks of the store. */
@@ -68,7 +76,7 @@ export interface DocumentLookup {
 export interface ImportedNote {
   path: string;
   content: string;
-  frontmatter: { source: string };
+  frontmatter: { source: string; title: string };
 }
 
 export interface DocumentImportPlan {
@@ -82,24 +90,13 @@ export interface DocumentImportPlan {
   notes: ImportedNote[];
 }
 
-/** The title a file name gives: its basename, without extension or anything a path or a link cannot hold. */
-export function documentTitle(fileName: string): string {
-  const base = fileName.split(/[\\/]/).pop() ?? '';
-  return cleanName(base.replace(/\.[A-Za-z0-9]{1,8}$/, ''), MAX_TITLE_CHARS);
-}
-
 export async function planDocumentImport(
   input: DocumentImportInput,
   lookup: DocumentLookup,
   maxChars = NOTE_MAX_CHARS,
 ): Promise<DocumentImportPlan> {
   const text = normalizeText(input.markdown);
-  if (noteSize(text).chars === 0) {
-    throw new DocumentImportError(
-      'the document has no text to import (a scanned PDF needs OCR, which BrainStack does not do)',
-      'INVALID_INPUT',
-    );
-  }
+  assertHasText(text, input.fileBytes);
   const title =
     input.title !== undefined
       ? cleanName(input.title, MAX_TITLE_CHARS)
@@ -132,14 +129,13 @@ function layout(
   source: string,
   maxChars: number,
 ): DocumentImportPlan {
-  const frontmatter = { source };
   if (noteSize(text).chars <= maxChars) {
     const path = `${base}/${title}.md`;
     return {
       title,
       folder: base,
       entry: path,
-      notes: [{ path, content: `${text}\n`, frontmatter }],
+      notes: [{ path, content: `${text}\n`, frontmatter: { source, title } }],
     };
   }
 
@@ -149,7 +145,9 @@ function layout(
   const footer = `## Refs\n\n- [[${folder}/${indexName}]]`;
   // What a part's body may hold, the blank line and the footer kept out of it.
   const budget = maxChars - noteSize(footer).chars - 2;
-  const parts = pack(sections(text), budget);
+  const outline = parseOutline(text);
+  const isTitle = titleMatcher(title, outline.flatMap(sectionHeadings));
+  const parts = partition(outline, budget, isTitle);
   if (parts.length + 1 > MAX_IMPORT_NOTES) {
     throw new DocumentImportError(
       `the document would become ${parts.length + 1} notes, more than the ${MAX_IMPORT_NOTES} one import may create; ` +
@@ -158,149 +156,31 @@ function layout(
     );
   }
 
-  const width = String(parts.length).length < 2 ? 2 : String(parts.length).length;
   const notes = parts.map((part, i) => {
-    const number = String(i + 1).padStart(width, '0');
-    const heading = part.heading ? cleanName(part.heading, MAX_HEADING_CHARS) : '';
-    const name = heading ? `${title} ${number} - ${heading}` : `${title} ${number}`;
+    const name = partName(part, isTitle);
+    const file = partFileName(i, parts.length, name);
     return {
-      name,
-      path: `${folder}/${name}.md`,
+      file,
+      path: `${folder}/${file}.md`,
       content: `${part.text}\n\n${footer}\n`,
-      frontmatter,
+      frontmatter: { source, title: partTitle(title, name) },
     };
   });
+  // The index sits in the parts' folder, where a bare link resolves first:
+  // `[[01 - Introducción]]` finds this document's part, not another's.
   const index =
     `# ${title}\n\n` +
     `Imported from \`${source.replace(/`/g, "'")}\`, split into ${notes.length} notes in reading order.\n\n` +
-    `## Notas\n\n${notes.map((n) => `- [[${n.name}]]`).join('\n')}\n`;
+    `## Notas\n\n${notes.map((n) => `- [[${n.file}]]`).join('\n')}\n`;
   return {
     title,
     folder,
     entry: indexPath,
     notes: [
-      ...notes.map(({ path, content }) => ({ path, content, frontmatter })),
-      { path: indexPath, content: index, frontmatter },
+      ...notes.map(({ path, content, frontmatter }) => ({ path, content, frontmatter })),
+      { path: indexPath, content: index, frontmatter: { source, title } },
     ],
   };
-}
-
-interface Chunk {
-  /** The heading the chunk sits under, when the document has one above it. */
-  heading?: string;
-  text: string;
-}
-
-/**
- * The document cut at its headings (levels 1 to 3), outside code fences, and
- * every piece longer than a note cut again until it fits.
- */
-function sections(text: string): Chunk[] {
-  const out: Chunk[] = [];
-  let current: string[] = [];
-  let heading: string | undefined;
-  let fence: string | null = null;
-  const flush = () => {
-    const body = current.join('\n').trim();
-    if (body) out.push({ ...(heading !== undefined ? { heading } : {}), text: body });
-    current = [];
-  };
-  for (const line of text.split('\n')) {
-    const marker = /^\s*(```|~~~)/.exec(line)?.[1];
-    if (marker) fence = fence === null ? marker : fence === marker ? null : fence;
-    const h = fence === null && !marker ? /^#{1,3}\s+(.+?)\s*#*\s*$/.exec(line) : null;
-    if (h) {
-      flush();
-      heading = h[1]!;
-    }
-    current.push(line);
-  }
-  flush();
-  return out;
-}
-
-/**
- * Chunks packed in order into parts of at most `budget` characters. A chunk
- * that alone is longer is cut first, at paragraphs, lines, or the length.
- */
-function pack(chunks: Chunk[], budget: number): Chunk[] {
-  const pieces = chunks.flatMap((c) => cut(c, budget));
-  const parts: Chunk[] = [];
-  for (const piece of pieces) {
-    const last = parts.at(-1);
-    if (last && noteSize(`${last.text}\n\n${piece.text}`).chars <= budget) {
-      last.text = `${last.text}\n\n${piece.text}`;
-    } else {
-      parts.push({ ...piece });
-    }
-  }
-  return parts;
-}
-
-function cut(chunk: Chunk, budget: number): Chunk[] {
-  if (noteSize(chunk.text).chars <= budget) return [chunk];
-  const at = (text: string): Chunk => ({
-    ...(chunk.heading !== undefined ? { heading: chunk.heading } : {}),
-    text,
-  });
-  for (const separator of ['\n\n', '\n']) {
-    const units = chunk.text.split(separator).filter((u) => u.trim() !== '');
-    if (units.length < 2) continue;
-    const joined: string[] = [];
-    for (const unit of units) {
-      const last = joined.at(-1);
-      if (last !== undefined && noteSize(`${last}${separator}${unit}`).chars <= budget) {
-        joined[joined.length - 1] = `${last}${separator}${unit}`;
-      } else {
-        joined.push(unit);
-      }
-    }
-    return joined.flatMap((t) => cut(at(t.trim()), budget));
-  }
-  // No break left to cut at: cut at the length, in code points, so a
-  // character outside the BMP is never split in half.
-  const points = [...chunk.text];
-  const out: Chunk[] = [];
-  for (let i = 0; i < points.length; i += budget)
-    out.push(
-      at(
-        points
-          .slice(i, i + budget)
-          .join('')
-          .trim(),
-      ),
-    );
-  return out.filter((c) => c.text !== '');
-}
-
-function normalizeText(markdown: string): string {
-  return (
-    markdown
-      .replace(/\r\n?/g, '\n')
-      // eslint-disable-next-line no-control-regex -- control characters are what is removed
-      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
-      .replace(/[ \t]+$/gm, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-  );
-}
-
-/**
- * A name a note path and a wikilink can both hold: no folder separators, none
- * of the characters a wikilink reads as syntax (`[ ] | # ^`), none that
- * Windows refuses in a file name — a vault is exported to disk — and no
- * leading dot.
- */
-function cleanName(raw: string, max: number): string {
-  const clean = raw
-    // eslint-disable-next-line no-control-regex -- control characters are what is removed
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/[\\/[\]|#^:*?"<>]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^[.\s]+/, '');
-  const points = [...clean];
-  return (points.length > max ? points.slice(0, max).join('') : clean).replace(/[.\s]+$/, '');
 }
 
 function trimSlashes(folder: string): string {

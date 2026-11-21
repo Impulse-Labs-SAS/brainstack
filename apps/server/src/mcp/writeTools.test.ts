@@ -844,8 +844,8 @@ describe('import_document', () => {
       folder: 'orbit/Atlas',
       entry: 'orbit/Atlas/_Atlas.md',
       notes: [
-        { path: 'orbit/Atlas/Atlas 01 - Part 1.md' },
-        { path: 'orbit/Atlas/Atlas 02 - Part 2.md' },
+        { path: 'orbit/Atlas/01 - Part 1.md' },
+        { path: 'orbit/Atlas/02 - Part 2.md' },
         { path: 'orbit/Atlas/_Atlas.md' },
       ],
     });
@@ -866,7 +866,25 @@ describe('import_document', () => {
     for (const n of saved.notes) {
       expect((await body(OWNER.id, n.path)).length).toBeLessThanOrEqual(NOTE_MAX_CHARS);
     }
-    expect(await body(OWNER.id, saved.entry)).toContain('[[Erebor 30 - Part 30]]');
+    expect(await body(OWNER.id, saved.entry)).toContain('[[30 - Part 30]]');
+  });
+
+  it('refuses a scan with no text as EMPTY_TEXT and creates nothing', async () => {
+    const client = await clientFor(OWNER.id);
+    for (const args of [
+      { text: '  \n\n  ', fileName: 'scan.pdf' },
+      { text: 'Página 1\n\nPágina 2\n\nPágina 3', fileName: 'scan.pdf' },
+      {
+        text: 'Página 1 de un documento con apenas texto, unas palabras de más',
+        fileName: 'scan.pdf',
+        fileBytes: 6_000_000,
+      },
+    ]) {
+      const { error } = await call(client, 'import_document', args);
+      expect(error).toMatch(/EMPTY_TEXT/);
+      expect(error).toMatch(/OCR/);
+    }
+    expect(await notes.exists(OWNER.id, 'Documentos')).toBe(false);
   });
 
   it('refuses a read-only key and a folder nobody shared', async () => {

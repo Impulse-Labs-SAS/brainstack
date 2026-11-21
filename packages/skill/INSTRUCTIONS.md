@@ -48,7 +48,7 @@ You interact with BrainStack via these MCP tools:
 - `create_note(path, content, frontmatter?, ownerId?)` — returns `{ path, affectedMocs, checksum }`
 - `edit_note(path, edits, ownerId?, expectedChecksum?)` — change part of a note without sending it back whole: `replace` (one exact passage), `append` / `prepend` (to the note or to a `section`), `set_frontmatter`. See **Writing only what changes**
 - `apply_changes(changes)` — a plan of changes in one call: `create`, `edit`, `replace`, `delete`, `create_folder`, `move`, in order, each checked before any is written; the answer carries every final path and checksum. See **Writing only what changes**.
-- `import_document(text, fileName, folder?, title?, ownerId?, dryRun?)` — saves a document the user attached (PDF, Word, text) as notes: one note, or a folder with an index and linked parts when it is long. Send its full text as Markdown. See **Saving an attached document**.
+- `import_document(text, fileName, folder?, title?, fileBytes?, ownerId?, dryRun?)` — saves a document the user attached (PDF, Word, text) as notes: one note, or a folder with an index and linked parts when it is long. Send its full text as Markdown. See **Saving an attached document**.
 - `update_note(path, content, ownerId?, expectedChecksum?)` — replaces the whole note; for a rewrite, not for a change to part of it. Pass the `checksum` from the `get_note` or `gather_context` you based it on. If someone changed the note since, the update fails with `CHANGED` instead of overwriting their work: read it again, redo the edit on the new version, and tell the user what changed.
 - `create_folder(path, ownerId?)`
 - `move(from, to, ownerId?)` — wikilinks pointing at the moved path(s) are rewritten automatically across the vault, including aliases, sections, and attachment embeds. A renamed folder renames its index note with it (`a/_a.md` becomes `b/_b.md`). Returns `{ path, affectedMocs, moved, linksRewritten }`. To move and then create or edit, send one `apply_changes`.
@@ -268,9 +268,10 @@ Creating a new top-level is a deliberate architectural change. Don't do it unila
 
 When the user attaches a PDF, a Word file or a text file and asks to save it in the brain:
 
-1. **Extract its full text as Markdown** — headings as `#`, `##`, `###`, lists, tables. Never summarise, shorten or rewrite it: the brain keeps what the document says. A scanned PDF with no text cannot be saved this way; say so.
-2. **Call `import_document` with `dryRun: true`**, the `text`, the file's name as `fileName` and, if the user named one, the `folder`. It writes nothing and says what it would create: one note, or a folder named after the document with an index note and the parts, cut at its headings.
+1. **Extract its full text as Markdown** — headings as `#`, `##`, `###`, lists, tables. Never summarise, shorten or rewrite it: the brain keeps what the document says. Pass the file's size as `fileBytes` when you know it.
+2. **Call `import_document` with `dryRun: true`**, the `text`, the file's name as `fileName` and, if the user named one, the `folder`. It writes nothing and says what it would create: one note, or a folder named after the document with an index note and the parts — `01 - Introducción.md`, then one per section (`02 - Puntos acordados.md`, a section's own numbering left out), and `NN - <Section> (cont.).md` where a section needed more than one note.
 3. **Tell the user** how many notes and where ("It becomes 6 notes in `Documentos/Orbit proposal/`, an index and 5 parts"), and save — the same call without `dryRun` — on their yes. Don't split it yourself with `apply_changes`: `import_document` already splits, names and links the parts.
+4. **`EMPTY_TEXT` means a scan** — the text you sent has almost nothing in it. If you can read the page images, transcribe them and call again with that text; otherwise tell the user the document needs OCR (the web app's import offers it). Never save it empty or summarised.
 
 ## MOC maintenance (the `_<Folder>.md` index notes)
 
