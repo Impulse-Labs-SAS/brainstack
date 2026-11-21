@@ -8,8 +8,8 @@
     "lint": "next lint --dir src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "build": "next build",
-    "dev": "next dev -p 3001",
+    "build": "node scripts/copy-ocr-assets.mjs && next build",
+    "dev": "node scripts/copy-ocr-assets.mjs && next dev -p 3001",
     "start": "next start -p 3001"
   },
   "dependencies": {
@@ -47,11 +47,14 @@
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.7.0",
     "tailwind-variants": "^3.2.2",
+    "tesseract.js": "^6.0.1",
     "three": "^0.187.0",
     "unist-util-visit": "^5.2.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/spa": "^1.0.0",
     "@types/d3-hierarchy": "^3.1.7",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

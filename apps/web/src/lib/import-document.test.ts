@@ -5,6 +5,7 @@ import {
   htmlToMarkdown,
   documentKind,
   documentProblem,
+  looksScanned,
   pdfToMarkdown,
   type HtmlNode,
   type PdfRun,
@@ -109,5 +110,18 @@ describe('htmlToMarkdown', () => {
         '[site](https://example.com) local',
       ].join('\n\n'),
     );
+  });
+});
+
+describe('looksScanned', () => {
+  const text = 'El sistema registra cada movimiento y lo concilia con el libro mayor.';
+  it('flags a file with almost no letters or numbers', () => {
+    expect(looksScanned({ markdown: '1\n\n2\n\n---' })).toBe(true);
+    expect(looksScanned({ markdown: text })).toBe(false);
+  });
+
+  it('flags a PDF whose pages hold almost no text, like a scan with a typed cover', () => {
+    expect(looksScanned({ markdown: text, pages: 10 })).toBe(true);
+    expect(looksScanned({ markdown: text, pages: 1 })).toBe(false);
   });
 });

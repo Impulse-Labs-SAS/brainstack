@@ -83,3 +83,6 @@ scripts/deploy.local.env
 
 # Git worktrees created by Claude Code sessions.
 .claude/worktrees/
+
+# OCR assets, copied from node_modules at dev/build time (apps/web/scripts/copy-ocr-assets.mjs)
+apps/web/public/ocr/
