@@ -5,13 +5,14 @@
 // browser, so the file never reaches the server — and Sentinel decides what
 // notes it becomes and where. This answers its lookup and writes the notes.
 //
-// A person's import, from the web app, not an assistant's write: it does not go
-// through apply_changes, whose batch is capped well below what one document may
-// become. The parts are written first and the index last, one by one; if one
-// fails — somebody created a note at that path a moment ago — the ones before it
-// stay and the answer says how many. Every path was free when the plan was made.
+// The web app (tRPC `notes.importDocument`) writes the notes one by one: a
+// person's import, not held to the assistant batch. MCP's `import_document`
+// writes the same plan through that batch, in as many calls as its cap takes.
+// Either way the parts are written first and the index last; if one fails —
+// somebody created a note at that path a moment ago — the ones before it stay
+// and the answer says how many. Every path was free when the plan was made.
 //
-// Permission is not decided here: the tRPC layer checks the caller may write in
+// Permission is not decided here: the tRPC and MCP layers check the caller may write in
 // the folder before calling in, with the owner of that folder.
 
 import {

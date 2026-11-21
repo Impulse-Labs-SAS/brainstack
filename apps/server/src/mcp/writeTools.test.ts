@@ -822,3 +822,70 @@ describe('get_notes', () => {
     ]);
   });
 });
+
+describe('import_document', () => {
+  /** A document past one note: sections of `chars` characters each. */
+  const doc = (sections: number, chars = 4_000) =>
+    Array.from(
+      { length: sections },
+      (_, i) => `## Part ${i + 1}\n\n${'ledger '.repeat(chars / 7)}`,
+    ).join('\n\n');
+
+  it('says what a dry run would create and writes nothing', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value } = await call(client, 'import_document', {
+      text: doc(2),
+      fileName: 'Atlas.pdf',
+      folder: 'orbit',
+      dryRun: true,
+    });
+    expect(value).toMatchObject({
+      saved: false,
+      folder: 'orbit/Atlas',
+      entry: 'orbit/Atlas/_Atlas.md',
+      notes: [
+        { path: 'orbit/Atlas/Atlas 01 - Part 1.md' },
+        { path: 'orbit/Atlas/Atlas 02 - Part 2.md' },
+        { path: 'orbit/Atlas/_Atlas.md' },
+      ],
+    });
+    expect(await notes.exists(OWNER.id, 'orbit/Atlas')).toBe(false);
+  });
+
+  it('saves every note, past the batch cap, within the size limit', async () => {
+    const client = await clientFor(OWNER.id);
+    const { value, error } = await call(client, 'import_document', {
+      text: doc(30, 5_000),
+      fileName: 'Erebor.docx',
+    });
+    expect(error).toBeUndefined();
+    const saved = value as { saved: boolean; notes: Array<{ path: string }>; entry: string };
+    expect(saved.saved).toBe(true);
+    expect(saved.notes).toHaveLength(31);
+    expect(saved.entry).toBe('Documentos/Erebor/_Erebor.md');
+    for (const n of saved.notes) {
+      expect((await body(OWNER.id, n.path)).length).toBeLessThanOrEqual(NOTE_MAX_CHARS);
+    }
+    expect(await body(OWNER.id, saved.entry)).toContain('[[Erebor 30 - Part 30]]');
+  });
+
+  it('refuses a read-only key and a folder nobody shared', async () => {
+    const readOnly = await clientFor(OWNER.id, { readOnly: true });
+    expect(
+      (await call(readOnly, 'import_document', { text: 'x', fileName: 'a.txt', dryRun: true }))
+        .error,
+    ).toMatch(/read-only/i);
+    const frodo = await clientFor(FRODO.id);
+    expect(
+      (
+        await call(frodo, 'import_document', {
+          text: 'x',
+          fileName: 'a.txt',
+          folder: 'orbit',
+          ownerId: OWNER.id,
+          dryRun: true,
+        })
+      ).error,
+    ).toMatch(/no write access/);
+  });
+});

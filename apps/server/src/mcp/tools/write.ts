@@ -1,12 +1,18 @@
 // Tools that change a vault. Every write goes through Sentinel's batch (`ctx.save`), one change or many.
 
-import { NOTE_MAX_CHARS, type NoteEdit } from '@brainstack/core/sentinel';
+import {
+  DEFAULT_IMPORT_FOLDER,
+  MAX_IMPORT_NOTES,
+  NOTE_MAX_CHARS,
+  type NoteEdit,
+} from '@brainstack/core/sentinel';
 import { z } from 'zod';
 
 import { field, frontmatterField, noteContent } from '../../config/limits.js';
 import { AppError, toAppError } from '../../lib/errors.js';
 
 import { MAX_CHANGES, type Change } from '../../services/applyChanges.js';
+import { describeImport, planImport } from '../../services/importDocument.js';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { EDITS, JSON_TEXT, TEXT } from '../shared.js';
@@ -430,6 +436,91 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
         // used to answer `undefined`, which the client rejected as an invalid
         // result after the delete had already happened.
         return JSON_TEXT(await notes.remove(ownerOf(ownerId), path, { recursive }));
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'import_document',
+    {
+      title: 'Save a document as notes',
+      description:
+        'Save a document the user attached — a PDF, a Word file, a text file — as notes, the way the web app imports one. ' +
+        'You extract its text and send it as Markdown (keep its headings as `#`/`##`/`###`, its lists and tables); never summarise or shorten it. ' +
+        `BrainStack decides the notes: one note when it fits ${NOTE_MAX_CHARS} characters, otherwise a folder named after the document with an index note (\`_<Title>.md\`) linking every part, the parts cut at the document's headings, each linking back. ` +
+        `At most ${MAX_IMPORT_NOTES} notes per document. A name already taken gets \`(2)\`, \`(3)\`…; nothing is overwritten. Every note gets \`source: <fileName>\` in its frontmatter. ` +
+        'The file itself is not stored. ' +
+        'Call it first with `dryRun: true`: it writes nothing and returns the notes it would create (`folder`, `entry`, each path and length). Tell the user how many notes, and where, and save (the same call without `dryRun`) only on their yes.',
+      inputSchema: {
+        text: noteContent().describe("The document's full text, as Markdown."),
+        fileName: field()
+          .min(1)
+          .describe(
+            'The attached file\'s name, e.g. "Orbit proposal.pdf". Names the notes unless `title` is given.',
+          ),
+        folder: field()
+          .optional()
+          .describe(
+            `Folder to put it in; omit for the vault root, which puts it in \`${DEFAULT_IMPORT_FOLDER}/\`.`,
+          ),
+        title: field().optional().describe("Name for the notes instead of the file's name."),
+        ownerId: OWNER_ARG,
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe('true: say what would be created and write nothing. Always do this first.'),
+      },
+    },
+    async ({ text, fileName, folder, title, ownerId, dryRun }) => {
+      try {
+        const target = folder ?? '';
+        // Before the plan reads which names are taken in that vault.
+        await assertWrite(target || DEFAULT_IMPORT_FOLDER, ownerId);
+        const owner = ownerOf(ownerId);
+        const plan = await planImport(notes, owner, {
+          markdown: text,
+          fileName,
+          folder: target,
+          ...(title !== undefined ? { title } : {}),
+        });
+        await assertWrite(plan.entry, ownerId);
+        const described = describeImport(plan);
+        if (dryRun) return JSON_TEXT({ saved: false, ...described });
+
+        // Through the batch like every assistant write, in as many calls as
+        // its cap takes; the parts are written first and the index last.
+        let written = 0;
+        for (let i = 0; i < plan.notes.length; i += MAX_CHANGES) {
+          const report = await save(
+            plan.notes
+              .slice(i, i + MAX_CHANGES)
+              .map((n): Change => ({
+                action: 'create',
+                owner,
+                path: n.path,
+                content: n.content,
+                frontmatter: n.frontmatter,
+              })),
+          );
+          written += report.results.filter((r) => r.status === 'done').length;
+          if (!report.saved) {
+            const failure = report.results.find((r) => r.status === 'failed');
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text:
+                    `[${failure?.error?.code ?? 'INTERNAL'}] ${written} of ${plan.notes.length} notes were saved in ${plan.folder} ` +
+                    `before ${failure?.path ?? 'one'} failed: ${failure?.error?.message ?? 'internal error'}`,
+                },
+              ],
+              isError: true as const,
+            };
+          }
+        }
+        return JSON_TEXT({ saved: true, ...described });
       } catch (err) {
         return toMcpError(err);
       }
