@@ -33,12 +33,45 @@ export function documentProblem(file: { name: string; size: number }): string | 
   return null;
 }
 
+export interface ReadDocument {
+  markdown: string;
+  /** For a PDF, how many pages it has. */
+  pages?: number;
+}
+
 /** The file's text as Markdown. */
-export async function readDocument(file: File): Promise<string> {
+export async function readDocument(file: File): Promise<ReadDocument> {
   const kind = documentKind(file.name);
   if (kind === 'pdf') return readPdf(await file.arrayBuffer());
-  if (kind === 'docx') return readDocx(await file.arrayBuffer());
-  return file.text();
+  if (kind === 'docx') return { markdown: await readDocx(await file.arrayBuffer()) };
+  return { markdown: await file.text() };
+}
+
+/** Letters and digits below which a text is not a document's text (Sentinel's `MIN_TEXT_CHARS`). */
+export const MIN_TEXT_CHARS = 50;
+/** Letters and digits per page below which a PDF reads as a scan: a page of text has hundreds. */
+export const MIN_CHARS_PER_PAGE = 20;
+
+/**
+ * Whether what was read is too little to be the document: a scanned PDF has no
+ * text layer, and gives back nothing, or a page number per page.
+ */
+export function looksScanned({ markdown, pages }: ReadDocument): boolean {
+  const chars = markdown.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
+  return (
+    chars < MIN_TEXT_CHARS ||
+    (pages !== undefined && pages > 0 && chars / pages < MIN_CHARS_PER_PAGE)
+  );
+}
+
+/** pdf.js, loaded on first use, its worker served from this app. */
+export async function loadPdfjs() {
+  const pdfjs = await import('pdfjs-dist');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url,
+  ).toString();
+  return pdfjs;
 }
 
 // -- PDF ----------------------------------------------------------------------
@@ -54,12 +87,8 @@ export interface PdfRun {
   eol: boolean;
 }
 
-async function readPdf(data: ArrayBuffer): Promise<string> {
-  const pdfjs = await import('pdfjs-dist');
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
-    import.meta.url,
-  ).toString();
+async function readPdf(data: ArrayBuffer): Promise<ReadDocument> {
+  const pdfjs = await loadPdfjs();
   const doc = await pdfjs.getDocument({ data, isEvalSupported: false }).promise;
   try {
     const pages: PdfRun[][] = [];
@@ -80,7 +109,7 @@ async function readPdf(data: ArrayBuffer): Promise<string> {
       pages.push(runs);
       page.cleanup();
     }
-    return pdfToMarkdown(pages);
+    return { markdown: pdfToMarkdown(pages), pages: doc.numPages };
   } finally {
     await doc.destroy();
   }
@@ -178,7 +207,7 @@ function headingLevel(line: Line, body: number): 1 | 2 | 3 | null {
   return null;
 }
 
-function joinLine(paragraph: string, line: string): string {
+export function joinLine(paragraph: string, line: string): string {
   if (!paragraph) return line;
   if (/\p{L}-$/u.test(paragraph) && /^\p{Ll}/u.test(line)) return paragraph.slice(0, -1) + line;
   return `${paragraph} ${line}`;

@@ -71,8 +71,8 @@ export function middleware(req: NextRequest): NextResponse {
 
 export const config = {
   // Skip the matcher for the API, OAuth discovery, framework internals and
-  // static assets. Everything else flows through the middleware above.
+  // static assets, the OCR worker and language data in /ocr among them. Everything else flows through the middleware above.
   matcher: [
-    '/((?!api/|\\.well-known/|_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)).*)',
+    '/((?!api/|\\.well-known/|_next/|ocr/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)).*)',
   ],
 };

@@ -449,9 +449,10 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
       description:
         'Save a document the user attached — a PDF, a Word file, a text file — as notes, the way the web app imports one. ' +
         'You extract its text and send it as Markdown (keep its headings as `#`/`##`/`###`, its lists and tables); never summarise or shorten it. ' +
-        `BrainStack decides the notes: one note when it fits ${NOTE_MAX_CHARS} characters, otherwise a folder named after the document with an index note (\`_<Title>.md\`) linking every part, the parts cut at the document's headings, each linking back. ` +
-        `At most ${MAX_IMPORT_NOTES} notes per document. A name already taken gets \`(2)\`, \`(3)\`…; nothing is overwritten. Every note gets \`source: <fileName>\` in its frontmatter. ` +
-        'The file itself is not stored. ' +
+        `BrainStack decides the notes: one note when it fits ${NOTE_MAX_CHARS} characters, otherwise a folder named after the document with an index note (\`_<Title>.md\`) linking every part, each part linking back. ` +
+        'Sections are kept whole with their subsections; a part is named `NN - <Section>.md` (NN is reading order; numbering the heading already carries, like "2. ", is left out of the name), the text under the title is `Introducción`, and a section too long for one note continues in `NN - <Section> (cont.)`. ' +
+        `Each part's frontmatter has \`title: <Document> — <Part>\` and \`source: <fileName>\`. At most ${MAX_IMPORT_NOTES} notes per document. A name already taken gets \`(2)\`, \`(3)\`…; nothing is overwritten. The file itself is not stored. ` +
+        'A text with almost nothing in it (whitespace, page numbers) is refused with EMPTY_TEXT: the document is a scan. Then transcribe the page images if you can read them and send that, or tell the user it needs OCR; never save it empty. ' +
         'Call it first with `dryRun: true`: it writes nothing and returns the notes it would create (`folder`, `entry`, each path and length). Tell the user how many notes, and where, and save (the same call without `dryRun`) only on their yes.',
       inputSchema: {
         text: noteContent().describe("The document's full text, as Markdown."),
@@ -466,6 +467,14 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
             `Folder to put it in; omit for the vault root, which puts it in \`${DEFAULT_IMPORT_FOLDER}/\`.`,
           ),
         title: field().optional().describe("Name for the notes instead of the file's name."),
+        fileBytes: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            'Size of the attached file in bytes, when you know it: helps tell a scan from a short document.',
+          ),
         ownerId: OWNER_ARG,
         dryRun: z
           .boolean()
@@ -473,7 +482,7 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
           .describe('true: say what would be created and write nothing. Always do this first.'),
       },
     },
-    async ({ text, fileName, folder, title, ownerId, dryRun }) => {
+    async ({ text, fileName, folder, title, fileBytes, ownerId, dryRun }) => {
       try {
         const target = folder ?? '';
         // Before the plan reads which names are taken in that vault.
@@ -484,6 +493,7 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
           fileName,
           folder: target,
           ...(title !== undefined ? { title } : {}),
+          ...(fileBytes !== undefined ? { fileBytes } : {}),
         });
         await assertWrite(plan.entry, ownerId);
         const described = describeImport(plan);
@@ -494,15 +504,13 @@ export function registerWriteTools(server: McpServer, ctx: McpToolContext): void
         let written = 0;
         for (let i = 0; i < plan.notes.length; i += MAX_CHANGES) {
           const report = await save(
-            plan.notes
-              .slice(i, i + MAX_CHANGES)
-              .map((n): Change => ({
-                action: 'create',
-                owner,
-                path: n.path,
-                content: n.content,
-                frontmatter: n.frontmatter,
-              })),
+            plan.notes.slice(i, i + MAX_CHANGES).map((n): Change => ({
+              action: 'create',
+              owner,
+              path: n.path,
+              content: n.content,
+              frontmatter: n.frontmatter,
+            })),
           );
           written += report.results.filter((r) => r.status === 'done').length;
           if (!report.saved) {

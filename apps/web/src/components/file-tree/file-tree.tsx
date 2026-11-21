@@ -51,7 +51,8 @@ import { trpc } from '@/lib/trpc';
 import { useModKey, useOpenPalette } from '@/components/layout/app-shell';
 import { ConfirmModal, PromptModal } from '@/components/ui/prompt-modal';
 import { isInside, nodeId, parseNodeId, sameNode, type NodeRef } from '@/lib/tree-node-id';
-import { documentProblem, readDocument } from '@/lib/import-document';
+import { documentKind, documentProblem, looksScanned, readDocument } from '@/lib/import-document';
+import { MAX_OCR_PAGES } from '@/lib/ocr';
 import { importMarkdownFiles, isMarkdownFile, summarizeImport } from '@/lib/import-md';
 import { forgetRecent, useRecentNotes } from '@/lib/recent-notes';
 import { groupSharedOwners } from '@/lib/shared-owners';
@@ -828,20 +829,18 @@ export function FileTree() {
     });
   }, []);
 
-  /**
-   * Importa archivos .md como notas de verdad, por el mismo camino que "New
-   * note": una llamada a `notes.create` por archivo, con el contenido literal.
-   *
-   * El dueño es el de la carpeta destino, no quien importa: soltar en una
-   * carpeta compartida escribe en la bóveda de su dueño, que es lo que
-   * mantiene el share cubriendo lo que acaba de entrar.
-   */
   /** The import waiting on the person: how many notes a document becomes, and where. */
   const [importConfirm, setImportConfirm] = useState<{
     title: string;
     message: string;
+    okLabel: string;
     resolve(ok: boolean): void;
   } | null>(null);
+  const askImport = useCallback(
+    (title: string, message: string, okLabel: string) =>
+      new Promise<boolean>((resolve) => setImportConfirm({ title, message, okLabel, resolve })),
+    [],
+  );
 
   /**
    * A PDF, Word or text file as notes. Read here, in the browser — only its
@@ -856,20 +855,59 @@ export function FileTree() {
         return;
       }
       try {
-        const markdown = await readDocument(file);
-        const input = { fileName: file.name, folder: ref.path, markdown, ownerId: ref.ownerId };
+        let read = await readDocument(file);
+        let fileBytes: number | undefined = file.size;
+        if (looksScanned(read)) {
+          // A scan has no text to read. A PDF can still be read with OCR, on
+          // the person's machine, if they want to wait for it.
+          if (documentKind(file.name) !== 'pdf') {
+            pushToast('error', `${file.name}: it has no text to import`);
+            return;
+          }
+          const ocr = await askImport(
+            `${file.name} looks scanned`,
+            'It has almost no text in it, so it is probably a scanned PDF.\n\n' +
+              `BrainStack can read it with OCR here in your browser (Spanish and English, the first ${MAX_OCR_PAGES} pages). ` +
+              'It takes a few seconds a page, and the first time downloads about 9 MB.',
+            'Read with OCR',
+          );
+          if (!ocr) return;
+          const { ocrPdf } = await import('@/lib/ocr');
+          pushToast('info', `reading ${file.name} with OCR…`);
+          const result = await ocrPdf(file);
+          read = { markdown: result.markdown, pages: result.pagesRead };
+          // The text now comes from images: the size of the file says nothing about it.
+          fileBytes = undefined;
+          if (looksScanned(read)) {
+            pushToast('error', `${file.name}: OCR found no text in it`);
+            return;
+          }
+          if (result.pages > result.pagesRead) {
+            pushToast(
+              'info',
+              `${file.name}: read the first ${result.pagesRead} of ${result.pages} pages`,
+            );
+          }
+        }
+        const input = {
+          fileName: file.name,
+          folder: ref.path,
+          markdown: read.markdown,
+          ownerId: ref.ownerId,
+          ...(fileBytes !== undefined ? { fileBytes } : {}),
+        };
         const plan = await importDocM.mutateAsync({ ...input, dryRun: true });
         const count = plan.notes.length;
-        const ok = await new Promise<boolean>((resolve) =>
-          setImportConfirm({
-            title: `Import ${file.name}?`,
-            message:
-              count === 1
-                ? `It becomes one note:\n${plan.entry}`
-                : `It becomes ${count} notes — ${count - 1} parts and an index — in a folder of its own:\n` +
-                  `${plan.folder}/\n\nThe original file is not kept, only its text.`,
-            resolve,
-          }),
+        const ok = await askImport(
+          `Import ${file.name}?`,
+          count === 1
+            ? `It becomes one note:\n${plan.entry}`
+            : `It becomes ${count} notes — ${count - 1} parts and an index — in a folder of its own:\n` +
+                `${plan.folder}/\n\n${plan.notes
+                  .slice(0, -1)
+                  .map((n) => n.path.split('/').pop()!.replace(/\.md$/, ''))
+                  .join('\n')}\n\nThe original file is not kept, only its text.`,
+          'Import',
         );
         if (!ok) return;
         const saved = await importDocM.mutateAsync(input);
@@ -884,9 +922,17 @@ export function FileTree() {
         pushToast('error', `${file.name}: ${(err as Error).message || 'could not be read'}`);
       }
     },
-    [importDocM, refresh, pushToast, router, mine],
+    [importDocM, refresh, pushToast, router, mine, askImport],
   );
 
+  /**
+   * Importa archivos .md como notas de verdad, por el mismo camino que "New
+   * note": una llamada a `notes.create` por archivo, con el contenido literal.
+   *
+   * El dueño es el de la carpeta destino, no quien importa: soltar en una
+   * carpeta compartida escribe en la bóveda de su dueño, que es lo que
+   * mantiene el share cubriendo lo que acaba de entrar.
+   */
   const runImport = useCallback(
     async (ref: NodeRef, fileList: FileList) => {
       const all = Array.from(fileList);
@@ -1312,7 +1358,7 @@ export function FileTree() {
         open={importConfirm !== null}
         title={importConfirm?.title ?? ''}
         message={importConfirm?.message}
-        okLabel="Import"
+        okLabel={importConfirm?.okLabel ?? 'Import'}
         onCancel={() => {
           importConfirm?.resolve(false);
           setImportConfirm(null);
