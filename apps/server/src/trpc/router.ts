@@ -52,6 +52,7 @@ const TRPC_CODES = {
   FORBIDDEN: 'FORBIDDEN',
   INVALID_INPUT: 'BAD_REQUEST',
   TOO_LONG: 'PAYLOAD_TOO_LARGE',
+  EMPTY_TEXT: 'UNPROCESSABLE_CONTENT',
   RATE_LIMITED: 'TOO_MANY_REQUESTS',
   SIGNUP_CLOSED: 'FORBIDDEN',
   UNAVAILABLE: 'PRECONDITION_FAILED',
@@ -400,6 +401,8 @@ export const appRouter = t.router({
           folder: field(),
           markdown: noteContent(),
           title: field().optional(),
+          /** Size of the original file: a lot of file with little text in it is a scan. */
+          fileBytes: z.number().int().nonnegative().optional(),
           ownerId: OwnerInput,
           dryRun: z.boolean().optional(),
         }),
@@ -415,6 +418,7 @@ export const appRouter = t.router({
             fileName: input.fileName,
             folder: input.folder,
             ...(input.title !== undefined ? { title: input.title } : {}),
+            ...(input.fileBytes !== undefined ? { fileBytes: input.fileBytes } : {}),
           });
           await assertWritable(ctx, owner, plan.entry, named);
           if (!input.dryRun) await writeImport(ctx.notes, owner, plan);

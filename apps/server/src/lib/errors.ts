@@ -20,6 +20,8 @@ export class AppError extends Error {
       | 'INVALID_INPUT'
       /** A write that would leave a note longer than an assistant may make it. */
       | 'TOO_LONG'
+      /** A document with almost no text in it: a scan, which needs OCR first. */
+      | 'EMPTY_TEXT'
       | 'UNAUTHORIZED'
       | 'FORBIDDEN'
       | 'RATE_LIMITED'
@@ -56,9 +58,11 @@ export function toAppError(err: unknown): AppError | null {
     const status = { NOT_FOUND: 404, ALREADY_EXISTS: 409, INVALID_INPUT: 400 }[err.code];
     return new AppError(err.message, err.code, status);
   }
-  // A document that cannot be imported as it is: no text, too long, name taken.
+  // A document that cannot be imported as it is: no text, a scan, too long, name taken.
   if (err instanceof DocumentImportError) {
-    const status = { INVALID_INPUT: 400, ALREADY_EXISTS: 409, TOO_LONG: 413 }[err.code];
+    const status = { INVALID_INPUT: 400, EMPTY_TEXT: 422, ALREADY_EXISTS: 409, TOO_LONG: 413 }[
+      err.code
+    ];
     return new AppError(err.message, err.code, status);
   }
   return null;

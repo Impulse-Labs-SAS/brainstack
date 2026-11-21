@@ -92,7 +92,7 @@ echo "== build sin packagePath =="
 # el cliente usa el origin de la página, que es lo correcto en todos lados.
 export NEXT_PUBLIC_SERVER_URL=""
 cp netlify.toml "$HOME/netlify.toml.deploy-bak"
-sed -i 's|command = "pnpm --filter @brainstack/core build && pnpm --filter @brainstack/web build"|command = "npx tsc -p packages/core/tsconfig.build.json \&\& cd apps/web \&\& npx next build"|' netlify.toml
+sed -i 's|command = "pnpm --filter @brainstack/core build && pnpm --filter @brainstack/web build"|command = "npx tsc -p packages/core/tsconfig.build.json \&\& cd apps/web \&\& node scripts/copy-ocr-assets.mjs \&\& npx next build"|' netlify.toml
 mv pnpm-workspace.yaml "$HOME/pnpm-workspace.yaml.deploy-bak"
 npx -y "$CLI" build --offline
 

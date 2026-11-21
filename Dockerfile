@@ -71,6 +71,9 @@ WORKDIR /app
 
 COPY --from=build /app/apps/web/.next/standalone ./
 COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
+# Files served as they are — the OCR worker and language data among them. A
+# standalone build leaves public/ out; the server serves it from beside itself.
+COPY --from=build /app/apps/web/public ./apps/web/public
 
 USER node
 EXPOSE 3000
