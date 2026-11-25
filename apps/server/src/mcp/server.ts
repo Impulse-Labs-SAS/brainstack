@@ -55,6 +55,12 @@ export interface BuildMcpServerOptions {
   principal?: McpPrincipal | null;
   /** Plugins whose tools and listeners this server adds, in order. */
   plugins?: readonly BrainStackPlugin[];
+  /**
+   * Where the web app answers, for links an assistant hands the user — the
+   * page that approves a share it asked for. Without it the tool names the
+   * page instead of linking it.
+   */
+  appOrigin?: string;
 }
 
 export function buildMcpServer(opts: BuildMcpServerOptions): McpServer {
@@ -72,7 +78,7 @@ export function buildMcpServer(opts: BuildMcpServerOptions): McpServer {
 
   registerReadTools(server, ctx);
   registerWriteTools(server, ctx);
-  registerSharingTools(server, ctx);
+  registerSharingTools(server, ctx, { appOrigin: opts.appOrigin });
   registerGuideTools(server, ctx);
   for (const plugin of plugins) plugin.mcpTools?.(server, ctx);
 
