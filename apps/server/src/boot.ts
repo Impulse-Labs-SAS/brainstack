@@ -159,6 +159,7 @@ export async function createBrainStack(opts: CreateBrainStackOptions): Promise<B
       logger,
       principal,
       plugins,
+      appOrigin,
     });
   // MCP servers are built per session, so a plugin tool whose name is taken
   // would only fail on the first call. Building one now fails the boot instead.

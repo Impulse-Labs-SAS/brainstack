@@ -61,8 +61,11 @@ export function middleware(req: NextRequest): NextResponse {
   if (!hasSession) {
     const url = req.nextUrl.clone();
     url.pathname = '/login';
-    // Preserve where the user was trying to go (relative path only).
-    if (pathname !== '/') url.searchParams.set('redirect_to', pathname);
+    url.search = '';
+    // Preserve where the user was trying to go (relative path only), query
+    // included: the link that approves a share names the request in it.
+    const target = pathname + req.nextUrl.search;
+    if (target !== '/') url.searchParams.set('redirect_to', target);
     return NextResponse.redirect(url);
   }
 
