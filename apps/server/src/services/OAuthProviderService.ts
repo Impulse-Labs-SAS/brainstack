@@ -8,13 +8,13 @@
 // and short-lived, refresh rotates the whole pair. Secrets are stored as
 // sha256 hashes, the same rule as api_keys.
 
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, lte, or } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { createHash } from 'node:crypto';
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
-import { generateToken, sha256 } from '../lib/tokens.js';
+import { generateToken, LAST_USED_RESOLUTION_MS, sha256 } from '../lib/tokens.js';
 import type { EmitEvent } from './events.js';
 
 const { oauthClients, oauthAuthorizationCodes, oauthTokens } = pgSchema;
@@ -469,15 +469,16 @@ export class OAuthProviderService {
   }
 
   /**
-   * Resolve a bearer access token, stamping `last_used_at`. Null for unknown,
+   * Resolve a bearer access token, stamping `last_used_at` at most once per
+   * `LAST_USED_RESOLUTION_MS`. Null for unknown,
    * expired and revoked alike — same silence as ApiKeyService.validate.
    */
   async validateAccessToken(token: string): Promise<OAuthAccessGrant | null> {
     if (!token.startsWith(OAUTH_ACCESS_PREFIX)) return null;
     const now = this.now();
     const [row] = await this.opts.db
-      .update(oauthTokens)
-      .set({ lastUsedAt: now })
+      .select()
+      .from(oauthTokens)
       .where(
         and(
           eq(oauthTokens.tokenHash, sha256(token)),
@@ -485,9 +486,24 @@ export class OAuthProviderService {
           isNull(oauthTokens.revokedAt),
         ),
       )
-      .returning();
+      .limit(1);
     if (!row) return null;
     if (row.expiresAt < now) return null;
+    if (row.lastUsedAt === null || row.lastUsedAt <= now - LAST_USED_RESOLUTION_MS) {
+      // Guarded on the stamp, so concurrent requests write it once.
+      await this.opts.db
+        .update(oauthTokens)
+        .set({ lastUsedAt: now })
+        .where(
+          and(
+            eq(oauthTokens.id, row.id),
+            or(
+              isNull(oauthTokens.lastUsedAt),
+              lte(oauthTokens.lastUsedAt, now - LAST_USED_RESOLUTION_MS),
+            ),
+          ),
+        );
+    }
     return { userId: row.userId, clientId: row.clientId, scopes: row.scope.split(' ') };
   }
 

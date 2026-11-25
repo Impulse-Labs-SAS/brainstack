@@ -280,6 +280,24 @@ describe('ApiKeyService', () => {
     expect(validated?.scopes).toEqual(['notes:read']);
   });
 
+  it('stamps last use at most once a minute', async () => {
+    const user = await auth.ensureUser('user@brain.test');
+    const created = await apiKeys.create(user.id, 'Test');
+    const lastUsed = async () => (await apiKeys.list(user.id))[0]?.lastUsedAt;
+
+    const first = now;
+    await apiKeys.validate(created.token);
+    expect(await lastUsed()).toBe(first);
+
+    now += 30_000;
+    await apiKeys.validate(created.token);
+    expect(await lastUsed()).toBe(first);
+
+    now += 31_000;
+    await apiKeys.validate(created.token);
+    expect(await lastUsed()).toBe(now);
+  });
+
   it('returns null on invalid or revoked tokens', async () => {
     const user = await auth.ensureUser('user@brain.test');
     const created = await apiKeys.create(user.id, 'Test');
@@ -290,9 +308,9 @@ describe('ApiKeyService', () => {
 
   it('lists keys for a user, newest first', async () => {
     const user = await auth.ensureUser('user@brain.test');
-    apiKeys.create(user.id, 'Old');
+    await apiKeys.create(user.id, 'Old');
     now += 1000;
-    apiKeys.create(user.id, 'New');
+    await apiKeys.create(user.id, 'New');
     const list = await apiKeys.list(user.id);
     expect(list.map((k) => k.name)).toEqual(['New', 'Old']);
   });
