@@ -5,6 +5,7 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { Logger } from 'pino';
 
+import { clientIp, type TrustedProxy } from '../../lib/clientIp.js';
 import { AppError } from '../../lib/errors.js';
 import type { AuthService } from '../../services/AuthService.js';
 import type { GoogleOAuthService } from '../../services/GoogleOAuthService.js';
@@ -20,6 +21,8 @@ export interface OAuthGoogleRouterOptions {
   appHome: string;
   /** The prefix the API is mounted under, e.g. `/api`. */
   basePath?: string;
+  /** Which header names the client, if any. See lib/clientIp.ts. */
+  trustedProxy: TrustedProxy;
 }
 
 const STATE_COOKIE = 'bs_oauth_state';
@@ -80,7 +83,7 @@ export function createOAuthGoogleRouter(opts: OAuthGoogleRouterOptions): Hono<Au
       });
       const session = await opts.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
-        ipAddress: c.req.header('x-forwarded-for') ?? undefined,
+        ipAddress: clientIp(c, opts.trustedProxy),
       });
       setSessionCookie(c, session.token, opts.secureCookies);
       const dest = sanitizeRedirect(redirectTo, opts.appHome);
