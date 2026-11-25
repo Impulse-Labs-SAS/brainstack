@@ -12,6 +12,7 @@ import { emailField, field, frontmatterField, noteContent } from '../config/limi
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { describeImport, planImport, writeImport } from '../services/importDocument.js';
 import { approveShareRequest } from '../services/shareRequests.js';
+import { normalizeFolderPath } from '../services/SharingService.js';
 import { AppError, INTERNAL_MESSAGE, toAppError } from '../lib/errors.js';
 import { API_KEY_SCOPES, READ_ONLY_MESSAGE, scopesAllowWrite } from '../lib/scopes.js';
 import { MAX_TREE_DEPTH } from '../services/NoteService.js';
@@ -583,6 +584,13 @@ export const appRouter = t.router({
       ctx.sharing.listSharedRoots(ctx.user.id),
     ),
     listMyShares: protectedProcedure.query(({ ctx }) => ctx.sharing.listMyShares(ctx.user.id)),
+    /**
+     * Change what a member of a folder may do. New people are reached through
+     * an invitation (`createInvite`), never by email here: answering "no user
+     * with that email" told anyone signed in which addresses have an account.
+     * Whether the address has no account or is just not a member of this
+     * folder, the answer is the same.
+     */
     shareWithUser: sessionProcedure
       .input(
         z.object({
@@ -593,11 +601,15 @@ export const appRouter = t.router({
       )
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
+          const folderPath = normalizeFolderPath(input.folderPath);
           const target = await ctx.auth.findUserByEmail(input.email);
-          if (!target) {
-            // Somebody without an account is reached through an invitation instead.
+          const members = target ? await ctx.sharing.listMyShares(ctx.user.id) : [];
+          const member = members.find(
+            (m) => m.userId === target?.id && m.folderPath === folderPath,
+          );
+          if (!target || !member) {
             throw new AppError(
-              'no user with that email; send an invitation instead',
+              'that address is not a member of this folder; send an invitation instead',
               'NOT_FOUND',
               404,
             );
@@ -605,7 +617,7 @@ export const appRouter = t.router({
           const id = await ctx.sharing.grant({
             ownerId: ctx.user.id,
             sharedWithUserId: target.id,
-            folderPath: input.folderPath,
+            folderPath,
             grantedBy: ctx.user.id,
             permission: input.permission,
           });
