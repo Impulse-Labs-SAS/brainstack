@@ -477,6 +477,12 @@ Sharing in the web app. Approval grants access to an existing account or sends
 an email invitation. `unshare` answers the same whether or not the address has
 an account, so neither tool tells anyone who is a member.
 
+*Amended:* `share_folder` returns `approveUrl` (`/settings/sharing?request=<id>`),
+which opens the web app on that one request so the owner approves it with one
+tap. Granting at once to people the owner already shares with was tried and
+dropped: they are the very people who can write text an assistant reads, so a
+planted note could win one of them another folder.
+
 **A recipient can say no.** A share still arrives without asking, but the
 recipient can leave it, or leave it and block further shares from that owner
 (`share_blocks`). `grant` refuses a blocked pair.

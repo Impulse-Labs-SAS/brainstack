@@ -1,5 +1,8 @@
 'use client';
 
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useRef } from 'react';
+
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
@@ -11,8 +14,21 @@ import { trpc } from '@/lib/trpc';
  * wrote, so "share this with x@y" may not be the user's own idea. Its requests
  * wait here. So do the folders other people shared with you — a share arrives
  * without being asked for, so it can be left, and its sender refused.
+ *
+ * An assistant hands the user a link here with `?request=<id>`: that request
+ * is shown first and marked, so approving it is one tap.
  */
 export default function SharingSettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SharingSettings />
+    </Suspense>
+  );
+}
+
+function SharingSettings() {
+  const focusId = useSearchParams().get('request');
+  const focusRef = useRef<HTMLLIElement>(null);
   const utils = trpc.useUtils();
   const requests = trpc.sharing.listShareRequests.useQuery();
   const sharedWithMe = trpc.sharing.listSharedWithMe.useQuery();
@@ -30,6 +46,15 @@ export default function SharingSettingsPage() {
   const leave = trpc.sharing.leave.useMutation({ onSuccess: refresh });
   const unblock = trpc.sharing.unblock.useMutation({ onSuccess: refresh });
 
+  const pending = [...(requests.data ?? [])].sort(
+    (a, b) => Number(b.id === focusId) - Number(a.id === focusId),
+  );
+  const focusMissing =
+    focusId !== null && requests.data !== undefined && !requests.data.some((r) => r.id === focusId);
+  useEffect(() => {
+    focusRef.current?.scrollIntoView({ block: 'center' });
+  }, [requests.data]);
+
   const busy = approve.isPending || reject.isPending || leave.isPending || unblock.isPending;
   const error = approve.error ?? reject.error ?? leave.error ?? unblock.error;
 
@@ -40,6 +65,18 @@ export default function SharingSettingsPage() {
       </div>
       <div className="flex-1 space-y-8 overflow-y-auto p-6 text-sm">
         {error && <div className="max-w-3xl text-xs text-danger">{error.message}</div>}
+        {approve.data && (
+          <div className="max-w-3xl rounded border border-border bg-bg-elevated p-3 text-xs text-fg-primary">
+            {approve.data.status === 'granted'
+              ? `Shared ${approve.data.folderPath} with ${approve.data.email}.`
+              : `Invitation sent to ${approve.data.email} for ${approve.data.folderPath}.`}
+          </div>
+        )}
+        {focusMissing && !approve.data && (
+          <div className="max-w-3xl text-xs text-fg-muted">
+            That request is no longer waiting: it was already approved or declined, or it expired.
+          </div>
+        )}
 
         <section className="max-w-3xl">
           <h2 className="mb-1 text-base font-medium text-fg-primary">Waiting for your approval</h2>
@@ -48,8 +85,12 @@ export default function SharingSettingsPage() {
             that address access to the folder and everything under it.
           </p>
           <ul className="divide-y divide-border-subtle rounded border border-border">
-            {(requests.data ?? []).map((r) => (
-              <li key={r.id} className="flex items-center gap-3 p-3">
+            {pending.map((r) => (
+              <li
+                key={r.id}
+                ref={r.id === focusId ? focusRef : undefined}
+                className={`flex items-center gap-3 p-3 ${r.id === focusId ? 'bg-bg-elevated ring-1 ring-inset ring-accent' : ''}`}
+              >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-fg-primary">
                     <span className="font-mono">{r.folderPath}</span> → {r.email}

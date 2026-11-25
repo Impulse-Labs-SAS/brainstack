@@ -36,7 +36,7 @@ let email: CapturingEmailSender;
 let sharing: SharingService;
 
 /** An MCP client talking to a server that acts as `userId`. */
-async function clientFor(userId: string): Promise<Client> {
+async function clientFor(userId: string, opts: { appOrigin?: string } = {}): Promise<Client> {
   const notes = new NoteService({ db: database.db });
   const search = new SearchService({ db: database.db });
   const totp = new TotpService({ db: database.db, issuer: 'BrainStack' });
@@ -59,6 +59,7 @@ async function clientFor(userId: string): Promise<Client> {
     crawls: new CrawlHistoryService({ db: database.db, retentionDays: 30 }),
     logger,
     principal: { userId },
+    appOrigin: opts.appOrigin,
   });
 
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -213,6 +214,27 @@ describe('share_folder', () => {
     });
     expect(error).toContain('yourself');
     expect(await sharing.listShareRequests(OWNER.id)).toEqual([]);
+  });
+
+  it('hands the assistant a link that opens the request in the web app', async () => {
+    const owner = await clientFor(OWNER.id, { appOrigin: 'https://brain.example.com/' });
+    const { value } = await call(owner, 'share_folder', { path: 'Erebor', email: FRODO.email });
+    const { requestId, approveUrl } = value as { requestId: string; approveUrl: string };
+    expect(approveUrl).toBe(`https://brain.example.com/settings/sharing?request=${requestId}`);
+  });
+
+  it('still only asks for someone the owner already shares a folder with', async () => {
+    // People already shared with can write text the assistant reads; a note
+    // planted by one must not win them a second folder without the owner.
+    const owner = await clientFor(OWNER.id);
+    await shareApproved(owner, OWNER.id, { path: 'Erebor', email: FRODO.email });
+    const { value } = await call(owner, 'share_folder', {
+      path: 'Orbit',
+      email: FRODO.email,
+      permission: 'write',
+    });
+    expect(value).toMatchObject({ status: 'pending_approval' });
+    expect(await sharing.canRead(FRODO.id, OWNER.id, 'Orbit/nota.md')).toBe(false);
   });
 
   it('asking twice is one request', async () => {
