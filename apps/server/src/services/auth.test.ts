@@ -41,9 +41,11 @@ beforeEach(async () => {
     now: () => now,
   });
   apiKeys = new ApiKeyService({ db: database.db, now: () => now });
-  // The first account on an instance skips verification; these tests are
-  // about everyone after it.
-  await auth.signup(OWNER, STRONG);
+  // These tests are about everyone after the first account. With
+  // AUTHORIZED_EMAILS set and mail configured, the owner verifies too.
+  const owner = await auth.signup(OWNER, STRONG);
+  await auth.consumeEmailVerification(owner.verification!.token, STRONG);
+  mailer.sent.length = 0;
 });
 
 describe('validatePassword', () => {
@@ -66,7 +68,7 @@ describe('AuthService signup + email verification', () => {
     expect(mailer.sent).toHaveLength(1);
     expect(mailer.sent[0]?.text).toContain('https://brain.test/auth/verify-email?token=');
 
-    const verified = await auth.consumeEmailVerification(result.verification!.token);
+    const verified = await auth.consumeEmailVerification(result.verification!.token, STRONG);
     expect(verified.emailVerified).toBe(true);
   });
 
@@ -90,20 +92,20 @@ describe('AuthService signup + email verification', () => {
   it('rejects expired verification tokens', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
     now += 25 * 60 * 60 * 1000;
-    await expect(auth.consumeEmailVerification(verification!.token)).rejects.toThrow(AppError);
+    await expect(auth.consumeEmailVerification(verification!.token, STRONG)).rejects.toThrow(AppError);
   });
 
   it('refuses to reuse a verification token', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification!.token);
-    await expect(auth.consumeEmailVerification(verification!.token)).rejects.toThrow(/already used/);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
+    await expect(auth.consumeEmailVerification(verification!.token, STRONG)).rejects.toThrow(/already used/);
   });
 });
 
 describe('AuthService login', () => {
   it('succeeds for a verified user with the right password', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification!.token);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
     const result = await auth.login('user@brain.test', STRONG);
     expect(result.user.id).toBeTruthy();
     expect((await auth.validateSession(result.session.token))?.id).toBe(result.user.id);
@@ -118,7 +120,7 @@ describe('AuthService login', () => {
 
   it('rejects a wrong password with the same error as a missing account', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification!.token);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
     const bad = await auth.login('user@brain.test', 'WrongPass!1234').catch((e: unknown) => e);
     const missing = await auth
       .login('ghost@brain.test', 'WhateverPass!12')
@@ -133,7 +135,7 @@ describe('AuthService login', () => {
 describe('AuthService password reset', () => {
   it('runs the full forgot → reset → login cycle', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification!.token);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
     const existing = await auth.login('user@brain.test', STRONG);
 
     const reset = await auth.requestPasswordReset('user@brain.test');
@@ -159,7 +161,7 @@ describe('AuthService password reset', () => {
 
   it('rejects an expired reset token', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification!.token);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
     const reset = await auth.requestPasswordReset('user@brain.test');
     now += 2 * 60 * 60 * 1000;
     await expect(auth.consumePasswordReset(reset.token!, NEW_STRONG)).rejects.toMatchObject({
@@ -169,7 +171,7 @@ describe('AuthService password reset', () => {
 
   it('refuses to reuse a reset token', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification!.token);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
     const reset = await auth.requestPasswordReset('user@brain.test');
     await auth.consumePasswordReset(reset.token!, NEW_STRONG);
     await expect(auth.consumePasswordReset(reset.token!, 'YetAn0ther!Pass')).rejects.toMatchObject({
@@ -192,7 +194,7 @@ describe('AuthService Google OAuth linking', () => {
 
   it('links to a verified local user', async () => {
     const { verification } = await auth.signup('user@brain.test', STRONG);
-    await auth.consumeEmailVerification(verification!.token);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
     const linked = await auth.upsertGoogleUser({
       googleId: 'g-1',
       email: 'user@brain.test',
@@ -381,7 +383,7 @@ describe('ApiKeyService', () => {
 describe('AuthService.updateProfile', () => {
   async function verifiedUser(): Promise<string> {
     const { user, verification } = await auth.signup('user@brain.test', STRONG, null);
-    await auth.consumeEmailVerification(verification!.token);
+    await auth.consumeEmailVerification(verification!.token, STRONG);
     return user.id;
   }
 

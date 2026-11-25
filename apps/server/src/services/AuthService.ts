@@ -119,7 +119,8 @@ export interface SignupResult {
   user: User;
   /**
    * The verification that was emailed, or null when the account needed none:
-   * the first account on an instance is its owner, and is verified already.
+   * the first account on an instance is its owner, and is verified already
+   * (unless AUTHORIZED_EMAILS is set and mail can be sent; see `signup`).
    */
   verification: { token: string; url: string; expiresAt: number } | null;
 }
@@ -288,9 +289,15 @@ export class AuthService {
     if (policyError) throw new AppError(policyError, 'INVALID_INPUT', 400);
 
     const { first } = await this.assertMaySignUp(email);
+    // The first account is the owner and needs no mail to prove anything:
+    // whoever gets there first owns the instance. Not so when the operator
+    // named who may sign up: then the address is the credential, and whoever
+    // merely knows one on the list could claim the instance before its owner.
+    // So it is verified like any other, wherever this instance can send mail.
+    const verified = first && (this.opts.authorizedEmails.size === 0 || !this.opts.email);
     // Checked before the row exists: an account whose verification can never
     // arrive would hold the address and let nobody in.
-    if (!first && !this.opts.email) throw emailUnavailable();
+    if (!verified && !this.opts.email) throw emailUnavailable();
 
     const passwordHash = await hashPassword(password);
     const now = this.now();
@@ -303,7 +310,7 @@ export class AuthService {
         id: nanoid(),
         email,
         displayName: displayName ?? null,
-        emailVerified: first,
+        emailVerified: verified,
         passwordHash,
         createdAt: now,
         updatedAt: now,
@@ -322,7 +329,7 @@ export class AuthService {
         actorId: user.id,
         method: 'password',
       });
-    if (first) {
+    if (verified) {
       await signedUp();
       return { user, verification: null };
     }
@@ -482,8 +489,8 @@ export class AuthService {
     await this.send({
       to: email,
       subject: 'Verify your BrainStack email',
-      text: `Click to verify your email: ${url}\nThis link expires in 24 hours.`,
-      html: `<p>Click to verify your email: <a href="${url}">${url}</a></p><p>This link expires in 24 hours.</p>`,
+      text: `Click to verify your email: ${url}\nYou will be asked for the password you signed up with. This link expires in 24 hours.\nIf you did not sign up, ignore this email.`,
+      html: `<p>Click to verify your email: <a href="${url}">${url}</a></p><p>You will be asked for the password you signed up with. This link expires in 24 hours.</p><p>If you did not sign up, ignore this email.</p>`,
     });
     return { token, url, expiresAt };
   }
@@ -510,9 +517,48 @@ export class AuthService {
     return { url: issued.url };
   }
 
-  async consumeEmailVerification(token: string): Promise<User> {
+  /**
+   * Verifies the address, given the password the account was created with.
+   *
+   * The link alone is not enough. Anyone may sign up with an address that is
+   * allowed in (an invitation is pending for it, say) and pick the password;
+   * if its real owner then opened the mail and the link sufficed, the account
+   * would be verified with a stranger's password. Asking for the password ties
+   * the verification to whoever created the account. The real owner, who does
+   * not know it, uses "forgot password" instead, which sets a new one and
+   * verifies the address (see `consumePasswordReset`).
+   *
+   * A wrong password leaves the token unused, so the person can try again.
+   */
+  async consumeEmailVerification(token: string, password: string): Promise<User> {
     const tokenHash = sha256(token);
     const now = this.now();
+
+    const [pending] = await this.opts.db
+      .select({ userId: emailVerificationTokens.userId, passwordHash: users.passwordHash })
+      .from(emailVerificationTokens)
+      .innerJoin(users, eq(users.id, emailVerificationTokens.userId))
+      .where(
+        and(
+          eq(emailVerificationTokens.tokenHash, tokenHash),
+          isNull(emailVerificationTokens.usedAt),
+          gt(emailVerificationTokens.expiresAt, now),
+        ),
+      )
+      .limit(1);
+    if (!pending) {
+      throw await this.explainFailedClaim(emailVerificationTokens, tokenHash, now);
+    }
+
+    let ok = false;
+    try {
+      ok = await verifyPassword(pending.passwordHash ?? DECOY_HASH, password);
+    } catch {
+      ok = false;
+    }
+    if (!pending.passwordHash || !ok) {
+      throw new AppError('incorrect password', 'UNAUTHORIZED', 401);
+    }
 
     const [claimed] = await this.opts.db
       .update(emailVerificationTokens)
@@ -532,7 +578,7 @@ export class AuthService {
 
     const [row] = await this.opts.db
       .update(users)
-      .set({ emailVerified: true, updatedAt: now })
+      .set({ emailVerified: true, lastLoginAt: now, updatedAt: now })
       .where(eq(users.id, claimed.userId))
       .returning();
 

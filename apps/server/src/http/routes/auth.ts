@@ -179,20 +179,33 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
 
   // -- Email verification ------------------------------------------------
 
-  router.get('/verify-email', async (c) => {
+  // The link in the mail only lands on the web page that asks for the
+  // password; nothing is consumed by opening it (see
+  // `AuthService.consumeEmailVerification` for why the link alone is not enough).
+  router.get('/verify-email', (c) => {
     const token = c.req.query('token');
     if (!token) return c.redirect(`${options.appHome}/verify-email?error=missing_token`);
+    return c.redirect(`${options.appHome}/verify-email?token=${encodeURIComponent(token)}`);
+  });
+
+  router.post('/verify-email', async (c) => {
+    const parsed = z
+      .object({ token: z.string().min(1).max(256), password: z.string().min(1).max(256) })
+      .safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
     try {
-      const user = await options.auth.consumeEmailVerification(token);
+      const user = await options.auth.consumeEmailVerification(
+        parsed.data.token,
+        parsed.data.password,
+      );
       const session = await options.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
         ipAddress: clientIp(c, options.trustedProxy),
       });
       setSessionCookie(c, session.token, options.secureCookies);
-      return c.redirect(`${options.appHome}/?verified=1`);
+      return c.json({ user });
     } catch (err) {
-      const code = err instanceof AppError ? err.code : 'INTERNAL';
-      return c.redirect(`${options.appHome}/verify-email?error=${encodeURIComponent(code)}`);
+      return jsonError(c, err);
     }
   });
 
