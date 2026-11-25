@@ -57,6 +57,16 @@ describe('noteSanitizeSchema', () => {
     expect(html.toLowerCase()).not.toContain('srcdoc');
   });
 
+  // The browser fetches a <source srcset> by itself, past the img override that
+  // holds external images until the reader asks.
+  it('drops srcset from picture sources', () => {
+    const html = render(
+      '<picture><source srcset="https://elsewhere.example/p.png"><img src="https://elsewhere.example/q.png"></picture>',
+    );
+    expect(html.toLowerCase()).not.toContain('srcset');
+    expect(html).toContain('<img');
+  });
+
   it('keeps wikilinks and embeds', () => {
     // Spaces arrive percent-encoded, as they did before sanitising; the `a` override decodes them.
     expect(render('see [[Some Note|alias]]')).toContain('href="wikilink://Some%20Note"');

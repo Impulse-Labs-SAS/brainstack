@@ -26,6 +26,8 @@ import {
 import { LinkPeek, usePeek } from '@/components/note/link-peek';
 import { noteSanitizeSchema } from '@/lib/markdown-sanitize';
 import { remarkWikilinks } from '@/lib/remark-wikilinks';
+import { externalImageHost } from '@/lib/external-image';
+import { serverOrigin } from '@/lib/server-url';
 import { cn } from '@/lib/utils';
 import { safeDecodeURI } from '@/lib/safe-decode';
 import type { ResolvedAttachment } from '@/lib/wikilinks-client';
@@ -167,6 +169,12 @@ export function MarkdownPreview({
           );
         }
         if (!raw) return null;
+        // Rendered on the server there is no page origin to compare with: hold it.
+        const host =
+          typeof window === 'undefined'
+            ? externalImageHost(raw, [], 'http://localhost/')
+            : externalImageHost(raw, [window.location.origin, serverOrigin()], window.location.href);
+        if (host !== null) return <ExternalImage src={raw} alt={alt ?? ''} host={host} />;
         return (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -284,6 +292,43 @@ export function MarkdownPreview({
       </div>
       <LinkPeek target={peek.target} onEnter={peek.keep} onLeave={peek.hide} />
     </div>
+  );
+}
+
+/**
+ * An image from another site, held until the reader asks for it.
+ *
+ * Loading it would tell that site the note was opened, and whatever its URL
+ * carries; see external-image.ts. So it stays a button naming the site, and
+ * loads, without a referrer, on click.
+ */
+function ExternalImage({ src, alt, host }: { src: string; alt: string; host: string }) {
+  const [shown, setShown] = useState(false);
+  if (shown) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt={alt}
+        referrerPolicy="no-referrer"
+        className="my-2 max-h-[70vh] max-w-full rounded border border-border-subtle"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setShown(true)}
+      title={src}
+      data-external-image={host}
+      className="my-1 inline-flex max-w-full items-center gap-1.5 rounded border border-dashed border-border-subtle bg-bg-elevated px-2 py-1 text-left text-[12px] text-fg-secondary hover:bg-bg-hover hover:text-fg-primary"
+    >
+      <span aria-hidden>🖼</span>
+      <span className="truncate">
+        {alt ? `${alt} · ` : ''}Image from <span className="font-mono">{host}</span>
+      </span>
+      <span className="shrink-0 text-accent">Show</span>
+    </button>
   );
 }
 
