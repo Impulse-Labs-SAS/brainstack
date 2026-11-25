@@ -209,23 +209,6 @@ export class SharingService {
   }
 
   /**
-   * Whether the owner already shares at least one folder with this account.
-   *
-   * What lets an assistant share straight away instead of asking: the owner
-   * chose this person once, in the web app or by approving a request, so a
-   * mistaken or planted "share this with x@y" can reach only someone they
-   * already trust — never a stranger. Anyone else still waits for approval.
-   */
-  async sharesWith(ownerId: string, userId: string): Promise<boolean> {
-    const [row] = await this.opts.db
-      .select({ id: folderShares.id })
-      .from(folderShares)
-      .where(and(eq(folderShares.ownerId, ownerId), eq(folderShares.sharedWithUserId, userId)))
-      .limit(1);
-    return Boolean(row);
-  }
-
-  /**
    * Create a direct grant. Idempotent: granting the same folder to the same
    * person twice returns the existing id rather than a second row.
    */

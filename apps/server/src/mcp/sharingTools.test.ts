@@ -95,8 +95,6 @@ async function shareApproved(
   args: { path: string; email: string; permission?: 'read' | 'write' },
 ) {
   const asked = await call(client, 'share_folder', args);
-  // Someone the owner already shares with is shared with at once.
-  if ((asked.value as { status: string }).status === 'shared') return asked.value;
   const requestId = (asked.value as { requestId: string }).requestId;
   return approveShareRequest(
     {
@@ -225,50 +223,16 @@ describe('share_folder', () => {
     expect(approveUrl).toBe(`https://brain.example.com/settings/sharing?request=${requestId}`);
   });
 
-  it('shares at once with someone the owner already shares a folder with', async () => {
+  it('still only asks for someone the owner already shares a folder with', async () => {
+    // People already shared with can write text the assistant reads; a note
+    // planted by one must not win them a second folder without the owner.
     const owner = await clientFor(OWNER.id);
     await shareApproved(owner, OWNER.id, { path: 'Erebor', email: FRODO.email });
-
     const { value } = await call(owner, 'share_folder', {
       path: 'Orbit',
       email: FRODO.email,
       permission: 'write',
     });
-    expect(value).toMatchObject({ status: 'shared', folderPath: 'Orbit', permission: 'write' });
-    expect(await sharing.canWrite(FRODO.id, OWNER.id, 'Orbit/nota.md')).toBe(true);
-    expect(await sharing.listShareRequests(OWNER.id)).toEqual([]);
-  });
-
-  it('still only asks for someone the owner shares nothing with', async () => {
-    const owner = await clientFor(OWNER.id);
-    const third = { id: 'sam', email: 'sam@x.com' };
-    await database.db
-      .insert(users)
-      .values({ id: third.id, email: third.email, createdAt: Date.now(), updatedAt: 0 });
-    await shareApproved(owner, OWNER.id, { path: 'Erebor', email: FRODO.email });
-
-    const { value } = await call(owner, 'share_folder', { path: 'Erebor', email: third.email });
-    expect(value).toMatchObject({ status: 'pending_approval' });
-    expect(await sharing.canRead(third.id, OWNER.id, 'Erebor/nota.md')).toBe(false);
-  });
-
-  it('does not count a share somebody else made with that person', async () => {
-    await sharing.grant({
-      ownerId: FRODO.id,
-      sharedWithUserId: OWNER.id,
-      folderPath: 'Ledger',
-      grantedBy: FRODO.id,
-    });
-    const owner = await clientFor(OWNER.id);
-    const { value } = await call(owner, 'share_folder', { path: 'Erebor', email: FRODO.email });
-    expect(value).toMatchObject({ status: 'pending_approval' });
-  });
-
-  it('stops sharing at once with someone who blocked the owner', async () => {
-    const owner = await clientFor(OWNER.id);
-    await shareApproved(owner, OWNER.id, { path: 'Erebor', email: FRODO.email });
-    await sharing.block(FRODO.id, OWNER.id);
-    const { value } = await call(owner, 'share_folder', { path: 'Orbit', email: FRODO.email });
     expect(value).toMatchObject({ status: 'pending_approval' });
     expect(await sharing.canRead(FRODO.id, OWNER.id, 'Orbit/nota.md')).toBe(false);
   });

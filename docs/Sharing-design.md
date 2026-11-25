@@ -477,11 +477,11 @@ Sharing in the web app. Approval grants access to an existing account or sends
 an email invitation. `unshare` answers the same whether or not the address has
 an account, so neither tool tells anyone who is a member.
 
-*Amended:* with someone the owner already shares at least one folder with,
-`share_folder` grants at once — a planted request can then reach only a person
-the owner chose before, never a stranger. Anyone else is still a request, and
-the tool returns `approveUrl` (`/settings/sharing?request=<id>`), which opens the
-web app on that one request so the owner approves it with one tap.
+*Amended:* `share_folder` returns `approveUrl` (`/settings/sharing?request=<id>`),
+which opens the web app on that one request so the owner approves it with one
+tap. Granting at once to people the owner already shares with was tried and
+dropped: they are the very people who can write text an assistant reads, so a
+planted note could win one of them another folder.
 
 **A recipient can say no.** A share still arrives without asking, but the
 recipient can leave it, or leave it and block further shares from that owner
