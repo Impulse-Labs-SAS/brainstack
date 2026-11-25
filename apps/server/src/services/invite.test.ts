@@ -201,6 +201,25 @@ describe('revocar el acceso cierra la puerta de atrás', () => {
     ).rejects.toThrow(/revocada/);
   });
 
+  it('revoking by email closes an invite sent before the person had an account', async () => {
+    const inv = await svc.create({
+      ownerId: 'owner',
+      folderPath: 'proyectos',
+      mode: 'email',
+      inviteeEmail: 'New@X.com',
+    });
+    const [row] = await database.db.select().from(pgSchema.folderShareInvites);
+    expect(row?.inviteeEmail).toBe('new@x.com');
+
+    await sharing.revokeByEmail({ ownerId: 'owner', email: 'NEW@x.com', folderPath: 'proyectos' });
+
+    await seedUser('newcomer', 'new@x.com');
+    await expect(
+      svc.accept({ token: inv.token, user: { id: 'newcomer', email: 'new@x.com' } }),
+    ).rejects.toThrow(/revocada/);
+    expect(await sharing.canRead('newcomer', 'owner', 'proyectos/nota.md')).toBe(false);
+  });
+
   it('no toca los links de otras carpetas', async () => {
     const otra = await svc.create({ ownerId: 'owner', folderPath: 'otra', mode: 'link' });
     await sharing.grant({

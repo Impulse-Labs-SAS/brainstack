@@ -50,6 +50,11 @@ export interface ShareMember {
   grantedAt: number;
 }
 
+/** One inbox, one spelling: invites and share requests store addresses this way. */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 /** Normalise a logical path to folder_path form: no leading or trailing slash. */
 export function normalizeFolderPath(input: string): string {
   return input.replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
@@ -304,25 +309,75 @@ export class SharingService {
     sharedWithUserId: string;
     folderPath: string;
   }): Promise<void> {
+    const [user] = await this.opts.db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, params.sharedWithUserId))
+      .limit(1);
+    await this.closeAccess({
+      ownerId: params.ownerId,
+      folderPath: params.folderPath,
+      userId: params.sharedWithUserId,
+      email: user?.email ?? null,
+    });
+  }
+
+  /**
+   * `revoke`, for someone named by email — who may not have an account yet.
+   *
+   * An invitation goes out by email precisely because the person has no
+   * account, so "no account" is the case where the pending invite is the only
+   * access there is to take away. Looking the account up first and doing
+   * nothing without one answered "revoked" and left that invite working.
+   *
+   * Does the same work whether or not the address has an account, so a caller
+   * cannot tell the two apart.
+   */
+  async revokeByEmail(params: {
+    ownerId: string;
+    email: string;
+    folderPath: string;
+  }): Promise<void> {
+    const email = normalizeEmail(params.email);
+    const [user] = await this.opts.db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(sql`lower(${users.email})`, email))
+      .limit(1);
+    await this.closeAccess({
+      ownerId: params.ownerId,
+      folderPath: params.folderPath,
+      userId: user?.id ?? null,
+      email,
+    });
+  }
+
+  private async closeAccess(params: {
+    ownerId: string;
+    folderPath: string;
+    userId: string | null;
+    email: string | null;
+  }): Promise<void> {
     const folderPath = normalizeFolderPath(params.folderPath);
-    const removed = await this.deleteGrantsUnder(
-      params.ownerId,
-      params.sharedWithUserId,
-      folderPath,
-    );
-    if (removed > 0) {
-      await this.opts.emit?.({
-        type: 'share.revoked',
-        ownerId: params.ownerId,
-        path: folderPath,
-        userId: params.sharedWithUserId,
-      });
+    if (params.userId) {
+      const removed = await this.deleteGrantsUnder(params.ownerId, params.userId, folderPath);
+      if (removed > 0) {
+        await this.opts.emit?.({
+          type: 'share.revoked',
+          ownerId: params.ownerId,
+          path: folderPath,
+          userId: params.userId,
+        });
+      }
     }
 
     // The invites that would hand the folder, or one inside it, straight back:
-    // every link invite and this person's email invites. Matched in memory —
-    // share paths never go through LIKE, where a folder named `a_b` would
-    // also reach `aXb`.
+    // every link invite and this person's email invites. Addresses compare
+    // without case — `Ana@x.com` and `ana@x.com` are one inbox, and an invite
+    // stored before addresses were lowercased may still carry capitals. Paths
+    // are matched in memory: share paths never go through LIKE, where a folder
+    // named `a_b` would also reach `aXb`.
+    const email = params.email ? normalizeEmail(params.email) : null;
     const live = await this.opts.db
       .select({ id: folderShareInvites.id, folderPath: folderShareInvites.folderPath })
       .from(folderShareInvites)
@@ -330,12 +385,12 @@ export class SharingService {
         and(
           eq(folderShareInvites.ownerId, params.ownerId),
           isNull(folderShareInvites.revokedAt),
-          or(
-            eq(folderShareInvites.mode, 'link'),
-            sql`${folderShareInvites.inviteeEmail} = (
-                  SELECT ${users.email} FROM ${users} WHERE ${users.id} = ${params.sharedWithUserId}
-                )`,
-          ),
+          email
+            ? or(
+                eq(folderShareInvites.mode, 'link'),
+                eq(sql`lower(${folderShareInvites.inviteeEmail})`, email),
+              )
+            : eq(folderShareInvites.mode, 'link'),
         ),
       );
     const doomed = live.filter((i) => pathFallsUnder(i.folderPath, folderPath)).map((i) => i.id);
@@ -599,7 +654,7 @@ export class SharingService {
     if (folderPath === '') {
       throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
-    const email = params.email.trim().toLowerCase();
+    const email = normalizeEmail(params.email);
     const now = this.now();
     const expiresAt = now + SHARE_REQUEST_TTL_MS;
 

@@ -483,6 +483,23 @@ const shareRequestsAndBlocks: PgMigration = {
   ],
 };
 
+/**
+ * Email invites store their address lowercased, as accounts and share
+ * requests already did. Revoking someone matched the address exactly, so an
+ * invite sent to `Ana@x.com` outlived taking `ana@x.com` out of the folder.
+ * New invites are written lowercased; this brings the old ones in line.
+ * Idempotent: a second run finds nothing to change.
+ */
+const lowercaseInviteEmails: PgMigration = {
+  name: '0013_pg_lowercase_invite_emails',
+  statements: [
+    `UPDATE folder_share_invites
+        SET invitee_email = lower(trim(invitee_email))
+      WHERE invitee_email IS NOT NULL
+        AND invitee_email <> lower(trim(invitee_email))`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -496,4 +513,5 @@ export const pgMigrations: readonly PgMigration[] = [
   crawlHistory,
   totpAttempts,
   shareRequestsAndBlocks,
+  lowercaseInviteEmails,
 ];

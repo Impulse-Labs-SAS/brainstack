@@ -311,6 +311,21 @@ describe('unshare', () => {
     expect(await sharing.canRead(FRODO.id, OWNER.id, 'Impulse Labs/nota.md')).toBe(false);
   });
 
+  it('takes back the invitation of someone who has no account yet', async () => {
+    const owner = await clientFor(OWNER.id);
+    const approved = await shareApproved(owner, OWNER.id, {
+      path: 'Impulse Labs',
+      email: 'Sam@X.com',
+    });
+    expect(approved).toMatchObject({ status: 'invited' });
+
+    const { value } = await call(owner, 'unshare', { path: 'Impulse Labs', email: 'sam@x.com' });
+    expect(value).toMatchObject({ status: 'revoked' });
+
+    const [invite] = await database.db.select().from(pgSchema.folderShareInvites);
+    expect(invite?.revokedAt).not.toBeNull();
+  });
+
   it('answers the same whether or not the email has an account', async () => {
     const owner = await clientFor(OWNER.id);
     const unknown = await call(owner, 'unshare', { path: 'Impulse Labs', email: 'nadie@x.com' });
