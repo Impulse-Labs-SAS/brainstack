@@ -18,6 +18,7 @@ import { pgSchema, type PgDb } from '@brainstack/core/pg';
 const {
   emailVerificationTokens,
   folderShareInvites,
+  loginChallenges,
   magicLinkTokens,
   oauthAuthorizationCodes,
   oauthClients,
@@ -65,6 +66,9 @@ export async function purgeExpired(
       .delete(emailVerificationTokens)
       .where(lt(emailVerificationTokens.expiresAt, now))
       .returning({ id: emailVerificationTokens.id }),
+  );
+  await count(
+    db.delete(loginChallenges).where(lt(loginChallenges.expiresAt, now)).returning({ id: loginChallenges.id }),
   );
   await count(
     db.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, now)).returning({ id: magicLinkTokens.id }),

@@ -483,6 +483,26 @@ const shareRequestsAndBlocks: PgMigration = {
   ],
 };
 
+/**
+ * Sign-ins that have passed Google and still owe the second factor. Without a
+ * place to hold that half-finished state, the Google callback could only open
+ * a session outright, and a second factor stopped nobody who controlled the
+ * email address.
+ */
+const loginChallenges: PgMigration = {
+  name: '0013_pg_login_challenges',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS login_challenges (
+       id         TEXT PRIMARY KEY,
+       user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       token_hash TEXT NOT NULL UNIQUE,
+       created_at BIGINT NOT NULL,
+       expires_at BIGINT NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_login_challenges_user ON login_challenges (user_id)`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -496,4 +516,5 @@ export const pgMigrations: readonly PgMigration[] = [
   crawlHistory,
   totpAttempts,
   shareRequestsAndBlocks,
+  loginChallenges,
 ];
