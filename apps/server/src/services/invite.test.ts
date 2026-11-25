@@ -43,7 +43,7 @@ beforeEach(async () => {
 });
 
 describe('InviteService — email mode', () => {
-  it('crea invite, manda email y permite accept por el email correcto', async () => {
+  it('creates an invite, emails it and accepts it for the right address', async () => {
     const inv = await svc.create({
       ownerId: 'owner',
       folderPath: 'proyectos',
@@ -62,7 +62,7 @@ describe('InviteService — email mode', () => {
     expect(await sharing.canRead('alice', 'owner', 'proyectos/x.md')).toBe(true);
   });
 
-  it('rechaza accept con email distinto', async () => {
+  it('refuses to accept for a different address', async () => {
     const inv = await svc.create({
       ownerId: 'owner',
       folderPath: 'p',
@@ -112,15 +112,15 @@ describe('InviteService — link mode', () => {
   });
 });
 
-describe('InviteService — expiración y revocación', () => {
-  it('rechaza tokens expirados', async () => {
+describe('InviteService — expiry and revocation', () => {
+  it('refuses expired tokens', async () => {
     const inv = await svc.create({
       ownerId: 'owner',
       folderPath: 'p',
       mode: 'link',
     });
     now = inv.expiresAt + 1000;
-    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/expirada/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/expired/);
   });
 
   it('revoke bloquea accept', async () => {
@@ -130,10 +130,10 @@ describe('InviteService — expiración y revocación', () => {
       mode: 'link',
     });
     await svc.revoke('owner', inv.inviteId);
-    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/revocada/);
+    await expect(svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } })).rejects.toThrow(/revoked/);
   });
 
-  it('listPending no incluye aceptadas, revocadas ni expiradas', async () => {
+  it('listPending leaves out accepted, revoked and expired invites', async () => {
     const a = await svc.create({
       ownerId: 'owner',
       folderPath: 'p',
@@ -157,8 +157,8 @@ describe('InviteService — expiración y revocación', () => {
  * the app by hand — alice was removed from a folder and returned with the same
  * URL seconds later.
  */
-describe('revocar el acceso cierra la puerta de atrás', () => {
-  it('alice no puede volver con el mismo link tras ser revocada', async () => {
+describe('revoking access closes the way back in', () => {
+  it('alice cannot come back with the same link once it is revoked', async () => {
     const inv = await svc.create({ ownerId: 'owner', folderPath: 'proyectos', mode: 'link' });
     await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
     expect(await sharing.canRead('alice', 'owner', 'proyectos/nota.md')).toBe(true);
@@ -172,11 +172,11 @@ describe('revocar el acceso cierra la puerta de atrás', () => {
 
     await expect(
       svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).rejects.toThrow(/revocada/);
+    ).rejects.toThrow(/revoked/);
     expect(await sharing.canRead('alice', 'owner', 'proyectos/nota.md')).toBe(false);
   });
 
-  it('también mata la invitación por email que seguía pendiente', async () => {
+  it('also ends the email invitation that was still pending', async () => {
     const inv = await svc.create({
       ownerId: 'owner',
       folderPath: 'proyectos',
@@ -198,10 +198,10 @@ describe('revocar el acceso cierra la puerta de atrás', () => {
 
     await expect(
       svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } }),
-    ).rejects.toThrow(/revocada/);
+    ).rejects.toThrow(/revoked/);
   });
 
-  it('no toca los links de otras carpetas', async () => {
+  it('leaves links to other folders alone', async () => {
     const otra = await svc.create({ ownerId: 'owner', folderPath: 'otra', mode: 'link' });
     await sharing.grant({
       ownerId: 'owner',
@@ -220,7 +220,7 @@ describe('revocar el acceso cierra la puerta de atrás', () => {
     expect(out.folderPath).toBe('otra');
   });
 
-  it('quien ya entró conserva el acceso: sólo se cierra el regreso', async () => {
+  it('whoever already joined keeps access: only the way back is closed', async () => {
     await seedUser('bob', 'b@x.com');
     const inv = await svc.create({ ownerId: 'owner', folderPath: 'proyectos', mode: 'link' });
     await svc.accept({ token: inv.token, user: { id: 'alice', email: 'a@x.com' } });
@@ -238,12 +238,12 @@ describe('revocar el acceso cierra la puerta de atrás', () => {
 });
 
 /*
- * El link es lo único que el invitado ve, y apuntaba al origin del frontend sin
- * el prefijo de la API: `/invite/accept/:token` no es una página, así que cada
- * invitación terminaba en el 404 de Next.
+ * The link is all the invitee sees, and it pointed at the frontend's origin
+ * without the API prefix: `/invite/accept/:token` is not a page, so every
+ * invitation ended on Next's 404.
  */
 describe('InviteService — acceptUrl', () => {
-  it('apunta al endpoint del server, detrás del prefijo de la API', async () => {
+  it('points at the server endpoint, behind the API prefix', async () => {
     const conPrefijo = new InviteService({
       db: database.db,
       email,
@@ -260,7 +260,7 @@ describe('InviteService — acceptUrl', () => {
     expect(inv.acceptUrl).toBe(`https://app.test/api/invite/accept/${inv.token}`);
   });
 
-  it('sin prefijo configurado queda en la raíz del origin', async () => {
+  it('with no prefix configured it sits at the origin root', async () => {
     const inv = await svc.create({ ownerId: 'owner', folderPath: 'proyectos', mode: 'link' });
     expect(inv.acceptUrl).toBe(`https://app.test/invite/accept/${inv.token}`);
   });

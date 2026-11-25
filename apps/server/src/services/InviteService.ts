@@ -202,9 +202,9 @@ export class InviteService {
       .limit(1);
 
     if (!row) throw new AppError('invitation not found', 'NOT_FOUND', 404);
-    if (row.revokedAt != null) throw new AppError('invite revocada', 'FORBIDDEN', 403);
+    if (row.revokedAt != null) throw new AppError('this invitation was revoked', 'FORBIDDEN', 403);
     if (Number(row.expiresAt) < this.now()) {
-      throw new AppError('invite expirada', 'FORBIDDEN', 403);
+      throw new AppError('this invitation has expired', 'FORBIDDEN', 403);
     }
 
     if (row.mode === 'email') {
