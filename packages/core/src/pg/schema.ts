@@ -260,6 +260,25 @@ export const sessions = pgTable(
   (t) => ({ userIdx: index('idx_sessions_user').on(t.userId) }),
 );
 
+/**
+ * A sign-in that has proved who someone is by a way other than the password
+ * form (Google) and still owes the second factor. The browser holds the token
+ * in a cookie; only its hash is stored. Used once, then deleted.
+ */
+export const loginChallenges = pgTable(
+  'login_challenges',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique('login_challenges_token_hash_key'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({ userIdx: index('idx_login_challenges_user').on(t.userId) }),
+);
+
 export const magicLinkTokens = pgTable(
   'magic_link_tokens',
   {

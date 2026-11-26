@@ -25,21 +25,78 @@ const REDIRECT_ERRORS: Record<string, string> = {
 };
 const GENERIC_REDIRECT_ERROR = 'Sign-in did not complete. Try again.';
 
+/**
+ * Why someone was sent here instead of being signed in, for an account with a
+ * second factor: a reset link or a verification link proves the address, and
+ * the address alone does not open a session.
+ */
+const NOTICES: Record<string, string> = {
+  reset: 'Password updated. Sign in with it and your 2FA code.',
+  verified: 'Email verified. Sign in to continue.',
+};
+
 function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
   const errorParam = params.get('error');
   const initialError = errorParam
-    ? (Object.hasOwn(REDIRECT_ERRORS, errorParam)
-        ? REDIRECT_ERRORS[errorParam]!
-        : GENERIC_REDIRECT_ERROR)
+    ? Object.hasOwn(REDIRECT_ERRORS, errorParam)
+      ? REDIRECT_ERRORS[errorParam]!
+      : GENERIC_REDIRECT_ERROR
     : null;
+  // Google sent the person back, and their account still owes its code.
+  const googleSecondFactor = params.get('second_factor') === 'google';
+  const notice =
+    params.get('reset') === '1'
+      ? NOTICES.reset
+      : params.get('verified') === '1'
+        ? NOTICES.verified
+        : null;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');
   const [needsTotp, setNeedsTotp] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
   const [pending, setPending] = useState(false);
+
+  function goOn() {
+    // The middleware (and the OAuth authorize endpoint) preserve where the
+    // user was headed in ?redirect_to. Relative paths only — anything with a
+    // host in it is someone else's destination, not ours. API paths (the
+    // OAuth consent screen) are not client routes, so those take a full
+    // navigation instead of the router.
+    const redirectTo = params.get('redirect_to');
+    if (
+      redirectTo?.startsWith('/') &&
+      !redirectTo.startsWith('//') &&
+      !redirectTo.startsWith('/\\')
+    ) {
+      if (redirectTo.startsWith('/api/')) {
+        window.location.replace(redirectTo);
+        return;
+      }
+      router.replace(redirectTo);
+      return;
+    }
+    router.replace('/');
+  }
+
+  async function submitSecondFactor(e: React.FormEvent) {
+    e.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      await authFetch<LoginResult>('/auth/google/second-factor', {
+        method: 'POST',
+        json: { code: totpCode },
+      });
+      goOn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'sign-in failed');
+    } finally {
+      setPending(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,21 +107,7 @@ function LoginInner() {
         method: 'POST',
         json: { email, password, totpCode: totpCode || undefined },
       });
-      // The middleware (and the OAuth authorize endpoint) preserve where the
-      // user was headed in ?redirect_to. Relative paths only — anything with a
-      // host in it is someone else's destination, not ours. API paths (the
-      // OAuth consent screen) are not client routes, so those take a full
-      // navigation instead of the router.
-      const redirectTo = params.get('redirect_to');
-      if (redirectTo?.startsWith('/') && !redirectTo.startsWith('//') && !redirectTo.startsWith('/\\')) {
-        if (redirectTo.startsWith('/api/')) {
-          window.location.replace(redirectTo);
-          return;
-        }
-        router.replace(redirectTo);
-        return;
-      }
-      router.replace('/');
+      goOn();
     } catch (err) {
       if (err instanceof AuthApiError && err.message.toLowerCase().includes('totp code required')) {
         setNeedsTotp(true);
@@ -82,64 +125,101 @@ function LoginInner() {
       <div className="w-full max-w-sm rounded-lg border border-border bg-bg-surface p-6 shadow-lg">
         <BrandLockup className="mb-5 block h-5 text-fg-primary" />
         <h1 className="mb-6 text-xl font-medium text-fg-primary">Sign in</h1>
-        <form onSubmit={submit} className="space-y-4">
-          <div>
-            <label className="mb-1 block font-mono text-[11px] text-fg-muted">EMAIL</label>
-            <Input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              autoComplete="email"
-              required
-              autoFocus
-            />
-          </div>
-          <div>
-            <label className="mb-1 block font-mono text-[11px] text-fg-muted">PASSWORD</label>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-          {needsTotp && (
-            <div>
-              <label className="mb-1 block font-mono text-[11px] text-fg-muted">
-                2FA CODE
-              </label>
-              <Input
-                inputMode="numeric"
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value)}
-                placeholder="123 456 or backup code"
-                autoComplete="one-time-code"
-                required
-              />
+        {googleSecondFactor ? (
+          <>
+            <form onSubmit={submitSecondFactor} className="space-y-4">
+              <p className="text-sm text-fg-muted">
+                Google confirmed it is you. Enter the code from your authenticator app to finish.
+              </p>
+              <div>
+                <label className="mb-1 block font-mono text-[11px] text-fg-muted">2FA CODE</label>
+                <Input
+                  inputMode="numeric"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value)}
+                  placeholder="123 456 or backup code"
+                  autoComplete="one-time-code"
+                  required
+                  autoFocus
+                />
+              </div>
+              {error && <div className="text-xs text-danger">{error}</div>}
+              <Button
+                intent="primary"
+                type="submit"
+                isDisabled={pending || !totpCode}
+                className="w-full"
+              >
+                {pending ? 'Signing in…' : 'Continue'}
+              </Button>
+            </form>
+            <div className="mt-6 text-xs text-fg-muted">
+              <Link href="/login" className="hover:text-fg-primary">
+                Start over
+              </Link>
             </div>
-          )}
-          {error && <div className="text-xs text-danger">{error}</div>}
-          <Button
-            intent="primary"
-            type="submit"
-            isDisabled={pending || !email || !password}
-            className="w-full"
-          >
-            {pending ? 'Signing in…' : 'Sign in'}
-          </Button>
-        </form>
-        <GoogleButton redirectTo={params.get('redirect_to')} />
+          </>
+        ) : (
+          <>
+            {notice && <div className="mb-4 text-sm text-fg-primary">{notice}</div>}
+            <form onSubmit={submit} className="space-y-4">
+              <div>
+                <label className="mb-1 block font-mono text-[11px] text-fg-muted">EMAIL</label>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  required
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="mb-1 block font-mono text-[11px] text-fg-muted">PASSWORD</label>
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+              {needsTotp && (
+                <div>
+                  <label className="mb-1 block font-mono text-[11px] text-fg-muted">2FA CODE</label>
+                  <Input
+                    inputMode="numeric"
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value)}
+                    placeholder="123 456 or backup code"
+                    autoComplete="one-time-code"
+                    required
+                  />
+                </div>
+              )}
+              {error && <div className="text-xs text-danger">{error}</div>}
+              <Button
+                intent="primary"
+                type="submit"
+                isDisabled={pending || !email || !password}
+                className="w-full"
+              >
+                {pending ? 'Signing in…' : 'Sign in'}
+              </Button>
+            </form>
+            <GoogleButton redirectTo={params.get('redirect_to')} />
 
-        <div className="mt-6 flex items-center justify-between text-xs text-fg-muted">
-          <Link href="/signup" className="hover:text-fg-primary">
-            Create account
-          </Link>
-          <Link href="/forgot-password" className="hover:text-fg-primary">
-            Forgot password?
-          </Link>
-        </div>
+            <div className="mt-6 flex items-center justify-between text-xs text-fg-muted">
+              <Link href="/signup" className="hover:text-fg-primary">
+                Create account
+              </Link>
+              <Link href="/forgot-password" className="hover:text-fg-primary">
+                Forgot password?
+              </Link>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -147,7 +227,11 @@ function LoginInner() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>}>
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>
+      }
+    >
       <LoginInner />
     </Suspense>
   );
