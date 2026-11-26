@@ -275,6 +275,91 @@ describe('SharingService — grant / revoke', () => {
   });
 });
 
+describe('SharingService.revokeByEmail', () => {
+  const { folderShareInvites } = pgSchema;
+
+  async function seedInvite(id: string, folderPath: string, inviteeEmail: string | null) {
+    await database.db.insert(folderShareInvites).values({
+      id,
+      folderPath,
+      ownerId: 'owner',
+      mode: inviteeEmail ? 'email' : 'link',
+      inviteeEmail,
+      permission: 'read',
+      tokenHash: `hash-${id}`,
+      expiresAt: Date.now() + 100_000,
+      createdAt: Date.now(),
+    });
+  }
+
+  async function revokedIds(): Promise<string[]> {
+    const rows = await database.db.select().from(folderShareInvites);
+    return rows
+      .filter((r) => r.revokedAt !== null)
+      .map((r) => r.id)
+      .sort();
+  }
+
+  it('kills the pending email invite of someone with no account yet', async () => {
+    await seedInvite('pending', 'proj', 'new@x.com');
+    await seedInvite('nested', 'proj/sub', 'new@x.com');
+    await seedInvite('elsewhere', 'other', 'new@x.com');
+    await seedInvite('someone-else', 'proj', 'other@x.com');
+
+    await svc.revokeByEmail({ ownerId: 'owner', email: 'new@x.com', folderPath: 'proj' });
+
+    expect(await revokedIds()).toEqual(['nested', 'pending']);
+  });
+
+  it('matches the address without case, both ways', async () => {
+    await seedInvite('stored-upper', 'proj', 'New@X.com');
+    await seedInvite('stored-lower', 'proj/sub', 'new@x.com');
+
+    await svc.revokeByEmail({ ownerId: 'owner', email: ' NEW@x.com ', folderPath: 'proj' });
+
+    expect(await revokedIds()).toEqual(['stored-lower', 'stored-upper']);
+  });
+
+  it('kills link invites for the folder too, as revoke does', async () => {
+    await seedInvite('link', 'proj', null);
+    await svc.revokeByEmail({ ownerId: 'owner', email: 'new@x.com', folderPath: 'proj' });
+    expect(await revokedIds()).toEqual(['link']);
+  });
+
+  it('takes away the grant when the address has an account', async () => {
+    await svc.grant({
+      ownerId: 'owner',
+      sharedWithUserId: 'alice',
+      folderPath: 'proj',
+      grantedBy: 'owner',
+    });
+    await svc.revokeByEmail({ ownerId: 'owner', email: 'A@X.com', folderPath: 'proj' });
+    expect(await svc.canRead('alice', 'owner', 'proj/x.md')).toBe(false);
+  });
+
+  it("does not touch another owner's invites", async () => {
+    await database.db.insert(folderShareInvites).values({
+      id: 'theirs',
+      folderPath: 'proj',
+      ownerId: 'bob',
+      mode: 'email',
+      inviteeEmail: 'new@x.com',
+      permission: 'read',
+      tokenHash: 'hash-theirs',
+      expiresAt: Date.now() + 100_000,
+      createdAt: Date.now(),
+    });
+    await svc.revokeByEmail({ ownerId: 'owner', email: 'new@x.com', folderPath: 'proj' });
+    expect(await revokedIds()).toEqual([]);
+  });
+
+  it("revoke by account also matches an invite stored with capitals", async () => {
+    await seedInvite('upper', 'proj', 'A@X.COM');
+    await svc.revoke({ ownerId: 'owner', sharedWithUserId: 'alice', folderPath: 'proj' });
+    expect(await revokedIds()).toEqual(['upper']);
+  });
+});
+
 describe('SharingService — listing', () => {
   it('listSharedRoots devuelve metadata del dueño', async () => {
     await svc.grant({

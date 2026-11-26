@@ -477,6 +477,13 @@ Sharing in the web app. Approval grants access to an existing account or sends
 an email invitation. `unshare` answers the same whether or not the address has
 an account, so neither tool tells anyone who is a member.
 
+*Amended:* `unshare` revokes by address (`SharingService.revokeByEmail`), not by
+account. Someone invited by email often has no account yet, and then the pending
+invitation is the only access there is to take back; looking the account up
+first answered "revoked" and left that invitation working. Invitation addresses
+are stored lowercased (migration `0014` brings old rows in line) and compared
+without case.
+
 *Amended:* `share_folder` returns `approveUrl` (`/settings/sharing?request=<id>`),
 which opens the web app on that one request so the owner approves it with one
 tap. Granting at once to people the owner already shares with was tried and
