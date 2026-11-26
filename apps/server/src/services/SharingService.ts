@@ -14,12 +14,15 @@ import { pgSchema, type PgDb } from '@brainstack/core/pg';
 import { AppError } from '../lib/errors.js';
 import type { EmitEvent } from './events.js';
 
-const { folderShares, folderShareInvites, shareBlocks, shareRequests, users } = pgSchema;
+const { folderShares, folderShareInvites, moveRequests, shareBlocks, shareRequests, users } =
+  pgSchema;
 
 /** How long a share an assistant asked for waits for the owner. */
 const SHARE_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Pending requests one owner may have at once; an assistant cannot pile them up. */
 const MAX_PENDING_SHARE_REQUESTS = 20;
+/** Pending moves one person may have at once, for the same reason. */
+const MAX_PENDING_MOVE_REQUESTS = 20;
 
 /** What a grant allows. Ordered: 'write' implies 'read'. */
 export type SharePermission = 'read' | 'write';
@@ -695,6 +698,120 @@ export class SharingService {
         folderPath: shareRequests.folderPath,
         email: shareRequests.email,
         permission: shareRequests.permission,
+      });
+    return row ?? null;
+  }
+
+  /**
+   * Ask, for `userId`, to move a note or folder into another vault — what an
+   * assistant does instead of moving it. Nothing moves until that person
+   * approves it in the web app with a signed-in session.
+   *
+   * The move takes the notes from their owner and gives them to another; the
+   * previous owner cannot undo it. An assistant may be acting on text someone
+   * else wrote in a shared folder, so, like a grant, it waits for a person.
+   *
+   * Asking again for the same move renews the request.
+   */
+  async requestMove(params: {
+    userId: string;
+    fromOwnerId: string;
+    fromPath: string;
+    toOwnerId: string;
+    toPath: string;
+    requestedBy?: string | null;
+  }): Promise<{ id: string; expiresAt: number }> {
+    const now = this.now();
+    const expiresAt = now + SHARE_REQUEST_TTL_MS;
+    const pending = await this.listMoveRequests(params.userId);
+    const same = pending.find(
+      (r) =>
+        r.fromOwnerId === params.fromOwnerId &&
+        r.fromPath === params.fromPath &&
+        r.toOwnerId === params.toOwnerId &&
+        r.toPath === params.toPath,
+    );
+    if (same) {
+      await this.opts.db
+        .update(moveRequests)
+        .set({ createdAt: now, expiresAt })
+        .where(eq(moveRequests.id, same.id));
+      return { id: same.id, expiresAt };
+    }
+    if (pending.length >= MAX_PENDING_MOVE_REQUESTS) {
+      throw new AppError(
+        'too many moves are waiting for approval; ask the user to review them first',
+        'RATE_LIMITED',
+        429,
+      );
+    }
+    const id = nanoid();
+    await this.opts.db.insert(moveRequests).values({
+      id,
+      userId: params.userId,
+      fromOwnerId: params.fromOwnerId,
+      fromPath: params.fromPath,
+      toOwnerId: params.toOwnerId,
+      toPath: params.toPath,
+      requestedBy: params.requestedBy ?? null,
+      createdAt: now,
+      expiresAt,
+    });
+    return { id, expiresAt };
+  }
+
+  /** Moves still waiting for this person, newest first. */
+  async listMoveRequests(userId: string): Promise<
+    Array<{
+      id: string;
+      fromOwnerId: string;
+      fromPath: string;
+      toOwnerId: string;
+      toPath: string;
+      requestedBy: string | null;
+      createdAt: number;
+      expiresAt: number;
+    }>
+  > {
+    const rows = await this.opts.db
+      .select()
+      .from(moveRequests)
+      .where(and(eq(moveRequests.userId, userId), gt(moveRequests.expiresAt, this.now())))
+      .orderBy(desc(moveRequests.createdAt));
+    return rows.map((r) => ({
+      id: r.id,
+      fromOwnerId: r.fromOwnerId,
+      fromPath: r.fromPath,
+      toOwnerId: r.toOwnerId,
+      toPath: r.toPath,
+      requestedBy: r.requestedBy,
+      createdAt: Number(r.createdAt),
+      expiresAt: Number(r.expiresAt),
+    }));
+  }
+
+  /**
+   * Remove a pending move and hand it back, for the caller to act on.
+   * Claimed in one statement, so approving twice at once acts once.
+   */
+  async takeMoveRequest(
+    userId: string,
+    id: string,
+  ): Promise<{ fromOwnerId: string; fromPath: string; toOwnerId: string; toPath: string } | null> {
+    const [row] = await this.opts.db
+      .delete(moveRequests)
+      .where(
+        and(
+          eq(moveRequests.id, id),
+          eq(moveRequests.userId, userId),
+          gt(moveRequests.expiresAt, this.now()),
+        ),
+      )
+      .returning({
+        fromOwnerId: moveRequests.fromOwnerId,
+        fromPath: moveRequests.fromPath,
+        toOwnerId: moveRequests.toOwnerId,
+        toPath: moveRequests.toPath,
       });
     return row ?? null;
   }
