@@ -43,8 +43,10 @@ const nextConfig = {
  * frame — so a page cannot be overlaid for clicks. Inline script stays
  * allowed because Next's App Router bootstraps with it; taking that away
  * needs a nonce per response, a larger change. Images and connections are
- * left open: notes embed images from anywhere, and the API may live on
- * another origin in development.
+ * left open: a note may embed an image from anywhere, and the API may live on
+ * another origin in development. What keeps a note from calling out on its own
+ * is the preview, which shows an image from another site only after the reader
+ * clicks it (markdown-preview.tsx, external-image.ts).
  *
  * HSTS is ignored by browsers over plain http, so a local `:80` install is
  * unaffected; over https it stops the next visit being downgraded.
