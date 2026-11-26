@@ -260,6 +260,25 @@ export const sessions = pgTable(
   (t) => ({ userIdx: index('idx_sessions_user').on(t.userId) }),
 );
 
+/**
+ * A sign-in that has proved who someone is by a way other than the password
+ * form (Google) and still owes the second factor. The browser holds the token
+ * in a cookie; only its hash is stored. Used once, then deleted.
+ */
+export const loginChallenges = pgTable(
+  'login_challenges',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique('login_challenges_token_hash_key'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({ userIdx: index('idx_login_challenges_user').on(t.userId) }),
+);
+
 export const magicLinkTokens = pgTable(
   'magic_link_tokens',
   {
@@ -422,6 +441,37 @@ export const shareRequests = pgTable(
   (t) => ({
     permissionValues: check('share_requests_permission_check', sql`permission IN ('read', 'write')`),
     ownerIdx: index('idx_share_requests_owner').on(t.ownerId, t.createdAt),
+  }),
+);
+
+/**
+ * A move into another vault an assistant asked for, waiting for the person who
+ * asked it (`userId`) to approve it in the web app. It takes notes from one
+ * owner and gives them to another, which the previous owner cannot undo, so
+ * nothing moves until then.
+ */
+export const moveRequests = pgTable(
+  'move_requests',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fromOwnerId: text('from_owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fromPath: text('from_path').notNull(),
+    toOwnerId: text('to_owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    toPath: text('to_path').notNull(),
+    /** Which credential asked: an API key name or an OAuth client, for the person to see. */
+    requestedBy: text('requested_by'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({
+    userIdx: index('idx_move_requests_user').on(t.userId, t.createdAt),
   }),
 );
 

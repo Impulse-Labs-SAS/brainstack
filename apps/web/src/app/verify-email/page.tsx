@@ -36,8 +36,12 @@ function ConfirmForm({ token }: { token: string }) {
     setError(null);
     setPending(true);
     try {
-      await authFetch('/auth/verify-email', { method: 'POST', json: { token, password } });
-      router.replace('/?verified=1');
+      const res = await authFetch<{ next?: 'login' }>('/auth/verify-email', {
+        method: 'POST',
+        json: { token, password },
+      });
+      // An account with a second factor still signs in with its code.
+      router.replace(res?.next === 'login' ? '/login?verified=1' : '/?verified=1');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'verification failed');
     } finally {

@@ -14,12 +14,15 @@ import { pgSchema, type PgDb } from '@brainstack/core/pg';
 import { AppError } from '../lib/errors.js';
 import type { EmitEvent } from './events.js';
 
-const { folderShares, folderShareInvites, shareBlocks, shareRequests, users } = pgSchema;
+const { folderShares, folderShareInvites, moveRequests, shareBlocks, shareRequests, users } =
+  pgSchema;
 
 /** How long a share an assistant asked for waits for the owner. */
 const SHARE_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Pending requests one owner may have at once; an assistant cannot pile them up. */
 const MAX_PENDING_SHARE_REQUESTS = 20;
+/** Pending moves one person may have at once, for the same reason. */
+const MAX_PENDING_MOVE_REQUESTS = 20;
 
 /** What a grant allows. Ordered: 'write' implies 'read'. */
 export type SharePermission = 'read' | 'write';
@@ -48,6 +51,11 @@ export interface ShareMember {
   displayName: string | null;
   permission: SharePermission;
   grantedAt: number;
+}
+
+/** One inbox, one spelling: invites and share requests store addresses this way. */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 /** Normalise a logical path to folder_path form: no leading or trailing slash. */
@@ -304,25 +312,75 @@ export class SharingService {
     sharedWithUserId: string;
     folderPath: string;
   }): Promise<void> {
+    const [user] = await this.opts.db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, params.sharedWithUserId))
+      .limit(1);
+    await this.closeAccess({
+      ownerId: params.ownerId,
+      folderPath: params.folderPath,
+      userId: params.sharedWithUserId,
+      email: user?.email ?? null,
+    });
+  }
+
+  /**
+   * `revoke`, for someone named by email — who may not have an account yet.
+   *
+   * An invitation goes out by email precisely because the person has no
+   * account, so "no account" is the case where the pending invite is the only
+   * access there is to take away. Looking the account up first and doing
+   * nothing without one answered "revoked" and left that invite working.
+   *
+   * Does the same work whether or not the address has an account, so a caller
+   * cannot tell the two apart.
+   */
+  async revokeByEmail(params: {
+    ownerId: string;
+    email: string;
+    folderPath: string;
+  }): Promise<void> {
+    const email = normalizeEmail(params.email);
+    const [user] = await this.opts.db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(sql`lower(${users.email})`, email))
+      .limit(1);
+    await this.closeAccess({
+      ownerId: params.ownerId,
+      folderPath: params.folderPath,
+      userId: user?.id ?? null,
+      email,
+    });
+  }
+
+  private async closeAccess(params: {
+    ownerId: string;
+    folderPath: string;
+    userId: string | null;
+    email: string | null;
+  }): Promise<void> {
     const folderPath = normalizeFolderPath(params.folderPath);
-    const removed = await this.deleteGrantsUnder(
-      params.ownerId,
-      params.sharedWithUserId,
-      folderPath,
-    );
-    if (removed > 0) {
-      await this.opts.emit?.({
-        type: 'share.revoked',
-        ownerId: params.ownerId,
-        path: folderPath,
-        userId: params.sharedWithUserId,
-      });
+    if (params.userId) {
+      const removed = await this.deleteGrantsUnder(params.ownerId, params.userId, folderPath);
+      if (removed > 0) {
+        await this.opts.emit?.({
+          type: 'share.revoked',
+          ownerId: params.ownerId,
+          path: folderPath,
+          userId: params.userId,
+        });
+      }
     }
 
     // The invites that would hand the folder, or one inside it, straight back:
-    // every link invite and this person's email invites. Matched in memory —
-    // share paths never go through LIKE, where a folder named `a_b` would
-    // also reach `aXb`.
+    // every link invite and this person's email invites. Addresses compare
+    // without case — `Ana@x.com` and `ana@x.com` are one inbox, and an invite
+    // stored before addresses were lowercased may still carry capitals. Paths
+    // are matched in memory: share paths never go through LIKE, where a folder
+    // named `a_b` would also reach `aXb`.
+    const email = params.email ? normalizeEmail(params.email) : null;
     const live = await this.opts.db
       .select({ id: folderShareInvites.id, folderPath: folderShareInvites.folderPath })
       .from(folderShareInvites)
@@ -330,12 +388,12 @@ export class SharingService {
         and(
           eq(folderShareInvites.ownerId, params.ownerId),
           isNull(folderShareInvites.revokedAt),
-          or(
-            eq(folderShareInvites.mode, 'link'),
-            sql`${folderShareInvites.inviteeEmail} = (
-                  SELECT ${users.email} FROM ${users} WHERE ${users.id} = ${params.sharedWithUserId}
-                )`,
-          ),
+          email
+            ? or(
+                eq(folderShareInvites.mode, 'link'),
+                eq(sql`lower(${folderShareInvites.inviteeEmail})`, email),
+              )
+            : eq(folderShareInvites.mode, 'link'),
         ),
       );
     const doomed = live.filter((i) => pathFallsUnder(i.folderPath, folderPath)).map((i) => i.id);
@@ -599,7 +657,7 @@ export class SharingService {
     if (folderPath === '') {
       throw new AppError("you can't share the root of your vault; share a folder instead", 'INVALID_INPUT', 400);
     }
-    const email = params.email.trim().toLowerCase();
+    const email = normalizeEmail(params.email);
     const now = this.now();
     const expiresAt = now + SHARE_REQUEST_TTL_MS;
 
@@ -695,6 +753,120 @@ export class SharingService {
         folderPath: shareRequests.folderPath,
         email: shareRequests.email,
         permission: shareRequests.permission,
+      });
+    return row ?? null;
+  }
+
+  /**
+   * Ask, for `userId`, to move a note or folder into another vault — what an
+   * assistant does instead of moving it. Nothing moves until that person
+   * approves it in the web app with a signed-in session.
+   *
+   * The move takes the notes from their owner and gives them to another; the
+   * previous owner cannot undo it. An assistant may be acting on text someone
+   * else wrote in a shared folder, so, like a grant, it waits for a person.
+   *
+   * Asking again for the same move renews the request.
+   */
+  async requestMove(params: {
+    userId: string;
+    fromOwnerId: string;
+    fromPath: string;
+    toOwnerId: string;
+    toPath: string;
+    requestedBy?: string | null;
+  }): Promise<{ id: string; expiresAt: number }> {
+    const now = this.now();
+    const expiresAt = now + SHARE_REQUEST_TTL_MS;
+    const pending = await this.listMoveRequests(params.userId);
+    const same = pending.find(
+      (r) =>
+        r.fromOwnerId === params.fromOwnerId &&
+        r.fromPath === params.fromPath &&
+        r.toOwnerId === params.toOwnerId &&
+        r.toPath === params.toPath,
+    );
+    if (same) {
+      await this.opts.db
+        .update(moveRequests)
+        .set({ createdAt: now, expiresAt })
+        .where(eq(moveRequests.id, same.id));
+      return { id: same.id, expiresAt };
+    }
+    if (pending.length >= MAX_PENDING_MOVE_REQUESTS) {
+      throw new AppError(
+        'too many moves are waiting for approval; ask the user to review them first',
+        'RATE_LIMITED',
+        429,
+      );
+    }
+    const id = nanoid();
+    await this.opts.db.insert(moveRequests).values({
+      id,
+      userId: params.userId,
+      fromOwnerId: params.fromOwnerId,
+      fromPath: params.fromPath,
+      toOwnerId: params.toOwnerId,
+      toPath: params.toPath,
+      requestedBy: params.requestedBy ?? null,
+      createdAt: now,
+      expiresAt,
+    });
+    return { id, expiresAt };
+  }
+
+  /** Moves still waiting for this person, newest first. */
+  async listMoveRequests(userId: string): Promise<
+    Array<{
+      id: string;
+      fromOwnerId: string;
+      fromPath: string;
+      toOwnerId: string;
+      toPath: string;
+      requestedBy: string | null;
+      createdAt: number;
+      expiresAt: number;
+    }>
+  > {
+    const rows = await this.opts.db
+      .select()
+      .from(moveRequests)
+      .where(and(eq(moveRequests.userId, userId), gt(moveRequests.expiresAt, this.now())))
+      .orderBy(desc(moveRequests.createdAt));
+    return rows.map((r) => ({
+      id: r.id,
+      fromOwnerId: r.fromOwnerId,
+      fromPath: r.fromPath,
+      toOwnerId: r.toOwnerId,
+      toPath: r.toPath,
+      requestedBy: r.requestedBy,
+      createdAt: Number(r.createdAt),
+      expiresAt: Number(r.expiresAt),
+    }));
+  }
+
+  /**
+   * Remove a pending move and hand it back, for the caller to act on.
+   * Claimed in one statement, so approving twice at once acts once.
+   */
+  async takeMoveRequest(
+    userId: string,
+    id: string,
+  ): Promise<{ fromOwnerId: string; fromPath: string; toOwnerId: string; toPath: string } | null> {
+    const [row] = await this.opts.db
+      .delete(moveRequests)
+      .where(
+        and(
+          eq(moveRequests.id, id),
+          eq(moveRequests.userId, userId),
+          gt(moveRequests.expiresAt, this.now()),
+        ),
+      )
+      .returning({
+        fromOwnerId: moveRequests.fromOwnerId,
+        fromPath: moveRequests.fromPath,
+        toOwnerId: moveRequests.toOwnerId,
+        toPath: moveRequests.toPath,
       });
     return row ?? null;
   }

@@ -17,11 +17,20 @@
 // every footnote link pointing at nothing; it would also break `#anchor` links
 // to ids written by hand. The prefix guards against DOM clobbering, and no code
 // in this app looks elements up by id or name.
+//
+// And `srcset` on `<source>` goes. GitHub allows `<picture><source srcset>`,
+// and the browser fetches that URL on its own, past the `img` override that
+// holds external images until the reader asks (see external-image.ts). Without
+// it a `<picture>` falls back to its `<img>`, which goes through the override.
 
 import { defaultSchema, type Options } from 'rehype-sanitize';
 
 export const noteSanitizeSchema: Options = {
   ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    source: [],
+  },
   clobberPrefix: '',
   protocols: {
     ...defaultSchema.protocols,

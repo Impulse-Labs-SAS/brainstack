@@ -18,12 +18,14 @@ import { pgSchema, type PgDb } from '@brainstack/core/pg';
 const {
   emailVerificationTokens,
   folderShareInvites,
+  loginChallenges,
   magicLinkTokens,
   oauthAuthorizationCodes,
   oauthClients,
   oauthStates,
   oauthTokens,
   passwordResetTokens,
+  moveRequests,
   sessions,
   shareRequests,
 } = pgSchema;
@@ -65,6 +67,9 @@ export async function purgeExpired(
       .delete(emailVerificationTokens)
       .where(lt(emailVerificationTokens.expiresAt, now))
       .returning({ id: emailVerificationTokens.id }),
+  );
+  await count(
+    db.delete(loginChallenges).where(lt(loginChallenges.expiresAt, now)).returning({ id: loginChallenges.id }),
   );
   await count(
     db.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, now)).returning({ id: magicLinkTokens.id }),
@@ -124,6 +129,10 @@ export async function purgeExpired(
 
   await count(
     db.delete(shareRequests).where(lt(shareRequests.expiresAt, now)).returning({ id: shareRequests.id }),
+  );
+
+  await count(
+    db.delete(moveRequests).where(lt(moveRequests.expiresAt, now)).returning({ id: moveRequests.id }),
   );
 
   if (deleted > 0) opts.logger?.info({ deleted }, 'purged expired sessions, links and tokens');

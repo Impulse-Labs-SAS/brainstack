@@ -165,13 +165,17 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
     if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
     try {
       const user = await options.auth.consumePasswordReset(parsed.data.token, parsed.data.password);
+      // The link proves control of the address and nothing more. With a
+      // second factor on, that is not enough to be signed in: the password is
+      // changed, and the person signs in with it and their code.
+      if (options.auth.needsSecondFactor(user)) return c.json({ user, signedIn: false });
       // Create a fresh session so the user lands logged in.
       const session = await options.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
         ipAddress: clientIp(c, options.trustedProxy),
       });
       setSessionCookie(c, session.token, options.secureCookies);
-      return c.json({ user });
+      return c.json({ user, signedIn: true });
     } catch (err) {
       return jsonError(c, err);
     }
@@ -198,6 +202,11 @@ export function createAuthRouter(options: AuthRouterOptions): Hono<AuthBindings>
         parsed.data.token,
         parsed.data.password,
       );
+      // Verified, but a verification link is no more a second factor than a
+      // reset link is: the page sends the person to sign in with their code.
+      if (options.auth.needsSecondFactor(user)) {
+        return c.json({ next: 'login' as const });
+      }
       const session = await options.auth.createSession(user.id, {
         userAgent: c.req.header('user-agent') ?? undefined,
         ipAddress: clientIp(c, options.trustedProxy),

@@ -101,12 +101,15 @@ export function AppShell({ children }: { children: ReactNode }) {
    */
   const [navOpen, setNavOpen] = useState(false);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
-  // A share an assistant asked for does nothing until it is approved, so the
+  // A share or a move an assistant asked for does nothing until it is approved, so the
   // rail says when one is waiting. Polled gently; it changes rarely.
   const shareRequests = trpc.sharing.listShareRequests.useQuery(undefined, {
     refetchInterval: 60_000,
   });
-  const pendingShares = shareRequests.data?.length ?? 0;
+  const moveRequests = trpc.sharing.listMoveRequests.useQuery(undefined, {
+    refetchInterval: 60_000,
+  });
+  const pendingShares = (shareRequests.data?.length ?? 0) + (moveRequests.data?.length ?? 0);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
