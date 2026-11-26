@@ -9,6 +9,7 @@
 
 import 'highlight.js/styles/github-dark.css';
 
+import { ImageOff } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
@@ -323,11 +324,11 @@ function ExternalImage({ src, alt, host }: { src: string; alt: string; host: str
       data-external-image={host}
       className="my-1 inline-flex max-w-full items-center gap-1.5 rounded border border-dashed border-border-subtle bg-bg-elevated px-2 py-1 text-left text-[12px] text-fg-secondary hover:bg-bg-hover hover:text-fg-primary"
     >
-      <span aria-hidden>🖼</span>
+      <ImageOff aria-hidden className="size-3.5 shrink-0 text-fg-muted" />
       <span className="truncate">
-        {alt ? `${alt} · ` : ''}Image from <span className="font-mono">{host}</span>
+        {alt ? `${alt} · ` : ''}Image from <span className="font-mono">{host}</span> not loaded
       </span>
-      <span className="shrink-0 text-accent">Show</span>
+      <span className="shrink-0 text-accent">Show image</span>
     </button>
   );
 }
