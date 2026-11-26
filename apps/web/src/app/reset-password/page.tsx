@@ -26,8 +26,13 @@ function ResetInner() {
     }
     setPending(true);
     try {
-      await authFetch('/auth/reset-password', { method: 'POST', json: { token, password } });
-      router.replace('/');
+      const result = await authFetch<{ signedIn?: boolean }>('/auth/reset-password', {
+        method: 'POST',
+        json: { token, password },
+      });
+      // With a second factor on, the link changes the password but does not
+      // sign anyone in: that takes the new password and the code.
+      router.replace(result.signedIn === false ? '/login?reset=1' : '/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'reset failed');
     } finally {
@@ -66,7 +71,12 @@ function ResetInner() {
               />
             </div>
             {error && <div className="text-xs text-danger">{error}</div>}
-            <Button intent="primary" type="submit" isDisabled={pending || !password} className="w-full">
+            <Button
+              intent="primary"
+              type="submit"
+              isDisabled={pending || !password}
+              className="w-full"
+            >
               {pending ? 'Updating…' : 'Update password'}
             </Button>
           </form>
@@ -78,7 +88,11 @@ function ResetInner() {
 
 export default function ResetPasswordPage() {
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>}>
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center text-fg-muted">…</div>
+      }
+    >
       <ResetInner />
     </Suspense>
   );

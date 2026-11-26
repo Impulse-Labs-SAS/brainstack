@@ -477,6 +477,13 @@ Sharing in the web app. Approval grants access to an existing account or sends
 an email invitation. `unshare` answers the same whether or not the address has
 an account, so neither tool tells anyone who is a member.
 
+*Amended:* `unshare` revokes by address (`SharingService.revokeByEmail`), not by
+account. Someone invited by email often has no account yet, and then the pending
+invitation is the only access there is to take back; looking the account up
+first answered "revoked" and left that invitation working. Invitation addresses
+are stored lowercased (migration `0014` brings old rows in line) and compared
+without case.
+
 *Amended:* `share_folder` returns `approveUrl` (`/settings/sharing?request=<id>`),
 which opens the web app on that one request so the owner approves it with one
 tap. Granting at once to people the owner already shares with was tried and
@@ -498,6 +505,13 @@ cannot undo it, and the flag is only the assistant's word. People do it in the
 web app by dragging onto the shared folder, which asks them to confirm. Taking
 notes out of a folder shared with you still works over MCP. The tRPC route
 needs a session, never an API key.
+
+*Amended:* taking notes out of a folder shared with you no longer moves
+anything over MCP either. `move_to_owner` files a request (`move_requests`, at
+most 20 pending per person, expiring after 7 days) and returns `approveUrl`
+(`/settings/sharing?move=<id>`), where the person who asked approves it with one
+tap. Approval checks write access at both ends again before moving. The old
+`userConfirmedOwnershipTransfer` flag is gone: it was only the assistant's word.
 
 **Concurrent edits conflict instead of overwriting.** Every note carries a
 checksum. The web editor sends the checksum its draft was built on, and

@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { emailField, field, frontmatterField, noteContent } from '../config/limits.js';
 import { listBacklinksSafely } from '../lib/backlinks.js';
 import { describeImport, planImport, writeImport } from '../services/importDocument.js';
+import { approveMoveRequest } from '../services/moveRequests.js';
 import { approveShareRequest } from '../services/shareRequests.js';
 import { AppError, INTERNAL_MESSAGE, toAppError } from '../lib/errors.js';
 import { API_KEY_SCOPES, READ_ONLY_MESSAGE, scopesAllowWrite } from '../lib/scopes.js';
@@ -687,6 +688,46 @@ export const appRouter = t.router({
       .mutation(async ({ ctx, input }) =>
         wrap(async () => {
           await ctx.sharing.takeShareRequest(ctx.user.id, input.id);
+          return { ok: true };
+        }),
+      ),
+    /**
+     * Moves into another vault an assistant asked for, waiting for this user's
+     * approval. Owners are named, because the move gives notes to one of them.
+     */
+    listMoveRequests: sessionProcedure.query(async ({ ctx }) => {
+      const requests = await ctx.sharing.listMoveRequests(ctx.user.id);
+      const names = await ctx.crawls.clientNames(
+        ctx.user.id,
+        requests.map((r) => r.requestedBy),
+      );
+      const ownerIds = [...new Set(requests.flatMap((r) => [r.fromOwnerId, r.toOwnerId]))];
+      const owners = new Map<string, string>();
+      for (const id of ownerIds) {
+        if (id === ctx.user.id) continue;
+        const user = await ctx.auth.findUserById(id);
+        owners.set(id, user?.displayName || user?.email || 'someone');
+      }
+      const label = (id: string) => (id === ctx.user.id ? null : (owners.get(id) ?? 'someone'));
+      return requests.map(({ requestedBy, ...r }) => ({
+        ...r,
+        fromOwner: label(r.fromOwnerId),
+        toOwner: label(r.toOwnerId),
+        requestedBy: requestedBy ? (names.get(requestedBy) ?? 'an assistant') : null,
+      }));
+    }),
+    approveMoveRequest: sessionProcedure
+      .input(z.object({ id: field().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(() =>
+          approveMoveRequest({ sharing: ctx.sharing, notes: ctx.notes }, ctx.user.id, input.id),
+        ),
+      ),
+    rejectMoveRequest: sessionProcedure
+      .input(z.object({ id: field().min(1) }))
+      .mutation(async ({ ctx, input }) =>
+        wrap(async () => {
+          await ctx.sharing.takeMoveRequest(ctx.user.id, input.id);
           return { ok: true };
         }),
       ),

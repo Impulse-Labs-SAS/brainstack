@@ -17,6 +17,7 @@ import { generateToken, sha256 } from '../lib/tokens.js';
 
 import type { EmailSender } from './EmailSender.js';
 import {
+  normalizeEmail,
   normalizeFolderPath,
   type SharePermission,
   type SharingService,
@@ -110,7 +111,10 @@ export class InviteService {
       folderPath,
       ownerId: params.ownerId,
       mode: params.mode,
-      inviteeEmail: params.mode === 'email' ? (params.inviteeEmail ?? null) : null,
+      // Lowercased, as accounts are: one inbox, one spelling, so revoking the
+      // person later finds this invite however the address was typed.
+      inviteeEmail:
+        params.mode === 'email' && params.inviteeEmail ? normalizeEmail(params.inviteeEmail) : null,
       permission: params.permission ?? 'read',
       tokenHash: sha256(token),
       expiresAt,
