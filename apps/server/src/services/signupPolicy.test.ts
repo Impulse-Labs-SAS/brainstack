@@ -77,6 +77,45 @@ describe('the first account', () => {
     });
     await auth.signup('owner@brain.test', STRONG);
   });
+
+  it('verifies its email when AUTHORIZED_EMAILS is set and mail can be sent', async () => {
+    // Knowing an address on the list must not be enough to claim a fresh
+    // instance before its owner does.
+    const auth = authWith({ authorizedEmails: new Set(['owner@brain.test']) });
+    const { user, verification } = await auth.signup('owner@brain.test', STRONG);
+    expect(user.emailVerified).toBe(false);
+    expect(mailer.sent).toHaveLength(1);
+    await expect(auth.login('owner@brain.test', STRONG)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    await auth.consumeEmailVerification(verification!.token, STRONG);
+    expect((await auth.login('owner@brain.test', STRONG)).user.emailVerified).toBe(true);
+  });
+
+  it('is verified at once with AUTHORIZED_EMAILS when no mail is configured', async () => {
+    const auth = authWith({ email: null, authorizedEmails: new Set(['owner@brain.test']) });
+    const { user } = await auth.signup('owner@brain.test', STRONG);
+    expect(user.emailVerified).toBe(true);
+  });
+});
+
+describe('email verification', () => {
+  it('needs the password the account was created with', async () => {
+    // Somebody else signed up with an address that may sign up; its real
+    // owner opening the link must not leave the account on their password.
+    const auth = authWith({ openSignup: true });
+    await auth.signup('owner@brain.test', STRONG);
+    const { verification } = await auth.signup('guest@brain.test', STRONG);
+
+    await expect(
+      auth.consumeEmailVerification(verification!.token, 'Not-The-One-123'),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    // A wrong password leaves the link usable.
+    const user = await auth.consumeEmailVerification(verification!.token, STRONG);
+    expect(user.emailVerified).toBe(true);
+    await expect(auth.consumeEmailVerification(verification!.token, STRONG)).rejects.toThrow(
+      /already used/,
+    );
+  });
 });
 
 describe('every account after the first', () => {
@@ -150,7 +189,7 @@ describe('signing in', () => {
     const open = authWith({ openSignup: true });
     await open.signup('owner@brain.test', STRONG);
     const { verification } = await open.signup('guest@brain.test', STRONG);
-    await open.consumeEmailVerification(verification!.token);
+    await open.consumeEmailVerification(verification!.token, STRONG);
 
     const listed = authWith({ authorizedEmails: new Set(['owner@brain.test']) });
     expect((await listed.login('guest@brain.test', STRONG)).user.email).toBe('guest@brain.test');

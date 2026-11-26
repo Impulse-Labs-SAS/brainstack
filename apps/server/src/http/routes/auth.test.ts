@@ -190,3 +190,38 @@ describe('auth links', () => {
     }
   });
 });
+
+describe('/verify-email', () => {
+  it('opening the link consumes nothing and lands on the page that asks for the password', async () => {
+    const res = await router.request('/verify-email?token=abc');
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('https://brain.test/verify-email?token=abc');
+  });
+
+  it('verifies and signs in with the token and the password', async () => {
+    const open = new AuthService({
+      db: database.db,
+      email: new CapturingEmailSender(),
+      logger,
+      publicOrigin: 'https://brain.test',
+      authorizedEmails: new Set(),
+      openSignup: true,
+    });
+    await open.signup('owner@brain.test', 'Owner-Horse-10');
+    const { verification } = await open.signup('guest@brain.test', 'Guest-Horse-10');
+    const post = (password: string) =>
+      router.request('/verify-email', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: verification!.token, password }),
+      });
+
+    const wrong = await post('Wrong-Horse-10');
+    expect(wrong.status).toBe(401);
+    expect(wrong.headers.get('set-cookie')).toBeNull();
+
+    const right = await post('Guest-Horse-10');
+    expect(right.status).toBe(200);
+    expect(right.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=`);
+  });
+});

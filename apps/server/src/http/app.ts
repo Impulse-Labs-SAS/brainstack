@@ -25,6 +25,7 @@ import { describeError, toAppError } from '../lib/errors.js';
 
 import { buildAuthMiddleware, type AuthBindings, type BearerPlugin } from './middleware/auth.js';
 import { buildRateLimitMiddleware } from './middleware/rateLimit.js';
+import { buildOriginCheckMiddleware } from './middleware/origin.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMcpHttpRouter } from './routes/mcp.js';
 import { createOAuthGoogleRouter } from './routes/oauthGoogle.js';
@@ -171,6 +172,19 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       }),
     );
   }
+
+  // A cookie-authenticated request that changes something must come from one
+  // of BrainStack's own pages. See middleware/origin.ts.
+  app.use(
+    '*',
+    buildOriginCheckMiddleware({
+      allowedOrigins: [
+        ...opts.corsOrigins,
+        opts.appHome,
+        ...(opts.oauth ? [opts.oauth.issuer] : []),
+      ],
+    }),
+  );
 
   // Nothing reads a request body unbounded. Notes travel over tRPC and MCP,
   // so those get room for one; every other route carries a few fields. A

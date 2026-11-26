@@ -42,7 +42,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Then open your `PUBLIC_ORIGIN` and **create your account right away**. The first account on an instance is its owner and needs no email verification. After it, sign-up is closed.
+Then open your `PUBLIC_ORIGIN` and **create your account right away**. The first account on an instance is its owner and needs no email verification (unless you set `AUTHORIZED_EMAILS` and email is configured: then it verifies like any other). After it, sign-up is closed.
 
 The schema is created on first start and updated by every new version on its own. Already have a Postgres? Set `DATABASE_URL` in `.env` and BrainStack uses it instead of the bundled one.
 

@@ -419,12 +419,31 @@ describe('two accounts on a default instance', () => {
 
     await alice.notes.create({ path: 'proj/shared.md', content: '# Shared\n\n#client/acme' });
     await alice.notes.create({ path: 'private/hidden.md', content: '# Hidden strategy\n\n#client/acme' });
-    await alice.sharing.shareWithUser({ folderPath: 'proj', email: 'bob@brain.test', permission: 'read' });
+    await sharing.grant({ ownerId: 'alice', sharedWithUserId: 'bob', folderPath: 'proj', grantedBy: 'alice' });
 
     for (const scope of ['mine', 'shared', 'all'] as const) {
       const related = await bob.notes.related({ path: 'proj/shared.md', ownerId: 'alice', scope });
       expect(JSON.stringify(related)).not.toContain('hidden');
     }
+  });
+
+  it('changing a member’s permission says nothing about who else has an account', async () => {
+    const alice = callerFor(asUser('alice', 'alice@brain.test'));
+    await alice.notes.create({ path: 'proj/a.md', content: '# A' });
+
+    // An account that is not a member and an address with no account at all
+    // get the same answer.
+    const notMember = await alice.sharing
+      .shareWithUser({ folderPath: 'proj', email: 'bob@brain.test' })
+      .catch((e: Error) => e.message);
+    const noAccount = await alice.sharing
+      .shareWithUser({ folderPath: 'proj', email: 'nobody@brain.test' })
+      .catch((e: Error) => e.message);
+    expect(notMember).toBe(noAccount);
+
+    await sharing.grant({ ownerId: 'alice', sharedWithUserId: 'bob', folderPath: 'proj', grantedBy: 'alice' });
+    await alice.sharing.shareWithUser({ folderPath: 'proj/', email: 'bob@brain.test', permission: 'write' });
+    expect((await sharing.listMyShares('alice')).map((m) => m.permission)).toEqual(['write']);
   });
 
   it('scores related notes without counting other vaults', async () => {

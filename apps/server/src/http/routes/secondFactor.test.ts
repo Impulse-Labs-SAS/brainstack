@@ -2,8 +2,10 @@
 // form. A reset link and a Google sign-in each prove control of the email
 // address; with TOTP on, that alone must not open a session.
 
+import { pgSchema } from '@brainstack/core/pg';
 import { decodeBase32 } from '@oslojs/encoding';
 import { generateTOTP } from '@oslojs/otp';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -222,5 +224,24 @@ describe('Google sign-in', () => {
     );
     expect(late.status).toBe(401);
     expect(cookieValue(late, SESSION_COOKIE)).toBeNull();
+  });
+});
+
+describe('POST /auth/verify-email', () => {
+  it('verifies an account with a second factor but sends it to sign in with its code', async () => {
+    await enableTotp();
+    await database.db
+      .update(pgSchema.users)
+      .set({ emailVerified: false })
+      .where(eq(pgSchema.users.email, EMAIL));
+    const { url } = await auth.resendVerification(EMAIL);
+    const token = new URL(url!).searchParams.get('token');
+
+    const res = await post('/auth/verify-email', { token, password: STRONG });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ next: 'login' });
+    expect(cookieValue(res, SESSION_COOKIE)).toBeNull();
+    expect((await auth.findUserByEmail(EMAIL))?.emailVerified).toBe(true);
   });
 });
