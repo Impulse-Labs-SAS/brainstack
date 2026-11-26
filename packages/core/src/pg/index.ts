@@ -44,4 +44,5 @@ export {
   toTsQuery,
   type SearchHit as PgSearchHit,
   type SearchOptions as PgSearchOptions,
+  type SearchScope as PgSearchScope,
 } from './search.js';

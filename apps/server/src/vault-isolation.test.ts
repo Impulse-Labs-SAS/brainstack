@@ -139,6 +139,31 @@ describe('multi-user with a shared folder', () => {
     expect(JSON.stringify(hits)).not.toContain('diario');
   });
 
+  it('search returns the caller’s own hits however many better ones other vaults hold', async () => {
+    for (let i = 0; i < 12; i++) {
+      await notes.create('alice', `Privado/ruido-${i}.md`, '# Ruido\n\nlentejas lentejas lentejas');
+    }
+    await notes.create('bob', 'Cocina/guiso.md', '# Guiso\n\nun guiso con lentejas');
+
+    const hits = await search.search('bob', 'lentejas', { limit: 3 });
+    expect(hits.map((h) => h.path)).toEqual(['Cocina/guiso.md']);
+  });
+
+  it('search with only shared scopes skips the caller’s own vault', async () => {
+    await notes.create('bob', 'Cocina/presupuesto.md', '# Mio\n\npresupuesto de bob');
+    const scopes = (await sharing.listSharedRoots('bob')).map((r) => ({
+      ownerId: r.ownerId,
+      folderPath: r.folderPath,
+    }));
+
+    const hits = await search.search('bob', 'presupuesto', {
+      includeMine: false,
+      sharedScopes: scopes,
+    });
+    expect(hits.map((h) => h.path)).toEqual(['Proyectos/erebor.md']);
+    expect(await search.search('bob', 'presupuesto', { includeMine: false })).toEqual([]);
+  });
+
   it('search without the shared scope finds nothing of alice’s', async () => {
     const hits = await search.search('bob', 'presupuesto');
     expect(hits).toEqual([]);

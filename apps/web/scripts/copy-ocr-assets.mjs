@@ -18,7 +18,12 @@ const dir = (pkg) => dirname(require.resolve(`${pkg}/package.json`));
 
 const files = [
   [join(dir('tesseract.js'), 'dist', 'worker.min.js'), 'worker.min.js'],
-  // The core comes in builds with and without SIMD; the worker picks one.
+  // The core comes in builds with relaxed SIMD, plain SIMD and none; the worker
+  // picks the best one the browser supports, so all three must be served.
+  [
+    join(dir('tesseract.js-core'), 'tesseract-core-relaxedsimd-lstm.wasm.js'),
+    'tesseract-core-relaxedsimd-lstm.wasm.js',
+  ],
   [
     join(dir('tesseract.js-core'), 'tesseract-core-simd-lstm.wasm.js'),
     'tesseract-core-simd-lstm.wasm.js',

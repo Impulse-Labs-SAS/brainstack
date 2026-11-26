@@ -12,7 +12,7 @@
 // morphology — but they must be applied side by side rather than OR'd into one
 // tsquery. See the comment in `search` for why.
 
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 
 import type { PgDb } from './client.js';
 import { escapeLike } from './notes.js';
@@ -28,6 +28,22 @@ export interface SearchHit {
 
 export interface SearchOptions {
   limit?: number;
+  /**
+   * The notes the search may rank: one owner's vault, plus any `folders` —
+   * stored folder paths, owner prefix included — such as those shared with
+   * the reader. Applied inside the query, so a caller whose notes are a small
+   * slice of a large database still gets `limit` hits of their own, instead
+   * of the top of every vault filtered down afterwards. Omitted, the search
+   * runs over every note in the store.
+   */
+  scope?: SearchScope;
+}
+
+/** Which notes a search or a count may look at. See `SearchOptions.scope`. */
+export interface SearchScope {
+  /** Whose vault to include whole. Omitted, only `folders` are searched. */
+  ownerId?: string;
+  folders?: readonly string[];
 }
 
 /** Raw shape coming back from `db.execute`, which requires an index signature. */
@@ -45,6 +61,8 @@ export class PgSearchService {
     const tokens = tokenize(query);
     if (tokens.length === 0) return [];
     const limit = Math.min(options.limit ?? 10, 50);
+    const readable = options.scope ? readableFilter(options.scope) : sql`TRUE`;
+    if (readable === null) return [];
 
     const prefixQuery = tokens.map((t) => `${t}:*`).join(' | ');
     const stemQuery = tokens.join(' | ');
@@ -83,7 +101,8 @@ export class PgSearchService {
           ts_headline(${STEM_CONFIG}::regconfig, n.body, ${stemTsq}, ${headlineOpts})
             AS stem_snippet
       ) h
-      WHERE n.body_tsv @@ (${prefixTsq} || ${stemTsq})
+      WHERE (${readable})
+        AND n.body_tsv @@ (${prefixTsq} || ${stemTsq})
       ORDER BY score DESC, n.updated_at DESC
       LIMIT ${limit}
     `);
@@ -108,14 +127,12 @@ export class PgSearchService {
    * count, not rows anyone sees; each folder still goes through `escapeLike`,
    * so a name with `%` or `_` cannot widen it into a neighbour.
    */
-  async counts(
-    queries: readonly string[],
-    scope: { ownerId: string; folders?: readonly string[] },
-  ): Promise<number[]> {
+  async counts(queries: readonly string[], scope: SearchScope): Promise<number[]> {
     const tokenized = queries.map(tokenize);
     const searchable = tokenized.flatMap((tokens, i) => (tokens.length > 0 ? [{ i, tokens }] : []));
     const out = queries.map(() => 0);
-    if (searchable.length === 0) return out;
+    const readable = readableFilter(scope);
+    if (searchable.length === 0 || readable === null) return out;
 
     const array = (items: string[]) =>
       sql`ARRAY[${sql.join(
@@ -124,13 +141,6 @@ export class PgSearchService {
       )}]::text[]`;
     const prefix = array(searchable.map(({ tokens }) => tokens.map((t) => `${t}:*`).join(' | ')));
     const stem = array(searchable.map(({ tokens }) => tokens.join(' | ')));
-    const readable = sql.join(
-      [
-        sql`n.owner_id = ${scope.ownerId}`,
-        ...(scope.folders ?? []).map((f) => sql`n.path LIKE ${`${escapeLike(f)}/%`}`),
-      ],
-      sql` OR `,
-    );
     const result = await this.db.execute<{ ord: number | string; n: number | string }>(sql`
       SELECT q.ord, count(n.path) AS n
       FROM unnest(${prefix}, ${stem}) WITH ORDINALITY AS q(p, s, ord)
@@ -145,6 +155,20 @@ export class PgSearchService {
     }
     return out;
   }
+}
+
+/**
+ * The SQL condition a scope stands for, or `null` when it covers nothing.
+ * Each folder goes through `escapeLike`, so a name with `%` or `_` cannot widen
+ * it into a neighbour. It narrows the query; callers that show rows still
+ * re-check each one in memory against the shares it came from.
+ */
+function readableFilter(scope: SearchScope): SQL | null {
+  const parts = [
+    ...(scope.ownerId === undefined ? [] : [sql`n.owner_id = ${scope.ownerId}`]),
+    ...(scope.folders ?? []).map((f) => sql`n.path LIKE ${`${escapeLike(f)}/%`}`),
+  ];
+  return parts.length === 0 ? null : sql.join(parts, sql` OR `);
 }
 
 /**

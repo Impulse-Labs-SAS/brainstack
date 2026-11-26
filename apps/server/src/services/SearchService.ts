@@ -11,7 +11,7 @@ import { PgSearchService, type PgDb } from '@brainstack/core/pg';
 
 import { ownerIdFromPhysicalPath, toLogical } from '../lib/vault.js';
 
-import { pathFallsUnder } from './SharingService.js';
+import { normalizeFolderPath, pathFallsUnder } from './SharingService.js';
 
 export interface SearchHit {
   path: string;
@@ -44,17 +44,6 @@ export interface SearchServiceOptions {
   search?: PgSearchService;
 }
 
-/**
- * How much wider than the requested limit to search before filtering by scope.
- *
- * Scope is applied after ranking rather than inside the query, because pushing
- * it down would mean rewriting the two-vector SQL that makes search work. The
- * cost is that a caller whose visible notes are a small slice of a large
- * database could see fewer hits than they asked for; with a handful of users
- * sharing folders, that does not happen.
- */
-const OVERSCAN = 4;
-
 export class SearchService {
   private readonly engine: PgSearchService;
 
@@ -67,10 +56,21 @@ export class SearchService {
     if (trimmed === '') return [];
 
     const limit = options.limit ?? 10;
-    const hits = await this.engine.search(trimmed, { limit: limit * OVERSCAN });
-
     const includeMine = options.includeMine ?? true;
     const sharedScopes = options.sharedScopes ?? [];
+    if (!includeMine && sharedScopes.length === 0) return [];
+
+    // Scope goes into the query, so the ranking only ever sees what the caller
+    // may read and `limit` hits of theirs come back however large the database.
+    // Every hit is still checked below against the shares it came from: the
+    // query narrows, the loop decides.
+    const hits = await this.engine.search(trimmed, {
+      limit,
+      scope: {
+        ...(includeMine ? { ownerId: userId } : {}),
+        folders: storedFolders(sharedScopes),
+      },
+    });
 
     const visible: SearchHit[] = [];
     for (const hit of hits) {
@@ -95,8 +95,6 @@ export class SearchService {
         score: Number(hit.score),
         ownerId,
       });
-
-      if (visible.length === limit) break;
     }
 
     return visible;
@@ -113,9 +111,20 @@ export class SearchService {
   ): Promise<number[]> {
     return this.engine.counts(queries, {
       ownerId: userId,
-      folders: sharedScopes.map((s) => `${s.ownerId}/${s.folderPath}`),
+      folders: storedFolders(sharedScopes),
     });
   }
+}
+
+/**
+ * Shared scopes as stored folder paths, owner prefix included, the shape the
+ * engine filters on. A scope with no folder stands for the owner's whole vault.
+ */
+function storedFolders(scopes: readonly SearchScope[]): string[] {
+  return scopes.map((s) => {
+    const folder = normalizeFolderPath(s.folderPath);
+    return folder === '' ? s.ownerId : `${s.ownerId}/${folder}`;
+  });
 }
 
 /** Drop a known owner prefix. Used for hits belonging to somebody else. */

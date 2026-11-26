@@ -29,7 +29,7 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.2.0",
+    "@neondatabase/serverless": "^1.2.1",
     "drizzle-orm": "^0.45.4",
     "js-yaml": "^4.3.2",
     "pg": "^8.23.1",

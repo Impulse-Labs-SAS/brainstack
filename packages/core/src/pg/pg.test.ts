@@ -577,6 +577,50 @@ describe('PgSearchService', () => {
     const hits = await search.search('postgres netlify brainstack', { limit: 1 });
     expect(hits.length).toBeLessThanOrEqual(1);
   });
+
+  it('ranks only inside the scope, so other vaults cannot crowd it out', async () => {
+    // Many better matches in someone else's vault, one weaker match in ours:
+    // filtering after ranking returned nothing for us at limit 2.
+    for (const id of ['otro', 'yo', 'ajeno']) {
+      await db
+        .insert(users)
+        .values({ id, email: `${id}@x.com`, createdAt: 0, updatedAt: 0 })
+        .onConflictDoNothing();
+    }
+    for (let i = 0; i < 6; i++) {
+      await notes.upsert(
+        `otro/Ruido/n${i}.md`,
+        '# Ruido\n\nalcachofa alcachofa alcachofa alcachofa',
+        'otro',
+      );
+    }
+    await notes.upsert('yo/Huerta/una.md', '# Huerta\n\nuna alcachofa entre otras cosas', 'yo');
+    await notes.upsert('ajeno/Compartida/b.md', '# B\n\nalcachofa', 'ajeno');
+    await notes.upsert('ajeno/Compartida_x/c.md', '# C\n\nalcachofa', 'ajeno');
+
+    const mine = await search.search('alcachofa', { limit: 2, scope: { ownerId: 'yo' } });
+    expect(mine.map((h) => h.path)).toEqual(['yo/Huerta/una.md']);
+
+    // A shared folder reaches its notes and not a neighbour whose name only
+    // matches it as a LIKE pattern.
+    const withShared = await search.search('alcachofa', {
+      limit: 10,
+      scope: { ownerId: 'yo', folders: ['ajeno/Compartida'] },
+    });
+    expect(withShared.map((h) => h.path).sort()).toEqual([
+      'ajeno/Compartida/b.md',
+      'yo/Huerta/una.md',
+    ]);
+
+    // Only folders, no vault of its own.
+    const sharedOnly = await search.search('alcachofa', {
+      scope: { folders: ['ajeno/Compartida'] },
+    });
+    expect(sharedOnly.map((h) => h.path)).toEqual(['ajeno/Compartida/b.md']);
+
+    // A scope that covers nothing searches nothing, rather than everything.
+    expect(await search.search('alcachofa', { scope: {} })).toEqual([]);
+  });
 });
 
 /**
