@@ -24,6 +24,7 @@ const {
   oauthStates,
   oauthTokens,
   passwordResetTokens,
+  moveRequests,
   sessions,
   shareRequests,
 } = pgSchema;
@@ -124,6 +125,10 @@ export async function purgeExpired(
 
   await count(
     db.delete(shareRequests).where(lt(shareRequests.expiresAt, now)).returning({ id: shareRequests.id }),
+  );
+
+  await count(
+    db.delete(moveRequests).where(lt(moveRequests.expiresAt, now)).returning({ id: moveRequests.id }),
   );
 
   if (deleted > 0) opts.logger?.info({ deleted }, 'purged expired sessions, links and tokens');

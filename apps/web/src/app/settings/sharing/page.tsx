@@ -17,6 +17,9 @@ import { trpc } from '@/lib/trpc';
  *
  * An assistant hands the user a link here with `?request=<id>`: that request
  * is shown first and marked, so approving it is one tap.
+ *
+ * Moving notes into another vault waits here too (`?move=<id>`): it changes
+ * who owns them, and the previous owner cannot undo it.
  */
 export default function SharingSettingsPage() {
   return (
@@ -27,15 +30,19 @@ export default function SharingSettingsPage() {
 }
 
 function SharingSettings() {
-  const focusId = useSearchParams().get('request');
+  const params = useSearchParams();
+  const focusId = params.get('request');
+  const focusMoveId = params.get('move');
   const focusRef = useRef<HTMLLIElement>(null);
   const utils = trpc.useUtils();
   const requests = trpc.sharing.listShareRequests.useQuery();
+  const moves = trpc.sharing.listMoveRequests.useQuery();
   const sharedWithMe = trpc.sharing.listSharedWithMe.useQuery();
   const blocked = trpc.sharing.listBlocked.useQuery();
 
   const refresh = (): void => {
     void utils.sharing.listShareRequests.invalidate();
+    void utils.sharing.listMoveRequests.invalidate();
     void utils.sharing.listSharedWithMe.invalidate();
     void utils.sharing.listBlocked.invalidate();
     void utils.sharing.listMyShares.invalidate();
@@ -45,18 +52,38 @@ function SharingSettings() {
   const reject = trpc.sharing.rejectShareRequest.useMutation({ onSuccess: refresh });
   const leave = trpc.sharing.leave.useMutation({ onSuccess: refresh });
   const unblock = trpc.sharing.unblock.useMutation({ onSuccess: refresh });
+  const approveMove = trpc.sharing.approveMoveRequest.useMutation({ onSuccess: refresh });
+  const rejectMove = trpc.sharing.rejectMoveRequest.useMutation({ onSuccess: refresh });
 
   const pending = [...(requests.data ?? [])].sort(
     (a, b) => Number(b.id === focusId) - Number(a.id === focusId),
   );
   const focusMissing =
     focusId !== null && requests.data !== undefined && !requests.data.some((r) => r.id === focusId);
+  const pendingMoves = [...(moves.data ?? [])].sort(
+    (a, b) => Number(b.id === focusMoveId) - Number(a.id === focusMoveId),
+  );
+  const focusMoveMissing =
+    focusMoveId !== null && moves.data !== undefined && !moves.data.some((m) => m.id === focusMoveId);
   useEffect(() => {
     focusRef.current?.scrollIntoView({ block: 'center' });
-  }, [requests.data]);
+  }, [requests.data, moves.data]);
 
-  const busy = approve.isPending || reject.isPending || leave.isPending || unblock.isPending;
-  const error = approve.error ?? reject.error ?? leave.error ?? unblock.error;
+  const busy =
+    approve.isPending ||
+    reject.isPending ||
+    leave.isPending ||
+    unblock.isPending ||
+    approveMove.isPending ||
+    rejectMove.isPending;
+  const error =
+    approve.error ??
+    reject.error ??
+    leave.error ??
+    unblock.error ??
+    approveMove.error ??
+    rejectMove.error;
+  const vault = (owner: string | null) => (owner ? `${owner}'s vault` : 'your vault');
 
   return (
     <AppShell>
@@ -119,6 +146,60 @@ function SharingSettings() {
             )}
           </ul>
         </section>
+
+        {approveMove.data && (
+          <div className="max-w-3xl rounded border border-border bg-bg-elevated p-3 text-xs text-fg-primary">
+            Moved {approveMove.data.fromPath} ({approveMove.data.movedNotes} note
+            {approveMove.data.movedNotes === 1 ? '' : 's'}) to {approveMove.data.path}.
+          </div>
+        )}
+        {focusMoveMissing && !approveMove.data && (
+          <div className="max-w-3xl text-xs text-fg-muted">
+            That move is no longer waiting: it was already approved or declined, or it expired.
+          </div>
+        )}
+
+        {(moves.data?.length ?? 0) > 0 && (
+          <section className="max-w-3xl">
+            <h2 className="mb-1 text-base font-medium text-fg-primary">Moves waiting for your approval</h2>
+            <p className="mb-3 text-xs text-fg-muted">
+              An assistant asked to move these into another vault. Nothing moves until you approve
+              it; approving gives the notes to the destination&apos;s owner, and whoever owned them
+              cannot undo it.
+            </p>
+            <ul className="divide-y divide-border-subtle rounded border border-border">
+              {pendingMoves.map((m) => (
+                <li
+                  key={m.id}
+                  ref={m.id === focusMoveId ? focusRef : undefined}
+                  className={`flex items-center gap-3 p-3 ${m.id === focusMoveId ? 'bg-bg-elevated ring-1 ring-inset ring-accent' : ''}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-fg-primary">
+                      <span className="font-mono">{m.fromPath}</span> → <span className="font-mono">{m.toPath}</span>
+                    </div>
+                    <div className="text-xs text-fg-muted">
+                      From {vault(m.fromOwner)} to {vault(m.toOwner)}
+                      {m.requestedBy ? ` · asked by ${m.requestedBy}` : ''} ·{' '}
+                      {new Date(m.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <Button size="sm" isDisabled={busy} onPress={() => rejectMove.mutate({ id: m.id })}>
+                    Decline
+                  </Button>
+                  <Button
+                    size="sm"
+                    intent="primary"
+                    isDisabled={busy}
+                    onPress={() => approveMove.mutate({ id: m.id })}
+                  >
+                    Approve
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section className="max-w-3xl">
           <h2 className="mb-1 text-base font-medium text-fg-primary">Shared with you</h2>

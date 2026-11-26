@@ -20,6 +20,7 @@ import { SharingService } from '../services/SharingService.js';
 import { TotpService } from '../services/TotpService.js';
 import { createTestDatabase, type TestDatabase } from '../services/testDb.js';
 import { InviteService } from '../services/InviteService.js';
+import { approveMoveRequest } from '../services/moveRequests.js';
 import { approveShareRequest } from '../services/shareRequests.js';
 
 import { GUIDE, SERVER_INSTRUCTIONS } from './guide.generated.js';
@@ -900,13 +901,11 @@ describe('una carpeta creada dentro de lo compartido se ve', () => {
   });
 });
 
-// Mover entre bóvedas transfiere la propiedad, y por MCP eso ocurría sin que
-// nada se lo dijera al modelo: la respuesta traía un path y un conteo de links,
-// así que un asistente podía informar "listo, movido" mientras la otra persona
-// acababa de dejar de ser dueña de sus notas — o de verlas.
-describe('move_to_owner avisa lo que la transferencia le costó al dueño anterior', () => {
-  const setup = async (): Promise<Client> => {
-    const owner = await clientFor(OWNER.id);
+// Moving between vaults transfers ownership, and the previous owner cannot undo
+// it. An assistant only asks; the person who asked approves it in the web app.
+describe('move_to_owner asks, and the person approves in the web app', () => {
+  const setup = async (opts: { appOrigin?: string } = {}): Promise<Client> => {
+    const owner = await clientFor(OWNER.id, opts);
     const frodo = await clientFor(FRODO.id);
     await call(frodo, 'create_note', { path: 'Gondor/arquitectura.md', content: 'a' });
     await sharing.grant({
@@ -919,51 +918,102 @@ describe('move_to_owner avisa lo que la transferencia le costó al dueño anteri
     return owner;
   };
 
-  const move = async (client: Client, confirmed = true) =>
+  const move = async (client: Client, extra: Record<string, unknown> = {}) =>
     call(client, 'move_to_owner', {
       from: 'Gondor',
       fromOwnerId: FRODO.id,
       to: 'mio/Gondor',
       toOwnerId: OWNER.id,
-      ...(confirmed ? { userConfirmedOwnershipTransfer: true } : {}),
+      ...extra,
     });
 
-  it('sin la confirmación no mueve nada, y dice qué habría costado', async () => {
+  const frodoNotes = async (): Promise<string[]> => {
+    const frodo = await clientFor(FRODO.id);
+    const { value } = (await call(frodo, 'list_notes', {})) as { value: Array<{ path: string }> };
+    return value.map((n) => n.path);
+  };
+
+  const approve = (userId: string, id: string) =>
+    approveMoveRequest({ sharing, notes: new NoteService({ db: database.db }) }, userId, id);
+
+  type Pending = {
+    status: string;
+    requestId: string;
+    approveUrl?: string;
+    wouldTransfer: Record<string, unknown>;
+    tellTheUser: string;
+  };
+
+  it('moves nothing, and says what it would cost', async () => {
     const owner = await setup();
+    const { value } = (await move(owner)) as { value: Pending };
 
-    const { value } = (await move(owner, false)) as {
-      value: { moved: boolean; wouldTransfer: Record<string, unknown>; askTheUser: string };
-    };
-
-    expect(value.moved).toBe(false);
+    expect(value.status).toBe('pending_approval');
     expect(value.wouldTransfer).toMatchObject({
       notes: 1,
       fromOwnerId: FRODO.id,
       toOwnerId: OWNER.id,
       previousOwnerAccessAfterwards: 'none',
     });
-    expect(value.askTheUser).toMatch(/no access at all/);
-
-    // Y lo importante: la nota sigue siendo de Frodo.
-    const frodo = await clientFor(FRODO.id);
-    const { value: mias } = (await call(frodo, 'list_notes', {})) as {
-      value: Array<{ path: string }>;
-    };
-    expect(mias.map((n) => n.path)).toEqual(['Gondor/arquitectura.md']);
+    expect(value.tellTheUser).toMatch(/no access at all/);
+    expect(await frodoNotes()).toEqual(['Gondor/arquitectura.md']);
+    expect(await sharing.listMoveRequests(OWNER.id)).toHaveLength(1);
   });
 
-  it('dice que el dueño anterior se quedó sin ver nada cuando el destino no vuelve', async () => {
+  it('moves nothing even when the assistant says the user agreed', async () => {
     const owner = await setup();
-
-    const { value } = (await move(owner)) as { value: { ownership: Record<string, string> } };
-
-    expect(value.ownership.previousOwnerId).toBe(FRODO.id);
-    expect(value.ownership.newOwnerId).toBe(OWNER.id);
-    expect(value.ownership.previousOwnerAccess).toBe('none');
-    expect(value.ownership.tellTheUser).toMatch(/no longer see them at all/);
+    const { value } = (await move(owner, { userConfirmedOwnershipTransfer: true })) as {
+      value: Pending;
+    };
+    expect(value.status).toBe('pending_approval');
+    expect(await frodoNotes()).toEqual(['Gondor/arquitectura.md']);
   });
 
-  it('distingue quedarse sólo con lectura de conservar la escritura', async () => {
+  it('hands the assistant a link that opens the request in the web app', async () => {
+    const owner = await setup({ appOrigin: 'https://brain.example.com/' });
+    const { value } = (await move(owner)) as { value: Pending };
+    expect(value.approveUrl).toBe(
+      `https://brain.example.com/settings/sharing?move=${value.requestId}`,
+    );
+  });
+
+  it('asking twice is one request', async () => {
+    const owner = await setup();
+    const a = (await move(owner)) as { value: Pending };
+    const b = (await move(owner)) as { value: Pending };
+    expect(b.value.requestId).toBe(a.value.requestId);
+    expect(await sharing.listMoveRequests(OWNER.id)).toHaveLength(1);
+  });
+
+  it('moves once the person who asked approves it, and only once', async () => {
+    const owner = await setup();
+    const { value } = (await move(owner)) as { value: Pending };
+
+    const result = await approve(OWNER.id, value.requestId);
+    expect(result).toMatchObject({ path: 'mio/Gondor', movedNotes: 1 });
+    expect(await frodoNotes()).toEqual([]);
+
+    await expect(approve(OWNER.id, value.requestId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('nobody else can approve it', async () => {
+    const owner = await setup();
+    const { value } = (await move(owner)) as { value: Pending };
+
+    await expect(approve(FRODO.id, value.requestId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await frodoNotes()).toEqual(['Gondor/arquitectura.md']);
+  });
+
+  it('checks permission again when approved', async () => {
+    const owner = await setup();
+    const { value } = (await move(owner)) as { value: Pending };
+    await sharing.revoke({ ownerId: FRODO.id, sharedWithUserId: OWNER.id, folderPath: 'Gondor' });
+
+    await expect(approve(OWNER.id, value.requestId)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await frodoNotes()).toEqual(['Gondor/arquitectura.md']);
+  });
+
+  it('tells read-only access apart from keeping write access', async () => {
     const owner = await setup();
     await sharing.grant({
       ownerId: OWNER.id,
@@ -972,15 +1022,10 @@ describe('move_to_owner avisa lo que la transferencia le costó al dueño anteri
       grantedBy: OWNER.id,
       permission: 'read',
     });
+    const read = (await move(owner)) as { value: Pending };
+    expect(read.value.wouldTransfer.previousOwnerAccessAfterwards).toBe('read');
+    expect(read.value.tellTheUser).toMatch(/read access only/);
 
-    const { value } = (await move(owner)) as { value: { ownership: Record<string, string> } };
-
-    expect(value.ownership.previousOwnerAccess).toBe('read');
-    expect(value.ownership.tellTheUser).toMatch(/only read/);
-  });
-
-  it('reconoce cuando conserva la escritura por el destino compartido', async () => {
-    const owner = await setup();
     await sharing.grant({
       ownerId: OWNER.id,
       sharedWithUserId: FRODO.id,
@@ -988,20 +1033,16 @@ describe('move_to_owner avisa lo que la transferencia le costó al dueño anteri
       grantedBy: OWNER.id,
       permission: 'write',
     });
-
-    const { value } = (await move(owner)) as { value: { ownership: Record<string, string> } };
-
-    expect(value.ownership.previousOwnerAccess).toBe('write');
+    const write = (await move(owner)) as { value: Pending };
+    expect(write.value.wouldTransfer.previousOwnerAccessAfterwards).toBe('write');
   });
 
-  it('la descripción de la herramienta avisa antes de que se llame', async () => {
+  it('the tool description warns before it is called', async () => {
     const client = await clientFor(OWNER.id);
     const tool = (await client.listTools()).tools.find((t) => t.name === 'move_to_owner');
-
-    // Lo que lee el modelo cuando decide si llamarla.
     expect(tool?.description).toMatch(/TRANSFERS OWNERSHIP/);
-    expect(tool?.description).toMatch(/ALWAYS tell the user/);
-    expect(tool?.description).toMatch(/moves nothing/);
+    expect(tool?.description).toMatch(/Nothing moves yet/);
+    expect(tool?.description).toMatch(/approveUrl/);
   });
 });
 

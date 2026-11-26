@@ -499,6 +499,13 @@ web app by dragging onto the shared folder, which asks them to confirm. Taking
 notes out of a folder shared with you still works over MCP. The tRPC route
 needs a session, never an API key.
 
+*Amended:* taking notes out of a folder shared with you no longer moves
+anything over MCP either. `move_to_owner` files a request (`move_requests`, at
+most 20 pending per person, expiring after 7 days) and returns `approveUrl`
+(`/settings/sharing?move=<id>`), where the person who asked approves it with one
+tap. Approval checks write access at both ends again before moving. The old
+`userConfirmedOwnershipTransfer` flag is gone: it was only the assistant's word.
+
 **Concurrent edits conflict instead of overwriting.** Every note carries a
 checksum. The web editor sends the checksum its draft was built on, and
 `update_note` accepts one; a save over a newer version fails with `CHANGED`
