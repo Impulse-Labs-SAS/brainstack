@@ -46,16 +46,16 @@
     "@typescript-eslint/parser": "^7.18.0",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
   },
   "dependencies": {
     "@brainstack/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@neondatabase/serverless": "^1.2.0",
+    "@neondatabase/serverless": "^1.2.1",
     "drizzle-orm": "^0.45.4",
-    "hono": "^4.13.16",
+    "hono": "^4.13.19",
     "zod": "^4.6.7"
   }
 }
