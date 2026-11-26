@@ -57,6 +57,13 @@
       "when": 1791720274640,
       "tag": "0007_share_requests_and_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795619876395,
+      "tag": "0008_move_requests",
+      "breakpoints": true
     }
   ]
 }
