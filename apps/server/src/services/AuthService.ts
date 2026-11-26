@@ -32,6 +32,7 @@ import type { EmitEvent } from './events.js';
 const {
   emailVerificationTokens,
   folderShareInvites,
+  loginChallenges,
   oauthTokens,
   passwordResetTokens,
   sessions,
@@ -41,6 +42,8 @@ const {
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+/** Time to type the code after Google sends someone back. */
+const SECOND_FACTOR_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /** Shortest gap between two reset or verification emails to one address. */
 const EMAIL_COOLDOWN_MS = 60 * 1000;
 /*
@@ -402,6 +405,81 @@ export class AuthService {
 
     await this.opts.emit?.({ type: 'auth.signed_in', userId, actorId: userId });
     return { id, userId, token, createdAt: now, expiresAt };
+  }
+
+  // -- Second factor on other ways in ------------------------------------------
+  //
+  // `login` asks for the code itself. Every other way that ends in a session
+  // proves only control of the email address — a reset link, Google, a
+  // verification link — and a second factor exists precisely so that the
+  // address alone is not enough. So each of those asks here before it opens a
+  // session.
+
+  /** Whether signing this account in takes a code as well. */
+  needsSecondFactor(user: User): boolean {
+    return user.hasTotp && this.opts.totp != null;
+  }
+
+  /**
+   * Hold a sign-in that has passed Google until the code arrives. Returns the
+   * token the browser keeps (in a cookie); only its hash is stored.
+   */
+  async issueSecondFactorChallenge(userId: string): Promise<{ token: string; expiresAt: number }> {
+    const now = this.now();
+    const token = generateToken(32);
+    const expiresAt = now + SECOND_FACTOR_TTL_MS;
+    await this.opts.db.insert(loginChallenges).values({
+      id: nanoid(),
+      userId,
+      tokenHash: sha256(token),
+      createdAt: now,
+      expiresAt,
+    });
+    return { token, expiresAt };
+  }
+
+  /**
+   * Finish a held sign-in with the code. A wrong code leaves the challenge in
+   * place for another try; guessing is bounded by the second factor's own
+   * lock, which counts in the database. A right one spends the challenge.
+   */
+  async completeSecondFactor(
+    challengeToken: string,
+    code: string,
+    context: { userAgent?: string; ipAddress?: string } = {},
+  ): Promise<{ user: User; session: Session }> {
+    const now = this.now();
+    const tokenHash = sha256(challengeToken);
+    const [challenge] = await this.opts.db
+      .select({ id: loginChallenges.id, userId: loginChallenges.userId })
+      .from(loginChallenges)
+      .where(and(eq(loginChallenges.tokenHash, tokenHash), gt(loginChallenges.expiresAt, now)))
+      .limit(1);
+    if (!challenge) {
+      throw new AppError('sign-in expired; start again', 'UNAUTHORIZED', 401);
+    }
+
+    if (!this.opts.totp || !(await this.opts.totp.verifyForUser(challenge.userId, code))) {
+      throw new AppError('invalid totp code', 'UNAUTHORIZED', 401);
+    }
+
+    // Spent in a conditional delete, so one challenge opens one session even
+    // when the same right code is sent twice at once.
+    const [spent] = await this.opts.db
+      .delete(loginChallenges)
+      .where(eq(loginChallenges.id, challenge.id))
+      .returning({ id: loginChallenges.id });
+    if (!spent) throw new AppError('sign-in expired; start again', 'UNAUTHORIZED', 401);
+
+    const [row] = await this.opts.db
+      .update(users)
+      .set({ lastLoginAt: now, updatedAt: now })
+      .where(eq(users.id, challenge.userId))
+      .returning();
+    if (!row) throw new AppError('sign-in expired; start again', 'UNAUTHORIZED', 401);
+
+    const session = await this.createSession(challenge.userId, context);
+    return { user: toUser(row as UserRow), session };
   }
 
   async validateSession(token: string): Promise<User | null> {

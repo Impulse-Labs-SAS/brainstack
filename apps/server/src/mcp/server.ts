@@ -77,7 +77,7 @@ export function buildMcpServer(opts: BuildMcpServerOptions): McpServer {
   if (listeners.length > 0) reportToolCalls(server, opts, listeners);
 
   registerReadTools(server, ctx);
-  registerWriteTools(server, ctx);
+  registerWriteTools(server, ctx, { appOrigin: opts.appOrigin });
   registerSharingTools(server, ctx, { appOrigin: opts.appOrigin });
   registerGuideTools(server, ctx);
   for (const plugin of plugins) plugin.mcpTools?.(server, ctx);

@@ -277,6 +277,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
         logger: opts.logger,
         secureCookies: opts.secureCookies,
         appHome: opts.appHome,
+        trustedProxy,
         ...(opts.basePath ? { basePath: opts.basePath } : {}),
       }),
     );

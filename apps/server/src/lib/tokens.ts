@@ -20,3 +20,12 @@ export function tokensEqual(a: string, b: string): boolean {
   if (buf1.length !== buf2.length) return false;
   return timingSafeEqual(buf1, buf2);
 }
+
+/**
+ * How stale a token's `last_used_at` may get before a request writes it again.
+ *
+ * Every API key and OAuth access token is checked on every request, and
+ * stamping each check made an authenticated read a database write too. The
+ * stamp is shown to people as "last used", where a minute makes no difference.
+ */
+export const LAST_USED_RESOLUTION_MS = 60 * 1000;

@@ -1,8 +1,8 @@
 'use client';
 
-// Página de error del flujo de aceptar invitaciones. El endpoint REST
-// /invite/accept/:token redirige acá con ?reason=<AppError.code> cuando
-// el accept falla (token inválido, expirado, revocado, etc.).
+// Error page for accepting an invitation. The REST endpoint
+// /invite/accept/:token redirects here with ?reason=<AppError.code> when
+// accepting fails (bad token, expired, revoked, and so on).
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -10,24 +10,24 @@ import { Suspense } from 'react';
 
 const REASON_COPY: Record<string, { title: string; body: string }> = {
   not_found: {
-    title: 'Invitación no encontrada',
-    body: 'El link puede haber sido revocado o el token está mal formado.',
+    title: 'Invitation not found',
+    body: 'The link may have been revoked, or it was copied incompletely.',
   },
   forbidden: {
-    title: 'Sin acceso',
-    body: 'Esta invitación no está dirigida a tu cuenta. Si tenés varias, probá iniciar sesión con la dirección correcta.',
+    title: 'This invitation cannot be used',
+    body: 'It was revoked, it has expired, or it was sent to another email address. If you have more than one account, sign in with the address it was sent to; otherwise ask the owner for a new one.',
   },
   invalid_input: {
-    title: 'Invitación inválida',
-    body: 'El token tiene un formato inválido. Pedile al dueño que te genere uno nuevo.',
+    title: 'Invalid invitation',
+    body: 'This invitation cannot be accepted from this account. An invitation you created is for someone else to open.',
   },
   already_exists: {
-    title: 'Ya aceptaste esta invitación',
-    body: 'Buscá la carpeta bajo "Compartido conmigo" en el sidebar.',
+    title: 'You already accepted this invitation',
+    body: 'Look for the folder under "Shared with me" in the sidebar.',
   },
   internal: {
-    title: 'Error inesperado',
-    body: 'Algo falló del lado del server. Probá de nuevo en un rato o pedile al dueño que te genere otra invitación.',
+    title: 'Something went wrong',
+    body: 'The server could not accept the invitation. Try again in a while, or ask the owner for a new one.',
   },
 };
 
@@ -39,7 +39,7 @@ function InviteErrorView() {
   return (
     <div className="mx-auto flex max-w-md flex-col gap-4 px-6 py-16">
       <div className="font-mono text-[11px] uppercase tracking-wide text-fg-muted">
-        invitación · error
+        invitation · error
       </div>
       <h1 className="text-lg font-medium text-fg-primary">{copy.title}</h1>
       <p className="text-sm text-fg-secondary">{copy.body}</p>
@@ -49,7 +49,7 @@ function InviteErrorView() {
           href="/notes"
           className="rounded border border-border px-3 py-1.5 text-xs text-fg-secondary hover:bg-bg-elevated"
         >
-          Ir a mis notas
+          Go to my notes
         </Link>
       </div>
     </div>

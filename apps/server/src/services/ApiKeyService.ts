@@ -4,13 +4,13 @@
 // short prefix are stored. The prefix lets us identify keys in audit logs and
 // in the UI without ever holding the secret.
 
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, lte, or } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 
 import { pgSchema, type PgDb } from '@brainstack/core/pg';
 
 import { AppError } from '../lib/errors.js';
-import { generateToken, sha256 } from '../lib/tokens.js';
+import { generateToken, LAST_USED_RESOLUTION_MS, sha256 } from '../lib/tokens.js';
 import type { EmitEvent } from './events.js';
 
 const { apiKeys } = pgSchema;
@@ -81,7 +81,8 @@ export class ApiKeyService {
   }
 
   /**
-   * Resolve a bearer token to its key, stamping `last_used_at`.
+   * Resolve a bearer token to its key, stamping `last_used_at` (at most once
+   * per `LAST_USED_RESOLUTION_MS`).
    *
    * Returns null for unknown, malformed and revoked tokens alike — callers get
    * no signal about which, by design.
@@ -97,16 +98,30 @@ export class ApiKeyService {
    */
   async validateByHash(tokenHash: string): Promise<ApiKey | null> {
     const now = this.now();
-    // Stamping and fetching in one statement keeps a revoked key from slipping
-    // through between a read and a write.
+    // A read, not a stamp-and-fetch: the revoked filter is what keeps a
+    // revoked key out, and a key revoked a moment after this read is the same
+    // as one revoked a moment after the request.
     const [row] = await this.opts.db
-      .update(apiKeys)
-      .set({ lastUsedAt: now })
+      .select()
+      .from(apiKeys)
       .where(and(eq(apiKeys.tokenHash, tokenHash), isNull(apiKeys.revokedAt)))
-      .returning();
+      .limit(1);
 
     if (!row || row.userId === null) return null;
-    return toApiKey({ ...row, userId: row.userId });
+    const stale = row.lastUsedAt === null || Number(row.lastUsedAt) <= now - LAST_USED_RESOLUTION_MS;
+    if (!stale) return toApiKey({ ...row, userId: row.userId });
+
+    // Guarded on the stamp, so concurrent requests write it once.
+    await this.opts.db
+      .update(apiKeys)
+      .set({ lastUsedAt: now })
+      .where(
+        and(
+          eq(apiKeys.id, row.id),
+          or(isNull(apiKeys.lastUsedAt), lte(apiKeys.lastUsedAt, now - LAST_USED_RESOLUTION_MS)),
+        ),
+      );
+    return toApiKey({ ...row, lastUsedAt: now, userId: row.userId });
   }
 
   /**

@@ -124,16 +124,11 @@ export function registerSharingTools(
       try {
         requireWriteAccess();
         const ownerId = requireUserId();
-        // The same answer whether or not the address has an account: this
-        // tool is not a way to learn who is a member of the instance.
-        const target = await auth.findUserByEmail(email);
-        if (target) {
-          await sharing.revoke({
-            ownerId,
-            sharedWithUserId: target.id,
-            folderPath: path,
-          });
-        }
+        // Revoked by address, not by account: someone invited by email may not
+        // have one yet, and then the pending invite is all there is to take
+        // back. The same work and answer either way, so this tool is not a
+        // way to learn who is a member of the instance.
+        await sharing.revokeByEmail({ ownerId, email, folderPath: path });
         return JSON_TEXT({
           status: 'revoked',
           folderPath: normalizeFolderPath(path),

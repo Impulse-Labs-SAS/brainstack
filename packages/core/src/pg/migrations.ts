@@ -483,6 +483,67 @@ const shareRequestsAndBlocks: PgMigration = {
   ],
 };
 
+/**
+ * Moves into another vault an assistant asked for, waiting for the person to
+ * approve them in the web app — the same reason share requests wait: the
+ * assistant may be acting on text somebody else wrote, and the previous owner
+ * cannot undo a change of ownership.
+ */
+const moveRequests: PgMigration = {
+  name: '0013_pg_move_requests',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS move_requests (
+       id            TEXT PRIMARY KEY,
+       user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       from_owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       from_path     TEXT NOT NULL,
+       to_owner_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       to_path       TEXT NOT NULL,
+       requested_by  TEXT,
+       created_at    BIGINT NOT NULL,
+       expires_at    BIGINT NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_move_requests_user ON move_requests (user_id, created_at)`,
+  ],
+};
+
+/**
+ * Email invites store their address lowercased, as accounts and share
+ * requests already did. Revoking someone matched the address exactly, so an
+ * invite sent to `Ana@x.com` outlived taking `ana@x.com` out of the folder.
+ * New invites are written lowercased; this brings the old ones in line.
+ * Idempotent: a second run finds nothing to change.
+ */
+const lowercaseInviteEmails: PgMigration = {
+  name: '0014_pg_lowercase_invite_emails',
+  statements: [
+    `UPDATE folder_share_invites
+        SET invitee_email = lower(trim(invitee_email))
+      WHERE invitee_email IS NOT NULL
+        AND invitee_email <> lower(trim(invitee_email))`,
+  ],
+};
+
+/**
+ * Sign-ins that have passed Google and still owe the second factor. Without a
+ * place to hold that half-finished state, the Google callback could only open
+ * a session outright, and a second factor stopped nobody who controlled the
+ * email address.
+ */
+const loginChallenges: PgMigration = {
+  name: '0015_pg_login_challenges',
+  statements: [
+    `CREATE TABLE IF NOT EXISTS login_challenges (
+       id         TEXT PRIMARY KEY,
+       user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       token_hash TEXT NOT NULL UNIQUE,
+       created_at BIGINT NOT NULL,
+       expires_at BIGINT NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_login_challenges_user ON login_challenges (user_id)`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -496,4 +557,7 @@ export const pgMigrations: readonly PgMigration[] = [
   crawlHistory,
   totpAttempts,
   shareRequestsAndBlocks,
+  moveRequests,
+  lowercaseInviteEmails,
+  loginChallenges,
 ];
