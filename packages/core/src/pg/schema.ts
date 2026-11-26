@@ -444,6 +444,37 @@ export const shareRequests = pgTable(
   }),
 );
 
+/**
+ * A move into another vault an assistant asked for, waiting for the person who
+ * asked it (`userId`) to approve it in the web app. It takes notes from one
+ * owner and gives them to another, which the previous owner cannot undo, so
+ * nothing moves until then.
+ */
+export const moveRequests = pgTable(
+  'move_requests',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fromOwnerId: text('from_owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fromPath: text('from_path').notNull(),
+    toOwnerId: text('to_owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    toPath: text('to_path').notNull(),
+    /** Which credential asked: an API key name or an OAuth client, for the person to see. */
+    requestedBy: text('requested_by'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  },
+  (t) => ({
+    userIdx: index('idx_move_requests_user').on(t.userId, t.createdAt),
+  }),
+);
+
 /** Someone a user no longer accepts shares from. */
 export const shareBlocks = pgTable(
   'share_blocks',
