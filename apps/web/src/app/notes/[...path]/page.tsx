@@ -117,6 +117,11 @@ export default function NotePage() {
   const wikilinkCandidatesRef = useRef(wikilinkCandidates);
   wikilinkCandidatesRef.current = wikilinkCandidates;
   const getWikilinkCandidates = useCallback(() => wikilinkCandidatesRef.current, []);
+  // `@` offers the people who can read this note, the only ones who would be told.
+  const people = trpc.mentions.people.useQuery({ path }, { enabled: !!urlPath });
+  const peopleRef = useRef(people.data ?? []);
+  peopleRef.current = people.data ?? [];
+  const getMentionCandidates = useCallback(() => peopleRef.current, []);
 
   const [viewMode, setViewMode] = usePersistedViewMode('edit');
 
@@ -632,6 +637,7 @@ export default function NotePage() {
                 value={draft}
                 onChange={setDraft}
                 wikilinkCandidates={getWikilinkCandidates}
+                mentionCandidates={getMentionCandidates}
                 frontmatter={note.data.frontmatter}
                 onNavigate={(href) => router.push(href)}
                 onOpenLink={onOpenLink}

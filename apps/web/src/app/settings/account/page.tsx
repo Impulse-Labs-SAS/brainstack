@@ -51,6 +51,8 @@ export default function AccountSettingsPage() {
             onSaved={() => me.refetch()}
           />
 
+          <UsernameCard />
+
           <ChangePasswordCard hasPassword={Boolean(user?.hasPassword)} />
 
           <TwoFactorCard status={totpStatus} userEmail={user?.email ?? ''} onChanged={refreshTotp} />
@@ -154,6 +156,77 @@ function ProfileCard({
           isDisabled={update.isPending || name.trim() === (displayName ?? '')}
         >
           {update.isPending ? 'Saving…' : 'Save'}
+        </Button>
+      </form>
+    </section>
+  );
+}
+
+/**
+ * The name people write after `@` to mention you in a note. Most people pick
+ * it when their assistant asks; this is where it is seen and changed.
+ */
+function UsernameCard() {
+  const me = trpc.mentions.me.useQuery();
+  const save = trpc.mentions.setUsername.useMutation();
+  const [value, setValue] = useState('');
+  const [touched, setTouched] = useState(false);
+  const [status, setStatus] = useState<{ ok?: boolean; error?: string } | null>(null);
+  const current = me.data?.username ?? null;
+
+  useEffect(() => {
+    if (!touched) setValue(current ?? me.data?.suggested ?? '');
+  }, [current, me.data?.suggested, touched]);
+
+  async function submit(e: React.FormEvent): Promise<void> {
+    e.preventDefault();
+    setStatus(null);
+    try {
+      await save.mutateAsync({ username: value });
+      setTouched(false);
+      setStatus({ ok: true });
+      await me.refetch();
+    } catch (err) {
+      setStatus({ error: err instanceof Error ? err.message : 'failed' });
+    }
+  }
+
+  const unchanged = value.trim().replace(/^@/, '').toLowerCase() === (current ?? '');
+
+  return (
+    <section>
+      <h2 className="mb-2 text-base font-medium text-fg-primary">Username</h2>
+      <form
+        onSubmit={submit}
+        className="space-y-3 rounded border border-border bg-bg-surface p-4 text-sm"
+      >
+        <div>
+          <label htmlFor="username" className="mb-1 block font-mono text-[11px] text-fg-muted">
+            @USERNAME
+          </label>
+          <Input
+            id="username"
+            value={value}
+            maxLength={31}
+            placeholder={me.data?.suggested ?? 'your.name'}
+            autoComplete="username"
+            spellCheck={false}
+            onChange={(e) => {
+              setTouched(true);
+              setValue(e.target.value);
+              setStatus(null);
+            }}
+          />
+          <p className="mt-1 text-xs text-fg-muted">
+            {current
+              ? `People mention you in a note by writing @${current}. Your assistant tells you the next time you use it.`
+              : 'Nobody can mention you until you pick one. Lowercase letters, digits, ".", "_" or "-".'}
+          </p>
+        </div>
+        {status?.error && <div className="text-xs text-danger">{status.error}</div>}
+        {status?.ok && <div className="text-xs text-success">Username saved.</div>}
+        <Button intent="primary" type="submit" isDisabled={save.isPending || unchanged || !value.trim()}>
+          {save.isPending ? 'Saving…' : 'Save'}
         </Button>
       </form>
     </section>

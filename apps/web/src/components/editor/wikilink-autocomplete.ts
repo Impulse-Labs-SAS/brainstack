@@ -1,9 +1,15 @@
 // CM6 extension: typing `[[` opens a note picker; accepting a suggestion
 // inserts `[[Path]]`. Matching itself lives in
 // lib/wikilink-autocomplete-match.ts (pure, tested without a CM instance) —
-// this file only owns trigger detection and the insert.
+// this file only owns trigger detection and the insert, and the extension
+// every completion source the editor has goes through.
 
-import { autocompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
+import {
+  autocompletion,
+  type CompletionContext,
+  type CompletionResult,
+  type CompletionSource,
+} from '@codemirror/autocomplete';
 import type { Extension } from '@codemirror/state';
 
 import { matchWikilinkCandidates, type WikilinkCandidate } from '@/lib/wikilink-autocomplete-match';
@@ -11,7 +17,7 @@ import { matchWikilinkCandidates, type WikilinkCandidate } from '@/lib/wikilink-
 /** Matches an unclosed `[[query` right before the cursor. */
 const TRIGGER_RE = /\[\[([^[\]\n]*)$/;
 
-function wikilinkSource(candidates: () => readonly WikilinkCandidate[]) {
+export function wikilinkSource(candidates: () => readonly WikilinkCandidate[]) {
   return (context: CompletionContext): CompletionResult | null => {
     const match = context.matchBefore(TRIGGER_RE);
     if (!match) return null;
@@ -38,11 +44,10 @@ function wikilinkSource(candidates: () => readonly WikilinkCandidate[]) {
 }
 
 /**
- * `candidates` is a function rather than a plain array so the extension can
- * be built once and still see a freshly-fetched note list on every
- * completion — the tree changes as notes are created while the editor stays
- * mounted.
+ * One completion extension for every source the editor offers — `[[` notes,
+ * `@` people. Two `autocompletion()` extensions would not combine their
+ * overrides; the first would win.
  */
-export function wikilinkAutocomplete(candidates: () => readonly WikilinkCandidate[]): Extension {
-  return autocompletion({ override: [wikilinkSource(candidates)] });
+export function editorAutocomplete(sources: readonly CompletionSource[]): Extension {
+  return autocompletion({ override: [...sources] });
 }
