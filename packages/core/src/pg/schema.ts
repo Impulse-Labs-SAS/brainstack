@@ -177,9 +177,21 @@ export const users = pgTable(
     /** The last 30-second step a code was accepted for; never accepted twice. */
     totpLastStep: bigint('totp_last_step', { mode: 'number' }),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(0),
+    /**
+     * What other people write after an `@` to mention this user in a note.
+     * Lowercase, as Sentinel's `normalizeUsername` leaves it. Null until they
+     * pick one; nobody can mention them before.
+     */
+    username: text('username'),
+    /** When the user's assistant was last told to ask them for a username. */
+    usernameAskedAt: bigint('username_asked_at', { mode: 'number' }),
   },
   (t) => ({
     emailIdx: index('idx_users_email').on(t.email),
+    // Partial, like the Google index: most rows have none yet.
+    usernameIdx: uniqueIndex('idx_users_username')
+      .on(t.username)
+      .where(sql`username IS NOT NULL`),
     // Partial, so the many users without a Google account do not collide on null.
     googleIdx: uniqueIndex('idx_users_google_id')
       .on(t.googleId)
@@ -600,5 +612,36 @@ export const crawlHistory = pgTable(
     sourceValues: check('crawl_history_source_check', sql`source IN ('assistant', 'web')`),
     userCreatedIdx: index('idx_crawl_history_user_created').on(t.userId, t.createdAt),
     createdIdx: index('idx_crawl_history_created').on(t.createdAt),
+  }),
+);
+
+/**
+ * A person named with `@username` in a note, waiting to be told.
+ *
+ * Written when a save adds the mention and the person may read the note; the
+ * mentioned user's assistant hands it on with its next answer and stamps
+ * `delivered_at`. `path` is the note's logical path in `owner_id`'s vault as it
+ * was when the mention was written.
+ */
+export const userMentions = pgTable(
+  'user_mentions',
+  {
+    id: text('id').primaryKey(),
+    /** Who was mentioned. */
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Who wrote the mention. Null once their account is gone. */
+    authorId: text('author_id').references(() => users.id, { onDelete: 'set null' }),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    snippet: text('snippet').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    deliveredAt: bigint('delivered_at', { mode: 'number' }),
+  },
+  (t) => ({
+    userIdx: index('idx_user_mentions_user').on(t.userId, t.createdAt),
   }),
 );

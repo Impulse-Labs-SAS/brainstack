@@ -66,3 +66,14 @@ export {
   type DocumentLookup,
   type ImportedNote,
 } from './document.js';
+export {
+  MENTION_SNIPPET_CHARS,
+  USERNAME_MAX,
+  USERNAME_MIN,
+  USERNAME_RULES,
+  addedHandleMentions,
+  findHandleMentions,
+  normalizeUsername,
+  suggestUsername,
+  type HandleMention,
+} from './handles.js';
