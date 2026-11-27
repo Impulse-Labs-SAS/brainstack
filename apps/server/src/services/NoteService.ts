@@ -93,6 +93,15 @@ export interface NoteRowDto {
   checksum: string;
 }
 
+/** A note whose content was just written, as `onNoteWritten` hears it. */
+export interface NoteWrite {
+  ownerId: string;
+  /** Logical path in `ownerId`'s vault. */
+  path: string;
+  before: string | null;
+  after: string;
+}
+
 /** An edit checked against a note's current version, ready to write. */
 export interface PlannedEdit {
   path: string;
@@ -100,6 +109,8 @@ export interface PlannedEdit {
   raw: string;
   /** The version the edit was planned on; the write lands only over it. */
   baseChecksum: string;
+  /** That version's body, for `onNoteWritten`. */
+  baseBody: string;
   /** The body's size before and after, for the limit an assistant's writes keep to. */
   size: { before: NoteSize; after: NoteSize };
 }
@@ -224,6 +235,15 @@ export interface NoteServiceOptions {
    * the folder is still theirs, so what is shared on it should follow it.
    */
   onFolderMoved?: (ownerId: string, fromPath: string, toPath: string) => Promise<void>;
+  /**
+   * Called after a note's content is created or replaced — by a person or an
+   * assistant — with its body before (null for a new note) and after. It is
+   * how `@username` mentions are found; a callback for the same reason as the
+   * two above, since telling someone about a note means asking whether they
+   * may read it. A failure here is the listener's to log: it never undoes or
+   * fails the write.
+   */
+  onNoteWritten?: (write: NoteWrite) => Promise<void>;
   /**
    * Told about every note written, moved or deleted and every folder created,
    * once it has landed. Unlike the two above it changes nothing that follows:
@@ -599,6 +619,16 @@ export class NoteService {
 
   // -- Writes ----------------------------------------------------------------
 
+  /** Tells `onNoteWritten`, once the write has landed. Never fails the write. */
+  private async noteWritten(write: NoteWrite): Promise<void> {
+    if (!this.opts.onNoteWritten || write.before === write.after) return;
+    try {
+      await this.opts.onNoteWritten(write);
+    } catch {
+      // The listener logs its own failures; the note is saved either way.
+    }
+  }
+
   async create(
     ownerId: string,
     path: string,
@@ -621,6 +651,7 @@ export class NoteService {
       this.mocsFor(ownerId, logical),
     ]);
     const created = this.toLogical(ownerId, saved.path);
+    await this.noteWritten({ ownerId, path: created, before: null, after: saved.body });
     await this.opts.emit?.({ type: 'note.created', ownerId, path: created });
     return { path: created, affectedMocs, checksum: saved.checksum };
   }
@@ -655,6 +686,7 @@ export class NoteService {
           )
         : await this.store.upsert(physical, raw, ownerId);
       const updated = this.toLogical(ownerId, saved.path);
+      await this.noteWritten({ ownerId, path: updated, before: existing.body, after: saved.body });
       await this.opts.emit?.({ type: 'note.updated', ownerId, path: updated });
       return { path: updated, checksum: saved.checksum };
     } catch (err) {
@@ -718,6 +750,7 @@ export class NoteService {
       // back every key an edit removed.
       raw: serializeNote(next.frontmatter, next.body),
       baseChecksum: existing.checksum,
+      baseBody: existing.body,
       size: { before: noteSize(existing.body), after: noteSize(next.body) },
     };
   }
@@ -733,6 +766,7 @@ export class NoteService {
         this.store.replaceIfUnchanged(physical, plan.raw, plan.baseChecksum, ownerId),
       );
       const updated = this.toLogical(ownerId, saved.path);
+      await this.noteWritten({ ownerId, path: updated, before: plan.baseBody, after: saved.body });
       await this.opts.emit?.({ type: 'note.updated', ownerId, path: updated });
       return { path: updated, checksum: saved.checksum };
     } catch (err) {

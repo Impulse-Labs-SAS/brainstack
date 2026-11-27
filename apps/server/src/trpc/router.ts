@@ -191,6 +191,12 @@ const assertWritable = async (
   }
 };
 
+/** The mention service, or a refusal on an app built without one. */
+const mentionsOf = (ctx: AuthedContext) => {
+  if (!ctx.mentions) throw new AppError('mentions are not available', 'UNAVAILABLE', 503);
+  return ctx.mentions;
+};
+
 export const appRouter = t.router({
   auth: t.router({
     me: t.procedure.query(({ ctx }) => ({ user: ctx.user })),
@@ -834,6 +840,32 @@ export const appRouter = t.router({
     get: protectedProcedure
       .input(z.object({ id: z.string().min(1).max(64) }))
       .query(({ ctx, input }) => wrap(() => ctx.crawls.get(ctx.user.id, input.id))),
+  }), // `@username` mentions. Usernames are the account's own, so setting one
+  // takes a session; reading who can be mentioned in a note takes being able
+  // to read the note.
+  mentions: t.router({
+    me: sessionProcedure.query(async ({ ctx }) => {
+      const mentions = mentionsOf(ctx);
+      const username = await mentions.getUsername(ctx.user.id);
+      return { username, suggested: username ? null : await mentions.suggestFor(ctx.user.id) };
+    }),
+    setUsername: sessionProcedure
+      .input(z.object({ username: field().min(1) }))
+      .mutation(async ({ ctx, input }) => ({
+        username: await mentionsOf(ctx).setUsername(ctx.user.id, input.username),
+      })),
+    /** Who `@` may suggest in a note: the people who can read it, the caller left out. */
+    people: protectedProcedure
+      .input(z.object({ path: field().min(1), ownerId: OwnerInput }))
+      .query(async ({ ctx, input }) => {
+        const owner = ownerOf(ctx, input.ownerId);
+        await ctx.sharing.assertCanRead(ctx.user.id, owner, input.path);
+        const readers = await ctx.sharing.readersOf(owner, input.path);
+        return mentionsOf(ctx).people(readers.filter((id) => id !== ctx.user.id));
+      }),
+    recent: protectedProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(50).optional() }).optional())
+      .query(async ({ ctx, input }) => mentionsOf(ctx).recent(ctx.user.id, input?.limit)),
   }),
 });
 

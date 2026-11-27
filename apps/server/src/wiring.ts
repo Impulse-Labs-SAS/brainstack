@@ -14,12 +14,14 @@ import { CrossOwnerReader } from './services/CrossOwnerReader.js';
 import { createEmailSender, type EmailConfig, type EmailSender } from './services/EmailSender.js';
 import { GoogleOAuthService } from './services/GoogleOAuthService.js';
 import { InviteService } from './services/InviteService.js';
+import { MentionService } from './services/MentionService.js';
 import { NoteService } from './services/NoteService.js';
 import { OAuthProviderService } from './services/OAuthProviderService.js';
 import { SearchService } from './services/SearchService.js';
 import { SharingService } from './services/SharingService.js';
 import { TotpService } from './services/TotpService.js';
 import type { EmitEvent } from './services/events.js';
+import { currentActorId } from './events.js';
 
 export interface Services {
   db: PgDb;
@@ -34,6 +36,8 @@ export interface Services {
   crossOwner: CrossOwnerReader;
   /** What `gather_context` gave each user, for the Sentinel view. */
   crawls: CrawlHistoryService;
+  /** `@username` mentions: usernames, and the mentions waiting to be told. */
+  mentions: MentionService;
   /** Present only when Google credentials are configured. */
   google?: GoogleOAuthService;
   resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
@@ -69,6 +73,11 @@ export function buildServices(opts: BuildServicesOptions): Services {
 
   // Before NoteService, which needs it to clean up after a folder it removes.
   const sharing = new SharingService({ db: opts.db, ...emit });
+  const mentions = new MentionService({
+    db: opts.db,
+    logger: opts.logger,
+    canRead: (userId, ownerId, path) => sharing.canRead(userId, ownerId, path),
+  });
 
   const notes = new NoteService({
     db: opts.db,
@@ -78,6 +87,11 @@ export function buildServices(opts: BuildServicesOptions): Services {
     },
     onFolderMoved: async (ownerId, from, to) => {
       await sharing.reparentUnder({ ownerId, from, to });
+    },
+    // Whoever the request is from wrote the mention: in a shared folder that
+    // is not the owner.
+    onNoteWritten: async (write) => {
+      await mentions.recordWrite(write, currentActorId());
     },
     ...emit,
   });
@@ -154,6 +168,7 @@ export function buildServices(opts: BuildServicesOptions): Services {
     oauthProvider,
     crossOwner,
     crawls,
+    mentions,
     ...(google ? { google } : {}),
     resolveUserForApiKey: async (apiKey: ApiKey): Promise<User> => {
       const user = await auth.findUserById(apiKey.userId ?? '');

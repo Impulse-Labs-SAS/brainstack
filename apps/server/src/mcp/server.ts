@@ -12,6 +12,7 @@ import type { Logger } from 'pino';
 import type { AuthService } from '../services/AuthService.js';
 import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
+import type { MentionService } from '../services/MentionService.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import type { SharingService } from '../services/SharingService.js';
@@ -20,7 +21,9 @@ import type { BrainStackPlugin, ToolCall } from '../plugin.js';
 
 import { buildToolContext, type McpToolContext } from './context.js';
 import { SERVER_INSTRUCTIONS } from './guide.generated.js';
+import { attachNotices } from './notices.js';
 import { registerGuideTools } from './tools/guide.js';
+import { registerMentionTools } from './tools/mentions.js';
 import { registerReadTools } from './tools/read.js';
 import { registerSharingTools } from './tools/sharing.js';
 import { registerWriteTools } from './tools/write.js';
@@ -47,6 +50,11 @@ export interface BuildMcpServerOptions {
   auth: AuthService;
   /** Where `gather_context` leaves each crawl for the Sentinel view to replay. */
   crawls: CrawlHistoryService;
+  /**
+   * `@username` mentions. With it, every answer carries the caller's pending
+   * mentions and `set_username` / `list_mentions` are registered.
+   */
+  mentions?: MentionService;
   logger: Logger;
   /**
    * Who is calling. Every tool that touches a vault refuses to run without
@@ -75,11 +83,16 @@ export function buildMcpServer(opts: BuildMcpServerOptions): McpServer {
 
   const listeners = plugins.filter((p) => p.onToolCall);
   if (listeners.length > 0) reportToolCalls(server, opts, listeners);
+  // Wrapped first, so the notices ride on plugin tools' answers too.
+  if (opts.mentions && opts.principal?.userId) {
+    attachNotices(server, opts.mentions, opts.principal.userId, opts.logger);
+  }
 
   registerReadTools(server, ctx);
   registerWriteTools(server, ctx, { appOrigin: opts.appOrigin });
   registerSharingTools(server, ctx, { appOrigin: opts.appOrigin });
   registerGuideTools(server, ctx);
+  if (opts.mentions) registerMentionTools(server, ctx, opts.mentions);
   for (const plugin of plugins) plugin.mcpTools?.(server, ctx);
 
   return server;
