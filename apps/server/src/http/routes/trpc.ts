@@ -12,6 +12,7 @@ import type { ApiKey, ApiKeyService } from '../../services/ApiKeyService.js';
 import type { AuthService, User } from '../../services/AuthService.js';
 import type { CrawlHistoryService } from '../../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../../services/CrossOwnerReader.js';
+import type { MentionService } from '../../services/MentionService.js';
 import type { NoteService } from '../../services/NoteService.js';
 import type { OAuthProviderService } from '../../services/OAuthProviderService.js';
 import type { InviteService } from '../../services/InviteService.js';
@@ -32,6 +33,7 @@ export interface TrpcRouterOptions {
   invites: InviteService;
   crossOwner: CrossOwnerReader;
   crawls: CrawlHistoryService;
+  mentions?: MentionService;
   oauth?: OAuthProviderService;
   resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
   /** Where failures the client is not told about are written. */
@@ -80,6 +82,7 @@ export function createTrpcRouter(options: TrpcRouterOptions): Hono<AuthBindings>
             invites: options.invites,
             crossOwner: options.crossOwner,
             crawls: options.crawls,
+            ...(options.mentions ? { mentions: options.mentions } : {}),
             ...(options.oauth ? { oauth: options.oauth } : {}),
           },
           principal,

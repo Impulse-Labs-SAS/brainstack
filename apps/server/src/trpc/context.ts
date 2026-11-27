@@ -9,6 +9,7 @@ import type { ApiKeyService } from '../services/ApiKeyService.js';
 import type { AuthService, User } from '../services/AuthService.js';
 import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
+import type { MentionService } from '../services/MentionService.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { OAuthProviderService } from '../services/OAuthProviderService.js';
 import type { InviteService } from '../services/InviteService.js';
@@ -26,6 +27,8 @@ export interface ServerServices {
   invites: InviteService;
   crossOwner: CrossOwnerReader;
   crawls: CrawlHistoryService;
+  /** `@username` mentions. Optional so a router built for a test can leave it out. */
+  mentions?: MentionService;
   /** The OAuth provider, when this instance runs one. */
   oauth?: OAuthProviderService;
 }

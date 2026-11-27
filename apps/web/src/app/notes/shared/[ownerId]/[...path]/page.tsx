@@ -64,6 +64,14 @@ export default function SharedNotePage() {
   );
 
   const canWrite = shareRoot?.permission === 'write';
+  // `@` offers the people who can read this note, the only ones who would be told.
+  const people = trpc.mentions.people.useQuery(
+    { ownerId, path },
+    { enabled: isNote && !!ownerId && canWrite },
+  );
+  const peopleRef = useRef(people.data ?? []);
+  peopleRef.current = people.data ?? [];
+  const getMentionCandidates = useCallback(() => peopleRef.current, []);
 
   // Landing on the share's folder opens it in the sidebar.
   useEffect(() => {
@@ -317,6 +325,7 @@ export default function SharedNotePage() {
             value={canWrite ? (draft ?? '') : reconstructBody(note.data)}
             onChange={canWrite ? setDraft : undefined}
             readOnly={!canWrite}
+            mentionCandidates={canWrite ? getMentionCandidates : undefined}
             frontmatter={note.data.frontmatter}
             onNavigate={(href) => router.push(href)}
           />

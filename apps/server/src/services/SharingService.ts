@@ -217,6 +217,21 @@ export class SharingService {
   }
 
   /**
+   * Everyone who may read `relPath` in `ownerId`'s vault: the owner, then each
+   * person a folder covering it is shared with. Matched in memory, like every
+   * share path. For the editor's `@` suggestions, which offer only people who
+   * would be told.
+   */
+  async readersOf(ownerId: string, relPath: string): Promise<string[]> {
+    const shares = await this.listMyShares(ownerId);
+    const readers = new Set([ownerId]);
+    for (const s of shares) {
+      if (pathFallsUnder(relPath, s.folderPath)) readers.add(s.userId);
+    }
+    return [...readers];
+  }
+
+  /**
    * Create a direct grant. Idempotent: granting the same folder to the same
    * person twice returns the existing id rather than a second row.
    */

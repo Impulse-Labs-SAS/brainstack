@@ -43,10 +43,12 @@ import { buildOptionalAuthMiddleware } from './middleware/auth.js';
 import type { CrawlHistoryService } from '../services/CrawlHistoryService.js';
 import type { CrossOwnerReader } from '../services/CrossOwnerReader.js';
 import type { InviteService } from '../services/InviteService.js';
+import type { MentionService } from '../services/MentionService.js';
 import type { NoteService } from '../services/NoteService.js';
 import type { SearchService } from '../services/SearchService.js';
 import type { SharingService } from '../services/SharingService.js';
 
+import { requestScope } from '../events.js';
 import type { McpPrincipal } from '../mcp/server.js';
 
 export interface BuildAppOptions {
@@ -60,6 +62,8 @@ export interface BuildAppOptions {
   invites: InviteService;
   crossOwner: CrossOwnerReader;
   crawls: CrawlHistoryService;
+  /** `@username` mentions, for the tRPC procedures that set and suggest them. */
+  mentions?: MentionService;
   resolveUserForApiKey(apiKey: ApiKey): Promise<User>;
   rateLimitPerMinute: number;
   secureCookies: boolean;
@@ -105,8 +109,8 @@ export interface BuildAppOptions {
    */
   basePath?: string;
   /**
-   * Runs every request inside it, first thing. Set when events are on, so an
-   * event can tell who caused it (see `events.ts`).
+   * Runs every request inside it, first thing, so an event or a mention can
+   * tell who caused it (see `events.ts`). Defaults to `events.ts`'s own.
    */
   requestScope?: MiddlewareHandler<AuthBindings>;
   /** The tRPC router, when plugins add to it. Defaults to `appRouter`. */
@@ -137,7 +141,8 @@ const loggablePath = (path: string) => path.replace(/(\/invite\/accept\/)[^/]+/,
 
 export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
   const app = new Hono<AuthBindings>();
-  if (opts.requestScope) app.use('*', opts.requestScope);
+  // Always: an event's caller and a mention's author are both read from it.
+  app.use('*', opts.requestScope ?? requestScope);
 
   // The API answers JSON, plus the OAuth consent page. Nothing here is ever
   // meant to be framed — the consent page least of all, where a framed
@@ -348,6 +353,7 @@ export function buildApp(opts: BuildAppOptions): Hono<AuthBindings> {
       invites: opts.invites,
       crossOwner: opts.crossOwner,
       crawls: opts.crawls,
+      ...(opts.mentions ? { mentions: opts.mentions } : {}),
       resolveUserForApiKey: opts.resolveUserForApiKey,
       ...(opts.oauth ? { oauth: opts.oauth.service } : {}),
       logger: opts.logger,

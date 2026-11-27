@@ -71,6 +71,13 @@
       "when": 1795655184352,
       "tag": "0009_login_challenges",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795744460041,
+      "tag": "0010_user_mentions",
+      "breakpoints": true
     }
   ]
 }

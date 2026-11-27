@@ -6,8 +6,9 @@
 // the batch they share — is stamped with that request's caller. Nothing has to
 // pass the caller down through every service call to get there.
 //
-// Only built when some plugin listens. Without one, no service is handed an
-// `emit` and no request runs in a scope.
+// The bus is only built when some plugin listens; without one, no service is
+// handed an `emit`. Every request still runs in a scope, because `@username`
+// mentions need to know who wrote them (`currentActorId`).
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -58,6 +59,14 @@ function callerOf(facts: RequestFacts | undefined): { actorId: string | null; vi
         ? 'api'
         : 'web';
   return { actorId: principal?.user.id ?? null, via };
+}
+
+/**
+ * Who the current request is from, or null outside of one (boot, a command,
+ * a test calling a service directly) or before anyone signed in.
+ */
+export function currentActorId(): string | null {
+  return callerOf(scope.getStore()).actorId;
 }
 
 /**

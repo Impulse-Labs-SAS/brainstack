@@ -17,7 +17,8 @@ import { useEffect, useRef } from 'react';
 import type { WikilinkCandidate } from '@/lib/wikilink-autocomplete-match';
 
 import { propertiesExtension, setProperties } from './properties-extension';
-import { wikilinkAutocomplete } from './wikilink-autocomplete';
+import { mentionSource, type MentionCandidate } from './mention-autocomplete';
+import { editorAutocomplete, wikilinkSource } from './wikilink-autocomplete';
 import { wikilinkMarks } from './wikilink-marks';
 
 /** Sober markdown highlight aligned with the app palette (no saturated greens/reds). */
@@ -127,6 +128,8 @@ export interface NoteEditorProps {
    * mounts once — the tree changes as notes are created while it stays open.
    */
   wikilinkCandidates?: () => readonly WikilinkCandidate[];
+  /** People `@` can mention: those who can read the note. A function, like the above. */
+  mentionCandidates?: () => readonly MentionCandidate[];
   /** The frontmatter as the server parsed it, shown as the Properties block. */
   frontmatter?: Record<string, unknown>;
   /** Follows a route from inside the editor (a property chip). */
@@ -137,12 +140,13 @@ export interface NoteEditorProps {
   onReady?(view: EditorView | null): void;
 }
 
-/** CodeMirror 6 markdown editor, with `[[` wikilink autocomplete. */
+/** CodeMirror 6 markdown editor, with `[[` wikilink and `@` mention autocomplete. */
 export function NoteEditor({
   value,
   onChange,
   readOnly = false,
   wikilinkCandidates,
+  mentionCandidates,
   frontmatter,
   onNavigate,
   onOpenLink,
@@ -154,6 +158,8 @@ export function NoteEditor({
   onChangeRef.current = onChange;
   const candidatesRef = useRef(wikilinkCandidates);
   candidatesRef.current = wikilinkCandidates;
+  const peopleRef = useRef(mentionCandidates);
+  peopleRef.current = mentionCandidates;
   const navigateRef = useRef(onNavigate);
   navigateRef.current = onNavigate;
   const openLinkRef = useRef(onOpenLink);
@@ -176,8 +182,15 @@ export function NoteEditor({
           frontmatterRef.current ?? {},
         ),
         wikilinkMarks((target) => openLinkRef.current?.(target)),
-        ...(candidatesRef.current
-          ? [wikilinkAutocomplete(() => candidatesRef.current?.() ?? [])]
+        ...(candidatesRef.current || peopleRef.current
+          ? [
+              editorAutocomplete([
+                ...(candidatesRef.current
+                  ? [wikilinkSource(() => candidatesRef.current?.() ?? [])]
+                  : []),
+                ...(peopleRef.current ? [mentionSource(() => peopleRef.current?.() ?? [])] : []),
+              ]),
+            ]
           : []),
         keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap]),
         EditorView.lineWrapping,

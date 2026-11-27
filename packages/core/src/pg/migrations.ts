@@ -544,6 +544,31 @@ const loginChallenges: PgMigration = {
   ],
 };
 
+/**
+ * `@username` mentions: the name each user is mentioned by, and the mentions
+ * waiting for their assistant to pass on. See Sentinel's `handles.ts`.
+ */
+const userMentions: PgMigration = {
+  name: '0016_pg_user_mentions',
+  statements: [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS username_asked_at BIGINT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users (username)
+       WHERE username IS NOT NULL`,
+    `CREATE TABLE IF NOT EXISTS user_mentions (
+       id           TEXT PRIMARY KEY,
+       user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       author_id    TEXT REFERENCES users(id) ON DELETE SET NULL,
+       owner_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       path         TEXT NOT NULL,
+       snippet      TEXT NOT NULL,
+       created_at   BIGINT NOT NULL,
+       delivered_at BIGINT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_user_mentions_user ON user_mentions (user_id, created_at)`,
+  ],
+};
+
 export const pgMigrations: readonly PgMigration[] = [
   init,
   graphAndAuth,
@@ -560,4 +585,5 @@ export const pgMigrations: readonly PgMigration[] = [
   moveRequests,
   lowercaseInviteEmails,
   loginChallenges,
+  userMentions,
 ];
